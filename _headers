@@ -1,0 +1,75 @@
+# Response headers for this origin, read by the host and copied into the build
+# output verbatim, alongside robots.txt and _redirects.
+#
+# ONE policy for the whole origin, not one per surface. Cloudflare applies every
+# matching rule, and two rules setting Content-Security-Policy would leave the
+# browser enforcing the intersection — which is how an app-specific relaxation
+# silently becomes no relaxation at all. So the policy below is the union of
+# what the marketing pages and the app under /app both need, and it is written
+# down here rather than split where it could drift.
+#
+#   script-src 'self'    Nothing anywhere is an inline script. The per-language
+#                        translation table each page carries is a
+#                        `type="application/json"` block the browser parses and
+#                        never executes, and the code reading it lives in
+#                        boot.js — see i18n/render.mjs. No WebAssembly either:
+#                        the app's ML-KEM and secp256k1 are plain JavaScript.
+#   style-src            THE ONE DIVERGENCE from the app's own policy. This
+#                        site's markup has ~230 inline style attributes (the
+#                        landing page's layout, and every footer), and
+#                        `style-src` governs those.
+#   connect-src          FOR THE APP: wss: for the Nostr relays it publishes to,
+#                        and the Nymbot worker's origin. The marketing pages are
+#                        finished HTML and fetch nothing at runtime; with
+#                        `script-src 'self'` and no inline script, nothing on
+#                        them can originate a connection to spend this on.
+#   img-src / media-src  FOR THE APP: a generated picture or voice clip arrives
+#                        as a link to wherever the worker uploaded it, and is
+#                        rendered in the conversation.
+#   worker-src           FOR THE APP: reserved for off-thread crypto.
+
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://web.nymchat.app wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+
+# The stylesheet and the scripts are content-hashed by the build
+# (`/assets/styles-VJIGRWD4.css`), so a given filename's contents can never
+# change. Matched by prefix rather than by extension: a bare `/*.js` would also
+# match the app's un-hashed files under /app and pin a stale deploy for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The markdown twins are documents, not downloads: a browser should show one
+# rather than save it, and they are regenerated on every deploy like the pages
+# they mirror.
+/*.md
+  Content-Type: text/markdown; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Images are not hashed, so they are cached for a day and revalidated rather
+# than pinned for a year: replacing a screenshot has to take effect. The app
+# under /app takes its icons, favicon and Open Graph image from here, written as
+# absolute https://nymbot.ai URLs so both surfaces show one copy of the
+# artwork.
+/images/*
+  Cache-Control: public, max-age=86400, must-revalidate
+
+# The app is a document that changes with every deploy and is cached by its own
+# service worker, so it is always revalidated rather than pinned.
+/app/*
+  Cross-Origin-Resource-Policy: same-origin
+  Cache-Control: public, max-age=0, must-revalidate
+
+# The documents are regenerated on every deploy at stable URLs, so they are
+# always revalidated. A stale /docs/ page is a reader given last week's answer.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/*/
+  Cache-Control: public, max-age=0, must-revalidate

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Working in a git repository - Nymbot Knowledge Base</title>
+    <meta name="description" content="Connect GitHub, GitLab or Gitea to Nymbot so Pro replies can read your code, and optionally commit and open pull requests.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Working in a git repository - Nymbot Knowledge Base">
+    <meta property="og:description" content="Connect GitHub, GitLab or Gitea to Nymbot so Pro replies can read your code, and optionally commit and open pull requests.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/git/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Working in a git repository - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Connect GitHub, GitLab or Gitea to Nymbot so Pro replies can read your code, and optionally commit and open pull requests.">
+    <link rel="canonical" href="https://nymbot.ai/docs/git/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Working in a git repository</h1>
+            <p class="docs-lede">Pro can work inside one of your repositories the way a coding agent does
+                &mdash; reading your actual files, and with writes on, changing them.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="connecting">Connecting a repository</h2>
+            <p><code>?git</code>, or the <strong>Git</strong> chip in the toolbar, connects a provider:
+                GitHub, GitLab, or Gitea/Forgejo &mdash; which covers Codeberg and self-hosted instances. It
+                takes a scoped personal access token, a repository and a branch.</p>
+            <p>Once connected, the chip shows the repository name, and messages sent with a
+                <a href="/docs/models/#pro">Pro model</a> selected run in that repository's context.
+                <code>?git disconnect</code> removes it.</p>
+
+            <h2 id="what-it-can-do">What it can do</h2>
+            <p>A message in repo context runs as a small agent rather than a single completion. The model
+                can list directories, read files and search the tree, then answer using what it actually
+                found &mdash; so "why does the retry loop give up early" is answered from your code, not
+                from a guess about code that looks like yours.</p>
+            <p>It sees the branch you connected, at its current head.</p>
+
+            <h2 id="writes">Turning writes on</h2>
+            <p><code>?git writes on</code> adds the ability to commit files, create branches and open pull
+                or merge requests. Off by default, and worth leaving off until you want it.</p>
+            <p>With writes on, ask for a change and you get a branch and a pull request to review rather
+                than a patch pasted into chat. Nothing is pushed to your default branch unless that is the
+                branch you connected and you asked for it.</p>
+
+            <h2 id="cost">What a repo task costs</h2>
+            <p>A repo task uses up to six model calls per message &mdash; look, read, search, answer &mdash;
+                each billed at the pinned model's <a href="/docs/credits/#what-a-reply-costs">Pro price</a>.
+                Only the calls actually used are charged, so a question answered from one file costs about
+                what an ordinary reply costs.</p>
+            <p>The app reports the total and the number of calls after each repo task.</p>
+
+            <h2 id="token-safety">About that token</h2>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">About that token</span>
+                <p>The access token is stored only on your device and is wiped by a
+                    <a href="/docs/identity/#panic">panic wipe</a>. It travels to the Nymbot worker with each
+                    request, and is never stored server-side or published to relays. Scope it to the one
+                    repository you mean to use, and revoke it at your provider when you are done.</p>
+            </div>
+            <p>Because it is device-local, it does not sync: connect the repository again on a second
+                device, with a token scoped for that device if you would rather be able to revoke them
+                separately.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

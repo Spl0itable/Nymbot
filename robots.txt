@@ -1,0 +1,24 @@
+# Everything on this site is public and meant to be read — by people, by search
+# engines, and by language models alike. There is nothing here to gate: it is a
+# marketing page, a knowledge base about an app whose source is published, and
+# the legal and brand documents that go with them.
+#
+# There is deliberately no crawler blocklist. Nymbot's privacy claims are about
+# what the app does with your messages, not about who may read a public web page
+# describing it.
+
+User-agent: *
+Allow: /
+
+# The app itself is one page: a shell that builds the conversation on the
+# device. Crawlable so a search for the service reaches the thing rather than
+# only the page about it; there is nothing behind it to index, because a
+# conversation exists only on its owner's device.
+Allow: /app
+
+# For agents that would rather not parse HTML:
+#   https://nymbot.ai/llms.txt        every page, described, in markdown
+#   https://nymbot.ai/llms-full.txt   the whole knowledge base as one document
+#   https://nymbot.ai/docs/credits.md any page, with .md instead of the slash
+
+Sitemap: https://nymbot.ai/sitemap.xml

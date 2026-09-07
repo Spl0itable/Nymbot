@@ -1,0 +1,28 @@
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
+android/app/*.jks
+**/GeneratedPluginRegistrant.java
+
+# iOS
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Pods/
+ios/Podfile.lock
+ios/.symlinks/
+**/GeneratedPluginRegistrant.*
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+.DS_Store

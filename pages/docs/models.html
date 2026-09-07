@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Models and routing - Nymbot Knowledge Base</title>
+    <meta name="description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Models and routing - Nymbot Knowledge Base">
+    <meta property="og:description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/models/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Models and routing - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <link rel="canonical" href="https://nymbot.ai/docs/models/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Models and routing</h1>
+            <p class="docs-lede">Two ways to get an answer: let Nymbot choose the model, or choose it
+                yourself.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="standard">Standard: auto-routed</h2>
+            <p>On the standard tier your message is classified first &mdash; is this a question, a
+                translation, something creative, something that needs current information &mdash; and routed
+                to a model suited to it. A quick factual answer does not pay for a reasoning model, and a
+                hard one is not answered by a fast one.</p>
+            <p>Questions that depend on current information trigger a web search before the answer is
+                written, and the sources are listed underneath it.</p>
+            <p>This is the cheap, sensible default. Most conversations never need anything else.</p>
+
+            <h2 id="pro">Pro: pin a model</h2>
+            <p><code>?model &lt;name&gt;</code>, or the model chip in the toolbar, pins every reply in the
+                conversation to one specific frontier model. <code>?model off</code> returns you to standard
+                routing.</p>
+            <p>Pin one when you want a particular model's judgement, when you are working in a
+                <a href="/docs/git/">repository</a> &mdash; which needs Pro &mdash; or when you want the same
+                model's voice across a long piece of work.</p>
+            <p>Currently available: Claude Fable 5, Claude Opus 5, Claude Sonnet 5, Claude Haiku 4.5,
+                GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5 and
+                MiniMax M3.</p>
+
+            <h2 id="catalog">The model catalog</h2>
+            <p>The picker is generated from a live catalog rather than hard-coded, so the list you see is
+                exactly what the server will accept and charge for. Each entry carries its base price, its
+                maximum, its context window, and whether it can see images, reason visibly or call tools.</p>
+            <p>Models badged as hosted are run on the same infrastructure as the rest of the service and do
+                not depend on an upstream provider being reachable. The others are proxied.</p>
+            <p>The catalog moves as models are released and retired. A model you pinned that has since gone
+                away falls back to standard routing rather than failing, and tells you.</p>
+
+            <h2 id="reasoning">Reasoning and vision</h2>
+            <p>When a model shows its chain of thought &mdash; the standard tier's reasoning route, or a Pro
+                model that exposes it &mdash; the reply carries a collapsed
+                <strong>&#128173; Reasoning</strong> section above the answer. Tap to read it; it is not
+                charged separately from the reply it belongs to.</p>
+            <p>Every Claude, GPT, Gemini, Grok and Kimi Pro model can see images, as can the creative and
+                translation routes on standard. Put a picture's link in your message and ask about it
+                &mdash; see <a href="/docs/chats/#attachments">sending pictures</a>.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

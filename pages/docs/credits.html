@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Credits and pricing - Nymbot Knowledge Base</title>
+    <meta name="description" content="How Nymbot credits work: two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Credits and pricing - Nymbot Knowledge Base">
+    <meta property="og:description" content="How Nymbot credits work: two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/credits/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Credits and pricing - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="How Nymbot credits work: two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <link rel="canonical" href="https://nymbot.ai/docs/credits/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Credits and pricing</h1>
+            <p class="docs-lede">You buy credits with Bitcoin and spend them a reply at a time. No
+                subscription, no card, no minimum, and nothing that has to know your name.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="two-balances">Two balances</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Balance</th><th>Price</th><th>Spent on</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Standard credits</td><td>10 sats each</td><td>Auto-routed replies &mdash; the model is chosen per task</td></tr>
+                        <tr><td>Pro credits</td><td>100 sats each</td><td>Replies from a specific frontier model you have pinned</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>They are separate and neither converts into the other. The <strong>Standard / Pro</strong>
+                switch in the toolbar decides which one the conversation is spending;
+                <code>?balance</code> shows both, and so does the chat header.</p>
+
+            <h2 id="buying">Buying over Lightning</h2>
+            <p><code>?buy</code>, or the <strong>Buy</strong> button, opens a Lightning invoice with a
+                Standard/Pro switch. Pay it from any Lightning wallet &mdash; scan the QR, or copy the
+                invoice &mdash; and the balance updates within seconds of the payment settling.</p>
+            <p>The invoice is not addressed to you in any meaningful sense: it is a payment request, it
+                carries no identity, and the credit it produces is attached to your public key by the
+                ledger. Nothing about the purchase has to be true about you.</p>
+            <p>If the app closes between paying and crediting, the claim is idempotent &mdash; reopen it and
+                the credit lands once, not twice.</p>
+
+            <h2 id="what-a-reply-costs">What a reply costs</h2>
+            <p><strong>Standard replies</strong> cost one credit for an ordinary answer, and more for a task
+                that genuinely needs more work &mdash; a long reasoning route or a search-backed answer. The
+                app tells you when a reply cost more than one.</p>
+            <p><strong>Pro replies</strong> cost a per-model base of one or two credits, and then scale with
+                the length of the reply up to that model's maximum. The maximum is <em>reserved</em> when you
+                send the message and only the real cost is charged, so a short answer from an expensive
+                model costs the base even though the budget allowed for more.</p>
+            <p><code>?model</code> lists every model with its base and its maximum before you commit to
+                one. Image and speech generation are charged
+                <a href="/docs/media/#pricing">per generation</a> instead.</p>
+            <p>A <a href="/docs/git/#cost">repository task</a> can use up to six model calls for one message,
+                each billed at the pinned model's price. Only the calls actually made are charged.</p>
+
+            <h2 id="gifting">Gifting and transferring</h2>
+            <ul>
+                <li><code>?gift @nym#abcd</code> buys credits and puts them straight onto someone else's
+                    nym.</li>
+                <li><code>?transfer @nym#abcd</code> moves <em>your whole balance</em>, standard and Pro, to
+                    another nym. Useful when you rotate keys; irreversible once it lands.</li>
+            </ul>
+            <p>Both stay on your real nym, because both are about a named account. Moving credits onto a
+                <a href="/docs/anonymous/">throwaway key</a> works differently and deliberately &mdash; as
+                blind vouchers, so the move cannot be used to link the two.</p>
+
+            <h2 id="refunds">When nothing is charged</h2>
+            <p>You are charged for an answer, not an attempt.</p>
+            <ul>
+                <li>A generation that fails costs nothing.</li>
+                <li>A reply that never reaches you costs nothing &mdash; ask again and the turn is
+                    replayed, not regenerated. Resending the same message never buys a second answer.</li>
+                <li>Local commands &mdash; <code>?help</code>, <code>?balance</code>, <code>?buy</code>,
+                    <code>?model</code>, <code>?git</code>, <code>?anon</code>, <code>?clear</code>,
+                    <code>?image models</code> &mdash; are free.</li>
+                <li>Running out mid-conversation stops the reply before it is generated and tells you, so a
+                    low balance never produces a half answer you paid for.</li>
+            </ul>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

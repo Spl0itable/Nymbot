@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversations - Nymbot Knowledge Base</title>
+    <meta name="description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Conversations - Nymbot Knowledge Base">
+    <meta property="og:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/chats/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Conversations - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <link rel="canonical" href="https://nymbot.ai/docs/chats/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Conversations</h1>
+            <p class="docs-lede">You can keep as many separate chats with Nymbot as you like. Each one is
+                its own thread, its own context and its own title.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="separate-chats">Each chat is its own thread</h2>
+            <p>Press <strong>New chat</strong> and you get an empty conversation. Nothing said in one chat is
+                visible to the model in another &mdash; a debugging session and a recipe do not bleed into
+                each other, and the older one costs you nothing while it sits there.</p>
+            <p>Every chat is a private message thread in its own right: the messages are
+                <a href="/docs/encryption/">gift-wrapped</a> individually, published to relays, and
+                reassembled on whichever device you sign in from. Sign in on a second device and the whole
+                list is there.</p>
+            <p>The list is sorted by most recent activity. Search filters it by title and by the text of the
+                messages inside, which is possible only because the decryption happens on your device
+                &mdash; the search never leaves it.</p>
+
+            <h2 id="titles">Where the titles come from</h2>
+            <p>A new chat is called <em>New chat</em> until you say something. The first message you send
+                becomes its name: the app takes that message, trims it to a short phrase, and puts it in the
+                header and in the sidebar.</p>
+            <p>Two things follow from that. A conversation that starts "why does this regex backtrack" is
+                findable a week later, and the title is chosen entirely on your device &mdash; the server is
+                not asked to summarise anything, and never sees the title at all.</p>
+            <p>Rename any chat from its header menu if the first thing you asked turned out not to be what
+                the conversation became about.</p>
+
+            <h2 id="context">What Nymbot remembers</h2>
+            <p>Inside one conversation, the model sees the turns that came before it, so follow-up questions
+                work without repeating yourself. The thread is reconstructed from the encrypted messages
+                themselves each turn; there is no plaintext transcript sitting anywhere.</p>
+            <p>Older turns fall out of context as the conversation grows &mdash; the model is given the most
+                recent stretch of it, not the whole history. If an answer starts drifting from something you
+                established near the top, restate it or start a fresh chat.</p>
+            <p>Begin a message with <code>!</code> to send it with no history at all: a one-off question
+                inside an existing conversation, without the thread's context colouring the answer or
+                inflating the prompt.</p>
+
+            <h2 id="attachments">Sending pictures</h2>
+            <p>Put an image link in your message and ask about it. The worker pulls any picture URLs
+                out of what you send and hands them to the model alongside the question, so
+                "what is wrong with this diagram? https://…" works as one message.</p>
+            <p>Every Claude, GPT, Gemini, Grok and Kimi <a href="/docs/models/#pro">Pro model</a> can see
+                images, as can the creative and translation routes on the standard tier. A vision reply
+                costs what that model's reply would have cost &mdash; there is no separate charge for
+                looking.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Note</span>
+                <p>Uploading a picture from the device is not in the standalone apps yet; a link is.
+                    <a href="https://nymchat.app">Nymchat</a> has the upload, and shares this
+                    conversation.</p>
+            </div>
+
+            <h2 id="clearing">Clearing and deleting</h2>
+            <ul>
+                <li><strong>Delete a chat</strong> removes it from this device, wipes its archived copies,
+                    and tells the server to drop the thread it keeps for context.</li>
+                <li><code>?clear</code> empties the current conversation without deleting it: same chat,
+                    blank slate, model context reset.</li>
+                <li>A <a href="/docs/identity/#panic">panic wipe</a> takes everything at once &mdash; every
+                    conversation, your key, and any credits sitting on a
+                    <a href="/docs/anonymous/">throwaway key</a>.</li>
+            </ul>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Careful</span>
+                <p>Deleting is not recoverable. Your history is encrypted to your key and nobody &mdash;
+                    including us &mdash; holds a copy that could be handed back.</p>
+            </div>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

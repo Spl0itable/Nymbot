@@ -1,0 +1,49 @@
+name: nymbot
+description: "Nymbot — a private AI assistant. No account, end-to-end encrypted, paid in sats."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: any
+
+  # Nostr / crypto. The same set the Nymchat client uses, because the wire
+  # format is shared: bip340 signs, coinlib's bundled libsecp256k1 verifies and
+  # provides the raw-X ECDH NIP-44 needs, and pointycastle/cryptography carry
+  # ChaCha20-Poly1305, SHA-3 and SHAKE for ML-KEM.
+  bip340: ^0.3.0
+  coinlib: ^5.0.0
+  coinlib_flutter: ^5.0.1
+  ffi: ^2.1.0
+  pointycastle: ^3.9.1
+  cryptography: ^2.7.0
+  convert: ^3.1.1
+  crypto: ^3.0.5
+  bech32: ^0.2.2
+
+  web_socket_channel: ^3.0.1
+  http: ^1.0.0
+
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+
+  qr_flutter: ^4.1.0
+  url_launcher: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Written by `npm run build` from the shared translation cache. `index.json`
+  # is always present (an empty list when nothing is published yet), so the
+  # bundle is valid in a checkout that has never been built.
+  assets:
+    - assets/i18n/

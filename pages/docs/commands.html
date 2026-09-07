@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command reference - Nymbot Knowledge Base</title>
+    <meta name="description" content="Every Nymbot command: credits, model routing, image and speech generation, the git integration, knowledge lookups and games.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Command reference - Nymbot Knowledge Base">
+    <meta property="og:description" content="Every Nymbot command: credits, model routing, image and speech generation, the git integration, knowledge lookups and games.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/commands/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Command reference - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Every Nymbot command: credits, model routing, image and speech generation, the git integration, knowledge lookups and games.">
+    <link rel="canonical" href="https://nymbot.ai/docs/commands/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Command reference</h1>
+            <p class="docs-lede">Anything beginning with <code>?</code> is a command. <code>?help</code>
+                lists them in the app, free of charge.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="how-commands-work">How commands work</h2>
+            <p>Type a command as an ordinary message. Some are handled entirely on your device and cost
+                nothing &mdash; <code>?help</code>, <code>?balance</code>, <code>?buy</code>,
+                <code>?model</code>, <code>?git</code>, <code>?anon</code>, <code>?clear</code>. The rest go
+                to the server and are charged like any other reply.</p>
+            <p>Commands work in your own language: if the app is running in Spanish, the Spanish form of a
+                command is recognised and folded back to its canonical name before it is sent.</p>
+            <p>Anything that is <em>not</em> a command is simply a question, answered by whichever
+                <a href="/docs/models/">model</a> the conversation is set to.</p>
+
+            <h2 id="account">Account and credits</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>?help</code></td><td>A free, local guide to tiers, pricing and setup.</td></tr>
+                        <tr><td><code>?balance</code></td><td>Your standard and Pro balances.</td></tr>
+                        <tr><td><code>?buy</code></td><td>Buys credits over Lightning, with a Standard/Pro switch.</td></tr>
+                        <tr><td><code>?gift @nym</code></td><td>Gifts credits to another nym.</td></tr>
+                        <tr><td><code>?transfer @nym</code></td><td>Moves your whole balance, standard and Pro, to another nym.</td></tr>
+                        <tr><td><code>?anon</code></td><td><a href="/docs/anonymous/">Anonymous mode</a>: chat from a throwaway key.</td></tr>
+                        <tr><td><code>?clear</code></td><td>Empties the current conversation and resets its context.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 id="routing">Routing and tools</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>?model</code></td><td>Lists the Pro models with their prices.</td></tr>
+                        <tr><td><code>?model &lt;name&gt;</code></td><td>Pins every reply in this chat to that model.</td></tr>
+                        <tr><td><code>?model off</code></td><td>Back to standard auto-routing.</td></tr>
+                        <tr><td><code>?git</code></td><td>Connects a <a href="/docs/git/">repository</a>.</td></tr>
+                        <tr><td><code>?git writes on</code></td><td>Lets it commit, branch and open pull requests.</td></tr>
+                        <tr><td><code>!question</code></td><td>Not a command &mdash; a leading <code>!</code> sends this message with no history.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 id="making-things">Making things</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>?image &lt;description&gt;</code></td><td>Generates a picture.</td></tr>
+                        <tr><td><code>?image models</code></td><td>Lists the generators and their prices. Free.</td></tr>
+                        <tr><td><code>?image --model &lt;name&gt; &lt;description&gt;</code></td><td>Picks the generator. Needs a Pro model selected.</td></tr>
+                        <tr><td><code>?speak &lt;text&gt;</code></td><td>Returns a spoken clip, up to 800 characters.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>See <a href="/docs/media/">images and speech</a> for what each generator is good at.</p>
+
+            <h2 id="knowledge">Knowledge and utility</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>?ask &lt;question&gt;</code></td><td>Asks the AI. Plain text does the same.</td></tr>
+                        <tr><td><code>?define &lt;word&gt;</code></td><td>Definition, part of speech and example usage.</td></tr>
+                        <tr><td><code>?translate &lt;text&gt;</code></td><td>Translates, detecting the source language.</td></tr>
+                        <tr><td><code>?news</code></td><td>Breaking news headlines.</td></tr>
+                        <tr><td><code>?math &lt;expression&gt;</code></td><td>Calculates it.</td></tr>
+                        <tr><td><code>?units 10 km to mi</code></td><td>Converts units.</td></tr>
+                        <tr><td><code>?time</code></td><td>UTC time and the Unix timestamp.</td></tr>
+                        <tr><td><code>?btc</code></td><td>The Bitcoin price.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Questions that need current information trigger a web search automatically; the sources are
+                listed under the answer.</p>
+
+            <h2 id="games">Games</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Command</th><th>Does</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>?trivia [category]</code></td><td>general, history, science, crypto or nostr.</td></tr>
+                        <tr><td><code>?joke</code></td><td>A fresh joke.</td></tr>
+                        <tr><td><code>?riddle</code></td><td>A riddle &mdash; reply to answer.</td></tr>
+                        <tr><td><code>?wordplay [mode]</code></td><td>wordle, anagram or scramble &mdash; reply to guess.</td></tr>
+                        <tr><td><code>?flip</code></td><td>Flips a coin.</td></tr>
+                        <tr><td><code>?8ball &lt;question&gt;</code></td><td>Magic 8-ball.</td></tr>
+                        <tr><td><code>?pick a b c</code></td><td>Picks one at random.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

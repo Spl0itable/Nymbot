@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protocol and events - Nymbot Knowledge Base</title>
+    <meta name="description" content="The Nostr events a Nymbot turn is made of, how a request is authenticated, and how the credit ledger stays honest.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Protocol and events - Nymbot Knowledge Base">
+    <meta property="og:description" content="The Nostr events a Nymbot turn is made of, how a request is authenticated, and how the credit ledger stays honest.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/protocol/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Protocol and events - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="The Nostr events a Nymbot turn is made of, how a request is authenticated, and how the credit ledger stays honest.">
+    <link rel="canonical" href="https://nymbot.ai/docs/protocol/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Protocol and events</h1>
+            <p class="docs-lede">What is actually on the wire. Useful if you are auditing the client,
+                writing another one, or just want to know that the description above is the truth.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="nostr">Nostr underneath</h2>
+            <p>Nymbot is built on Nostr. Messages are events, identities are keypairs, and delivery is a set
+                of relays rather than a server you have to trust. That is why an identity from any other
+                Nostr app works here unchanged.</p>
+            <p>The events involved:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Kind</th><th>What it is</th></tr></thead>
+                    <tbody>
+                        <tr><td>1059</td><td>The gift wrap carrying a message, in either direction.</td></tr>
+                        <tr><td>14</td><td>The rumor inside it &mdash; unsigned, so it is deniable.</td></tr>
+                        <tr><td>13</td><td>The seal, signed by the sender, encrypted to the recipient.</td></tr>
+                        <tr><td>30078</td><td>The post-quantum capability announcement carrying a KEM key.</td></tr>
+                        <tr><td>27235</td><td>The short-lived auth event that proves a request is yours.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 id="the-turn">One turn, end to end</h2>
+            <ol>
+                <li>Your app seals the message to Nymbot's announced keys &mdash; classical and ML-KEM
+                    &mdash; wraps it under a single-use key and publishes the wrap to the relays. A copy
+                    wrapped to your own key goes out too, so the conversation restores on any device.</li>
+                <li>It calls the worker with the wrap's event id and a fresh auth event signed for that one
+                    action and endpoint, so a captured signature cannot be replayed against a different
+                    request. The message itself never travels as plaintext.</li>
+                <li>The worker claims the turn before it fetches, generates or charges anything. Resending
+                    the same message replays the first attempt's answer rather than buying a second one
+                    &mdash; and two wraps of one rumor count as one question.</li>
+                <li>It fetches the wrap from the relays, opens it, checks the seal's signer matches the
+                    authenticated key, reconstructs the thread from the previous wraps, and generates.</li>
+                <li>The reply is sealed back to your announced keys, published, and handed to your app in
+                    the response so it appears without waiting on relay propagation.</li>
+            </ol>
+            <p>The classification, routing, search and tool calls all happen inside step 4, on the server.
+                What comes back is one message.</p>
+
+            <h2 id="ledger">The credit ledger</h2>
+            <p>Balances live in a single-writer ledger rather than in ordinary rows, so concurrent spends
+                from two devices cannot both succeed against the same credit. Every money operation is
+                idempotent and keyed: a claim for a paid invoice credits once no matter how many times it is
+                retried, and a voucher redemption resumed after a crash credits once too.</p>
+            <p>A spend is authorised by a fresh signature bound to that action, and the amount is reserved
+                before generation and settled after, which is how a Pro reply can budget for its maximum and
+                charge you only what it used.</p>
+            <p>The <a href="/docs/anonymous/#vouchers">voucher tables</a> record issuance and spending
+                without recording who, which is the whole point of them.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

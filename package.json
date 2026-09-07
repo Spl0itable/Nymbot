@@ -1,0 +1,21 @@
+{
+  "name": "nymbot-web",
+  "version": "1.0.0",
+  "description": "Nymbot landing site and knowledge base",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "i18n": "node i18n/sync.mjs",
+    "i18n:list": "node i18n/sync.mjs --list",
+    "test": "node i18n/test/run.mjs",
+    "test:browser": "node i18n/test/browser.mjs",
+    "test:mobile": "node test/mobile.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

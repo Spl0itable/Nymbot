@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Nymbot</title>
+    <meta name="description" content="Nymbot Privacy Policy">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Privacy Policy - Nymbot">
+    <meta property="og:description" content="Nymbot Privacy Policy">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/privacy/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark over a field of hashtags, above the words Decentralized. Pseudonymous. Unstoppable.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark over a field of hashtags, above the words Decentralized. Pseudonymous. Unstoppable.">
+    <meta name="twitter:title" content="Privacy Policy - Nymbot">
+    <meta name="twitter:description" content="Nymbot Privacy Policy">
+    <link rel="canonical" href="https://nymbot.ai/privacy/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <main class="legal-page">
+        <a href="/" class="legal-back"><span aria-hidden="true">←</span> Back to Nymbot</a>
+        <h1>Privacy Policy</h1>
+        <p class="last-updated">Last Updated: September 6th, 2026</p>
+        <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+        <p>There is no account, no email address and no phone number. There is a key you generate on your own device, and a balance attached to its public half. That is the whole of what we hold about you.</p>
+        <p>Nymbot is an AI assistant, which means one thing is unavoidably different from a messenger: to answer your question, the service has to read it. We would rather say that plainly than bury it.</p>
+
+        <h2>What the service processes</h2>
+        <p>When you send a message, it is encrypted on your device and can only be opened by the Nymbot service, which opens it in order to generate a reply. The reply is encrypted back to you the same way. Relays and any network in between carry ciphertext only.</p>
+        <p>While generating a reply, your message and the recent turns of that conversation are passed to the model that answers it. Where that model is operated by a third party, your message text reaches that provider under their terms. Which model handles a message depends on the tier and the model you have selected — see the <a href="/docs/models/">models documentation</a>.</p>
+        <p>We do not use your messages to train models, and we do not sell them.</p>
+
+        <h2>What we store</h2>
+        <ul>
+            <li><strong>A credit balance</strong>, keyed to your public key, and the ledger entries that move it.</li>
+            <li><strong>An ordered list of message ids</strong> per conversation, so a reply can be given the thread as context. The messages themselves are encrypted.</li>
+            <li><strong>Encrypted archived copies</strong> of the exchange, readable only by the keys involved.</li>
+            <li><strong>Short-lived operational records</strong> — rate limits, turn de-duplication keys, invoice claims — which exist to stop double charges and abuse.</li>
+        </ul>
+        <p>We do not store your conversation titles: those are generated on your device and never sent. We do not store your private key, and we cannot recover it. We do not store the access token for a <a href="/docs/git/">connected git repository</a>; it is held on your device and passed with each request.</p>
+
+        <h2>Chatting without your name on it</h2>
+        <p>Because the balance and the thread are keyed to your public key, the service can tell that a particular key is using it. <a href="/docs/anonymous/">Anonymous mode</a> exists for people who do not want that: it moves the conversation onto a throwaway key generated on your device, and moves credits across as blind vouchers we sign without being able to see, so our own records cannot link the two.</p>
+        <p>What that does not hide is set out honestly in <a href="/docs/anonymous/#limits">the documentation</a>. Most importantly, relays and our infrastructure still see the network connection your device makes. Use Tor or a VPN if your IP address matters to you.</p>
+
+        <h2>Payments</h2>
+        <p>Credits are bought over the Bitcoin Lightning Network. An invoice carries no identity, and we do not ask for a name, an address or a card. We keep the record needed to credit the payment once and not twice.</p>
+
+        <h2>App stores</h2>
+        <p>If you use Nymbot on Android or iOS, Google or Apple may record telemetry about the app through their operating systems — when it is opened and closed, how long it is used, crash logs, your device model — and may link that to your Google or Apple account. This is a limitation of mobile operating systems and applies to every app on your device. Read Apple's and Google's own policies if that matters to you, or use the web app instead.</p>
+
+        <h2>The website</h2>
+        <p>The Nymbot website does not attempt to link your visit to your identity or build a profile of you. We use Cloudflare to serve it, and Cloudflare keeps HTTP request logs for the Nymbot domains for up to 7 days.</p>
+
+        <h2>Get in touch</h2>
+        <p>If you would like more information, have suggestions about how Nymbot can better protect your privacy, or just want to say hello, please send an email to <a href="mailto:support@nymbot.ai">support@nymbot.ai</a>.</p>
+    </main>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> • <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> • <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> • <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> • <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+</body>
+
+</html>

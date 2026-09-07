@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apps and platforms - Nymbot Knowledge Base</title>
+    <meta name="description" content="Nymbot on the web, on Android and on iOS, and how it relates to the assistant inside Nymchat.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Apps and platforms - Nymbot Knowledge Base">
+    <meta property="og:description" content="Nymbot on the web, on Android and on iOS, and how it relates to the assistant inside Nymchat.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/apps/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Apps and platforms - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Nymbot on the web, on Android and on iOS, and how it relates to the assistant inside Nymchat.">
+    <link rel="canonical" href="https://nymbot.ai/docs/apps/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Apps and platforms</h1>
+            <p class="docs-lede">The same assistant, the same key and the same balance, wherever you open
+                it.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="web">The web app</h2>
+            <p><a href="https://nymbot.ai/app">nymbot.ai/app</a> is a progressive web app: it runs in any
+                modern browser and installs to the home screen or dock without a store. Offline it will show
+                you everything you have already said &mdash; your history is stored locally, encrypted to
+                your key &mdash; but a reply needs the network, since the model is not on your device.</p>
+            <p>It is the reference implementation. Every feature described in this knowledge base is there
+                first.</p>
+
+            <h2 id="mobile">Android and iOS</h2>
+            <p>The mobile app is the same product built natively, so the keystore, the share sheet and the
+                system theme behave the way the platform expects. It talks to exactly the same service, and a
+                conversation started on a phone is readable on the web and the other way round.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Not in the stores yet</span>
+                <p>The Android and iOS app is in the
+                    <a href="https://github.com/Spl0itable/nymbot">repository</a> and builds from source
+                    today; there is no App Store, Play or Zapstore listing to install it from. Until there
+                    is, the <a href="https://nymbot.ai/app">web app</a> installs to a home screen and is
+                    the same thing.</p>
+            </div>
+            <p>Where the platform is more restrictive, the app is too: Android's background limits mean a
+                long Pro reply finishes when you come back to the app rather than while it is buried.</p>
+
+            <h2 id="one-account">One account everywhere</h2>
+            <p>There is nothing to sync, because there is nothing per-device to sync. Your key is the
+                account; point a second device at the same <code>nsec</code> and it is the same account,
+                with the same balance and the same conversations restored from the relays.</p>
+            <p>What does not travel is anything deliberately device-local: the
+                <a href="/docs/git/#token-safety">git access token</a>, and whatever unlock factor you chose
+                for <a href="/docs/identity/#encryption-at-rest">identity encryption</a>. Both are set up per
+                device on purpose.</p>
+
+            <h2 id="nymchat">Nymbot inside Nymchat</h2>
+            <p><a href="https://nymchat.app">Nymchat</a> is a full messenger &mdash; public channels, group
+                chats, private messages, calls, a Bluetooth mesh &mdash; and Nymbot lives inside it as one
+                more conversation, plus a set of <code>?</code> commands that work in any channel.</p>
+            <p>This app is that conversation on its own: no channels, no contacts, no mesh. If all you want
+                is the assistant, this is the smaller thing. If you want the messenger too, install Nymchat
+                and sign in with the same key &mdash; your credits and your Nymbot history are already
+                there.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th></th><th>Nymbot</th><th>Nymchat</th></tr></thead>
+                    <tbody>
+                        <tr><td>Private AI chat</td><td>Yes</td><td>Yes</td></tr>
+                        <tr><td>Many separate conversations</td><td>Yes</td><td>One thread</td></tr>
+                        <tr><td>AI in public channels</td><td>&mdash;</td><td>Yes, free</td></tr>
+                        <tr><td>Messaging people</td><td>&mdash;</td><td>Yes</td></tr>
+                        <tr><td>Shared credits</td><td colspan="2">One balance across both</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

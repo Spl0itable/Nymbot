@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Getting started - Nymbot Knowledge Base</title>
+    <meta name="description" content="Open Nymbot, understand what your key is, send a first message and buy your first credits.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Getting started - Nymbot Knowledge Base">
+    <meta property="og:description" content="Open Nymbot, understand what your key is, send a first message and buy your first credits.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/getting-started/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Getting started - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Open Nymbot, understand what your key is, send a first message and buy your first credits.">
+    <link rel="canonical" href="https://nymbot.ai/docs/getting-started/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Getting started</h1>
+            <p class="docs-lede">From nothing to a first answer. There is no form to fill in, so most of
+                this is explaining what just happened.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="open-it">Open Nymbot</h2>
+            <p>The web app is at <a href="https://nymbot.ai/app">nymbot.ai/app</a>. It installs like a
+                native app if you want it to &mdash; "Add to Home Screen" on a phone, the install icon in the
+                address bar on a desktop &mdash; and works the same either way. There are also
+                <a href="/docs/apps/">Android and iOS builds</a>, though not yet in any store.</p>
+            <p>The first time it opens it generates a keypair and asks you to pick a nym: a display name,
+                not a username. Nobody checks it and nobody reserves it, because it is not what identifies
+                you. Your public key is.</p>
+
+            <h2 id="your-key">Your key is your account</h2>
+            <p>Nymbot has no user table. The private key sitting in your browser's storage is the whole
+                account:</p>
+            <ul>
+                <li>It signs the messages you send, which is how the server knows a request is really
+                    yours.</li>
+                <li>Your credit balance is filed under its public half.</li>
+                <li>Your conversation history is encrypted to it, so only that key can read it back.</li>
+            </ul>
+            <p>Which means two things worth taking seriously. <strong>Back it up.</strong> Settings &rarr;
+                Identity shows your <code>nsec</code> &mdash; write it down somewhere offline, because
+                nobody can reissue it. And <strong>protect it on the device</strong>: turn on
+                <a href="/docs/identity/#encryption-at-rest">identity encryption</a> so the key is unreadable
+                in storage without your passphrase, biometric or hardware key.</p>
+            <p>If you already use <a href="https://nymchat.app">Nymchat</a> or any other Nostr app, sign in
+                with that <code>nsec</code> or a browser extension instead, and your existing credits and
+                Nymbot history come with you.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Note</span>
+                <p>Nymbot and Nymchat share one balance and one identity. Buying credits in either tops up
+                    the same account, and you can move between the two apps freely.</p>
+            </div>
+
+            <h2 id="first-conversation">Your first conversation</h2>
+            <p>Press <strong>New chat</strong> and type. The first thing you say names the conversation
+                &mdash; see <a href="/docs/chats/#titles">where the titles come from</a> &mdash; and
+                everything after it is one continuous thread the model can see.</p>
+            <p>Above the composer is the toolbar:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Control</th><th>What it does</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Standard / Pro</strong></td><td>Which <a href="/docs/credits/#two-balances">balance</a> this conversation spends.</td></tr>
+                        <tr><td><strong>Model</strong></td><td>Auto-routed, or one frontier model you pin. See <a href="/docs/models/">models</a>.</td></tr>
+                        <tr><td><strong>Git</strong></td><td>Connects a <a href="/docs/git/">repository</a> Pro replies can read and edit.</td></tr>
+                        <tr><td><strong>Anon</strong></td><td>Moves the chat onto a <a href="/docs/anonymous/">throwaway key</a>.</td></tr>
+                        <tr><td><strong>Buy</strong></td><td>Tops up over Lightning.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Anything starting with <code>?</code> is a command rather than a question &mdash;
+                <code>?help</code> is free and handled on your own device. The full list is in the
+                <a href="/docs/commands/">command reference</a>.</p>
+
+            <h2 id="buying-credits">Buying credits</h2>
+            <p>Replies cost credits, and you start with none. <code>?buy</code>, or the <strong>Buy</strong>
+                button, opens a Lightning invoice; pay it from any Lightning wallet and the balance lands in
+                a few seconds.</p>
+            <p>Standard credits are 10 sats each and buy auto-routed replies. Pro credits are 100 sats each
+                and buy replies from a specific frontier model. They are separate balances and neither
+                converts into the other. <a href="/docs/credits/">Credits and pricing</a> has the detail,
+                including what an individual reply actually costs.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

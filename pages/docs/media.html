@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Images and speech - Nymbot Knowledge Base</title>
+    <meta name="description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Images and speech - Nymbot Knowledge Base">
+    <meta property="og:description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/media/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Images and speech - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <link rel="canonical" href="https://nymbot.ai/docs/media/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Images and speech</h1>
+            <p class="docs-lede">Two commands that produce a file rather than a paragraph. Both are charged
+                per generation rather than by length, and a failed generation costs nothing.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="images">Generating images</h2>
+            <p><code>?image a lighthouse at dusk, long exposure</code> returns a picture. It arrives in the
+                conversation like any other message, encrypted the same way, and you can save it from
+                there.</p>
+            <p>On the standard tier this uses the built-in generator. With a
+                <a href="/docs/models/#pro">Pro model</a> selected you get the frontier generators
+                instead.</p>
+
+            <h2 id="generators">Choosing a generator</h2>
+            <p><code>?image models</code> lists what is available with prices, and costs nothing. With a Pro
+                model selected, <code>?image --model &lt;name&gt; &lt;description&gt;</code> picks one:
+                Nano Banana Pro, Nano Banana 2, Imagen 4, FLUX 2 Max, FLUX 2 Pro, Seedream 5 Pro,
+                GPT Image 2, Grok Imagine and Recraft v4 Pro.</p>
+            <p>They differ in what they are good at rather than in quality &mdash; text rendered inside the
+                image, photographic realism, illustration, and how literally each takes a long prompt. If
+                one misreads a description, another usually will not.</p>
+
+            <h2 id="speech">Speech</h2>
+            <p><code>?speak &lt;text&gt;</code> returns a spoken clip of up to 800 characters. Longer text is
+                refused rather than truncated, so you never pay for half a sentence.</p>
+
+            <h2 id="pricing">What they cost</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Command</th><th>Standard</th><th>With a Pro model selected</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>?image</code></td><td>5 standard credits</td><td>2&ndash;3 Pro credits, depending on the generator</td></tr>
+                        <tr><td><code>?speak</code></td><td>3 standard credits</td><td>1 Pro credit</td></tr>
+                        <tr><td><code>?image models</code></td><td colspan="2">Free</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Because these are flat per-generation charges, the length of your description does not change
+                the price. See <a href="/docs/credits/">credits and pricing</a> for how the two balances
+                work.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

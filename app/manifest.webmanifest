@@ -1,0 +1,14 @@
+{
+  "name": "Nymbot",
+  "short_name": "Nymbot",
+  "description": "A private AI assistant. No account, end-to-end encrypted, paid in sats.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#050810",
+  "theme_color": "#050810",
+  "icons": [
+    { "src": "/app/icons/nymbot-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/app/icons/nymbot-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

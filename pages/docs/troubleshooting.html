@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troubleshooting - Nymbot Knowledge Base</title>
+    <meta name="description" content="What to do when a reply does not arrive, a balance looks wrong, a conversation is missing, or a repository will not connect.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Troubleshooting - Nymbot Knowledge Base">
+    <meta property="og:description" content="What to do when a reply does not arrive, a balance looks wrong, a conversation is missing, or a repository will not connect.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/troubleshooting/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Troubleshooting - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="What to do when a reply does not arrive, a balance looks wrong, a conversation is missing, or a repository will not connect.">
+    <link rel="canonical" href="https://nymbot.ai/docs/troubleshooting/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Troubleshooting</h1>
+            <p class="docs-lede">The handful of things that actually go wrong, and what each one usually
+                means.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="no-reply">The reply never arrives</h2>
+            <p><strong>"Nymbot is still working on that message."</strong> A long Pro reply, or a
+                <a href="/docs/git/">repository task</a>, can outlast the request that asked for it. The
+                answer is being generated and is held for you; send the same message again and you collect
+                it rather than paying for a second one.</p>
+            <p><strong>"Could not fetch your encrypted message from the relays yet."</strong> Your wrap had
+                not propagated when the worker went looking. Try again &mdash; nothing was charged.</p>
+            <p><strong>Nothing at all.</strong> Check the connection indicator. If the app cannot reach the
+                relays it cannot publish your message, and a network that blocks WebSockets &mdash; some
+                corporate and hotel networks &mdash; will stop it dead.</p>
+
+            <h2 id="credits-wrong">The balance looks wrong</h2>
+            <p><code>?balance</code> asks the server rather than reading a cached number, so start
+                there.</p>
+            <p>A payment that settled but did not credit is usually a claim interrupted between the two.
+                Reopen the purchase and it completes; the claim is idempotent, so you cannot be credited
+                twice by retrying.</p>
+            <p>If you are in <a href="/docs/anonymous/">anonymous mode</a>, remember the throwaway key has
+                its own balance. <code>?balance</code> shows that one while the mode is on, and your nym's
+                balance is untouched behind it.</p>
+            <p>A reply that cost more than you expected was probably a long Pro reply &mdash; those
+                <a href="/docs/credits/#what-a-reply-costs">scale with length</a> &mdash; or a repo task
+                that used several model calls. The app reports both.</p>
+
+            <h2 id="history-missing">A conversation is missing</h2>
+            <p>On a new device, history is restored from the relays, which takes a moment and depends on the
+                relays still holding those wraps. Give it time before concluding it is gone.</p>
+            <p>If you are signed in with a different key than the one that had the conversation, you will
+                not see it and cannot &mdash; it is encrypted to the other key. Check the nym in the
+                header.</p>
+            <p>A <a href="/docs/chats/#clearing">cleared</a> conversation or a
+                <a href="/docs/identity/#panic">panic wipe</a> is not recoverable by anyone.</p>
+
+            <h2 id="git-errors">The repository will not connect</h2>
+            <ul>
+                <li><strong>"That does not look like a valid token."</strong> The token format did not match
+                    the provider you chose. GitHub, GitLab and Gitea all issue different shapes.</li>
+                <li><strong>The repository list is empty.</strong> The token is valid but not scoped to any
+                    repository, or scoped to an organisation that has not approved it.</li>
+                <li><strong>It connects but cannot write.</strong> Writes are off by default &mdash;
+                    <code>?git writes on</code> &mdash; and the token also needs write scope at the
+                    provider.</li>
+                <li><strong>It works on one device and not another.</strong> The token is
+                    <a href="/docs/git/#token-safety">device-local by design</a>. Connect again there.</li>
+            </ul>
+
+            <h2 id="locked-out">Locked out of an encrypted identity</h2>
+            <p><a href="/docs/identity/#encryption-at-rest">Identity encryption</a> has no recovery path.
+                That is what makes it worth having, and it means a forgotten passphrase, a wiped biometric
+                enrolment or a lost hardware key ends that copy of the identity.</p>
+            <p>If you backed up your <code>nsec</code>, reinstall and sign in with it. If you did not, the
+                identity is gone &mdash; which is the moment everyone learns why the backup is the first
+                thing this knowledge base tells you to do.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

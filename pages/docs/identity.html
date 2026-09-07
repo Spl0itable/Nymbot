@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Identity and login - Nymbot Knowledge Base</title>
+    <meta name="description" content="Keys instead of accounts, ways to sign in, encrypting your identity at rest, and the panic wipe.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Identity and login - Nymbot Knowledge Base">
+    <meta property="og:description" content="Keys instead of accounts, ways to sign in, encrypting your identity at rest, and the panic wipe.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/identity/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Identity and login - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Keys instead of accounts, ways to sign in, encrypting your identity at rest, and the panic wipe.">
+    <link rel="canonical" href="https://nymbot.ai/docs/identity/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Identity and login</h1>
+            <p class="docs-lede">There is no account, no email and no password. There is a key, and
+                everything else follows from how well you look after it.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="nsec">Keys, not accounts</h2>
+            <p>Your identity is a Nostr keypair. The public half (an <code>npub</code>) is what the service
+                knows you by; the private half (an <code>nsec</code>) stays on your device and signs on your
+                behalf.</p>
+            <p>Your nym &mdash; the display name you picked &mdash; is decoration. The four characters after
+                it are derived from your public key, and they are the part that actually distinguishes one
+                <code>alice</code> from another.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Back it up</span>
+                <p>Nobody can reissue your key. Lose it and you lose your history and any credits on it.
+                    Copy the <code>nsec</code> somewhere offline the first day you use the app.</p>
+            </div>
+
+            <h2 id="signing-in">Ways to sign in</h2>
+            <ul>
+                <li><strong>Generate one.</strong> The default on a fresh install.</li>
+                <li><strong>Paste an <code>nsec</code>.</strong> Brings an existing identity &mdash; from
+                    <a href="https://nymchat.app">Nymchat</a> or any other Nostr app &mdash; with its
+                    credits and its Nymbot history.</li>
+                <li><strong>A browser extension</strong> (NIP-07). The key stays in the extension and never
+                    reaches the page; the app asks it to sign.</li>
+                <li><strong>A remote signer</strong> (NIP-46), if you keep your key on another device.</li>
+            </ul>
+            <p>Signing in with the same key on a second device gives you the same account. Nothing has to be
+                migrated, because nothing lives anywhere but the key.</p>
+
+            <h2 id="encryption-at-rest">Identity encryption</h2>
+            <p>Optional protection for the stored key, so it cannot be read out of local storage without
+                unlocking. You pick the factor per device: a passphrase, a biometric, or a hardware security
+                key.</p>
+            <p>No password, salt or credential is ever synced. Only an on/off preference travels, so you can
+                choose to set encryption up on a new device rather than have it assumed.</p>
+            <p>It also covers the <a href="/docs/anonymous/">anonymous mode</a> throwaway key and its
+                vouchers. Your <a href="/docs/git/#token-safety">git access token</a> is device-local too,
+                for the same reason.</p>
+
+            <h2 id="panic">Panic wipe</h2>
+            <p>Press and hold the panic control and everything local is destroyed immediately: your key,
+                every conversation, the git token, the throwaway key and any credits left on it.</p>
+            <p>It is not a logout and there is no confirmation dialog to talk yourself out of. If you have
+                backed up your <code>nsec</code> you can come back to the same account later; if you have
+                not, that identity is gone.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

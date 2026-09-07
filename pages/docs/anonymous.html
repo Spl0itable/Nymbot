@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anonymous mode - Nymbot Knowledge Base</title>
+    <meta name="description" content="How anonymous AI chat works in Nymbot: a throwaway key the service cannot link to you, and credits moved across as blind vouchers it signs without seeing.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Anonymous mode - Nymbot Knowledge Base">
+    <meta property="og:description" content="How anonymous AI chat works in Nymbot: a throwaway key the service cannot link to you, and credits moved across as blind vouchers it signs without seeing.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/anonymous/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Anonymous mode - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="How anonymous AI chat works in Nymbot: a throwaway key the service cannot link to you, and credits moved across as blind vouchers it signs without seeing.">
+    <link rel="canonical" href="https://nymbot.ai/docs/anonymous/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Anonymous mode</h1>
+            <p class="docs-lede">Encryption was never the gap. Attribution was. Anonymous mode makes the
+                server able to charge a message without being able to learn whose credits it is
+                charging.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="the-gap">The gap it closes</h2>
+            <p>The chat is <a href="/docs/encryption/">end-to-end encrypted</a>, but the service still knows
+                which public key is talking to it. The seal inside each gift wrap is signed by your identity
+                key; your credit row, your conversation thread and the turn de-duplication all hang off that
+                key; and the archived copy of each reply is addressed to it.</p>
+            <p>So anyone holding the bot's private key could enumerate who used the paid chat, and anyone
+                with the database could do it without the key. Nothing there is a decryption failure. It is
+                simply that your name is on the bill.</p>
+
+            <h2 id="throwaway-key">The throwaway key</h2>
+            <p>The <strong>Anon</strong> chip, or <code>?anon</code>, generates a keypair on your device and
+                moves the whole conversation onto it. From then on the rumor, the seal and the request
+                signature are all that key &mdash; your identity key signs nothing in this conversation at
+                all.</p>
+            <p>Replies stay <a href="/docs/encryption/#post-quantum">hybrid post-quantum</a>: the throwaway
+                key carries its own KEM key, derived from a root generated independently of the signing key,
+                so publishing one does not weaken the other.</p>
+            <p>While it is on, read receipts, typing indicators, reactions and edits to Nymbot are held
+                back. Each of those would otherwise carry your real signature into the same conversation and
+                undo the whole thing. If your app cannot honour that &mdash; a locked vault, state not yet
+                restored &mdash; it refuses to send rather than quietly falling back to your identity
+                key.</p>
+            <p>The throwaway key is stored under <a href="/docs/identity/#encryption-at-rest">identity
+                encryption</a> and syncs to your other devices, so the conversation and its balance follow
+                you. Rotating it keeps the previous keys around for a while so their history stays readable
+                and their balance stays sweepable.</p>
+
+            <h2 id="vouchers">Blind credit vouchers</h2>
+            <p>Simply transferring credits to the throwaway key would hand the server the link the mode
+                exists to break. So credits move as <strong>blind vouchers</strong>, in the Chaumian style a
+                Cashu mint uses.</p>
+            <ol>
+                <li>Your app picks a random secret and blinds it with a random factor.</li>
+                <li>Authenticated as your nym, it asks the server to sign the blinded value. The server
+                    debits your balance and signs something it cannot read.</li>
+                <li>Each signature comes with a proof that the published signing key was the one used. Your
+                    app verifies it, and refuses the whole move if it does not check out &mdash; an
+                    unprovable signature is a tagging vector, not a cosmetic problem.</li>
+                <li>Your app unblinds. The result is a valid token that looks like nothing the server has
+                    seen.</li>
+                <li>Later, authenticated as the throwaway key, it presents the token. The server verifies
+                    it, checks it has not been spent, and credits the key &mdash; with nothing to match it
+                    against.</li>
+            </ol>
+            <p>The tables record that a voucher was issued and that a voucher was spent. Neither records
+                who. That link is what the blinding destroys, and storing it would put it straight back.</p>
+            <p>The keyset is published, and your app pins it and warns you if it changes &mdash; a
+                per-user keyset is exactly how a mint would tag its users. You can also skip the move
+                entirely and buy credits straight onto the throwaway key with <code>?buy</code>.</p>
+
+            <h2 id="limits">What it does not hide</h2>
+            <p>Being honest about the edges is the only way the rest of it is worth anything.</p>
+            <ul>
+                <li><strong>The relays see one connection publishing both identities' events.</strong> If
+                    that is in your threat model, use Tor or a VPN.</li>
+                <li><strong>Rotating the key and carrying the balance over</strong> shows the server one
+                    anonymous key paying another.</li>
+                <li><strong>A conversation is a conversation.</strong> Every message under one throwaway key
+                    is linked to the others by construction &mdash; the assistant needs the thread as
+                    context.</li>
+                <li><strong>What you write can identify you.</strong> No amount of key hygiene helps if the
+                    question names your employer.</li>
+                <li><code>?gift</code> and <code>?transfer</code> stay on your real nym, because both are
+                    about a named account.</li>
+            </ul>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Careful</span>
+                <p>Credits on a throwaway key live and die with that key. A
+                    <a href="/docs/identity/#panic">panic wipe</a> takes it and anything left on it.</p>
+            </div>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

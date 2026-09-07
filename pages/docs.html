@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nymbot Knowledge Base</title>
+    <meta name="description" content="How Nymbot works: an anonymous AI chat with no account — conversations, credits, models, the git integration, anonymous mode and the encryption underneath.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Nymbot Knowledge Base">
+    <meta property="og:description" content="How Nymbot works: an anonymous AI chat with no account — conversations, credits, models, the git integration, anonymous mode and the encryption underneath.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Nymbot Knowledge Base">
+    <meta name="twitter:description" content="How Nymbot works: an anonymous AI chat with no account — conversations, credits, models, the git integration, anonymous mode and the encryption underneath.">
+    <link rel="canonical" href="https://nymbot.ai/docs/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Nymbot knowledge base</h1>
+            <p class="docs-lede">Nymbot is a private AI assistant. Every message is end-to-end encrypted,
+                every reply is paid for in Bitcoin, and there is no account to make &mdash; a key on your
+                device is the whole of it.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-nymbot-is">What Nymbot is</h2>
+            <p>An assistant you talk to the way you would talk to a person in a messenger. You open a
+                conversation, you type, it answers. What is different is underneath.</p>
+            <ul>
+                <li><strong>There is no sign-up.</strong> A keypair is generated on your device, or you
+                    bring one you already have. That key is your identity, your history and your balance.</li>
+                <li><strong>Messages are end-to-end encrypted.</strong> Your question and its answer travel
+                    as <a href="/docs/encryption/#gift-wraps">gift-wrapped</a> Nostr events, sealed to keys
+                    only the two ends hold, with a
+                    <a href="/docs/encryption/#post-quantum">post-quantum</a> layer over the classical one.</li>
+                <li><strong>Replies are paid for in sats.</strong> No subscription, no card, no invoice with
+                    your name on it. You buy <a href="/docs/credits/">credits</a> over Lightning and spend
+                    them a reply at a time.</li>
+                <li><strong>It can stop knowing who you are.</strong>
+                    <a href="/docs/anonymous/">Anonymous mode</a> moves the whole conversation onto a
+                    throwaway key and moves your credits across as blind vouchers, so the server bills a
+                    message it cannot attribute.</li>
+            </ul>
+            <p>Under the hood it is the same assistant that lives inside
+                <a href="https://nymchat.app">Nymchat</a>, running on the same infrastructure and the same
+                key. Buy credits in one, spend them in the other.</p>
+
+            <h2 id="how-to-read-this">How to read this</h2>
+            <p>The nav on the left is the whole knowledge base, and the search box at the top filters it by
+                heading, so you can jump straight at a term you half remember.</p>
+            <p>If you have not used Nymbot yet, <a href="/docs/getting-started/">Getting started</a> is five
+                minutes and covers everything you need to send a first message. If you have, the pages you
+                are most likely to want are <a href="/docs/credits/">Credits and pricing</a>,
+                <a href="/docs/models/">Models and routing</a> and the
+                <a href="/docs/commands/">command reference</a>.</p>
+            <p>Every page also exists as markdown &mdash; add <code>.md</code> to its address &mdash; and the
+                whole site is summarised for agents at <a href="/llms.txt">/llms.txt</a>.</p>
+
+            <h2 id="the-short-version">The short version</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>You want to</th><th>Do this</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Start talking</td><td>Open <a href="https://nymbot.ai/app">the app</a> and type. A key is made for you.</td></tr>
+                        <tr><td>Start a fresh subject</td><td>New chat. Each one is its own thread with its own <a href="/docs/chats/#titles">title</a>.</td></tr>
+                        <tr><td>Top up</td><td><code>?buy</code>, or the <strong>Buy</strong> button in the toolbar.</td></tr>
+                        <tr><td>Use a specific frontier model</td><td><code>?model</code>, or the model chip in the toolbar.</td></tr>
+                        <tr><td>Work in your code</td><td><code>?git</code> &mdash; see <a href="/docs/git/">the repository page</a>.</td></tr>
+                        <tr><td>Make a picture</td><td><code>?image a lighthouse at dusk</code></td></tr>
+                        <tr><td>Hide your nym from the server</td><td><code>?anon</code> &mdash; see <a href="/docs/anonymous/">anonymous mode</a>.</td></tr>
+                        <tr><td>Check what you have left</td><td><code>?balance</code></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>
