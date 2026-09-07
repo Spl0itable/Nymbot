@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
 import 'i18n/i18n.dart';
 import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
+import 'sheets/artifacts_sheet.dart';
+import 'sheets/bots_sheet.dart';
+import 'sheets/compare_sheet.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/models_sheet.dart';
 import 'sheets/personas_sheet.dart';
 import 'sheets/repos_sheet.dart';
+import 'sheets/schedules_sheet.dart';
+import 'sheets/workspaces_sheet.dart';
 
 /// The AI toolbar: which balance this chat spends, which model answers, the
 /// connected repository, anonymous mode, and the credit balance.
@@ -67,6 +73,57 @@ class NymbotToolbar extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             _Chip(
+              icon: Icons.schedule,
+              label: app.schedules.where((s) => s.enabled).isEmpty
+                  ? t('Scheduled')
+                  : t('{n} scheduled',
+                      {'n': app.schedules.where((s) => s.enabled).length}),
+              active: app.schedules.any((s) => s.enabled),
+              onTap: () => showSchedulesSheet(context),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: app.current?.ephemeral == true
+                  ? Icons.no_accounts
+                  : Icons.history_toggle_off,
+              label: app.current?.ephemeral == true ? t('Ghost on') : t('Ghost'),
+              active: app.current?.ephemeral == true,
+              onTap: () => _confirmGhost(context, app),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: NymIcons.forPersona(app.activeBot?.icon ?? 'robot'),
+              label: app.activeBot?.name ?? t('Bot'),
+              active: app.activeBot != null,
+              onTap: () => showBotsSheet(context),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: Icons.folder_outlined,
+              label: app.activeWorkspace?.name ?? t('Workspace'),
+              active: app.activeWorkspace != null,
+              onTap: () => showWorkspacesSheet(context),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: Icons.splitscreen_outlined,
+              label: t('Compare'),
+              active: false,
+              onTap: () => showCompareSheet(context),
+            ),
+            if (app.artifacts.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              _Chip(
+                icon: Icons.description_outlined,
+                label: app.artifacts.length == 1
+                    ? t('1 artifact')
+                    : t('{n} artifacts', {'n': app.artifacts.length}),
+                active: true,
+                onTap: () => showArtifactsSheet(context),
+              ),
+            ],
+            const SizedBox(width: 6),
+            _Chip(
               icon: Icons.public,
               label: t('Web'),
               active: app.settings.webSearch,
@@ -92,6 +149,34 @@ class NymbotToolbar extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Turning ghost mode on is a promise about what is kept, so it is asked for
+/// rather than toggled by accident.
+Future<void> _confirmGhost(BuildContext context, AppController app) async {
+  final conv = app.current;
+  if (conv == null) return;
+  if (conv.ephemeral) {
+    await app.setEphemeral(false);
+    return;
+  }
+  final go = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(t('Make this a ghost chat?')),
+      content: Text(t('Nothing it says will be written to this device, and no '
+          'archive copy will be published. It is gone when you close the app.')),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(t('Cancel'))),
+        FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(t('Make it a ghost'))),
+      ],
+    ),
+  );
+  if (go == true) await app.setEphemeral(true);
 }
 
 class ContextBar extends StatelessWidget {

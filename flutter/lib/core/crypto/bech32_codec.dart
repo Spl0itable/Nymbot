@@ -117,6 +117,37 @@ String decodeNote(String note) {
   return bytesToHex(r.data);
 }
 
+/// Encodes an addressable event as an `naddr`: the NIP-19 TLV form carrying the
+/// `d` tag, the author and the kind, which is what makes a replaceable event
+/// referable by address rather than by id.
+String encodeNaddr({
+  required String identifier,
+  required String pubkey,
+  required int kind,
+  List<String> relays = const [],
+}) {
+  final out = <int>[];
+  void record(int type, List<int> value) {
+    out
+      ..add(type)
+      ..add(value.length)
+      ..addAll(value);
+  }
+
+  record(0, identifier.codeUnits);
+  for (final relay in relays) {
+    record(1, relay.codeUnits);
+  }
+  record(2, hexToBytes(pubkey));
+  record(3, [
+    (kind >> 24) & 0xff,
+    (kind >> 16) & 0xff,
+    (kind >> 8) & 0xff,
+    kind & 0xff,
+  ]);
+  return _encode('naddr', out);
+}
+
 /// HRP for a post-quantum root secret (PQ-ROOT-SPEC §1), matching the PWA's
 /// `nip19.encodeBytes('nympq', bytes)`.
 const String nymPqHrp = 'nympq';

@@ -166,6 +166,10 @@
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.46.62.85.7H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                     <span>Appearance</span>
                 </button>
+                <button class="side-link" type="button" data-act="open-help">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M9.6 9.2a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.8-.9 1.4v.5"></path><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"></circle></svg>
+                    <span>Help</span>
+                </button>
             </div>
             <div class="sidebar-foot">
                 <button class="who" type="button" data-act="open-settings">
@@ -242,6 +246,30 @@
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                     <span class="chip-label">Anon</span>
                 </button>
+                <button class="chip" type="button" data-act="open-schedules" id="chipSchedules" title="Prompts Nymbot sends on a schedule">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+                    <span class="chip-label">Scheduled</span>
+                </button>
+                <button class="chip" type="button" data-act="toggle-ghost" id="chipGhost" title="Keep this chat off this device">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7v11l2.5-2 2.5 2 2-2 2 2 2.5-2 2.5 2V9a7 7 0 0 0-7-7Z"></path><circle cx="9.5" cy="10" r="1"></circle><circle cx="14.5" cy="10" r="1"></circle></svg>
+                    <span class="chip-label">Ghost</span>
+                </button>
+                <button class="chip" type="button" data-act="open-bots" id="chipBot" title="Bots you have made or been given">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4"></path><circle cx="9" cy="14" r="1"></circle><circle cx="15" cy="14" r="1"></circle></svg>
+                    <span class="chip-label">Bot</span>
+                </button>
+                <button class="chip" type="button" data-act="open-workspaces" id="chipWorkspace" title="Standing instructions, files and repositories">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>
+                    <span class="chip-label">Workspace</span>
+                </button>
+                <button class="chip" type="button" data-act="open-compare" id="chipCompare" title="Ask two models the same thing">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect></svg>
+                    <span class="chip-label">Compare</span>
+                </button>
+                <button class="chip" type="button" data-act="open-artifacts" id="chipArtifacts" hidden title="Files this chat has produced">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                    <span class="chip-label">Artifacts</span>
+                </button>
                 <button class="chip chip-buy" type="button" data-act="open-credits" id="chipBuy" title="Buy credits">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     <span class="chip-label" id="chipBuyLabel">Buy</span>
@@ -250,7 +278,41 @@
 
             <div class="context-bar" id="contextBar" hidden></div>
 
-            <div class="messages screen-messages" id="messages"></div>
+            <div class="chat-body" id="chatBody">
+                <div class="messages screen-messages" id="messages"></div>
+
+                <aside class="artifact-panel" id="artifactPanel" hidden>
+                    <header class="artifact-head">
+                        <button class="icon-btn only-narrow" type="button" data-act="artifact-close" aria-label="Back to the chat">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                        </button>
+                        <input data-i18n-skip type="text" id="artifactTitle" class="artifact-title" autocomplete="off">
+                        <span class="artifact-lang" id="artifactLang"></span>
+                        <button class="icon-btn" type="button" data-act="artifact-close" aria-label="Close" id="artifactCloseWide">&times;</button>
+                    </header>
+                    <div class="artifact-tabs" role="tablist">
+                        <button class="pill is-active" type="button" data-act="artifact-tab" data-tab="preview" role="tab">Preview</button>
+                        <button class="pill" type="button" data-act="artifact-tab" data-tab="source" role="tab">Source</button>
+                        <button class="pill" type="button" data-act="artifact-tab" data-tab="versions" role="tab">Versions</button>
+                    </div>
+                    <div class="artifact-view" id="artifactPreview">
+                        <iframe id="artifactFrame" class="artifact-frame" sandbox="allow-scripts" title="Artifact preview"></iframe>
+                        <div class="artifact-reader" id="artifactReader" hidden></div>
+                    </div>
+                    <div class="artifact-view" id="artifactSource" hidden>
+                        <textarea id="artifactBody" class="artifact-body" spellcheck="false"></textarea>
+                    </div>
+                    <div class="artifact-view" id="artifactVersions" hidden>
+                        <div class="version-list" id="versionList"></div>
+                    </div>
+                    <footer class="artifact-foot">
+                        <span class="artifact-status" id="artifactStatus"></span>
+                        <button class="btn btn-small" type="button" data-act="artifact-copy">Copy</button>
+                        <button class="btn btn-small" type="button" data-act="artifact-download">Save</button>
+                        <button class="btn btn-small btn-primary" type="button" data-act="artifact-save" id="artifactSave" hidden>Save version</button>
+                    </footer>
+                </aside>
+            </div>
 
             <button class="jump-btn" id="jumpBtn" type="button" data-act="scroll-bottom" hidden aria-label="Jump to the newest message">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
@@ -321,6 +383,205 @@
             <div class="model-list" id="modelList"></div>
             <footer>
                 <button class="btn" type="button" data-act="model-off">Auto-routed (standard)</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- What a reply cost -->
+    <div class="modal" id="modalCost" hidden>
+        <div class="modal-card">
+            <header><h2>What this reply cost</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <div class="cost-rows" id="costRows"></div>
+            <p class="hint" id="costNote"></p>
+            <footer>
+                <button class="btn" type="button" data-act="open-stats">This chat so far&hellip;</button>
+                <button class="btn btn-primary" type="button" data-act="open-credits">Buy credits</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Help -->
+    <div class="modal" id="modalHelp" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Help</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <input type="search" id="helpSearch" placeholder="Search this guide" autocomplete="off">
+            <div class="help-body" id="helpBody"></div>
+            <div class="help-contact">
+                <h3 class="section-head">Still stuck?</h3>
+                <p class="hint">Email us and say what you were doing when it went wrong. We cannot read
+                    your chats &mdash; they are encrypted to keys we do not hold &mdash; so the more you
+                    can tell us, the more we can help.</p>
+                <div class="gate-actions">
+                    <a class="btn btn-small btn-primary" id="helpMail" href="mailto:support@nymbot.ai">Email support@nymbot.ai</a>
+                    <a class="btn btn-small" href="/docs/" target="_blank" rel="noopener">Full knowledge base</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scheduled prompts -->
+    <div class="modal" id="modalSchedules" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Scheduled prompts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A prompt Nymbot sends for you on a schedule. There is no server doing
+                this: it runs while the app is open, and a run that came due while it was shut runs
+                once when you come back rather than catching up on all of them. Each run costs a
+                reply, like any other.</p>
+            <div class="repo-list" id="scheduleList"></div>
+            <div class="repo-form" id="scheduleForm">
+                <h3 class="section-head" id="scheduleFormTitle">New scheduled prompt</h3>
+                <label for="scheduleTitle">Name</label>
+                <input data-i18n-skip type="text" id="scheduleTitle" placeholder="Morning digest" autocomplete="off">
+                <label for="schedulePrompt">Prompt</label>
+                <textarea id="schedulePrompt" rows="3" placeholder="What should it ask?"></textarea>
+                <div class="field-grid">
+                    <div>
+                        <label for="scheduleRepeat">How often</label>
+                        <select id="scheduleRepeat">
+                            <option value="once">Once</option>
+                            <option value="hourly">Every hour</option>
+                            <option value="daily">Every day</option>
+                            <option value="weekly">Every week</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="scheduleWhen">First run</label>
+                        <input type="datetime-local" id="scheduleWhen">
+                    </div>
+                </div>
+                <label class="check"><input type="checkbox" id="scheduleHere"> Send it into this chat rather than a new one</label>
+                <p class="modal-status" id="scheduleStatus"></p>
+                <footer>
+                    <button class="btn primary" type="button" data-act="schedule-save">Save it</button>
+                    <button class="btn" type="button" data-act="schedule-reset">Clear the form</button>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bots -->
+    <div class="modal" id="modalBots" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Bots</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A bot is a way of answering: a name, standing instructions, a model
+                and a few openers. Share one as a link or publish it under your npub. A shared bot
+                carries none of your repositories, tokens or files &mdash; only how it answers.</p>
+            <div class="repo-list" id="botList"></div>
+            <div class="repo-form" id="botForm">
+                <h3 class="section-head" id="botFormTitle">New bot</h3>
+                <label for="botName">Name</label>
+                <input data-i18n-skip type="text" id="botName" placeholder="Release notes" autocomplete="off">
+                <label for="botTagline">One line about it</label>
+                <input type="text" id="botTagline" placeholder="Turns a diff into something a human can read" autocomplete="off">
+                <label for="botIcon">Icon</label>
+                <div class="icon-picker" id="botIcons"></div>
+                <label for="botInstructions">Standing instructions</label>
+                <textarea id="botInstructions" rows="4" placeholder="How it should answer, every time"></textarea>
+                <label for="botModel">Model</label>
+                <select id="botModel"></select>
+                <label for="botStarters">Openers, one per line</label>
+                <textarea id="botStarters" rows="3" placeholder="Summarise the last release&#10;What changed in the API?"></textarea>
+                <p class="modal-status" id="botStatus"></p>
+                <footer>
+                    <button class="btn primary" type="button" data-act="bot-save">Save bot</button>
+                    <button class="btn" type="button" data-act="bot-reset">Clear the form</button>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sharing a bot -->
+    <div class="modal" id="modalShareBot" hidden>
+        <div class="modal-card">
+            <header><h2 id="shareBotTitle">Share this bot</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Anyone with this link gets the bot, not your account. It carries the
+                name, the instructions, the model and the openers &mdash; nothing else.</p>
+            <canvas id="shareBotQr" width="240" height="240" aria-label="Bot link as a QR code"></canvas>
+            <label for="shareBotLink">Link</label>
+            <textarea id="shareBotLink" rows="3" readonly></textarea>
+            <div class="row-actions">
+                <button class="btn" type="button" data-act="bot-copy-link">Copy the link</button>
+                <button class="btn" type="button" data-act="bot-publish">Publish under my npub</button>
+            </div>
+            <div id="shareBotAddr" hidden>
+                <label for="shareBotNaddr">Address</label>
+                <textarea id="shareBotNaddr" rows="2" readonly></textarea>
+            </div>
+            <p class="modal-status" id="shareBotStatus"></p>
+        </div>
+    </div>
+
+    <!-- Adding a shared bot -->
+    <div class="modal" id="modalAddBot" hidden>
+        <div class="modal-card">
+            <header><h2>Add a bot</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Paste a bot link or an address published on Nostr.</p>
+            <label for="addBotInput">Link or address</label>
+            <textarea id="addBotInput" rows="3" placeholder="https://…/app/#bot=… or naddr1…"></textarea>
+            <div class="bot-preview" id="addBotPreview" hidden></div>
+            <p class="modal-status" id="addBotStatus"></p>
+            <footer>
+                <button class="btn primary" type="button" data-act="bot-fetch">Look it up</button>
+                <button class="btn" type="button" data-act="bot-accept" hidden id="addBotAccept">Add it</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Workspaces -->
+    <div class="modal" id="modalWorkspaces" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Workspaces</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A workspace is standing context: instructions, reference files and
+                repositories that every chat in it starts with. The files stay on this device and
+                travel only inside the first message of a chat that uses them.</p>
+            <div class="repo-list" id="workspaceList"></div>
+            <div class="repo-form" id="workspaceForm">
+                <h3 class="section-head" id="workspaceFormTitle">New workspace</h3>
+                <label for="workspaceName">Name</label>
+                <input data-i18n-skip type="text" id="workspaceName" placeholder="Nymbot" autocomplete="off">
+                <label for="workspaceInstructions">Standing instructions</label>
+                <textarea id="workspaceInstructions" rows="3" placeholder="What every chat in here should know"></textarea>
+                <h4 class="section-head">Repositories</h4>
+                <div class="repo-picks" id="workspaceRepos"></div>
+                <h4 class="section-head">Knowledge files</h4>
+                <div class="file-list" id="workspaceFiles"></div>
+                <div class="row-actions">
+                    <button class="btn" type="button" data-act="workspace-add-file">Add a file</button>
+                    <input type="file" id="workspaceFileInput" multiple hidden>
+                </div>
+                <p class="modal-status" id="workspaceStatus"></p>
+                <footer>
+                    <button class="btn primary" type="button" data-act="workspace-save">Save workspace</button>
+                    <button class="btn" type="button" data-act="workspace-reset">Clear the form</button>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <!-- Compare two models -->
+    <div class="modal" id="modalCompare" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Ask two models at once</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">The same prompt goes to two models on separate threads, so neither
+                sees the other's answer. Keep the one you prefer and the chat carries on from it.
+                Two replies means two charges.</p>
+            <div class="compare-pickers">
+                <div>
+                    <label for="compareA">First model</label>
+                    <select id="compareA"></select>
+                </div>
+                <div>
+                    <label for="compareB">Second model</label>
+                    <select id="compareB"></select>
+                </div>
+            </div>
+            <label for="comparePrompt">Prompt</label>
+            <textarea id="comparePrompt" rows="3" placeholder="What should both of them answer?"></textarea>
+            <div class="compare-grid" id="compareGrid" hidden></div>
+            <p class="modal-status" id="compareStatus"></p>
+            <footer>
+                <button class="btn primary" type="button" data-act="compare-run">Ask both</button>
+                <button class="btn" type="button" data-act="close-modal">Close</button>
             </footer>
         </div>
     </div>
@@ -448,6 +709,16 @@
         </div>
     </div>
 
+    <!-- Artifacts -->
+    <div class="modal" id="modalArtifacts" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Artifacts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A reply that produces a whole file &mdash; a page, a script, a document
+                &mdash; opens it here beside the chat, where you can read it, edit it and keep the versions.</p>
+            <div class="repo-list" id="artifactList"></div>
+        </div>
+    </div>
+
     <!-- Saved messages -->
     <div class="modal" id="modalPinned" hidden>
         <div class="modal-card modal-wide">
@@ -571,7 +842,32 @@
                 </div>
             </div>
 
+            <h3 class="section-head">Long tasks</h3>
+            <label for="setAutoContinue">When a repo task runs out of room</label>
+            <select id="setAutoContinue">
+                <option value="0">Stop and tell me</option>
+                <option value="10">Carry on, up to 10 more credits</option>
+                <option value="25">Carry on, up to 25 more credits</option>
+                <option value="50">Carry on, up to 50 more credits</option>
+                <option value="100">Carry on, up to 100 more credits</option>
+                <option value="-1">Carry on until my balance runs out</option>
+            </select>
+            <p class="hint">A repo task can stop mid-way when it has used its allowance of model
+                calls. Carrying on buys it another allowance from the same balance, one leg at a
+                time, and every leg says what it cost. Stop cancels the rest.</p>
+            <label class="check"><input type="checkbox" id="setProgress"> Show what Nymbot is doing while it works</label>
+
             <h3 class="section-head">Your data</h3>
+            <label for="setAutoDelete">Delete chats after</label>
+            <select id="setAutoDelete">
+                <option value="0">Never</option>
+                <option value="1">A day</option>
+                <option value="7">A week</option>
+                <option value="30">A month</option>
+                <option value="90">Three months</option>
+                <option value="365">A year</option>
+            </select>
+            <p class="hint">Swept when the app opens. Pinned chats are never swept.</p>
             <div class="gate-actions">
                 <button class="btn btn-small" type="button" data-act="export-all">Export everything</button>
                 <button class="btn btn-small" type="button" data-act="import-open">Import a backup</button>
@@ -680,6 +976,20 @@
             <header><h2>Identity</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
             <p class="modal-lede" id="settingsWho"></p>
 
+            <label class="reveal-label" for="setNpub">Public key (npub)</label>
+            <div class="reveal-row">
+                <input type="text" id="setNpub" readonly spellcheck="false">
+                <button class="btn btn-small" type="button" data-act="copy" data-target="setNpub">Copy</button>
+            </div>
+
+            <label class="reveal-label" for="setHex">Public key (hex)</label>
+            <div class="reveal-row">
+                <input type="text" id="setHex" readonly spellcheck="false">
+                <button class="btn btn-small" type="button" data-act="copy" data-target="setHex">Copy</button>
+            </div>
+            <p class="hint">Both are the same key in two spellings, and both are safe to share &mdash;
+                they are how somebody addresses you.</p>
+
             <label class="reveal-label" for="setNsec">Private key (nsec)</label>
             <div class="reveal-row">
                 <input type="password" id="setNsec" readonly spellcheck="false">
@@ -757,7 +1067,9 @@
     <script src="/app/js/chat.js"></script>
     <script src="/app/js/highlight.js"></script>
     <script src="/app/js/markdown.js"></script>
+    <script src="/app/js/artifacts.js"></script>
     <script src="/app/js/export.js"></script>
+    <script src="/app/js/bots.js"></script>
     <script src="/app/js/qr.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>

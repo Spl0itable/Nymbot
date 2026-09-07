@@ -80,6 +80,25 @@
                 what an ordinary reply costs.</p>
             <p>The app reports the total and the number of calls after each repo task.</p>
 
+            <h2 id="carrying-on">When a task runs out of room</h2>
+            <p>A repository task is a loop, not a single answer: the model lists a directory, reads a
+                file, searches the tree, reads another, and only then writes. That loop has an
+                allowance &mdash; a number of model calls the reply reserved credits for &mdash; because
+                an unbounded agent is an unbounded bill.</p>
+            <p>When a task uses its allowance with work still to do, Nymbot stops, gives you what it
+                has, and says so. Nothing further is charged.</p>
+            <p>You can also let it carry on. Set a continuation budget in Appearance and Nymbot buys
+                another allowance from the same balance when a task runs out, picking up exactly where
+                it stopped rather than re-reading the repository from the beginning. It goes one leg at
+                a time, each leg saying what it cost, and stops the moment the budget is spent, the task
+                is finished, or you press Stop. Choosing &ldquo;until my balance runs out&rdquo; is still
+                a ceiling &mdash; it is your balance rather than a number you typed.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Note</span>
+                <p>The default is to stop and tell you. Nothing continues, and nothing is spent beyond
+                    the reply you asked for, unless you have set a budget.</p>
+            </div>
+
             <h2 id="token-safety">About that token</h2>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">About that token</span>

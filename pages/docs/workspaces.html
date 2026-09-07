@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workspaces, bots and schedules - Nymbot Knowledge Base</title>
+    <meta name="description" content="Standing context a run of chats shares, bots you can write and share, and prompts Nymbot asks on a schedule.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Workspaces, bots and schedules - Nymbot Knowledge Base">
+    <meta property="og:description" content="Standing context a run of chats shares, bots you can write and share, and prompts Nymbot asks on a schedule.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/workspaces/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Workspaces, bots and schedules - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Standing context a run of chats shares, bots you can write and share, and prompts Nymbot asks on a schedule.">
+    <link rel="canonical" href="https://nymbot.ai/docs/workspaces/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Workspaces, bots and schedules</h1>
+            <p class="docs-lede">Three ways to stop repeating yourself: context a group of chats shares, a bot that answers the way you want, and a question that asks itself.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="workspaces">Workspaces</h2>
+            <p>A workspace is standing context that a run of chats shares: instructions every chat in it
+                should follow, reference files it should have read, and the
+                <a href="/docs/git/">repositories</a> it can see. Put a chat in a workspace and it starts
+                every thread with that context already in place; open a new chat from it and the new one
+                inherits the workspace too.</p>
+            <p>A workspace's repositories are added to whatever the chat already had rather than replacing
+                them, and they are marked as the workspace's in the context bar &mdash; dropping one there
+                would be a lie, because the workspace would put it straight back.</p>
+
+            <h2 id="knowledge-files">Knowledge files</h2>
+            <p>Text and code files attached to a workspace travel inside the first message of any chat that
+                uses it, the same way a persona's instructions do. They are not uploaded anywhere: they sit
+                on the device and are encrypted into the message like everything else you send.</p>
+            <p>There is a limit to how much a model can hold at once, so each file and the set as a whole
+                are capped. A file that had to be cut short says so in the message rather than arriving
+                silently half-read.</p>
+
+            <h2 id="bots">Bots</h2>
+            <p>A bot is a way of answering: a name, standing instructions, a model to answer with, and a
+                few openers. Apply one to a chat and its instructions go ahead of everything else, the
+                model it names is pinned, and the empty chat offers its openers instead of the general
+                ones.</p>
+            <p>Bots are yours to make. A support triager, a release-notes writer, a tutor that never gives
+                the answer away &mdash; each one is a handful of lines you write once and reuse.</p>
+
+            <h2 id="sharing-a-bot">Sharing and publishing one</h2>
+            <p>Share a bot as a link or a QR code and whoever opens it gets the bot, not your account. The
+                payload carries only how the bot answers: the name, the instructions, the model and the
+                openers. It never carries your repositories, your access tokens, your knowledge files or
+                anything either of you has said. The bot rides in the link's fragment, which browsers do
+                not send to a server, so handing one over is not a request to anybody.</p>
+            <p>You can also publish a bot under your own npub, as a replaceable Nostr event, and share the
+                address. Publishing it again replaces it rather than leaving a second copy behind.
+                Publishing is a claim of authorship, so it is always signed by your account and never by an
+                <a href="/docs/anonymous/">anonymous throwaway key</a>.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Careful</span>
+                <p>Instructions from a stranger are still instructions. Adding a shared bot shows you its
+                    instructions in full first &mdash; read them before you use it.</p>
+            </div>
+
+            <h2 id="scheduled">Scheduled prompts</h2>
+            <p>A scheduled prompt is a question Nymbot asks for you: once, hourly, daily or weekly, into a
+                new chat or into one you name. A morning digest, a weekly look over a repository, a standing
+                check on something you would otherwise forget.</p>
+            <p>There is no server doing this. A run happens in the app while it is open, and a run that came
+                due while the app was shut fires once when you come back rather than catching up on every
+                slot it went past. Each run costs a reply, the same as asking by hand.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

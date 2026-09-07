@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../core/theme/theme.dart';
+import '../models/artifact.dart';
 import '../models/conversation.dart';
 import '../models/workspace.dart';
+import 'artifact_screen.dart';
+import 'citation_cards.dart';
+import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
 import 'nym_avatar.dart';
@@ -34,6 +38,10 @@ class MessageBubble extends StatefulWidget {
     this.grouped = false,
     this.speaking = false,
     this.highlighted = false,
+    this.artifacts = const [],
+    this.onOpenArtifact,
+    this.actionsOpen = false,
+    this.onToggleActions,
   });
 
   final ChatMessage message;
@@ -48,6 +56,14 @@ class MessageBubble extends StatefulWidget {
   final bool grouped;
   final bool speaking;
   final bool highlighted;
+  final List<Artifact> artifacts;
+  final void Function(Artifact artifact)? onOpenArtifact;
+
+  /// There is no hover on a phone, so the action row is revealed by tapping
+  /// the bubble. Held by the list rather than the bubble so only one is ever
+  /// open at a time.
+  final bool actionsOpen;
+  final VoidCallback? onToggleActions;
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
@@ -93,8 +109,12 @@ class _MessageBubbleState extends State<MessageBubble> {
             self && settings.bubbles ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           if (!widget.grouped) _author(context, m, self),
-          _content(context, m, self, theme),
-          _actions(context, m),
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: widget.onToggleActions,
+            child: _content(context, m, self, theme),
+          ),
+          if (widget.actionsOpen) _actions(context, m),
         ],
       ),
     );
@@ -153,14 +173,19 @@ class _MessageBubbleState extends State<MessageBubble> {
           if (bot)
             Padding(
               padding: const EdgeInsets.only(left: 3),
-              child: Icon(Icons.verified,
-                  size: 11, color: theme.colorScheme.secondary),
+              // The seal outline is illegible at this size; a ringed tick is
+              // the same claim and survives it.
+              child: Icon(Icons.check_circle_outline,
+                  size: 12, color: theme.colorScheme.secondary),
             ),
           if (bot && m.model != null)
-            Padding(
-              padding: const EdgeInsets.only(left: 5),
-              child: Text(m.model!,
-                  style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 5),
+                child: Text(m.model!,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+              ),
             ),
           if (m.edited)
             Padding(
@@ -168,6 +193,34 @@ class _MessageBubbleState extends State<MessageBubble> {
               child: Text(t('edited'),
                   style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
             ),
+          // The price of a reply belongs beside its byline, at the far end of
+          // the row, rather than trailing the words it charged for.
+          if (m.cost > 0) ...[
+            const Spacer(),
+            InkWell(
+              borderRadius: BorderRadius.circular(4),
+              onTap: () => showCostSheet(context, m),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: NymbotColors.lightning.withValues(alpha: 0.4)),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.bolt,
+                        size: 11, color: NymbotColors.lightning),
+                    Text('${m.cost}',
+                        style: const TextStyle(
+                            fontSize: 10, color: NymbotColors.lightning)),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -234,28 +287,14 @@ class _MessageBubbleState extends State<MessageBubble> {
                 ),
               ),
             if (m.sources.isNotEmpty) _sources(context, m),
+            for (final a in widget.artifacts)
+              ArtifactCard(
+                artifact: a,
+                onOpen: () => widget.onOpenArtifact?.call(a),
+              ),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                if (m.cost > 0)
-                  Container(
-                    margin: const EdgeInsets.only(right: 6, top: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                          color: NymbotColors.lightning.withValues(alpha: 0.4)),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.bolt, size: 11, color: NymbotColors.lightning),
-                        Text('${m.cost}',
-                            style: const TextStyle(
-                                fontSize: 10, color: NymbotColors.lightning)),
-                      ],
-                    ),
-                  ),
                 if (settings.timestamps)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -330,27 +369,8 @@ class _MessageBubbleState extends State<MessageBubble> {
         ),
       );
 
-  Widget _sources(BuildContext context, ChatMessage m) => Padding(
-        padding: const EdgeInsets.only(top: 6),
-        child: Wrap(
-          spacing: 5,
-          runSpacing: 5,
-          children: [
-            for (final s in m.sources.take(8))
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Theme.of(context).dividerColor),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  '${s['title'] ?? s['url'] ?? 'source'}',
-                  style: const TextStyle(fontSize: 10),
-                ),
-              ),
-          ],
-        ),
-      );
+  Widget _sources(BuildContext context, ChatMessage m) =>
+      CitationCards(sources: m.sources);
 
   Widget _reasoning(BuildContext context, ChatMessage m) {
     final open = _reasoningOpen ?? widget.settings.showReasoningByDefault;
@@ -440,15 +460,29 @@ class _MessageBubbleState extends State<MessageBubble> {
     final bot = m.role == ChatRole.bot;
     final buttons = <Widget>[];
 
+    // A long-press tooltip is no use when the row itself had to be tapped
+    // open, so each action wears its label rather than hiding it.
     void add(IconData icon, String tip, MessageAction action, {bool on = false}) {
-      buttons.add(IconButton(
-        icon: Icon(icon, size: 15),
-        tooltip: tip,
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 30, minHeight: 26),
-        color: on ? Theme.of(context).colorScheme.primary : Theme.of(context).hintColor,
-        onPressed: () => widget.onAction(action, m),
+      final colour = on
+          ? Theme.of(context).colorScheme.primary
+          : Theme.of(context).hintColor;
+      buttons.add(Tooltip(
+        message: tip,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => widget.onAction(action, m),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 15, color: colour),
+                const SizedBox(width: 3),
+                Text(tip, style: TextStyle(fontSize: 10.5, color: colour)),
+              ],
+            ),
+          ),
+        ),
       ));
     }
 
@@ -473,12 +507,14 @@ class _MessageBubbleState extends State<MessageBubble> {
         on: m.pinned);
     add(Icons.close, t('Delete'), MessageAction.delete);
 
-    return SizedBox(
-      height: 26,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        reverse: self && widget.settings.bubbles,
-        shrinkWrap: true,
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Wrap(
+        spacing: 2,
+        runSpacing: 2,
+        alignment: self && widget.settings.bubbles
+            ? WrapAlignment.end
+            : WrapAlignment.start,
         children: buttons,
       ),
     );
@@ -492,42 +528,81 @@ class _MessageBubbleState extends State<MessageBubble> {
 }
 
 class TypingIndicator extends StatelessWidget {
-  const TypingIndicator({super.key, required this.label, this.showAvatar = true});
+  const TypingIndicator({
+    super.key,
+    required this.label,
+    this.showAvatar = true,
+    this.steps = const [],
+  });
 
   final String label;
   final bool showAvatar;
 
+  /// What the worker has reported doing, newest last. Shown under the label
+  /// rather than instead of it: the spinner is still the answer to "is it
+  /// working", and these are the answer to "on what".
+  final List<String> steps;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final recent = steps.length > 4 ? steps.sublist(steps.length - 4) : steps;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showAvatar) ...[
             const NymAvatar(seed: 'nymbot', size: 30, bot: true),
             const SizedBox(width: 7),
           ],
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              color: theme.dividerColor.withValues(alpha: 0.9),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(4),
-                topRight: Radius.circular(16),
-                bottomLeft: Radius.circular(16),
-                bottomRight: Radius.circular(16),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: theme.dividerColor.withValues(alpha: 0.9),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
               ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label, style: TextStyle(fontSize: 12.5, color: theme.hintColor)),
-                const SizedBox(width: 8),
-                const _Dot(0),
-                const _Dot(150),
-                const _Dot(300),
-              ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(label,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 12.5, color: theme.hintColor)),
+                      ),
+                      const SizedBox(width: 8),
+                      const _Dot(0),
+                      const _Dot(150),
+                      const _Dot(300),
+                    ],
+                  ),
+                  for (final step in recent)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        step,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: theme.hintColor.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ],

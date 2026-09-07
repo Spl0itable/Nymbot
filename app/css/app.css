@@ -154,6 +154,31 @@ html[data-theme="light"] {
     --tok-meta: #0b6fb8;
 }
 
+/* Scrollbars follow the theme rather than the browser's default grey, and
+   stay out of the way: the thumb is only painted while a surface is actually
+   being scrolled, so a page at rest has none. Surfaces that hide theirs
+   outright (the ASCII banner, the chip rails) override this below. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: transparent;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    transition: background-color 200ms ease;
+}
+.is-scrolling { scrollbar-color: var(--text-faint) transparent; }
+.is-scrolling::-webkit-scrollbar-thumb { background: var(--text-faint); }
+.is-scrolling::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) {
+    *::-webkit-scrollbar-thumb { transition: none; }
+}
+
 html[data-density="compact"] { --msg-gap: 3px; }
 html[data-density="roomy"] { --msg-gap: 12px; }
 
@@ -362,9 +387,21 @@ kbd {
 .brand {
     display: inline-flex;
     align-items: center;
+    gap: 0.4rem;
     color: var(--primary);
 }
-.brand-mark { display: block; }
+.brand-mark { display: block; flex: 0 0 auto; }
+/* Optical, not geometric: the mark's drawn body sits a hair below its box
+   because of the antennae, so the word is nudged to match its middle. */
+.brand-name {
+    font-family: var(--mono);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    position: relative;
+    top: 0.12em;
+}
 
 .icon { display: block; flex: 0 0 auto; }
 .icon-wrap { display: inline-flex; }
@@ -709,7 +746,10 @@ html[data-avatars="off"] .message-group { gap: 0; }
 }
 
 .chat-message.self .message-author { justify-content: flex-end; }
-.message-author .nym-suffix { opacity: 0.7; font-size: 0.9em; font-weight: 100; }
+/* A nym's suffix is what distinguishes it, not what you read first: dimmed
+   the same way wherever one is shown. */
+.nym-suffix { opacity: 0.55; font-size: 0.9em; font-weight: 400; }
+.message-author .nym-suffix { opacity: 0.7; font-weight: 100; }
 .bot-author { color: var(--primary); }
 .verified-tick { margin-left: 0.2rem; color: var(--secondary); display: inline-flex; align-items: center; }
 .author-model { color: var(--text-faint); font-weight: 400; font-size: 0.92em; margin-left: 0.3rem; }
@@ -871,7 +911,33 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .reasoning-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; }
 .reasoning-chip, .cost-chip { display: inline-flex; align-items: center; gap: 0.25rem; vertical-align: middle; }
-.cost-chip { margin-left: 0.35rem; border-color: rgba(247, 147, 26, 0.4); color: var(--lightning); cursor: default; }
+/* The price of a reply belongs beside its byline, at the far end of the row,
+   rather than trailing the words it charged for. */
+.cost-chip {
+    margin-left: auto;
+    border-color: rgba(247, 147, 26, 0.4);
+    color: var(--lightning);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.66rem;
+    font-weight: 400;
+    line-height: 1;
+    padding: 0.22rem 0.4rem;
+}
+.cost-chip:hover { border-color: var(--lightning); }
+.chat-message.self .cost-chip { margin-left: 0.35rem; margin-right: 0; }
+
+.cost-rows { display: grid; gap: 0.1rem; margin-top: 0.4rem; }
+.cost-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--line);
+}
+.cost-row:last-child { border-bottom: 0; }
+.cost-label { flex: 1; min-width: 0; color: var(--text-dim); font-size: 0.82rem; }
+.cost-value { text-align: right; font-size: 0.84rem; font-weight: 600; }
 .repo-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; border-color: rgba(247, 147, 26, 0.35); color: var(--lightning); cursor: default; }
 .source-chip { margin: 0.35rem 0.3rem 0 0; }
 
@@ -912,8 +978,23 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .chat-message:focus-within .msg-actions,
 .msg-actions.is-open { opacity: 1; }
 
+/* No hover on a touch screen, so the row is revealed by tapping the bubble
+   rather than sitting under every message forever. */
 @media (pointer: coarse) {
-    .msg-actions { opacity: 1; }
+    .msg-actions {
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        margin-top: 0;
+        transition: opacity 0.15s, max-height 0.15s;
+    }
+    .msg-actions.is-open {
+        opacity: 1;
+        max-height: 12rem;
+        margin-top: 4px;
+        flex-wrap: wrap;
+        gap: 0.15rem 0.35rem;
+    }
 }
 
 .msg-action {
@@ -931,20 +1012,90 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .msg-action { justify-content: center; min-width: 24px; }
 .msg-action:hover { background: var(--bubble-bot); color: var(--text); }
+
+/* What each one does, said rather than guessed at. Drawn rather than left to
+   the native title, which takes a second to appear and never appears at all
+   on a touch screen. */
+.msg-action { position: relative; }
+.msg-action::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 5px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.2rem 0.4rem;
+    border-radius: 5px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-size: 0.68rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s;
+    z-index: 6;
+}
+.msg-action:hover::after,
+.msg-action:focus-visible::after { opacity: 1; }
+/* At the ends of a row the bubble would run off the screen. */
+.msg-action:first-child::after { left: 0; transform: none; }
+.msg-action:last-child::after { left: auto; right: 0; transform: none; }
+/* On a touch screen there is nothing to hover, so the label stops floating
+   and simply sits beside its icon once the row has been tapped open. */
+@media (pointer: coarse) {
+    .msg-action::after {
+        position: static;
+        transform: none;
+        opacity: 1;
+        z-index: auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-size: 0.66rem;
+    }
+}
 .msg-action.is-on { color: var(--primary); }
 .msg-action.is-down.is-on { color: var(--danger); }
 
+/* What Nymbot is doing, under the spinner rather than instead of it. */
+.bot-thinking-head { display: flex; align-items: center; gap: 0.3rem; }
+.bot-progress { display: grid; gap: 0.1rem; margin-top: 0.3rem; }
+.progress-step {
+    font-size: 0.72rem;
+    color: var(--text-faint);
+    font-family: var(--mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.progress-step.is-thought {
+    font-family: inherit;
+    font-style: italic;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
 .bot-thinking {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr;
     align-items: center;
     gap: 0.45rem;
     padding: 8px 12px;
     margin-bottom: var(--msg-gap);
+    max-width: min(30rem, 88%);
     width: fit-content;
     background: var(--bubble-bot);
     border-radius: var(--bubble-radius);
     border-top-left-radius: var(--bubble-tail);
 }
+.bot-thinking > .avatar-bubble { grid-row: 1 / span 2; align-self: start; }
+.bot-thinking > .bot-thinking-head,
+.bot-thinking > .bot-progress { grid-column: 2; min-width: 0; }
+.bot-thinking > .bot-progress:empty { display: none; }
 .bot-thinking .avatar-bubble { width: 18px; height: 18px; }
 .bot-thinking-label { font-size: 0.8rem; color: var(--text-dim); }
 .typing-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); animation: typingBounce 1s infinite; }
@@ -1025,6 +1176,289 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     cursor: pointer;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
+
+/* --- help ----------------------------------------------------------------- */
+
+.help-body { margin-top: 0.6rem; }
+.help-topic {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 0.35rem;
+}
+.help-topic > summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.88rem;
+    list-style: none;
+}
+.help-topic > summary::-webkit-details-marker { display: none; }
+.help-topic > summary::before { content: '+ '; color: var(--text-faint); }
+.help-topic[open] > summary::before { content: '\2212 '; }
+.help-topic > p { margin-top: 0.45rem; font-size: 0.84rem; color: var(--text-dim); }
+.help-contact { border-top: 1px solid var(--line); margin-top: 0.9rem; padding-top: 0.7rem; }
+
+/* --- citations and diffs -------------------------------------------------- */
+
+.citations { margin-top: 0.5rem; }
+.citations-head { font-size: 0.7rem; color: var(--text-faint); margin-bottom: 0.25rem; }
+.citation {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.4rem 0.5rem;
+    margin-bottom: 0.25rem;
+    color: inherit;
+    text-decoration: none;
+}
+.citation:hover { border-color: var(--line-strong); }
+.citation-mark {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+    color: var(--primary);
+    font-size: 0.66rem;
+    font-weight: 700;
+}
+.citation-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.citation-main strong { font-size: 0.78rem; font-weight: 600; }
+.citation-host { font-size: 0.68rem; color: var(--text-faint); }
+.citation-snippet {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-top: 0.15rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.diff-block {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 0.6rem 0;
+    background: var(--code-bg);
+}
+.diff-file + .diff-file { border-top: 1px solid var(--line); }
+.diff-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+}
+.diff-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.diff-added { color: #2da44e; }
+.diff-removed { color: #cf222e; }
+.diff-body { overflow-x: auto; font-family: var(--mono); font-size: 0.74rem; line-height: 1.5; }
+.diff-line { display: flex; align-items: flex-start; white-space: pre; min-width: max-content; }
+.diff-no {
+    flex: 0 0 auto;
+    width: 2.4rem;
+    padding: 0 0.3rem;
+    text-align: right;
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    user-select: none;
+}
+.diff-text { padding: 0 0.6rem; }
+.diff-line.is-add { background: color-mix(in srgb, #2da44e 14%, transparent); }
+.diff-line.is-del { background: color-mix(in srgb, #cf222e 14%, transparent); }
+.diff-line.is-hunk { background: var(--bg-sunken); color: var(--text-dim); }
+.diff-line.is-meta { color: var(--text-faint); }
+
+/* --- bots ----------------------------------------------------------------- */
+
+.bot-preview {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0.7rem 0.8rem;
+    margin-top: 0.6rem;
+}
+.bot-preview-head { display: flex; align-items: center; gap: 0.45rem; color: var(--text); }
+.bot-preview-line { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.35rem; }
+.bot-preview-body {
+    margin-top: 0.5rem;
+    max-height: 12rem;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    background: var(--bg-sunken);
+    border-radius: 8px;
+    padding: 0.5rem 0.6rem;
+}
+#shareBotQr { display: block; margin: 0.6rem auto; border-radius: 8px; }
+#shareBotLink, #shareBotNaddr { font-family: var(--mono); font-size: 0.74rem; }
+
+/* --- compare -------------------------------------------------------------- */
+
+.compare-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.compare-pickers label { margin-top: 0; }
+.compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-top: 0.9rem;
+}
+.compare-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.compare-col.is-kept { border-color: var(--primary); }
+.compare-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-sunken);
+}
+.compare-name { font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-cost { margin-left: auto; font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
+.compare-body {
+    flex: 1;
+    min-height: 6rem;
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: 0.65rem 0.7rem;
+    font-size: 0.86rem;
+}
+.compare-body > * + * { margin-top: 0.6rem; }
+.compare-body.is-error { color: var(--danger); font-size: 0.8rem; }
+.compare-foot { padding: 0.5rem 0.6rem; border-top: 1px solid var(--line); display: flex; gap: 0.4rem; }
+.compare-foot .btn { flex: 1; }
+
+@media (max-width: 720px) {
+    .compare-pickers, .compare-grid { grid-template-columns: 1fr; }
+    .compare-body { max-height: 34vh; }
+}
+
+/* --- artifacts ------------------------------------------------------------ */
+
+.chat-body { flex: 1; min-height: 0; display: flex; }
+.chat-body > .messages { flex: 1; min-width: 0; }
+
+.artifact-panel {
+    width: min(46%, 620px);
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    background: var(--bg-sunken);
+}
+
+.artifact-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--line);
+}
+.artifact-title {
+    flex: 1;
+    min-width: 0;
+    padding: 0.25rem 0.4rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-weight: 600;
+}
+.artifact-title:hover { border-color: var(--line); }
+.artifact-lang {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-faint);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+    flex: 0 0 auto;
+}
+
+.artifact-tabs { display: flex; gap: 0.3rem; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); }
+
+.artifact-view { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.artifact-frame { flex: 1; border: 0; background: #fff; }
+.artifact-reader { flex: 1; overflow-y: auto; padding: 1rem 1.1rem; }
+.artifact-reader > * + * { margin-top: 0.7rem; }
+.artifact-reader pre.code { background: var(--code-bg); }
+
+.artifact-body {
+    flex: 1;
+    resize: none;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg-sunken);
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    padding: 0.75rem 0.9rem;
+    tab-size: 2;
+}
+.artifact-body:focus { border: 0; outline: 0; }
+/* The class beats the blanket rule further up, so the editor has to opt back
+   in or a phone zooms the whole shell in the moment it takes focus. */
+@media (pointer: coarse) {
+    .artifact-body { font-size: 16px; }
+}
+
+.artifact-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+}
+.artifact-status { flex: 1; min-width: 0; font-size: 0.78rem; color: var(--text-dim); }
+.artifact-status.is-ok { color: var(--primary); }
+
+.version-list { flex: 1; overflow-y: auto; padding: 0.5rem 0.6rem; display: grid; gap: 0.35rem; align-content: start; }
+.version-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.version-row.is-current { border-color: var(--line-strong); }
+.version-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.version-name { font-size: 0.88rem; }
+.version-sub { font-size: 0.74rem; color: var(--text-faint); }
+
+.artifact-tray { display: grid; gap: 0.3rem; margin-top: 0.5rem; }
+.artifact-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-sunken);
+    color: var(--text-dim);
+    text-align: left;
+    cursor: pointer;
+}
+.artifact-card:hover { border-color: var(--line-strong); color: var(--text); }
+.artifact-card-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.artifact-card-main strong { color: var(--text); font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-card-main span { font-size: 0.74rem; color: var(--text-faint); }
 
 /* --- composer ------------------------------------------------------------ */
 
@@ -1184,6 +1618,35 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 
 .repo-form { border-top: 1px solid var(--line); padding-top: 0.5rem; margin-top: 0.6rem; }
 
+.repo-picks { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.repo-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.76rem;
+    cursor: pointer;
+}
+.repo-pick.is-on { border-color: var(--primary); color: var(--primary); }
+.repo-picks .hint { font-size: 0.76rem; }
+
+.file-list { display: grid; gap: 0.3rem; margin-bottom: 0.5rem; }
+.file-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.4rem 0.55rem;
+}
+.file-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.file-name { font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-sub { font-size: 0.72rem; color: var(--text-faint); }
+
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 .stat-cell { border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.7rem; }
 .stat-cell strong { display: block; font-size: 1.25rem; color: var(--text); }
@@ -1287,6 +1750,16 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     .field-grid { grid-template-columns: 1fr; }
     .stat-grid { grid-template-columns: 1fr; }
     .message-content { max-width: 90%; }
+    /* On a phone the panel is the screen: there is no room to put a document
+       beside a conversation, so it covers it and the chat is one tap back. */
+    .artifact-panel {
+        position: fixed;
+        inset: 0;
+        z-index: 45;
+        width: 100%;
+        border-left: 0;
+    }
+    .shell.has-artifact .composer { display: none; }
     .modal-card { padding: 1rem; }
     .palette { padding: 4vh 0.6rem 0.6rem; }
     .jump-btn { bottom: 8.5rem; }

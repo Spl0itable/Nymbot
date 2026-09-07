@@ -11,6 +11,10 @@
         { name: 'repo', args: '[name]', group: 'local', hint: () => t('Toggle a repository for this chat') },
         { name: 'anon', args: '', group: 'local', hint: () => t('Chat from a throwaway key') },
         { name: 'persona', args: '[name|off]', group: 'local', hint: () => t('Apply custom instructions to this chat') },
+        { name: 'workspace', args: '[name|off]', group: 'local', hint: () => t('Start this chat from a workspace') },
+        { name: 'bot', args: '[name|off]', group: 'local', hint: () => t('Answer this chat as one of your bots') },
+        { name: 'ghost', args: '', group: 'local', hint: () => t('Keep this chat off this device entirely') },
+        { name: 'schedule', args: '[prompt]', group: 'local', hint: () => t('Have Nymbot ask something on a schedule') },
         { name: 'system', args: '[text]', group: 'local', hint: () => t('Set this chat\'s custom instructions') },
         { name: 'prompt', args: '[title]', group: 'local', hint: () => t('Insert a saved prompt') },
         { name: 'save', args: '[title]', group: 'local', hint: () => t('Save the composer text as a prompt') },
@@ -26,6 +30,7 @@
         { name: 'theme', args: '[dark|light|system]', group: 'local', hint: () => t('Switch the theme') },
         { name: 'settings', args: '', group: 'local', hint: () => t('Open appearance and behaviour') },
         { name: 'shortcuts', args: '', group: 'local', hint: () => t('Keyboard shortcuts') },
+        { name: 'guide', args: '[topic]', group: 'local', hint: () => t('Open the help guide') },
         { name: 'voice', args: '', group: 'local', hint: () => t('Dictate a message') },
         { name: 'retry', args: '', group: 'local', hint: () => t('Ask the last question again') },
         { name: 'clear', args: '', group: 'local', hint: () => t('Clear this chat and reset the context') }

@@ -1,7 +1,7 @@
 // Caches the shell so the app opens offline. Conversations are read from local
 // storage, so what you have already said is there without a network; a reply is
 // not, because the model is not on the device.
-const CACHE = 'nymbot-shell-v3';
+const CACHE = 'nymbot-shell-v5';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -28,7 +28,9 @@ const SHELL = [
     '/app/js/chat.js',
     '/app/js/highlight.js',
     '/app/js/markdown.js',
+    '/app/js/artifacts.js',
     '/app/js/export.js',
+    '/app/js/bots.js',
     '/app/js/qr.js',
     '/app/js/ui.js'
 ];

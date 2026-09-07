@@ -87,6 +87,101 @@ class GitRepo {
   }
 }
 
+class KnowledgeFile {
+  const KnowledgeFile({
+    required this.id,
+    required this.name,
+    this.mime = 'text/plain',
+    this.body = '',
+  });
+
+  final String id;
+  final String name;
+  final String mime;
+  final String body;
+
+  int get size => body.length;
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'mime': mime, 'body': body};
+
+  static KnowledgeFile fromJson(Map<String, dynamic> j) => KnowledgeFile(
+        id: j['id'] as String? ?? '',
+        name: j['name'] as String? ?? '',
+        mime: j['mime'] as String? ?? 'text/plain',
+        body: j['body'] as String? ?? '',
+      );
+}
+
+/// Standing context a run of chats shares: instructions, reference files and
+/// repositories. Everything in it lives on this device and travels only inside
+/// the first message of a chat that uses it.
+class Workspace {
+  Workspace({
+    required this.id,
+    this.name = '',
+    this.instructions = '',
+    List<KnowledgeFile>? files,
+    List<String>? repoIds,
+    this.personaId,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  })  : files = files ?? [],
+        repoIds = repoIds ?? [],
+        createdAt = createdAt ?? DateTime.now(),
+        updatedAt = updatedAt ?? DateTime.now();
+
+  final String id;
+  String name;
+  String instructions;
+  List<KnowledgeFile> files;
+  List<String> repoIds;
+  String? personaId;
+  final DateTime createdAt;
+  DateTime updatedAt;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'instructions': instructions,
+        'files': files.map((f) => f.toJson()).toList(),
+        'repoIds': repoIds,
+        'personaId': personaId,
+        'createdAt': createdAt.millisecondsSinceEpoch,
+        'updatedAt': updatedAt.millisecondsSinceEpoch,
+      };
+
+  static Workspace fromJson(Map<String, dynamic> j) => Workspace(
+        id: j['id'] as String,
+        name: j['name'] as String? ?? '',
+        instructions: j['instructions'] as String? ?? '',
+        files: (j['files'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(KnowledgeFile.fromJson)
+            .toList(),
+        repoIds: (j['repoIds'] as List?)?.whereType<String>().toList(),
+        personaId: j['personaId'] as String?,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+            (j['createdAt'] as num?)?.toInt() ?? 0),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(
+            (j['updatedAt'] as num?)?.toInt() ?? 0),
+      );
+
+  static String encodeList(List<Workspace> list) =>
+      jsonEncode(list.map((w) => w.toJson()).toList());
+
+  static List<Workspace> decodeList(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return (jsonDecode(raw) as List)
+          .map((e) => Workspace.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+}
+
 class Persona {
   const Persona({
     required this.id,
@@ -405,6 +500,9 @@ class AppSettings {
     this.anonAutoTopFloor = 10,
     this.anonAutoTopAmount = 25,
     this.anonAutoTopTier = 'both',
+    this.autoDeleteDays = 0,
+    this.autoContinue = 0,
+    this.showProgress = true,
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
@@ -431,6 +529,15 @@ class AppSettings {
   int anonAutoTopFloor;
   int anonAutoTopAmount;
   String anonAutoTopTier;
+
+  /// Chats untouched for this many days are deleted when the app opens. Zero
+  /// means never, which is the default: deleting things is the user's call.
+  int autoDeleteDays;
+
+  /// How much you are willing to spend letting a capped repo run carry on:
+  /// 0 is never, -1 is whatever the balance holds.
+  int autoContinue;
+  bool showProgress;
   SidebarGrouping grouping;
   String? defaultPersonaId;
   List<String> defaultRepoIds;
@@ -457,6 +564,9 @@ class AppSettings {
         'anonAutoTopFloor': anonAutoTopFloor,
         'anonAutoTopAmount': anonAutoTopAmount,
         'anonAutoTopTier': anonAutoTopTier,
+        'autoDeleteDays': autoDeleteDays,
+        'autoContinue': autoContinue,
+        'showProgress': showProgress,
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
@@ -491,6 +601,9 @@ class AppSettings {
         anonAutoTopFloor: (j['anonAutoTopFloor'] as num?)?.toInt() ?? 10,
         anonAutoTopAmount: (j['anonAutoTopAmount'] as num?)?.toInt() ?? 25,
         anonAutoTopTier: j['anonAutoTopTier'] as String? ?? 'both',
+        autoDeleteDays: (j['autoDeleteDays'] as num?)?.toInt() ?? 0,
+        autoContinue: (j['autoContinue'] as num?)?.toInt() ?? 0,
+        showProgress: j['showProgress'] as bool? ?? true,
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:

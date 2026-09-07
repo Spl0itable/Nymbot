@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/artifact.dart';
+import '../models/bot.dart';
 import '../models/conversation.dart';
+import '../models/schedule.dart';
 import '../models/workspace.dart';
 
 /// Everything the app keeps on the device.
@@ -89,6 +92,39 @@ class Store {
   Future<void> savePersonas(List<Persona> list) =>
       _prefs.setString('personas', Persona.encodeList(list.take(60).toList()));
 
+  List<Bot> bots() => Bot.decodeList(_prefs.getString('bots'));
+
+  Bot? bot(String? id) {
+    if (id == null) return null;
+    for (final b in bots()) {
+      if (b.id == id) return b;
+    }
+    return null;
+  }
+
+  Future<void> saveBots(List<Bot> list) =>
+      _prefs.setString('bots', Bot.encodeList(list.take(60).toList()));
+
+  List<Schedule> schedules() =>
+      Schedule.decodeList(_prefs.getString('schedules'));
+
+  Future<void> saveSchedules(List<Schedule> list) => _prefs.setString(
+      'schedules', Schedule.encodeList(list.take(40).toList()));
+
+  List<Workspace> workspaces() =>
+      Workspace.decodeList(_prefs.getString('workspaces'));
+
+  Workspace? workspace(String? id) {
+    if (id == null) return null;
+    for (final w in workspaces()) {
+      if (w.id == id) return w;
+    }
+    return null;
+  }
+
+  Future<void> saveWorkspaces(List<Workspace> list) => _prefs.setString(
+      'workspaces', Workspace.encodeList(list.take(40).toList()));
+
   List<SavedPrompt> prompts() {
     final raw = _prefs.getString('prompts');
     if (raw == null) return [...SavedPrompt.defaults];
@@ -111,16 +147,54 @@ class Store {
   Future<void> saveConversations(List<Conversation> list) => _prefs.setString(
       'conversations', Conversation.encodeList(list.take(500).toList()));
 
-  List<ChatMessage> messages(String convId) =>
-      ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
+  /// Ghost chats live here and nowhere else: the map goes when the process
+  /// does, which is the whole promise.
+  final Map<String, List<ChatMessage>> _ghosts = {};
 
-  Future<void> saveMessages(String convId, List<ChatMessage> list) {
+  bool isGhost(String convId) {
+    for (final c in conversations()) {
+      if (c.id == convId) return c.ephemeral;
+    }
+    return _ghosts.containsKey(convId);
+  }
+
+  List<ChatMessage> messages(String convId) {
+    if (isGhost(convId)) return [...?_ghosts[convId]];
+    return ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
+  }
+
+  Future<void> saveMessages(String convId, List<ChatMessage> list) async {
     // Capped so one long conversation cannot fill the store and start failing
     // the writes it needs to make.
     final kept = list.length > _messageCap
         ? list.sublist(list.length - _messageCap)
         : list;
-    return _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
+    if (isGhost(convId)) {
+      _ghosts[convId] = [...kept];
+      await _prefs.remove('msgs_$convId');
+      return;
+    }
+    _ghosts.remove(convId);
+    await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
+  }
+
+  /// Moves what a chat has already said into memory and off the disk, which is
+  /// what turning ghost mode on part-way through has to mean.
+  Future<void> makeGhost(String convId) async {
+    _ghosts[convId] = ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
+    _ghostArtifacts[convId] =
+        Artifact.decodeList(_prefs.getString('artifacts_$convId'));
+    await _prefs.remove('msgs_$convId');
+    await _prefs.remove('artifacts_$convId');
+  }
+
+  /// Writes a ghost chat back to disk, so turning the mode off keeps what is
+  /// on screen rather than dropping it.
+  Future<void> unmakeGhost(String convId) async {
+    final kept = _ghosts.remove(convId) ?? const <ChatMessage>[];
+    final lifted = _ghostArtifacts.remove(convId) ?? const <Artifact>[];
+    await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
+    await _prefs.setString('artifacts_$convId', Artifact.encodeList(lifted));
   }
 
   /// The wrap ids this conversation is made of, newest last.
@@ -132,6 +206,26 @@ class Store {
     return _prefs.setStringList('thread_$convId', kept);
   }
 
+  final Map<String, List<Artifact>> _ghostArtifacts = {};
+
+  List<Artifact> artifacts(String convId) {
+    if (isGhost(convId)) return [...?_ghostArtifacts[convId]];
+    return Artifact.decodeList(_prefs.getString('artifacts_$convId'));
+  }
+
+  Future<void> saveArtifacts(String convId, List<Artifact> list) async {
+    final kept = list.length > 60 ? list.sublist(list.length - 60) : list;
+    // A file lifted out of a ghost chat is still that chat: it stays in memory
+    // with the rest of it.
+    if (isGhost(convId)) {
+      _ghostArtifacts[convId] = [...kept];
+      await _prefs.remove('artifacts_$convId');
+      return;
+    }
+    _ghostArtifacts.remove(convId);
+    await _prefs.setString('artifacts_$convId', Artifact.encodeList(kept));
+  }
+
   String draft(String convId) => _prefs.getString('draft_$convId') ?? '';
 
   Future<void> setDraft(String convId, String text) => text.isEmpty
@@ -139,9 +233,12 @@ class Store {
       : _prefs.setString('draft_$convId', text);
 
   Future<void> dropConversation(String convId) async {
+    _ghosts.remove(convId);
+    _ghostArtifacts.remove(convId);
     await _prefs.remove('msgs_$convId');
     await _prefs.remove('thread_$convId');
     await _prefs.remove('draft_$convId');
+    await _prefs.remove('artifacts_$convId');
   }
 
   ({int credits, int replies}) usage() => (
@@ -204,6 +301,9 @@ class Store {
       'folders': folders().map((f) => f.toJson()).toList(),
       'personas': customPersonas().map((p) => p.toJson()).toList(),
       'prompts': prompts().map((p) => p.toJson()).toList(),
+      'workspaces': workspaces().map((w) => w.toJson()).toList(),
+      'bots': bots().map((b) => b.toJson()).toList(),
+      'schedules': schedules().map((s) => s.toJson()).toList(),
       'conversations': conversations()
           .map((c) => {
                 'conversation': c.toJson(),

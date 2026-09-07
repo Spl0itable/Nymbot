@@ -4,11 +4,13 @@ import 'dart:typed_data';
 import '../config.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart';
+import '../models/bot.dart';
 import '../models/conversation.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
+import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
 import 'pq_announce.dart';
 import 'relay_pool.dart';
@@ -41,6 +43,22 @@ typedef TurnResult = ({
   bool lowBalance,
   List<String> repos,
   List<Map<String, dynamic>> sources,
+  // Set when the run stopped at its tool-call cap with work left. The token
+  // buys one more leg; the caller decides whether to spend it.
+  bool truncated,
+  String? resumeToken,
+  int nextReserve,
+  String eventId,
+});
+
+/// One thing the running turn reported doing.
+typedef TurnStep = ({
+  int n,
+  String kind,
+  String text,
+  String tool,
+  int call,
+  int of,
 });
 
 typedef CostEstimate = ({String tier, int low, int high});
@@ -92,14 +110,44 @@ class ChatEngine {
     return (tier: 'pro', low: low, high: high);
   }
 
+  static const knowledgeFileCap = 24000;
+  static const knowledgeTotalCap = 90000;
+
+  /// The workspace's files, trimmed to something a context window can hold. A
+  /// file that is cut says so, so nothing silently half-arrives.
+  static String knowledgeBlock(Workspace? space) {
+    final files = space?.files ?? const <KnowledgeFile>[];
+    if (files.isEmpty) return '';
+    final parts = <String>[];
+    var budget = knowledgeTotalCap;
+    for (final file in files) {
+      if (budget <= 0) break;
+      final room = knowledgeFileCap < budget ? knowledgeFileCap : budget;
+      final cut = file.body.length > room;
+      final text = cut ? file.body.substring(0, room) : file.body;
+      budget -= text.length;
+      final name = file.name.isEmpty ? 'untitled' : file.name;
+      parts.add('--- $name ---\n$text${cut ? '\n[…trimmed to fit]' : ''}');
+    }
+    final left = files.length - parts.length;
+    final tail = left > 0
+        ? '\n\n[$left more file(s) not sent — too much to fit]'
+        : '';
+    return '[project knowledge]\n${parts.join('\n\n')}$tail';
+  }
+
   static String preamble(
     Conversation conv,
     List<GitRepo> repos,
-    Persona? persona,
-  ) {
+    Persona? persona, [
+    Workspace? space,
+    Bot? bot,
+  ]) {
     final parts = <String>[];
     final instructions = [
+      bot?.instructions ?? '',
       persona?.instructions ?? '',
+      space?.instructions ?? '',
       conv.systemPrompt,
     ].where((x) => x.trim().isNotEmpty).join('\n\n').trim();
     if (instructions.isNotEmpty) {
@@ -117,6 +165,8 @@ class ChatEngine {
       parts.add('[repositories in scope]\n${lines.join('\n')}\n'
           'Refer to a repository by its name when you cite a file.');
     }
+    final knowledge = knowledgeBlock(space);
+    if (knowledge.isNotEmpty) parts.add(knowledge);
     final seed = conv.seed;
     if (seed != null && seed.isNotEmpty) {
       parts.add('[earlier in this conversation]\n$seed');
@@ -157,6 +207,13 @@ class ChatEngine {
     Map<String, dynamic>? proModel,
     List<GitRepo> repos = const [],
     Persona? persona,
+    Workspace? workspace,
+    Bot? bot,
+    /// Continues a run parked by an earlier truncated turn.
+    String? resume,
+    /// Called with the turn's own event id as soon as it is published, so a
+    /// watcher can start before the answer comes back.
+    void Function(String eventId)? onTurn,
     List<Attachment> attachments = const [],
     String? quote,
     bool webSearch = false,
@@ -188,7 +245,8 @@ class ChatEngine {
         : identity.kemPublicKey;
 
     final fresh = RegExp(r'^\s*!\s*\S').hasMatch(text);
-    final head = (firstTurn || fresh) ? preamble(conv, repos, persona) : '';
+    final head =
+        (firstTurn || fresh) ? preamble(conv, repos, persona, workspace, bot) : '';
     final quoted = (quote == null || quote.isEmpty)
         ? ''
         : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
@@ -216,12 +274,28 @@ class ChatEngine {
           t('No relay accepted your message. Check your connection and try again.'));
     }
 
+    // A ghost chat publishes nothing it does not have to. The wrap to the bot
+    // is how the message gets there at all; the archive copy and the reply's
+    // re-publish are for restoring a conversation later, which is exactly what
+    // a ghost chat is refusing.
+    final ghost = conv.ephemeral;
+
     // Our own copy, so the conversation restores on another device.
-    try {
-      final selfWrap = await _wrap(rumor, senderSk, signer.pubkey, selfKem);
-      unawaited(relays.publish(selfWrap, timeout: const Duration(seconds: 3)));
-    } catch (_) {
-      // The archive copy is best effort.
+    if (!ghost) {
+      try {
+        final selfWrap = await _wrap(rumor, senderSk, signer.pubkey, selfKem);
+        unawaited(relays.publish(selfWrap, timeout: const Duration(seconds: 3)));
+      } catch (_) {
+        // The archive copy is best effort.
+      }
+    }
+
+    // The turn is now identifiable, so anything watching it can start before
+    // the answer comes back.
+    if (onTurn != null) {
+      try {
+        onTurn(wrap.id);
+      } catch (_) {}
     }
 
     final announcement =
@@ -229,6 +303,7 @@ class ChatEngine {
     final extra = <String, dynamic>{
       'eventId': wrap.id,
       'fresh': fresh,
+      if (resume != null && resume.isNotEmpty) 'resume': resume,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (webSearch) 'web': true,
       if (attachments.isNotEmpty)
@@ -282,12 +357,16 @@ class ChatEngine {
     // message, and the bot's self-addressed copy so the worker can re-read its
     // own turn as context next time.
     final replyEvent = NostrEvent.fromJson(eventJson);
-    unawaited(relays.publish(replyEvent, timeout: const Duration(seconds: 3)));
+    if (!ghost) {
+      unawaited(relays.publish(replyEvent, timeout: const Duration(seconds: 3)));
+    }
     final selfJson = data['selfEvent'];
     NostrEvent? selfEvent;
     if (selfJson is Map<String, dynamic>) {
       selfEvent = NostrEvent.fromJson(selfJson);
-      unawaited(relays.publish(selfEvent, timeout: const Duration(seconds: 3)));
+      if (!ghost) {
+        unawaited(relays.publish(selfEvent, timeout: const Duration(seconds: 3)));
+      }
     }
 
     final recipient = useAnon ? await anon.recipient() : identity.pqIdentity;
@@ -317,7 +396,43 @@ class ChatEngine {
       repos: repos.map((r) => r.repo).toList(),
       sources: (data['sources'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
           const <Map<String, dynamic>>[],
+      truncated: data['truncated'] == true,
+      resumeToken: data['resumeToken'] as String?,
+      nextReserve: (data['nextReserve'] as num?)?.toInt() ?? 0,
+      eventId: wrap.id,
     );
+  }
+
+  /// What the turn answering [eventId] is doing. Purely advisory: a failure
+  /// returns nothing rather than disturbing the turn.
+  Future<List<TurnStep>> progress(
+    EventSigner signer,
+    String eventId, {
+    int after = 0,
+  }) async {
+    try {
+      final res = await api.call(
+        'pm-progress',
+        signer,
+        extra: {'eventId': eventId, 'after': after},
+        timeout: const Duration(seconds: 8),
+      );
+      final steps = (res.data['steps'] as List?) ?? const [];
+      return steps.whereType<Map<String, dynamic>>().map((s) => (
+            n: (s['n'] as num?)?.toInt() ?? 0,
+            kind: s['kind'] as String? ?? '',
+            // One field for "the thing this step is about", whichever name the
+            // worker gave it — the tool's own name stays separate so a tool
+            // step can say both what it did and what it touched.
+            text: (s['text'] ?? s['query'] ?? s['target'] ?? s['model'] ?? '')
+                .toString(),
+            tool: s['tool'] as String? ?? '',
+            call: (s['call'] as num?)?.toInt() ?? 0,
+            of: (s['of'] as num?)?.toInt() ?? 0,
+          )).toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<NostrEvent> _wrap(UnsignedEvent rumor, Uint8List senderSk,

@@ -165,8 +165,68 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               },
             ),
             const SizedBox(height: 16),
+            Text(t('Long tasks'), style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            DropdownButtonFormField<int>(
+              initialValue: s.autoContinue,
+              isExpanded: true,
+              decoration: InputDecoration(
+                  labelText: t('When a repo task runs out of room')),
+              items: [
+                DropdownMenuItem(value: 0, child: Text(t('Stop and tell me'))),
+                DropdownMenuItem(
+                    value: 10, child: Text(t('Carry on, up to 10 more credits'))),
+                DropdownMenuItem(
+                    value: 25, child: Text(t('Carry on, up to 25 more credits'))),
+                DropdownMenuItem(
+                    value: 50, child: Text(t('Carry on, up to 50 more credits'))),
+                DropdownMenuItem(
+                    value: 100, child: Text(t('Carry on, up to 100 more credits'))),
+                DropdownMenuItem(
+                    value: -1, child: Text(t('Carry on until my balance runs out'))),
+              ],
+              onChanged: (v) => app.setAutoContinue(v ?? 0),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t('A repo task can stop mid-way when it has used its allowance of '
+                  'model calls. Carrying on buys it another allowance from the '
+                  'same balance, one leg at a time, and every leg says what it '
+                  'cost. Stop cancels the rest.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: s.showProgress,
+              title: Text(t('Show what Nymbot is doing while it works'),
+                  style: const TextStyle(fontSize: 13)),
+              onChanged: app.setShowProgress,
+            ),
+            const SizedBox(height: 10),
             Text(t('Your data'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
+            DropdownButtonFormField<int>(
+              initialValue: s.autoDeleteDays,
+              decoration: InputDecoration(labelText: t('Delete chats after')),
+              items: [
+                DropdownMenuItem(value: 0, child: Text(t('Never'))),
+                DropdownMenuItem(value: 1, child: Text(t('A day'))),
+                DropdownMenuItem(value: 7, child: Text(t('A week'))),
+                DropdownMenuItem(value: 30, child: Text(t('A month'))),
+                DropdownMenuItem(value: 90, child: Text(t('Three months'))),
+                DropdownMenuItem(value: 365, child: Text(t('A year'))),
+              ],
+              onChanged: (v) => app.setAutoDeleteDays(v ?? 0),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t('Swept when the app opens. Pinned chats are never swept.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               children: [

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Conversations - Nymbot Knowledge Base</title>
-    <meta name="description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <meta name="description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
@@ -13,7 +13,7 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Conversations - Nymbot Knowledge Base">
-    <meta property="og:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <meta property="og:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/chats/">
     <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
     <meta name="twitter:title" content="Conversations - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, and clearing history.">
+    <meta name="twitter:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
     <link rel="canonical" href="https://nymbot.ai/docs/chats/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -99,6 +99,17 @@
                     conversation.</p>
             </div>
 
+            <h2 id="watching">Watching a reply as it is written</h2>
+            <p>While a reply is generating, Nymbot reports what it is doing underneath the spinner:
+                which model it routed to, what it searched the web for, which files it is reading in
+                a <a href="/docs/git/">connected repository</a>, which model call it is on, and the
+                model's own reasoning as each call returns.</p>
+            <p>That report is scoped to the key that asked for the reply and to that one message. In
+                <a href="/docs/anonymous/">anonymous mode</a> the key that asked is the throwaway one,
+                so watching a reply reveals nothing the message had not already revealed &mdash; the
+                account behind it is no more involved than it was before. Turn it off in Appearance and
+                you get the plain spinner.</p>
+
             <h2 id="clearing">Clearing and deleting</h2>
             <ul>
                 <li><strong>Delete a chat</strong> removes it from this device, wipes its archived copies,
@@ -114,6 +125,19 @@
                 <p>Deleting is not recoverable. Your history is encrypted to your key and nobody &mdash;
                     including us &mdash; holds a copy that could be handed back.</p>
             </div>
+
+            <h2 id="ghost-mode">Ghost chats and auto-delete</h2>
+            <p>A ghost chat is one that is never written down. Its messages, and any
+                <a href="/docs/artifacts/">artifacts</a> it produced, are held in memory and nowhere else,
+                and no archived copy is published for it &mdash; so there is nothing to restore on another
+                device, and nothing left when you close the app. The message itself still goes to Nymbot,
+                encrypted as always; what a ghost chat refuses is the copy that exists to bring a
+                conversation back later.</p>
+            <p>Turning ghost mode on part-way through moves what has already been said off the device;
+                turning it off writes back what is on screen. Neither direction quietly loses anything.</p>
+            <p>Separately, <strong>auto-delete</strong> can sweep old conversations for you. Choose a
+                window &mdash; a day, a week, a month &mdash; and chats untouched for longer are deleted
+                when the app opens. It is off unless you turn it on, and it never takes a pinned chat.</p>
         <!--DOCS-PAGER-->
         </main>
         <!--DOCS-TOC-->

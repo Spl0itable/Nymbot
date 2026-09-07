@@ -36,6 +36,12 @@
         anonAutoTopFloor: 10,
         anonAutoTopAmount: 25,
         anonAutoTopTier: 'both',
+        autoDeleteDays: 0,
+        // A repo task can stop at its tool-call cap with work left. This is
+        // how much you are willing to spend letting it carry on: 0 is never,
+        // -1 is whatever the balance holds.
+        autoContinue: 0,
+        showProgress: true,
         theme: 'system',
         density: 'comfortable',
         fontScale: 1,
@@ -265,6 +271,63 @@
             }
         },
 
+        schedules() {
+            const list = read('schedules', []);
+            return Array.isArray(list) ? list : [];
+        },
+
+        schedule(id) { return this.schedules().find(s => s.id === id) || null; },
+
+        saveSchedule(entry) {
+            const list = this.schedules();
+            const next = Object.assign({
+                id: uid(), title: '', prompt: '', repeat: 'once',
+                convId: null, nextAt: Date.now(), lastRunAt: 0, lastError: '',
+                enabled: true, runs: 0, createdAt: Date.now()
+            }, entry);
+            if (!next.id) next.id = uid();
+            const i = list.findIndex(s => s.id === next.id);
+            if (i === -1) list.push(next); else list[i] = next;
+            write('schedules', list.slice(0, 40));
+            return next;
+        },
+
+        deleteSchedule(id) {
+            write('schedules', this.schedules().filter(s => s.id !== id));
+        },
+
+        workspaces() {
+            const list = read('workspaces', []);
+            return Array.isArray(list) ? list : [];
+        },
+
+        workspace(id) { return this.workspaces().find(w => w.id === id) || null; },
+
+        saveWorkspace(workspace) {
+            const list = this.workspaces();
+            const entry = Object.assign({
+                id: uid(), name: '', instructions: '', files: [],
+                repoIds: [], personaId: null, createdAt: Date.now()
+            }, workspace);
+            if (!entry.id) entry.id = uid();
+            entry.updatedAt = Date.now();
+            entry.files = (entry.files || []).slice(0, 40);
+            entry.repoIds = (entry.repoIds || []).slice(0, 40);
+            const i = list.findIndex(w => w.id === entry.id);
+            if (i === -1) list.push(entry); else list[i] = entry;
+            write('workspaces', list.slice(0, 40));
+            return entry;
+        },
+
+        deleteWorkspace(id) {
+            write('workspaces', this.workspaces().filter(w => w.id !== id));
+            for (const conv of this.conversations()) {
+                if (conv.workspaceId === id) {
+                    this.updateConversation(conv.id, { workspaceId: null, silent: true });
+                }
+            }
+        },
+
         conversations() {
             const list = read('conversations', []);
             return Array.isArray(list) ? list : [];
@@ -290,6 +353,8 @@
                 tags: [],
                 repoIds: [],
                 personaId: null,
+                workspaceId: null,
+                botId: null,
                 systemPrompt: '',
                 proModel: null,
                 seed: null,
@@ -318,10 +383,13 @@
         },
 
         deleteConversation(id) {
+            this._ghosts.delete(id);
+            if (window.NymbotArtifacts) window.NymbotArtifacts._ghosts.delete(id);
             this.saveConversations(this.conversations().filter(c => c.id !== id));
             drop('msgs_' + id);
             drop('thread_' + id);
             drop('draft_' + id);
+            drop('artifacts_' + id);
         },
 
         duplicateConversation(id, title) {
@@ -330,10 +398,13 @@
             const copy = this.createConversation({
                 title: title || source.title,
                 anon: source.anon,
+                ephemeral: source.ephemeral,
                 folderId: source.folderId,
                 tags: (source.tags || []).slice(),
                 repoIds: (source.repoIds || []).slice(),
                 personaId: source.personaId,
+                workspaceId: source.workspaceId || null,
+                botId: source.botId || null,
                 systemPrompt: source.systemPrompt,
                 proModel: source.proModel,
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)))
@@ -342,13 +413,70 @@
             return copy;
         },
 
+        /// Ghost chats live here and nowhere else: the map goes when the tab
+        /// does, which is the whole promise.
+        _ghosts: new Map(),
+
+        isGhost(convId) {
+            const conv = this.conversations().find(c => c.id === convId);
+            if (conv) return !!conv.ephemeral;
+            return this._ghosts.has(convId);
+        },
+
         messages(convId) {
+            if (this.isGhost(convId)) return (this._ghosts.get(convId) || []).slice();
             const list = read('msgs_' + convId, []);
             return Array.isArray(list) ? list : [];
         },
 
         saveMessages(convId, list) {
-            write('msgs_' + convId, list.slice(-MSG_CAP));
+            const kept = list.slice(-MSG_CAP);
+            if (this.isGhost(convId)) {
+                this._ghosts.set(convId, kept);
+                drop('msgs_' + convId);
+                return;
+            }
+            this._ghosts.delete(convId);
+            write('msgs_' + convId, kept);
+        },
+
+        /// Moves what a chat has already said into memory and off the disk,
+        /// which is what turning ghost mode on part-way through has to mean.
+        makeGhost(convId) {
+            const list = read('msgs_' + convId, []);
+            this._ghosts.set(convId, Array.isArray(list) ? list : []);
+            drop('msgs_' + convId);
+            const Artifacts = window.NymbotArtifacts;
+            if (Artifacts) {
+                const lifted = read('artifacts_' + convId, []);
+                Artifacts._ghosts.set(convId, Array.isArray(lifted) ? lifted : []);
+                drop('artifacts_' + convId);
+            }
+        },
+
+        /// Writes a ghost chat back, so turning the mode off keeps what is on
+        /// screen rather than dropping it.
+        unmakeGhost(convId) {
+            const kept = this._ghosts.get(convId) || [];
+            this._ghosts.delete(convId);
+            write('msgs_' + convId, kept.slice(-MSG_CAP));
+            const Artifacts = window.NymbotArtifacts;
+            if (Artifacts) {
+                const lifted = Artifacts._ghosts.get(convId) || [];
+                Artifacts._ghosts.delete(convId);
+                write('artifacts_' + convId, lifted);
+            }
+        },
+
+        /// Two sweeps, both at startup: a ghost chat has nothing left to show
+        /// once the tab it lived in is gone, and a chat older than the
+        /// auto-delete window is one you have already said you do not want.
+        sweepOldChats(days) {
+            const cutoff = Date.now() - (days || 0) * 86400000;
+            const doomed = this.conversations().filter(c => c.ephemeral
+                || (days > 0 && !c.pinned && (c.updatedAt || 0) < cutoff));
+            for (const conv of doomed) this.deleteConversation(conv.id);
+            return doomed.length;
         },
 
         addMessage(convId, msg) {
@@ -431,6 +559,8 @@
             write('thread_' + convId, ids.slice(-40));
         },
 
+        dropThread(convId) { drop('thread_' + convId); },
+
         usage() {
             return Object.assign({ credits: 0, replies: 0, since: Date.now() }, read('usage', {}));
         },
@@ -451,6 +581,9 @@
                 folders: this.folders(),
                 personas: this.customPersonas(),
                 prompts: this.prompts(),
+                workspaces: this.workspaces(),
+                schedules: this.schedules(),
+                bots: (function () { const b = read('bots', []); return Array.isArray(b) ? b : []; })(),
                 conversations: this.conversations().map(c => ({
                     conversation: c,
                     messages: this.messages(c.id)
@@ -466,6 +599,9 @@
             if (Array.isArray(payload.folders)) write('folders', payload.folders);
             if (Array.isArray(payload.personas)) write('personas', payload.personas);
             if (Array.isArray(payload.prompts)) write('prompts', payload.prompts);
+            if (Array.isArray(payload.workspaces)) write('workspaces', payload.workspaces);
+            if (Array.isArray(payload.schedules)) write('schedules', payload.schedules);
+            if (Array.isArray(payload.bots)) write('bots', payload.bots);
             let count = 0;
             const list = this.conversations();
             for (const entry of payload.conversations) {

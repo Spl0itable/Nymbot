@@ -17,7 +17,7 @@
         star: '<polygon points="12 3 14.9 9 21.5 9.8 16.7 14.3 18 20.8 12 17.6 6 20.8 7.3 14.3 2.5 9.8 9.1 9 12 3"></polygon>',
         close: '<line x1="5" y1="5" x2="19" y2="19"></line><line x1="19" y1="5" x2="5" y2="19"></line>',
         check: '<polyline points="4 12.5 9.5 18 20 6.5"></polyline>',
-        verified: '<path d="M12 2.5 14.6 5l3.5-.2.5 3.5 2.9 2-1.6 3.2 1.6 3.1-2.9 2-.5 3.5-3.5-.2L12 21.5 9.4 19l-3.5.2-.5-3.5-2.9-2 1.6-3.1L2.5 7.3l2.9-2 .5-3.5L9.4 2 12 2.5Z"></path><polyline points="8.5 12 11 14.5 15.5 9.5"></polyline>',
+        verified: '<circle cx="12" cy="12" r="9"></circle><polyline points="8.2 12.3 10.8 14.9 15.8 9.4"></polyline>',
         thought: '<path d="M7.5 16A4.5 4.5 0 0 1 7 7a5 5 0 0 1 9.6-1.3A4 4 0 0 1 17 16Z"></path><circle cx="6" cy="19" r="1.6"></circle><circle cx="10" cy="21.2" r="1"></circle>',
         bolt: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>',
         search: '<circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>',
@@ -42,7 +42,8 @@
         send: '<line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>',
         dot: '<circle cx="12" cy="12" r="5"></circle>',
         circle: '<circle cx="12" cy="12" r="6.5"></circle>',
-        wallet: '<path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2"></path><rect x="3" y="7" width="18" height="13" rx="2"></rect><circle cx="16.5" cy="13.5" r="1.2"></circle>'
+        wallet: '<path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2"></path><rect x="3" y="7" width="18" height="13" rx="2"></rect><circle cx="16.5" cy="13.5" r="1.2"></circle>',
+        link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path>'
     };
 
     const FILLED = {
@@ -76,40 +77,52 @@
         return svg;
     }
 
-    /// The app's own mark, drawn rather than loaded: a monospace robot head in
-    /// the same shapes the icon and the ASCII wordmark use, so the sidebar,
-    /// the tab and the avatar are recognisably one thing.
+    /// The app icon, drawn rather than loaded, traced off images/nymbot-icon.png at 700x700 and divided
+    /// by 29.1667 into a 24-unit box, so the sidebar, the tab and the avatar
+    /// are the same drawing rather than three impressions of it.
+    const MARK = [
+        '<path d="M7.96 1.37 9.57 5.07"></path>',
+        '<path d="M15.98 1.37 14.40 5.07"></path>',
+        '<path d="M3.87 5.98H20.09"></path>',
+        '<path d="M2.76 6.41v1.99"></path>',
+        '<path d="M2.76 9.57v4.69"></path>',
+        '<path d="M2.76 15.40v4.62"></path>',
+        '<path d="M21.20 6.41v1.99"></path>',
+        '<path d="M21.20 9.57v4.69"></path>',
+        '<path d="M21.20 15.40v4.62"></path>',
+        '<path d="M6.79 9.32H5.85v3.85h0.94"></path>',
+        '<path d="M17.18 9.32h0.94v3.85h-0.94"></path>',
+        '<path d="m8.16 11.31 0.94-2.05 0.95 2.05"></path>',
+        '<path d="m13.92 11.31 1.01-2.05 1.01 2.05"></path>',
+        '<path d="M8.33 16.05h2.06"></path>',
+        '<path d="M10.94 16.05h2.09"></path>',
+        '<path d="M13.58 16.05h2.06"></path>',
+        '<path d="M8.33 17.01h2.06"></path>',
+        '<path d="M10.94 17.01h2.09"></path>',
+        '<path d="M13.58 17.01h2.06"></path>',
+        '<path d="M3.87 20.47H20.09"></path>'
+    ].join('');
+
     function wordmark(options) {
         const opts = options || {};
-        const size = opts.size || 22;
+        const size = opts.size || 24;
         const svg = document.createElementNS(NS, 'svg');
         svg.setAttribute('viewBox', '0 0 24 24');
         svg.setAttribute('width', String(size));
         svg.setAttribute('height', String(size));
         svg.setAttribute('fill', 'none');
         svg.setAttribute('stroke', 'currentColor');
-        svg.setAttribute('stroke-width', '1.6');
-        svg.setAttribute('stroke-linecap', 'square');
+        // The artwork's own strokes are 16/700 of the canvas, which is under a
+        // pixel at this size. Widened just enough to survive it; every
+        // coordinate below is the measured one.
+        svg.setAttribute('stroke-width', '1');
+        svg.setAttribute('stroke-linecap', 'butt');
+        svg.setAttribute('stroke-linejoin', 'miter');
         svg.setAttribute('class', 'brand-mark');
         svg.setAttribute('role', 'img');
-        svg.innerHTML = [
-            '<path d="M8 2.4 9.8 6"></path>',
-            '<path d="M16 2.4 14.2 6"></path>',
-            '<path d="M3.6 6.6h16.8"></path>',
-            '<path d="M2.4 8.6v7"></path>',
-            '<path d="M21.6 8.6v7"></path>',
-            '<path d="M4.8 8.8v8.6"></path>',
-            '<path d="M19.2 8.8v8.6"></path>',
-            '<path d="M3.6 19.6h16.8"></path>',
-            '<path d="M8.6 9.6H7.4v4.2h1.2"></path>',
-            '<path d="M15.4 9.6h1.2v4.2h-1.2"></path>',
-            '<path d="m9.2 12.6 1.1-1.8 1.1 1.8"></path>',
-            '<path d="m12.6 12.6 1.1-1.8 1.1 1.8"></path>',
-            '<path d="M9 16.2h2.2"></path>',
-            '<path d="M12.8 16.2H15"></path>'
-        ].join('');
+        svg.innerHTML = MARK;
         return svg;
     }
 
-    window.NymbotIcons = { markup, node, wordmark, PERSONA_ICONS, names: Object.keys(STROKE) };
+    window.NymbotIcons = { markup, node, wordmark, MARK, PERSONA_ICONS, names: Object.keys(STROKE) };
 })();

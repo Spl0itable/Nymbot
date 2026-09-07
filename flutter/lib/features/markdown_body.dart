@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'code_highlight.dart';
+import 'diff_view.dart';
 import 'i18n/i18n.dart';
 
 class MarkdownBody extends StatelessWidget {
@@ -62,7 +63,13 @@ class MarkdownBody extends StatelessWidget {
         }
         i++;
         gap();
-        blocks.add(CodeBlock(code: body.join('\n'), language: lang, wrap: wrapCode));
+        // A patch is read as a patch: per file, with what it costs on the
+        // header rather than counted off the `+` lines by eye.
+        if (lang == 'diff' || lang == 'patch') {
+          blocks.add(DiffView(source: body.join('\n')));
+        } else {
+          blocks.add(CodeBlock(code: body.join('\n'), language: lang, wrap: wrapCode));
+        }
         continue;
       }
 

@@ -62,6 +62,34 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             ),
             const SizedBox(height: 14),
             _row(
+              t('Public key (npub)'),
+              identity.npub,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () => _copy(identity.npub),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _row(
+              t('Public key (hex)'),
+              identity.pubkey,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () => _copy(identity.pubkey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t('Both are the same key in two spellings, and both are safe to '
+                  'share — they are how somebody addresses you.'),
+              style: const TextStyle(fontSize: 11),
+            ),
+            const SizedBox(height: 12),
+            _row(
               t('Private key (nsec)'),
               _showNsec ? identity.nsec : '•' * 24,
               actions: [

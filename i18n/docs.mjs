@@ -69,7 +69,30 @@ export const OUTLINE = [
           { id: 'titles', title: 'Where the titles come from' },
           { id: 'context', title: 'What Nymbot remembers' },
           { id: 'attachments', title: 'Sending pictures' },
+          { id: 'watching', title: 'Watching a reply as it is written' },
           { id: 'clearing', title: 'Clearing and deleting' },
+          { id: 'ghost-mode', title: 'Ghost chats and auto-delete' },
+        ],
+      },
+      {
+        slug: 'docs/artifacts',
+        nav: 'Artifacts and compare',
+        sections: [
+          { id: 'what-they-are', title: 'What an artifact is' },
+          { id: 'versions', title: 'Editing and versions' },
+          { id: 'compare', title: 'Asking two models at once' },
+          { id: 'citations-and-patches', title: 'Citations and patches' },
+        ],
+      },
+      {
+        slug: 'docs/workspaces',
+        nav: 'Workspaces and bots',
+        sections: [
+          { id: 'workspaces', title: 'Workspaces' },
+          { id: 'knowledge-files', title: 'Knowledge files' },
+          { id: 'bots', title: 'Bots' },
+          { id: 'sharing-a-bot', title: 'Sharing and publishing one' },
+          { id: 'scheduled', title: 'Scheduled prompts' },
         ],
       },
       {
@@ -128,6 +151,7 @@ export const OUTLINE = [
           { id: 'what-it-can-do', title: 'What it can do' },
           { id: 'writes', title: 'Turning writes on' },
           { id: 'cost', title: 'What a repo task costs' },
+          { id: 'carrying-on', title: 'When a task runs out of room' },
           { id: 'token-safety', title: 'About that token' },
         ],
       },

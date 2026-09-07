@@ -147,10 +147,10 @@ class _AnonSheetState extends State<_AnonSheet> {
                 style: const TextStyle(fontSize: 11),
               ),
               onChanged: (v) async {
+                final messenger = ScaffoldMessenger.of(context);
                 app.settings.anonAutoTop = v;
                 await app.saveSettings(app.settings);
                 if (v) {
-                  final messenger = ScaffoldMessenger.of(context);
                   final moved = await app.autoTopUp();
                   if (moved != null) {
                     messenger.showSnackBar(

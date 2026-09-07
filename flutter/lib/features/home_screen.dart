@@ -12,6 +12,13 @@ import '../services/attachments.dart';
 import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
+import 'artifact_screen.dart';
+import 'sheets/bots_sheet.dart';
+import 'sheets/compare_sheet.dart';
+import 'progress_lines.dart';
+import 'sheets/help_sheet.dart';
+import 'sheets/schedules_sheet.dart';
+import 'sheets/workspaces_sheet.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'message_bubble.dart';
@@ -44,6 +51,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _suggestTerm = '';
   String? _highlighted;
+
+  /// Which message has its action row open. One at a time, so a thread does
+  /// not fill up with them.
+  String? _openActions;
   bool _atBottom = true;
   bool _voiceAvailable = false;
   String? _findTerm;
@@ -136,6 +147,57 @@ class _HomeScreenState extends State<HomeScreen> {
           return true;
         }
         await showModelsSheet(context, filter: arg);
+        return true;
+      case 'compare':
+        await showCompareSheet(context, prefill: arg);
+        return true;
+      case 'schedule':
+        await showSchedulesSheet(context, prefill: arg);
+        return true;
+      case 'ghost':
+        await app.setEphemeral(!(app.current?.ephemeral ?? false));
+        await app.note(app.current?.ephemeral == true
+            ? t('Ghost chat. Nothing here is being kept.')
+            : t('This chat is being kept again.'));
+        return true;
+      case 'bot':
+        if (RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
+          await app.setBot(null);
+          await app.note(t('Back to plain Nymbot.'));
+          return true;
+        }
+        if (arg.isNotEmpty) {
+          final hit = app.bots
+              .where((b) => b.name.toLowerCase().contains(arg.toLowerCase()));
+          if (hit.isNotEmpty) {
+            await app.setBot(hit.first.id);
+            await app.note(
+                t('{name} is answering this chat.', {'name': hit.first.name}));
+            return true;
+          }
+        }
+        if (!context.mounted) return true;
+        await showBotsSheet(context);
+        if (arg.isNotEmpty) await app.note(t('No bot by that name.'));
+        return true;
+      case 'workspace':
+        if (RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
+          await app.setWorkspace(null);
+          await app.note(t('This chat is on its own again.'));
+          return true;
+        }
+        if (arg.isNotEmpty) {
+          final hit = app.workspaces.where(
+              (w) => w.name.toLowerCase().contains(arg.toLowerCase()));
+          if (hit.isNotEmpty) {
+            await app.setWorkspace(hit.first.id);
+            await app.note(t('This chat starts with that workspace.'));
+            return true;
+          }
+        }
+        if (!context.mounted) return true;
+        await showWorkspacesSheet(context);
+        if (arg.isNotEmpty) await app.note(t('No workspace by that name.'));
         return true;
       case 'git':
       case 'repo':
@@ -246,6 +308,9 @@ class _HomeScreenState extends State<HomeScreen> {
         return true;
       case 'settings':
         await showAppearanceSheet(context);
+        return true;
+      case 'guide':
+        await showHelpSheet(context, prefill: arg);
         return true;
       case 'voice':
         if (!_voiceAvailable) {
@@ -597,6 +662,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? t('Nymbot is reading your repositories')
                     : t('Nymbot is thinking')),
             showAvatar: app.settings.avatars,
+            steps: [
+              for (final s in app.progressSteps)
+                if (progressLine(s).isNotEmpty) progressLine(s),
+            ],
           );
         }
         final m = app.messages[i];
@@ -610,6 +679,11 @@ class _HomeScreenState extends State<HomeScreen> {
           key: key,
           child: MessageBubble(
             message: m,
+            artifacts: app.artifactsOf(m.id),
+            actionsOpen: _openActions == m.id,
+            onToggleActions: () => setState(
+                () => _openActions = _openActions == m.id ? null : m.id),
+            onOpenArtifact: (a) => showArtifact(context, a),
             selfPubkey: selfPubkey,
             selfName: me?.name,
             selfPicture: me?.picture ?? '',
@@ -625,7 +699,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _empty(BuildContext context, AppController app) {
-    final starters = <(String, String)>[
+    final bot = app.activeBot;
+    final starters = bot != null && bot.starters.isNotEmpty
+        ? [for (final s in bot.starters) (bot.name, s)]
+        : <(String, String)>[
       (
         t('Explain something'),
         t('Explain ML-KEM in three sentences, then tell me what it does not protect.')
@@ -647,7 +724,7 @@ class _HomeScreenState extends State<HomeScreen> {
         t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.')
       ),
       (t('Generate a picture'), '?image a lighthouse at dusk, long exposure, muted palette'),
-    ];
+          ];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -657,12 +734,16 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 20),
           const NymAvatar(seed: 'nymbot', size: 52, bot: true),
           const SizedBox(height: 12),
-          Text(t('Ask Nymbot anything'),
+          Text(bot?.name ?? t('Ask Nymbot anything'),
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            t('End-to-end encrypted, paid a reply at a time. Type ? for '
-                'commands, or start with one of these.'),
+            bot != null
+                ? (bot.tagline.isNotEmpty
+                    ? bot.tagline
+                    : t('This chat answers the way that bot was written to.'))
+                : t('End-to-end encrypted, paid a reply at a time. Type ? for '
+                    'commands, or start with one of these.'),
             textAlign: TextAlign.center,
             style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
           ),
@@ -1021,9 +1102,28 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         child: Column(
           children: [
             ListTile(
-              title: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: NymbotMark(size: 26),
+              title: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const NymbotMark(size: 26),
+                  const SizedBox(width: 6),
+                  // Optical, not geometric: the drawn body sits a hair below
+                  // its box because of the antennae, so the word is nudged to
+                  // match its middle.
+                  Transform.translate(
+                    offset: const Offset(0, 1.5),
+                    child: Text(
+                      'nymbot',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               trailing: IconButton(
                 icon: const Icon(Icons.add),
@@ -1089,7 +1189,8 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 await showSavedMessagesSheet(context);
               }),
               (Icons.tune, t('Appearance'), () => showAppearanceSheet(context)),
-              (Icons.help_outline, t('Getting around'),
+              (Icons.help_outline, t('Help'), () => showHelpSheet(context)),
+              (Icons.keyboard_outlined, t('Getting around'),
                   () => showShortcutsSheet(context)),
             ])
               ListTile(
@@ -1128,21 +1229,38 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 return Row(
                   children: [
                     Flexible(
-                      child: Text(
-                        who.hasProfile
-                            ? who.name
-                            : NymIdentity.handle(app.identity.pubkey),
-                        style: TextStyle(
-                          fontFamily: who.hasProfile ? null : 'monospace',
-                          fontSize: 13,
-                        ),
+                      // A nym's suffix is what distinguishes it, not what you
+                      // read first, so it is dimmed here as it is everywhere
+                      // else a nym is shown.
+                      child: RichText(
                         overflow: TextOverflow.ellipsis,
+                        text: TextSpan(
+                          style: TextStyle(
+                            fontFamily: who.hasProfile ? null : 'monospace',
+                            fontSize: 13,
+                            color: Theme.of(context).textTheme.bodyMedium?.color,
+                          ),
+                          children: who.hasProfile
+                              ? [TextSpan(text: who.name)]
+                              : [
+                                  TextSpan(
+                                      text: NymIdentity.name(
+                                          app.identity.pubkey)),
+                                  TextSpan(
+                                    text:
+                                        '#${NymIdentity.suffix(app.identity.pubkey)}',
+                                    style: TextStyle(
+                                      color: Theme.of(context).hintColor,
+                                    ),
+                                  ),
+                                ],
+                        ),
                       ),
                     ),
                     if (who.nip05.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(left: 4),
-                        child: Icon(Icons.verified,
+                        child: Icon(Icons.check_circle_outline,
                             size: 12, color: Theme.of(context).colorScheme.secondary),
                       ),
                   ],

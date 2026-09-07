@@ -11,12 +11,15 @@ class Conversation {
     required this.rootId,
     this.title = '',
     this.anon = false,
+    this.ephemeral = false,
     this.pinned = false,
     this.archived = false,
     this.folderId,
     List<String>? tags,
     List<String>? repoIds,
     this.personaId,
+    this.workspaceId,
+    this.botId,
     this.systemPrompt = '',
     this.proModel,
     this.seed,
@@ -33,12 +36,18 @@ class Conversation {
   String rootId;
   String title;
   bool anon;
+
+  /// A ghost chat: nothing it says is written to this device, and no archive
+  /// copy is published for it. It exists for as long as the app is open.
+  bool ephemeral;
   bool pinned;
   bool archived;
   String? folderId;
   List<String> tags;
   List<String> repoIds;
   String? personaId;
+  String? workspaceId;
+  String? botId;
   String systemPrompt;
   Map<String, dynamic>? proModel;
   String? seed;
@@ -52,12 +61,15 @@ class Conversation {
         'rootId': rootId,
         'title': title,
         'anon': anon,
+        'ephemeral': ephemeral,
         'pinned': pinned,
         'archived': archived,
         'folderId': folderId,
         'tags': tags,
         'repoIds': repoIds,
         'personaId': personaId,
+        'workspaceId': workspaceId,
+        'botId': botId,
         'systemPrompt': systemPrompt,
         'proModel': proModel,
         'seed': seed,
@@ -72,12 +84,15 @@ class Conversation {
         rootId: j['rootId'] as String? ?? '',
         title: j['title'] as String? ?? '',
         anon: j['anon'] as bool? ?? false,
+        ephemeral: j['ephemeral'] as bool? ?? false,
         pinned: j['pinned'] as bool? ?? false,
         archived: j['archived'] as bool? ?? false,
         folderId: j['folderId'] as String?,
         tags: (j['tags'] as List?)?.map((e) => '$e').toList(),
         repoIds: (j['repoIds'] as List?)?.map((e) => '$e').toList(),
         personaId: j['personaId'] as String?,
+        workspaceId: j['workspaceId'] as String?,
+        botId: j['botId'] as String?,
         systemPrompt: j['systemPrompt'] as String? ?? '',
         proModel: j['proModel'] as Map<String, dynamic>?,
         seed: j['seed'] as String?,
@@ -114,6 +129,8 @@ class ChatMessage {
     this.thinking,
     this.cost = 0,
     this.model,
+    this.calls = 1,
+    this.task,
     this.rating = 0,
     this.pinned = false,
     this.edited = false,
@@ -134,6 +151,11 @@ class ChatMessage {
   final String? thinking;
   final int cost;
   final String? model;
+
+  /// What the worker said it did to earn the charge, kept so the cost
+  /// breakdown reports it rather than re-deriving a guess after the fact.
+  final int calls;
+  final String? task;
   int rating;
   bool pinned;
   final bool edited;
@@ -151,6 +173,8 @@ class ChatMessage {
         thinking: thinking,
         cost: cost,
         model: model,
+        calls: calls,
+        task: task,
         rating: rating ?? this.rating,
         pinned: pinned ?? this.pinned,
         edited: edited,
@@ -169,6 +193,8 @@ class ChatMessage {
         'thinking': thinking,
         'cost': cost,
         'model': model,
+        'calls': calls,
+        'task': task,
         'rating': rating,
         'pinned': pinned,
         'edited': edited,
@@ -190,6 +216,8 @@ class ChatMessage {
         thinking: j['thinking'] as String?,
         cost: (j['cost'] as num?)?.toInt() ?? 0,
         model: j['model'] as String?,
+        calls: (j['calls'] as num?)?.toInt() ?? 1,
+        task: j['task'] as String?,
         rating: (j['rating'] as num?)?.toInt() ?? 0,
         pinned: j['pinned'] == true,
         edited: j['edited'] == true,

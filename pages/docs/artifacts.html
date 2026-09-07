@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Artifacts and comparing models - Nymbot Knowledge Base</title>
+    <meta name="description" content="Whole files opened beside the chat, versioned and editable; asking two models the same question; citation cards and rendered patches.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Artifacts and comparing models - Nymbot Knowledge Base">
+    <meta property="og:description" content="Whole files opened beside the chat, versioned and editable; asking two models the same question; citation cards and rendered patches.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/artifacts/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Artifacts and comparing models - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Whole files opened beside the chat, versioned and editable; asking two models the same question; citation cards and rendered patches.">
+    <link rel="canonical" href="https://nymbot.ai/docs/artifacts/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Artifacts and comparing models</h1>
+            <p class="docs-lede">Long code and documents belong beside the conversation rather than scrolling away inside it &mdash; and sometimes the fastest way to a good answer is to ask twice.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-they-are">What an artifact is</h2>
+            <p>When a reply contains a whole file &mdash; a page, a script, a document &mdash; Nymbot lifts
+                it out of the message and opens it beside the conversation instead of leaving it to scroll
+                away. On a wide screen it is a panel next to the chat; on a phone it is the screen, one tap
+                back to where you were.</p>
+            <p>HTML, SVG and Markdown preview as themselves. Everything else opens as highlighted source.
+                A preview runs in a sandboxed frame with no access to the app around it, so a page a model
+                wrote cannot reach your conversations, your keys or your credits.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Note</span>
+                <p>Short snippets stay in the message. Something is only lifted out when it is long enough
+                    to be worth a panel of its own.</p>
+            </div>
+
+            <h2 id="versions">Editing and versions</h2>
+            <p>An artifact is editable in place. Every save is kept, so you can read what changed and put
+                an earlier draft back. If a later reply rewrites the same file, it becomes the next version
+                of the artifact you already have rather than a second copy of it &mdash; one file, one
+                history.</p>
+            <p>Artifacts live on the device with the conversation they came from, are deleted with it, and
+                are never uploaded anywhere. In a <a href="/docs/chats/#ghost-mode">ghost chat</a> they are
+                held in memory only, like the rest of that chat.</p>
+
+            <h2 id="compare">Asking two models at once</h2>
+            <p><strong>Compare</strong> sends one prompt to two models at the same time. Each answers on a
+                thread of its own, seeded with the last few turns of the conversation, so neither model
+                sees what the other said and your chat is untouched until you choose.</p>
+            <p>Keep the answer you prefer and it is folded into the conversation with the question that
+                produced it; the chat then carries on from that point. The answer you did not keep is
+                discarded and never becomes context.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Cost</span>
+                <p>Two answers means two replies, so a comparison is charged twice. The confirmation says
+                    what it will cost before either model is asked.</p>
+            </div>
+
+            <h2 id="citations-and-patches">Citations and patches</h2>
+            <p>When a reply searches the web, what it read is listed underneath as citation cards: the
+                title, the site it came from and the passage it drew on, each one a link you can follow
+                and check. The little mark beside each source is a drawn letter, not a fetched favicon, so
+                reading a citation does not tell the site you read it.</p>
+            <p>When a reply produces a patch, it is rendered as a patch: one panel per file, headed with
+                the path and how many lines it adds and removes, with old and new line numbers down the
+                side. Long diffs across several files stay legible instead of arriving as one wall of
+                green and red.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

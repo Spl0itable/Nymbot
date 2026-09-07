@@ -427,6 +427,72 @@
 
             <div class="faq-item">
                 <div class="faq-question">
+                    <div class="faq-question-text">Where do long answers and files go?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>Into an artifact. When a reply contains a whole file &mdash; a page, a script, a document &mdash; it opens beside the conversation instead of scrolling away inside it. HTML, SVG and Markdown preview as themselves, in a sandboxed frame that cannot reach the app around it.</p>
+                    <p>Artifacts are editable, and every save is kept as a version you can put back. A later reply that rewrites the same file updates it rather than leaving you two copies. <a href="/docs/artifacts/">Artifacts</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Can I ask two models the same thing?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>Yes. Compare sends one prompt to two models at once, each on a thread of its own, so neither sees the other's answer. Keep the one you prefer and the conversation carries on from it; the other is discarded and never becomes context.</p>
+                    <p>Two answers means two replies, so it is charged twice &mdash; and the confirmation says what it will cost before either model is asked. <a href="/docs/artifacts/#compare">How comparing works</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Can I make a bot and give it to someone?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>A bot is a name, standing instructions, a model and a few openers. Share one as a link or a QR code, or publish it under your own npub as a replaceable Nostr event and share the address.</p>
+                    <p>What travels is only how the bot answers. It never carries your repositories, your access tokens, your files or anything either of you has said &mdash; and the link puts it in a URL fragment, which browsers do not send to a server. <a href="/docs/workspaces/#bots">Bots</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Can a chat leave no trace at all?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>A ghost chat is never written down. Its messages and anything it produced are held in memory and nowhere else, and no archived copy is published &mdash; so there is nothing to restore on another device, and nothing left when you close the app.</p>
+                    <p>The message itself still reaches Nymbot, encrypted as always; what a ghost chat refuses is the copy that exists to bring a conversation back later. Auto-delete does the same job on a timer for ordinary chats. <a href="/docs/chats/#ghost-mode">Ghost chats and auto-delete</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">What happens on a task too big for one reply?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>A repository task is a loop &mdash; list, read, search, write &mdash; and that loop has an allowance, because an unbounded agent is an unbounded bill. When a task uses its allowance with work still to do, Nymbot stops, hands you what it has, and says so. Nothing further is charged.</p>
+                    <p>Or set a continuation budget and it buys another allowance from the same balance, picking up exactly where it stopped instead of re-reading the repository. One leg at a time, each leg saying what it cost, stopping when the budget is spent or you press Stop. <a href="/docs/git/#carrying-on">How that works</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Can I see what it is doing while it thinks?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>Yes. Under the spinner Nymbot reports what it routed to, what it searched for, which files it is reading in a connected repository, which model call it is on, and the model's own reasoning as each call returns.</p>
+                    <p>That report is scoped to the key that asked and to that one message &mdash; in anonymous mode the throwaway key, so watching reveals nothing the message had not already. <a href="/docs/chats/#watching">Watching a reply</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
                     <div class="faq-question-text">What happens if I lose my key?</div>
                     <div class="faq-icon">+</div>
                 </div>

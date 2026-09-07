@@ -4,9 +4,15 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../config.dart';
+import '../core/crypto/bech32_codec.dart';
 import '../core/crypto/keys.dart';
 import '../features/i18n/i18n.dart';
+import '../models/artifact.dart';
+import '../models/bot.dart';
+import '../models/compare.dart';
 import '../models/conversation.dart';
+import '../models/schedule.dart';
+import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../services/anon.dart';
 import '../services/chat_engine.dart';
@@ -66,6 +72,7 @@ class AppController extends ChangeNotifier {
   List<Conversation> conversations = [];
   Conversation? current;
   List<ChatMessage> messages = [];
+  List<Artifact> artifacts = [];
 
   AppSettings settings = AppSettings();
   List<GitRepo> repos = [];
@@ -219,6 +226,121 @@ class AppController extends ChangeNotifier {
     return t('Moved {what} onto the throwaway key.', {'what': parts.join(', ')});
   }
 
+  /// Ghost mode, per chat. Turning it on moves what has already been said off
+  /// the disk, and turning it off writes back what is on screen — so the switch
+  /// never silently loses a conversation either way.
+  Future<void> setEphemeral(bool on) async {
+    final conv = current;
+    if (conv == null || conv.ephemeral == on) return;
+    if (on) {
+      await store.makeGhost(conv.id);
+      conv.ephemeral = true;
+    } else {
+      conv.ephemeral = false;
+      await store.unmakeGhost(conv.id);
+    }
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Future<void> setAutoDeleteDays(int days) async {
+    settings.autoDeleteDays = days < 0 ? 0 : days;
+    await store.saveSettings(settings);
+    notifyListeners();
+  }
+
+  /// Two sweeps, both at startup: a ghost chat has nothing left to show once
+  /// the process it lived in is gone, and a chat older than the auto-delete
+  /// window is one the user has already said they do not want kept.
+  Future<int> sweepOldChats() async {
+    final days = settings.autoDeleteDays;
+    final cutoff = DateTime.now().subtract(Duration(days: days));
+    final doomed = conversations
+        .where((c) =>
+            c.ephemeral ||
+            (days > 0 && !c.pinned && c.updatedAt.isBefore(cutoff)))
+        .map((c) => c.id)
+        .toList();
+    if (doomed.isEmpty) return 0;
+    for (final id in doomed) {
+      await store.dropConversation(id);
+    }
+    conversations.removeWhere((c) => doomed.contains(c.id));
+    await store.saveConversations(conversations);
+    return doomed.length;
+  }
+
+  // --- carrying a capped run on --------------------------------------------
+
+  /// Credits already spent carrying the current chat's run on, so a budget is
+  /// a budget for the task rather than for each leg of it.
+  int continuedSpend = 0;
+
+  /// What the running turn is doing, newest last. Advisory: it is emptied the
+  /// moment a turn ends, and an empty list simply shows the plain spinner.
+  List<TurnStep> progressSteps = [];
+  bool _watching = false;
+  bool _stopped = false;
+
+  /// What is left of this chat's continuation budget. A budget of -1 is
+  /// "whatever the balance holds", which is still a real ceiling — it is just
+  /// the user's own balance rather than a number they typed.
+  int get continueBudget {
+    final cap = settings.autoContinue;
+    if (cap == 0) return 0;
+    if (cap < 0) {
+      final have = proBalance;
+      return have == null || have < 0 ? 0 : have;
+    }
+    final left = cap - continuedSpend;
+    return left < 0 ? 0 : left;
+  }
+
+  Future<void> setAutoContinue(int credits) async {
+    settings.autoContinue = credits;
+    await store.saveSettings(settings);
+    notifyListeners();
+  }
+
+  Future<void> setShowProgress(bool on) async {
+    settings.showProgress = on;
+    await store.saveSettings(settings);
+    notifyListeners();
+  }
+
+  /// Polls the worker for what the turn is doing. Stops the moment the turn is
+  /// over, and never keeps the send waiting on it.
+  void _watchTurn(String eventId) {
+    if (!settings.showProgress) return;
+    _watching = true;
+    progressSteps = [];
+    () async {
+      var after = 0;
+      while (_watching) {
+        final signer = current?.anon == true && anon.enabled
+            ? await anon.signer()
+            : identity.signer;
+        final steps = await chat.progress(signer, eventId, after: after);
+        if (!_watching) return;
+        if (steps.isNotEmpty) {
+          after = steps.last.n;
+          progressSteps = [...progressSteps, ...steps];
+          notifyListeners();
+        }
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }()
+        .catchError((_) {});
+  }
+
+  void _stopWatching() {
+    if (!_watching && progressSteps.isEmpty) return;
+    _watching = false;
+    progressSteps = [];
+    notifyListeners();
+  }
+
   Future<void> setWebSearch(bool on) async {
     settings.webSearch = on;
     await store.saveSettings(settings);
@@ -265,10 +387,28 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Workspace? get activeWorkspace => store.workspace(current?.workspaceId);
+
+  /// A chat sees its own repositories plus the ones its workspace carries, in
+  /// that order and without duplicates.
   List<GitRepo> get activeRepos {
-    final ids = current?.repoIds ?? const <String>[];
-    return repos.where((r) => ids.contains(r.id) && r.enabled).toList();
+    final ids = [
+      ...current?.repoIds ?? const <String>[],
+      ...activeWorkspace?.repoIds ?? const <String>[],
+    ];
+    final out = <GitRepo>[];
+    for (final id in ids) {
+      if (out.any((r) => r.id == id)) continue;
+      for (final r in repos) {
+        if (r.id == id && r.enabled) out.add(r);
+      }
+    }
+    return out;
   }
+
+  /// Repositories this chat picked itself, as opposed to the ones it inherits
+  /// from its workspace.
+  bool ownsRepo(String id) => current?.repoIds.contains(id) ?? false;
 
   Future<GitRepo> saveRepo(GitRepo repo, {bool useHere = true}) async {
     final at = repos.indexWhere((r) => r.id == repo.id);
@@ -317,7 +457,8 @@ class AppController extends ChangeNotifier {
 
   List<Persona> get personas => store.personas();
 
-  Persona? get activePersona => store.persona(current?.personaId);
+  Persona? get activePersona =>
+      store.persona(current?.personaId ?? activeWorkspace?.personaId);
 
   Future<void> setPersona(String? id) async {
     final conv = current;
@@ -344,6 +485,197 @@ class AppController extends ChangeNotifier {
         store.customPersonas().where((p) => p.id != id).toList());
     for (final c in conversations) {
       if (c.personaId == id) c.personaId = null;
+    }
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  List<Bot> get bots => store.bots();
+
+  Bot? get activeBot => store.bot(current?.botId);
+
+  Future<void> setBot(String? id, {Map<String, dynamic>? model}) async {
+    final conv = current;
+    if (conv == null) return;
+    conv.botId = id;
+    if (id == null) {
+      conv.proModel = null;
+    } else if (model != null) {
+      conv.proModel = model;
+    }
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Future<Bot> saveBot(Bot bot) async {
+    final list = store.bots();
+    bot.updatedAt = DateTime.now();
+    final at = list.indexWhere((b) => b.id == bot.id);
+    if (at == -1) {
+      list.add(bot);
+    } else {
+      list[at] = bot;
+    }
+    await store.saveBots(list);
+    notifyListeners();
+    return bot;
+  }
+
+  Future<void> deleteBot(String id) async {
+    await store.saveBots(store.bots().where((b) => b.id != id).toList());
+    for (final c in conversations) {
+      if (c.botId == id) c.botId = null;
+    }
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  /// Publishing is a claim of authorship, so it is always signed by the account
+  /// and never by a throwaway key, whatever mode the chat is in. Kind 30078 is
+  /// replaceable, so republishing the same bot replaces it.
+  Future<int> publishBot(Bot bot) async {
+    final signer = identity.signer;
+    final event = await signer.sign(UnsignedEvent(
+      pubkey: signer.pubkey,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: Bot.kind,
+      tags: [
+        ['d', bot.dTag],
+        ['title', bot.name],
+        const ['t', 'nymbot'],
+      ],
+      content: jsonEncode(bot.shareable),
+    ));
+    final accepted = await relays.publish(event);
+    if (accepted > 0) {
+      bot.naddr = bot.addressFor(identity.pubkey);
+      bot.author = identity.pubkey;
+      await saveBot(bot);
+    }
+    return accepted;
+  }
+
+  /// Reads a published bot back off the relays. Returns null when no relay has
+  /// it, which is what an unpublished or mistyped address looks like.
+  Future<Bot?> fetchBot(String address) async {
+    final ref = decodeNostrRef(address.trim());
+    if (ref == null ||
+        ref.kind != NostrRefKind.addr ||
+        ref.eventKind != Bot.kind) {
+      return null;
+    }
+    final events = await relays.fetch({
+      'kinds': [Bot.kind],
+      'authors': [ref.pubkey],
+      '#d': [ref.identifier],
+      'limit': 2,
+    }, timeout: const Duration(seconds: 5));
+    final mine = events.where((e) => e.pubkey == ref.pubkey).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (mine.isEmpty) return null;
+    try {
+      final json = jsonDecode(mine.first.content);
+      if (json is! Map<String, dynamic>) return null;
+      return Bot.fromShared(json,
+          id: bytesToHex(randomBytes(8)), author: ref.pubkey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<Schedule> schedules = [];
+  Timer? _scheduler;
+
+  Future<Schedule> saveSchedule(Schedule entry) async {
+    final at = schedules.indexWhere((s) => s.id == entry.id);
+    if (at == -1) {
+      schedules = [...schedules, entry];
+    } else {
+      schedules[at] = entry;
+    }
+    await store.saveSchedules(schedules);
+    notifyListeners();
+    return entry;
+  }
+
+  Future<void> deleteSchedule(String id) async {
+    schedules = schedules.where((s) => s.id != id).toList();
+    await store.saveSchedules(schedules);
+    notifyListeners();
+  }
+
+  /// Nothing runs on a server, so a run happens here, in the open app, and
+  /// only when it is not already waiting on a reply.
+  Future<void> runSchedule(String id) async {
+    if (sending) return;
+    final at = schedules.indexWhere((s) => s.id == id);
+    if (at == -1) return;
+    final entry = schedules[at];
+
+    Conversation? target;
+    for (final c in conversations) {
+      if (c.id == entry.convId) target = c;
+    }
+    if (target == null) {
+      target = await newConversation();
+      target.title = entry.title;
+    } else if (current?.id != target.id) {
+      await open(target);
+    }
+
+    entry.advance();
+    await store.saveSchedules(schedules);
+    await note(t('Running “{name}”.',
+        {'name': entry.title.isEmpty ? t('Untitled') : entry.title}));
+    await send(entry.prompt);
+  }
+
+  List<Schedule> get dueSchedules => schedules.where((s) => s.due).toList();
+
+  Future<void> runDueSchedules() async {
+    if (sending) return;
+    final due = dueSchedules;
+    if (due.isEmpty) return;
+    await runSchedule(due.first.id);
+  }
+
+  void startScheduler() {
+    _scheduler?.cancel();
+    _scheduler = Timer.periodic(const Duration(minutes: 1), (_) {
+      runDueSchedules().catchError((_) {});
+    });
+  }
+
+  List<Workspace> get workspaces => store.workspaces();
+
+  Future<void> setWorkspace(String? id) async {
+    final conv = current;
+    if (conv == null) return;
+    conv.workspaceId = id;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Future<void> saveWorkspace(Workspace space) async {
+    final list = store.workspaces();
+    space.updatedAt = DateTime.now();
+    final at = list.indexWhere((w) => w.id == space.id);
+    if (at == -1) {
+      list.add(space);
+    } else {
+      list[at] = space;
+    }
+    await store.saveWorkspaces(list);
+    notifyListeners();
+  }
+
+  Future<void> deleteWorkspace(String id) async {
+    await store
+        .saveWorkspaces(store.workspaces().where((w) => w.id != id).toList());
+    for (final c in conversations) {
+      if (c.workspaceId == id) c.workspaceId = null;
     }
     await store.saveConversations(conversations);
     notifyListeners();
@@ -413,6 +745,11 @@ class AppController extends ChangeNotifier {
     relays.connect();
 
     conversations = store.conversations();
+    schedules = store.schedules();
+    // Before anything is drawn: a ghost chat has nothing left to show now the
+    // process it lived in is gone, and a chat past the auto-delete window is
+    // one the user has already said they do not want kept.
+    await sweepOldChats();
     final live = conversations.where((c) => !c.archived).toList();
     if (live.isEmpty) {
       await newConversation();
@@ -436,6 +773,8 @@ class AppController extends ChangeNotifier {
       }
       await refreshBalance();
       await anon.flush(identity: identity.signer);
+      startScheduler();
+      await runDueSchedules();
       await autoTopUp();
       // A published profile is what the account already tells the world;
       // showing it costs no privacy and makes the app feel signed in.
@@ -447,6 +786,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _bootWork?.cancel();
+    _scheduler?.cancel();
     relays.close();
     super.dispose();
   }
@@ -460,6 +800,8 @@ class AppController extends ChangeNotifier {
       anon: anon.enabled,
       repoIds: [...settings.defaultRepoIds],
       personaId: settings.defaultPersonaId,
+      workspaceId: current?.workspaceId,
+      botId: current?.botId,
     );
     conversations.insert(0, conv);
     await store.saveConversations(conversations);
@@ -470,8 +812,92 @@ class AppController extends ChangeNotifier {
   Future<void> open(Conversation conv) async {
     current = conv;
     messages = store.messages(conv.id);
+    artifacts = store.artifacts(conv.id);
     attachments = [];
     quote = null;
+    notifyListeners();
+  }
+
+  List<Artifact> artifactsOf(String messageId) =>
+      artifacts.where((a) => a.messageId == messageId).toList();
+
+  Future<List<Artifact>> harvestArtifacts(ChatMessage message) async {
+    if (message.role != ChatRole.bot) return const [];
+    final made = <Artifact>[];
+    for (final block in ArtifactHarvest.fences(message.content)) {
+      if (!ArtifactHarvest.worthLifting(block.body, block.lang)) continue;
+      final title = ArtifactHarvest.titleFor(block.lang, block.body);
+      final at = artifacts.indexWhere((a) => a.title == title && a.lang == block.lang);
+      if (at == -1) {
+        final entry = Artifact(
+          id: bytesToHex(randomBytes(8)),
+          title: title,
+          lang: block.lang,
+          body: block.body,
+          messageId: message.id,
+          versions: [ArtifactVersion(at: DateTime.now(), body: block.body)],
+        );
+        artifacts = [...artifacts, entry];
+        made.add(entry);
+      } else {
+        final entry = artifacts[at];
+        if (entry.body != block.body) {
+          entry.versions = [
+            ...entry.versions,
+            ArtifactVersion(at: DateTime.now(), body: block.body),
+          ];
+          if (entry.versions.length > 30) {
+            entry.versions = entry.versions.sublist(entry.versions.length - 30);
+          }
+          entry.body = block.body;
+          entry.updatedAt = DateTime.now();
+        }
+        made.add(entry);
+      }
+    }
+    if (made.isNotEmpty) {
+      await store.saveArtifacts(current!.id, artifacts);
+      notifyListeners();
+    }
+    return made;
+  }
+
+  Future<void> updateArtifact(String id, String body) async {
+    final at = artifacts.indexWhere((a) => a.id == id);
+    if (at == -1 || artifacts[at].body == body) return;
+    final entry = artifacts[at];
+    entry.versions = [
+      ...entry.versions,
+      ArtifactVersion(at: DateTime.now(), body: body, note: 'edited here'),
+    ];
+    if (entry.versions.length > 30) {
+      entry.versions = entry.versions.sublist(entry.versions.length - 30);
+    }
+    entry.body = body;
+    entry.updatedAt = DateTime.now();
+    await store.saveArtifacts(current!.id, artifacts);
+    notifyListeners();
+  }
+
+  Future<void> renameArtifact(String id, String title) async {
+    final at = artifacts.indexWhere((a) => a.id == id);
+    if (at == -1 || title.trim().isEmpty || artifacts[at].title == title.trim()) return;
+    artifacts[at].title = title.trim();
+    await store.saveArtifacts(current!.id, artifacts);
+    notifyListeners();
+  }
+
+  Future<void> revertArtifact(String id, int index) async {
+    final at = artifacts.indexWhere((a) => a.id == id);
+    if (at == -1) return;
+    final entry = artifacts[at];
+    if (index < 0 || index >= entry.versions.length) return;
+    await updateArtifact(id, entry.versions[index].body);
+  }
+
+  Future<void> deleteArtifact(String id) async {
+    artifacts = artifacts.where((a) => a.id != id).toList();
+    await store.saveArtifacts(current!.id, artifacts);
     notifyListeners();
   }
 
@@ -621,6 +1047,8 @@ class AppController extends ChangeNotifier {
     conv.messageCount = 0;
     conv.creditsSpent = 0;
     messages = [];
+    artifacts = [];
+    await store.saveArtifacts(conv.id, const []);
     await store.saveMessages(conv.id, const []);
     await store.setThread(conv.id, const []);
     await store.saveConversations(conversations);
@@ -718,15 +1146,143 @@ class AppController extends ChangeNotifier {
   // --- sending -------------------------------------------------------------------
 
   void stop() {
+    // Stop means stop: a run carrying itself on must not start another leg
+    // after the one being aborted.
+    _stopped = true;
+    _stopWatching();
     chat.abort();
     sending = false;
     status = null;
     notifyListeners();
   }
 
+  /// The last few turns, plain enough for a model that has never seen this
+  /// thread to pick up where it left off.
+  String compareSeed({int limit = 8}) {
+    final kept = messages
+        .where((m) => m.role == ChatRole.self || m.role == ChatRole.bot)
+        .toList();
+    final tail = kept.length > limit ? kept.sublist(kept.length - limit) : kept;
+    return tail.map((m) {
+      final who = m.role == ChatRole.self ? 'User' : 'Assistant';
+      final body =
+          m.content.length > 700 ? m.content.substring(0, 700) : m.content;
+      return '$who: $body';
+    }).join('\n\n');
+  }
+
+  /// Asks two models the same thing at once, each on a thread of its own so
+  /// neither sees the other's answer and this chat is untouched until one is
+  /// kept. Two replies, so two charges.
+  Future<List<CompareRun>> compare(
+      String text, List<Map<String, dynamic>> models) async {
+    final conv = current;
+    if (conv == null || sending || models.length < 2) return const [];
+    final body = text.trim();
+    if (body.isEmpty) return const [];
+
+    sending = true;
+    status = null;
+    notifyListeners();
+
+    final seed = compareSeed();
+    final scoped = activeRepos;
+    final persona = activePersona;
+    final space = activeWorkspace;
+    final bot = activeBot;
+
+    Future<CompareRun> once(Map<String, dynamic> model) async {
+      final scratch = Conversation(
+        id: 'cmp-${bytesToHex(randomBytes(6))}',
+        rootId: bytesToHex(randomBytes(32)),
+        anon: conv.anon,
+        ephemeral: conv.ephemeral,
+        repoIds: [...conv.repoIds],
+        personaId: conv.personaId,
+        workspaceId: conv.workspaceId,
+        botId: conv.botId,
+        systemPrompt: conv.systemPrompt,
+        proModel: model,
+        seed: seed.isEmpty ? null : seed,
+      );
+      try {
+        final res = await chat.send(
+          conv: scratch,
+          text: body,
+          proModel: model,
+          repos: scoped,
+          persona: persona,
+          workspace: space,
+          bot: bot,
+          webSearch: settings.webSearch,
+          firstTurn: true,
+          onThreadIds: (_) {},
+        );
+        return CompareRun(
+          model: model,
+          reply: res.reply,
+          thinking: res.thinking,
+          cost: res.cost,
+          sources: res.sources,
+        );
+      } on ChatFailure catch (e) {
+        return CompareRun(model: model, error: e.message);
+      } catch (e) {
+        return CompareRun(model: model, error: e.toString());
+      }
+    }
+
+    final out = await Future.wait(models.map(once));
+    sending = false;
+    status = null;
+
+    final spent = out.fold<int>(0, (n, r) => n + r.cost);
+    if (spent > 0) await store.recordUsage(spent);
+    notifyListeners();
+    return out;
+  }
+
+  /// Folds the winning answer into the chat. Neither reply was on this chat's
+  /// thread, so the worker has never seen this turn: the chat takes a fresh
+  /// thread and carries the transcript forward as its seed, exactly as a
+  /// branch does.
+  Future<void> keepCompare(String prompt, CompareRun run) async {
+    final conv = current;
+    if (conv == null || !run.ok) return;
+
+    await _add(ChatMessage(
+      id: bytesToHex(randomBytes(8)),
+      role: ChatRole.self,
+      content: prompt,
+    ));
+    final reply = ChatMessage(
+      id: bytesToHex(randomBytes(8)),
+      role: ChatRole.bot,
+      content: run.reply,
+      thinking: run.thinking,
+      cost: run.cost,
+      model: run.label,
+      sources: run.sources,
+    );
+    await _add(reply);
+    await harvestArtifacts(reply);
+
+    conv.rootId = bytesToHex(randomBytes(32));
+    conv.seed = compareSeed();
+    if (conv.title.isEmpty) conv.title = ChatEngine.titleFor(prompt);
+    conv.messageCount += 1;
+    conv.creditsSpent += run.cost;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    await store.setThread(conv.id, const []);
+    notifyListeners();
+  }
+
   Future<void> send(String text) async {
     final conv = current;
     if (conv == null || sending || text.trim().isEmpty) return;
+    _stopped = false;
+    continuedSpend = 0;
     final body = text.trim();
     final sent = [...attachments];
     final quoted = quote;
@@ -763,25 +1319,32 @@ class AppController extends ChangeNotifier {
         proModel: activeModel,
         repos: scoped,
         persona: activePersona,
+        workspace: activeWorkspace,
+        bot: activeBot,
         attachments: sent,
         quote: quoted,
         webSearch: settings.webSearch,
         firstTurn: store.thread(conv.id).isEmpty,
+        onTurn: _watchTurn,
         onThreadIds: (ids) {
           final thread = [...store.thread(conv.id), ...ids];
           unawaited(store.setThread(conv.id, thread));
         },
       );
-      await _add(ChatMessage(
+      _stopWatching();
+      final reply = ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.bot,
         content: res.reply,
         thinking: res.thinking,
         cost: res.cost,
         model: res.pro ? (activeModel?['label'] as String?) : null,
+        calls: res.modelCalls,
         repos: res.repos.length > 1 ? res.repos : const [],
         sources: res.sources,
-      ));
+      );
+      await _add(reply);
+      await harvestArtifacts(reply);
       if (conv.seed != null) conv.seed = null;
       conv.messageCount += 1;
       conv.creditsSpent += res.cost;
@@ -809,6 +1372,11 @@ class AppController extends ChangeNotifier {
               : t('Credits running low: {n} left. Tap Buy to top up.',
                   {'n': res.balance}));
         }
+      }
+      if (res.truncated) {
+        // Out of the try's finally, so the loop runs with `sending` under its
+        // own control rather than fighting the one being unwound.
+        unawaited(Future<void>.microtask(() => _carryOn(res)));
       }
     } on ChatFailure catch (e) {
       if (e.cancelled) {
@@ -842,9 +1410,120 @@ class AppController extends ChangeNotifier {
         retry: body,
       ));
     } finally {
+      _stopWatching();
       sending = false;
       status = null;
       notifyListeners();
+    }
+  }
+
+  /// A repo run stopped at its tool-call cap with work left. Spend the budget
+  /// the user set on carrying it on, one leg at a time, saying what each leg
+  /// cost as it goes — never silently.
+  Future<void> _carryOn(TurnResult first) async {
+    final conv = current;
+    if (conv == null) return;
+    var token = first.resumeToken;
+    var reserve = first.nextReserve;
+    if (token == null || token.isEmpty) {
+      await note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'));
+      return;
+    }
+    var left = continueBudget;
+    if (left <= 0) {
+      await note(t('That answer stopped early. Turn on continuing in Appearance, or ask it to carry on.'));
+      return;
+    }
+    if (reserve > left) {
+      await note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
+          {'n': reserve - left}));
+      return;
+    }
+
+    while (token != null && token.isNotEmpty && left > 0 && !_stopped) {
+      sending = true;
+      status = t('Carrying on where it left off');
+      notifyListeners();
+      TurnResult next;
+      try {
+        next = await chat.send(
+          conv: conv,
+          text: t('Continue.'),
+          proModel: activeModel,
+          repos: activeRepos,
+          persona: activePersona,
+          workspace: activeWorkspace,
+          bot: activeBot,
+          webSearch: settings.webSearch,
+          firstTurn: false,
+          resume: token,
+          onTurn: _watchTurn,
+          onThreadIds: (ids) {
+            final thread = [...store.thread(conv.id), ...ids];
+            unawaited(store.setThread(conv.id, thread));
+          },
+        );
+      } on ChatFailure catch (e) {
+        _stopWatching();
+        sending = false;
+        status = null;
+        await note(e.message);
+        return;
+      } catch (_) {
+        _stopWatching();
+        sending = false;
+        status = null;
+        await note(t('Could not carry on from there.'));
+        return;
+      }
+      _stopWatching();
+      sending = false;
+      status = null;
+
+      final more = ChatMessage(
+        id: bytesToHex(randomBytes(8)),
+        role: ChatRole.bot,
+        content: next.reply,
+        thinking: next.thinking,
+        cost: next.cost,
+        model: next.pro ? (activeModel?['label'] as String?) : null,
+        calls: next.modelCalls,
+        sources: next.sources,
+      );
+      await _add(more);
+      await harvestArtifacts(more);
+      conv.messageCount += 1;
+      conv.creditsSpent += next.cost;
+      _touch(conv);
+      await store.saveConversations(conversations);
+      await store.recordUsage(next.cost);
+      continuedSpend += next.cost;
+      if (next.balance != null) {
+        if (next.pro) {
+          proBalance = next.balance;
+        } else {
+          standardBalance = next.balance;
+        }
+      }
+
+      left = continueBudget;
+      token = next.truncated ? next.resumeToken : null;
+      reserve = next.nextReserve;
+
+      if (token != null && token.isNotEmpty && reserve > left) {
+        await note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
+            {'n': reserve, 'left': left}));
+        return;
+      }
+      if (token != null && token.isNotEmpty && left <= 0) {
+        await note(t('Budget spent — {n} credits on carrying that on. Raise it in Appearance to go further.',
+            {'n': continuedSpend}));
+        return;
+      }
+    }
+    if (continuedSpend > 0) {
+      await note(t('Finished. Carrying on cost {n} extra credits.', {'n': continuedSpend}));
+      continuedSpend = 0;
     }
   }
 

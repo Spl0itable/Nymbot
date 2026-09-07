@@ -63,7 +63,102 @@
         return null;
     }
 
+    /// Splits a unified diff into files, counted, so a patch can be read as a
+    /// patch rather than as coloured text. Anything before the first file
+    /// header is kept under an empty path, so a bare hunk still renders.
+    function diffFiles(source) {
+        const files = [];
+        let current = null;
+        let oldNo = 0;
+        let newNo = 0;
+        const start = (path) => {
+            current = { path, lines: [], added: 0, removed: 0 };
+            files.push(current);
+        };
+        for (const raw of String(source || '').replace(/\r\n/g, '\n').split('\n')) {
+            const git = /^diff --git a\/(\S+) b\/(\S+)/.exec(raw);
+            if (git) { start(git[2]); continue; }
+            if (raw.startsWith('+++ ')) {
+                const path = raw.slice(4).trim().replace(/^b\//, '');
+                if (path !== '/dev/null') {
+                    if (current && !current.lines.length) files.pop();
+                    start(path);
+                }
+                continue;
+            }
+            if (/^(--- |index |new file|deleted file|similarity index|rename )/.test(raw)) continue;
+            const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+            if (hunk) {
+                if (!current) start('');
+                oldNo = Number(hunk[1]);
+                newNo = Number(hunk[2]);
+                current.lines.push({ kind: 'hunk', text: raw });
+                continue;
+            }
+            if (!current) {
+                if (!raw.trim()) continue;
+                start('');
+            }
+            if (raw.startsWith('+')) {
+                current.lines.push({ kind: 'add', text: raw, newNo: newNo++ });
+                current.added++;
+            } else if (raw.startsWith('-')) {
+                current.lines.push({ kind: 'del', text: raw, oldNo: oldNo++ });
+                current.removed++;
+            } else if (raw.startsWith('\\')) {
+                current.lines.push({ kind: 'meta', text: raw });
+            } else {
+                current.lines.push({ kind: 'ctx', text: raw, oldNo: oldNo++, newNo: newNo++ });
+            }
+        }
+        return files.filter(f => f.lines.length);
+    }
+
+    function diffBlock(body) {
+        const files = diffFiles(body);
+        if (!files.length) return '';
+        const id = 'diff-' + Math.random().toString(36).slice(2, 10);
+        const panels = files.map(file => {
+            const rows = file.lines.map(line => [
+                `<div class="diff-line is-${line.kind}">`,
+                `<span class="diff-no">${line.oldNo == null ? '' : line.oldNo}</span>`,
+                `<span class="diff-no">${line.newNo == null ? '' : line.newNo}</span>`,
+                `<span class="diff-text">${esc(line.text)}</span>`,
+                '</div>'
+            ].join('')).join('');
+            return [
+                '<div class="diff-file">',
+                '<div class="diff-head">',
+                `<span class="diff-path">${esc(file.path || t('patch'))}</span>`,
+                `<span class="diff-added">+${file.added}</span>`,
+                `<span class="diff-removed">\u2212${file.removed}</span>`,
+                '</div>',
+                `<div class="diff-body">${rows}</div>`,
+                '</div>'
+            ].join('');
+        }).join('');
+        return [
+            `<div class="diff-block" data-code-id="${id}">`,
+            '<div class="code-head">',
+            `<span class="code-lang">diff</span>`,
+            `<span class="code-lines">${files.length} ${files.length === 1 ? t('file') : t('files')}</span>`,
+            '<span class="code-actions">',
+            `<button type="button" class="code-btn" data-act="code-copy" data-code-id="${id}">${esc(t('Copy'))}</button>`,
+            '</span>',
+            '</div>',
+            panels,
+            `<textarea class="code-source" hidden readonly>${esc(body)}</textarea>`,
+            '</div>'
+        ].join('');
+    }
+
     function codeBlock(body, lang, options) {
+        // A patch is read as a patch: per file, with what it costs on the
+        // header rather than counted off the `+` lines by eye.
+        if (lang === 'diff' || lang === 'patch') {
+            const rendered = diffBlock(body);
+            if (rendered) return rendered;
+        }
         const opts = options || {};
         const hl = HL();
         const label = hl ? hl.displayName(lang) : (lang || 'text');
@@ -256,5 +351,5 @@
             .trim();
     }
 
-    window.NymbotMarkdown = { render, escape: esc, plain, inline };
+    window.NymbotMarkdown = { render, escape: esc, plain, inline, diffFiles };
 })();

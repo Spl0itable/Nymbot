@@ -13,11 +13,13 @@
     const QR = window.NymbotQR;
     const Avatar = window.NymbotAvatar;
     const Attach = window.NymbotAttach;
+    const Bots = window.NymbotBots;
     const Commands = window.NymbotCommands;
     const Speech = window.NymbotSpeech;
     const Exporter = window.NymbotExport;
     const Icons = window.NymbotIcons;
     const Profile = window.NymbotProfile;
+    const Artifacts = window.NymbotArtifacts;
     const NT = () => window.NostrTools;
 
     const $ = (id) => document.getElementById(id);
@@ -39,7 +41,7 @@
         { keys: [MODIFIER, 'B'], what: t('Show or hide the chat list') },
         { keys: [MODIFIER, 'Enter'], what: t('Send, whatever the Enter setting is') },
         { keys: [MODIFIER, 'Shift', 'C'], what: t('Copy the last reply') },
-        { keys: [MODIFIER, 'Shift', 'R'], what: t('Ask the last question again') },
+        { keys: [MODIFIER, 'Shift', 'S'], what: t('Ask the last question again') },
         { keys: [MODIFIER, 'Shift', 'M'], what: t('Pick a model') },
         { keys: [MODIFIER, 'Shift', 'G'], what: t('Repositories') },
         { keys: [MODIFIER, 'Shift', 'P'], what: t('Prompt library') },
@@ -78,7 +80,20 @@
         suggestAt: 0,
         suggestRows: [],
         repoEditing: null,
+        artifact: null,
+        artifactTab: 'preview',
+        compare: null,
+        stopped: false,
+        _turnWatch: null,
         personaEditing: null,
+        workspaceEditing: null,
+        workspaceDraft: null,
+        scheduleEditing: null,
+        _schedulerTimer: null,
+        botEditing: null,
+        botIcon: 'robot',
+        sharingBot: null,
+        pendingBot: null,
         personaIcon: 'robot',
         promptEditing: null,
         _lastGroup: null,
@@ -91,7 +106,9 @@
             // rendered until it has landed (or failed, which is English).
             await window.NymbotI18n.ready;
             this.favourites = Store.read('favouriteModels', []) || [];
-            $('brand').appendChild(Icons.wordmark({ size: 24 }));
+            const brand = $('brand');
+            brand.appendChild(Icons.wordmark({ size: 26 }));
+            brand.appendChild(el('span', 'brand-name', 'nymbot'));
             this.applyAppearance();
             this.bind();
             Anon.load();
@@ -121,9 +138,19 @@
             });
             Relays.connect();
 
+            // Before anything is drawn: a ghost chat has nothing left to show
+            // now the tab it lived in is gone, and a chat past the auto-delete
+            // window is one you have already said you do not want kept.
+            const swept = Store.sweepOldChats(this.settings.autoDeleteDays || 0);
+
             const list = Store.conversations().filter(c => !c.archived);
             this.open(list.length ? list[0] : this.newConversation());
             this.renderList();
+            if (swept) {
+                this.toast(swept === 1
+                    ? t('1 chat swept.')
+                    : t('{n} chats swept.', { n: swept }));
+            }
             this.renderIdentity();
             this.refreshToolbar();
 
@@ -161,6 +188,10 @@
                 }
             };
             Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
+            this.offerBotFromUrl();
+            this.watchScrolling();
+            this.startScheduler();
+            setTimeout(() => this.runDueSchedules().catch(() => { }), 4000);
         },
 
         applyAppearance() {
@@ -190,7 +221,8 @@
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
                 anon: Anon.enabled(),
                 repoIds: (this.settings.defaultRepos || []).slice(),
-                personaId: this.settings.defaultPersona || null
+                personaId: this.settings.defaultPersona || null,
+                workspaceId: (this.conv && this.conv.workspaceId) || null
             }, patch || {}));
             return conv;
         },
@@ -208,9 +240,11 @@
             $('chatAnon').hidden = !conv.anon;
             this.toggleSidebar(false);
             this.closeFind();
+            this.closeArtifact();
             this.renderMessages();
             this.renderList();
             this.refreshToolbar();
+            this.renderArtifactStrip();
             const input = $('input');
             input.value = Store.draft(conv.id);
             this.autoGrow();
@@ -349,12 +383,17 @@
         },
 
         emptyState() {
+            const bot = Chat.botFor(this.conv);
             const wrap = el('div', 'empty');
-            wrap.appendChild(el('h2', null, t('Ask Nymbot anything')));
-            wrap.appendChild(el('p', null,
-                t('End-to-end encrypted, paid a reply at a time. Type ? for commands, or start with one of these.')));
+            wrap.appendChild(el('h2', null, bot ? bot.name : t('Ask Nymbot anything')));
+            wrap.appendChild(el('p', null, bot
+                ? (bot.tagline || t('This chat answers the way that bot was written to.'))
+                : t('End-to-end encrypted, paid a reply at a time. Type ? for commands, or start with one of these.')));
             const cards = el('div', 'empty-cards');
-            for (const starter of starters()) {
+            const own = bot && (bot.starters || []).length
+                ? bot.starters.map(body => ({ title: bot.name, body }))
+                : starters();
+            for (const starter of own) {
                 const b = el('button', 'empty-card');
                 b.type = 'button';
                 b.appendChild(el('strong', null, starter.title));
@@ -432,6 +471,16 @@
                     tick.appendChild(Icons.node('verified', { size: 12 }));
                     who.appendChild(tick);
                     if (m.model) who.appendChild(el('span', 'author-model', m.model));
+                    if (m.cost) {
+                        const cost = el('button', 'cost-chip');
+                        cost.type = 'button';
+                        cost.dataset.act = 'msg-cost';
+                        cost.dataset.id = m.id;
+                        cost.title = t('What this reply cost');
+                        cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
+                        cost.appendChild(el('span', null, String(m.cost)));
+                        who.appendChild(cost);
+                    }
                 } else {
                     const me = this.selfIdentity();
                     who.classList.add(me.colour);
@@ -491,25 +540,54 @@
             body.appendChild(text);
 
             if (m.sources && m.sources.length) {
-                const row = el('div');
-                for (const s of m.sources.slice(0, 8)) {
-                    const a = el('a', 'source-chip', s.title || s.url || 'source');
-                    if (s.url) { a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
-                    row.appendChild(a);
-                }
-                body.appendChild(row);
+                body.appendChild(this.citationCards(m.sources));
             }
 
-            if (m.cost) {
-                const cost = el('span', 'cost-chip');
-                cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
-                cost.appendChild(el('span', null, String(m.cost)));
-                text.appendChild(cost);
+
+            const made = m.role === 'bot'
+                ? Artifacts.all(this.conv.id).filter(a => a.messageId === m.id)
+                : [];
+            if (made.length) {
+                const tray = el('div', 'artifact-tray');
+                for (const a of made) {
+                    const card = el('button', 'artifact-card');
+                    card.type = 'button';
+                    card.dataset.act = 'artifact-open';
+                    card.dataset.artifact = a.id;
+                    card.appendChild(Icons.node(
+                        Artifacts.previewable(a.lang) ? 'prompt' : 'copy', { size: 14 }));
+                    const main = el('span', 'artifact-card-main');
+                    main.appendChild(el('strong', null, a.title));
+                    main.appendChild(el('span', null, [
+                        a.lang || 'text',
+                        t('{n} lines', { n: a.body.split('\n').length }),
+                        (a.versions || []).length > 1
+                            ? t('v{n}', { n: a.versions.length })
+                            : ''
+                    ].filter(Boolean).join(' · ')));
+                    card.appendChild(main);
+                    tray.appendChild(card);
+                }
+                body.appendChild(tray);
             }
 
             body.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
             node.appendChild(body);
-            node.appendChild(this.actionsFor(m));
+            const actions = this.actionsFor(m);
+            node.appendChild(actions);
+
+            // On a touch screen there is no hover to reveal a row with, so a
+            // tap on the bubble does it — and only one row is open at a time,
+            // so the thread does not fill up with them.
+            body.addEventListener('click', (e) => {
+                if (!matchMedia('(pointer: coarse)').matches) return;
+                if (e.target.closest('a, button, input, textarea, .code-block, .artifact-card')) return;
+                const open = actions.classList.contains('is-open');
+                for (const row of $('messages').querySelectorAll('.msg-actions.is-open')) {
+                    row.classList.remove('is-open');
+                }
+                actions.classList.toggle('is-open', !open);
+            });
             return node;
         },
 
@@ -518,7 +596,10 @@
             const add = (icon, title, act, extra) => {
                 const b = el('button', 'msg-action' + (extra && extra.cls ? ' ' + extra.cls : ''));
                 b.type = 'button';
+                // data-tip draws the label; title is kept so a screen reader
+                // and a native tooltip still have it.
                 b.title = title;
+                b.dataset.tip = title;
                 b.setAttribute('aria-label', title);
                 b.dataset.act = act;
                 b.dataset.id = m.id;
@@ -552,7 +633,7 @@
                 if (m.pinned) pin.classList.add('is-on');
             }
             if (m.role === 'error') {
-                add(t('Try again'), t('Try again'), 'msg-retry');
+                add('refresh', t('Try again'), 'msg-retry');
             }
             add('close', t('Delete'), 'msg-delete');
             return row;
@@ -589,11 +670,207 @@
             img.src = C.botAvatar;
             img.alt = '';
             node.appendChild(img);
-            node.appendChild(el('span', 'bot-thinking-label', label || t('Nymbot is thinking')));
-            node.appendChild(el('span', 'typing-dot'));
-            node.appendChild(el('span', 'typing-dot'));
-            node.appendChild(el('span', 'typing-dot'));
+            const head = el('div', 'bot-thinking-head');
+            head.appendChild(el('span', 'bot-thinking-label', label || t('Nymbot is thinking')));
+            head.appendChild(el('span', 'typing-dot'));
+            head.appendChild(el('span', 'typing-dot'));
+            head.appendChild(el('span', 'typing-dot'));
+            node.appendChild(head);
+            // Filled in as the worker reports what it is doing.
+            node.appendChild(el('div', 'bot-progress', ''));
             return node;
+        },
+
+        // --- carrying a capped run on ------------------------------------------
+
+        /// What is left of this chat's continuation budget. A budget of -1 is
+        /// "whatever the balance holds", which is still a real ceiling — it is
+        /// just the user's own balance rather than a number they typed.
+        continueBudget() {
+            const cap = Number(this.settings.autoContinue) || 0;
+            const spent = this.conv._continued || 0;
+            if (cap === 0) return 0;
+            if (cap < 0) {
+                const have = this.balance.pro;
+                return have == null ? 0 : Math.max(0, have);
+            }
+            return Math.max(0, cap - spent);
+        },
+
+        /// A repo run stopped at its tool-call cap with work left. Spend the
+        /// budget the user set on carrying it on, one leg at a time, and say
+        /// what each leg cost as it goes — never silently.
+        async continueRun(res, firstReply) {
+            let token = res.resumeToken;
+            let reserve = res.nextReserve || 0;
+            if (!token) {
+                this.note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'));
+                return;
+            }
+            let left = this.continueBudget();
+            if (left <= 0) {
+                this.note(t('That answer stopped early. Turn on continuing in Appearance, or ask it to carry on.'));
+                return;
+            }
+            if (reserve && reserve > left) {
+                this.note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
+                    { n: reserve - left }));
+                return;
+            }
+
+            const box = $('messages');
+            while (token && left > 0 && !this.stopped) {
+                const pending = this.thinkingNode(t('Carrying on where it left off'));
+                box.appendChild(pending);
+                this.scrollToBottom();
+                let next;
+                try {
+                    next = await Chat.send(this.conv, t('Continue.'), this.settings, {
+                        resume: token,
+                        onTurn: (eventId, signer) => this.watchTurn(eventId, signer)
+                    });
+                } catch (e) {
+                    this.stopWatchingTurn();
+                    pending.remove();
+                    this.note((e && e.message) || t('Could not carry on from there.'));
+                    return;
+                }
+                this.stopWatchingTurn();
+                pending.remove();
+
+                const more = {
+                    id: Store.uid(),
+                    role: 'bot',
+                    content: next.reply,
+                    thinking: next.thinking || null,
+                    cost: next.cost || 0,
+                    model: next.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
+                    sources: next.sources || null,
+                    calls: next.modelCalls || 1,
+                    task: next.taskType || null,
+                    continued: true,
+                    ts: Date.now()
+                };
+                Store.addMessage(this.conv.id, more);
+                Artifacts.harvest(this.conv.id, more);
+                this.appendMessage(more);
+                Store.recordUsage(more.cost);
+                this.bumpStats(more.cost);
+
+                const spent = (this.conv._continued || 0) + (more.cost || 0);
+                this.conv._continued = spent;
+                if (next.balance != null) {
+                    this.balance[next.pro ? 'pro' : 'standard'] = next.balance;
+                    this.renderBalance();
+                }
+                left = this.continueBudget();
+                token = next.truncated ? next.resumeToken : null;
+                reserve = next.nextReserve || 0;
+
+                if (token && reserve && reserve > left) {
+                    this.note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
+                        { n: reserve, left }));
+                    return;
+                }
+                if (token && left <= 0) {
+                    this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Appearance to go further.',
+                        { n: spent }));
+                    return;
+                }
+            }
+            if (this.conv._continued) {
+                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: this.conv._continued }));
+                this.conv._continued = 0;
+            }
+        },
+
+        // --- watching a turn as it runs ----------------------------------------
+
+        /// What one progress step reads as. The worker sends facts; the words
+        /// are the client's, so they translate with everything else.
+        progressLine(step) {
+            switch (step && step.kind) {
+                case 'routing':
+                    return step.resumed
+                        ? t('Carrying on where it left off')
+                        : (step.model && step.model !== 'auto'
+                            ? t('Routing to {model}', { model: step.model })
+                            : t('Routing this one'));
+                case 'search':
+                    return t('Searching the web for “{query}”', { query: step.query || '' });
+                case 'model':
+                    return step.of > 1
+                        ? t('Model call {n} of {total}', { n: step.call, total: step.of })
+                        : t('Asking {model}', { model: step.model || '' });
+                case 'tool':
+                    return step.target
+                        ? t('{tool}: {target}', { tool: this.toolLabel(step.tool), target: step.target })
+                        : this.toolLabel(step.tool);
+                case 'thinking':
+                    return step.text || '';
+                default:
+                    return '';
+            }
+        },
+
+        toolLabel(name) {
+            switch (name) {
+                case 'list_directory': return t('Listing files');
+                case 'read_file': return t('Reading');
+                case 'search_code': return t('Searching the code');
+                case 'write_file': return t('Writing');
+                case 'create_branch': return t('Creating a branch');
+                case 'open_pull_request': return t('Opening a pull request');
+                default: return t('Working');
+            }
+        },
+
+        renderProgress(steps) {
+            const node = document.getElementById('thinkingNode');
+            if (!node || !this.settings.showProgress) return;
+            const box = node.querySelector('.bot-progress');
+            if (!box) return;
+            box.innerHTML = '';
+            // The last few only: this sits under a spinner, not in a log view.
+            for (const step of steps.slice(-4)) {
+                const line = this.progressLine(step);
+                if (!line) continue;
+                const row = el('div', 'progress-step'
+                    + (step.kind === 'thinking' ? ' is-thought' : ''), line);
+                box.appendChild(row);
+            }
+            this.scrollToBottom();
+        },
+
+        /// Polls the worker for what the turn is doing. Stops the moment the
+        /// turn is over, and never keeps the send waiting on it.
+        watchTurn(eventId, signer) {
+            this.stopWatchingTurn();
+            if (!this.settings.showProgress) return;
+            const seen = [];
+            let after = 0;
+            let alive = true;
+            this._turnWatch = () => { alive = false; };
+            const tick = async () => {
+                while (alive) {
+                    const steps = await Chat.progress(eventId, after, { signer });
+                    if (!alive) return;
+                    if (steps.length) {
+                        after = steps[steps.length - 1].n || after;
+                        for (const s of steps) seen.push(s);
+                        this.renderProgress(seen);
+                    }
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            };
+            tick().catch(() => { });
+        },
+
+        stopWatchingTurn() {
+            if (this._turnWatch) {
+                try { this._turnWatch(); } catch (_) { }
+                this._turnWatch = null;
+            }
         },
 
         scrollToBottom(instant) {
@@ -703,6 +980,7 @@
                 this.renderList();
             }
 
+            this.stopped = false;
             this.setSending(true);
             const box = $('messages');
             const repos = Chat.reposFor(this.conv);
@@ -713,7 +991,11 @@
             this.scrollToBottom();
 
             try {
-                const res = await Chat.send(this.conv, text, this.settings, { attachments, quote });
+                const res = await Chat.send(this.conv, text, this.settings, {
+                    attachments, quote,
+                    onTurn: (eventId, signer) => this.watchTurn(eventId, signer)
+                });
+                this.stopWatchingTurn();
                 pending.remove();
                 const reply = {
                     id: Store.uid(),
@@ -724,10 +1006,16 @@
                     model: res.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
                     sources: res.sources || null,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
+                    // Kept so the cost breakdown reports what the worker said
+                    // it did rather than re-deriving a guess after the fact.
+                    calls: res.modelCalls || 1,
+                    task: res.taskType || null,
                     ts: Date.now()
                 };
                 Store.addMessage(this.conv.id, reply);
+                const lifted = Artifacts.harvest(this.conv.id, reply);
                 const node = this.appendMessage(reply);
+                if (lifted.length) this.renderArtifactStrip();
                 if (this.settings.typewriter && reply.content.length < 12000) {
                     await this.typeInto(node, reply);
                 }
@@ -751,7 +1039,9 @@
                             : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance }));
                     }
                 }
+                if (res.truncated) await this.continueRun(res, reply);
             } catch (e) {
+                this.stopWatchingTurn();
                 pending.remove();
                 if (e && e.name === 'AbortError') {
                     this.note(t('Stopped. That reply was not charged for unless it had already finished.'));
@@ -793,6 +1083,10 @@
 
         stop() {
             clearTimeout(this._typeTimer);
+            // Stop means stop: a run carrying itself on must not start another
+            // leg after the one being aborted.
+            this.stopped = true;
+            this.stopWatchingTurn();
             if (!Chat.abort()) this.setSending(false);
         },
 
@@ -845,6 +1139,9 @@
             const m = this.message(id);
             if (!m) return;
             switch (act) {
+                case 'msg-cost':
+                    this.openCost(m);
+                    return;
                 case 'msg-copy':
                     this.writeClipboard(m.content);
                     return;
@@ -980,8 +1277,46 @@
                     await this.openModels(arg);
                     return true;
                 case 'compare':
-                    this.note(t('Pick a model, ask your question, then use Ask again on the reply after switching models. Both answers stay in the chat side by side.'));
-                    await this.openModels();
+                    await this.openCompare(arg || undefined);
+                    return true;
+                case 'schedule':
+                    this.openSchedules();
+                    if (arg) $('schedulePrompt').value = arg;
+                    return true;
+                case 'ghost':
+                    await this.toggleGhost();
+                    return true;
+                case 'bot':
+                    if (/^off$/i.test(arg)) {
+                        this.useBot(null);
+                        return true;
+                    }
+                    if (arg) {
+                        const hit = Bots.all()
+                            .find(b => (b.name || '').toLowerCase().includes(arg.toLowerCase()));
+                        if (hit) {
+                            this.useBot(hit.id);
+                            return true;
+                        }
+                        this.note(t('No bot by that name.'));
+                    }
+                    await this.openBots();
+                    return true;
+                case 'workspace':
+                    if (/^off$/i.test(arg)) {
+                        this.useWorkspace(null);
+                        return true;
+                    }
+                    if (arg) {
+                        const found = Store.workspaces()
+                            .find(w => (w.name || '').toLowerCase().includes(arg.toLowerCase()));
+                        if (found) {
+                            this.useWorkspace(found.id);
+                            return true;
+                        }
+                        this.note(t('No workspace by that name.'));
+                    }
+                    this.openWorkspaces();
                     return true;
                 case 'git':
                 case 'repo':
@@ -1086,6 +1421,9 @@
                 }
                 case 'settings':
                     this.openAppearance();
+                    return true;
+                case 'guide':
+                    this.openHelp(arg);
                     return true;
                 case 'shortcuts':
                     this.openShortcuts();
@@ -1362,6 +1700,31 @@
                 badge.appendChild(el('span', null, persona.name));
             }
 
+            const due = Store.schedules().filter(s => s.enabled).length;
+            const schedChip = $('chipSchedules');
+            schedChip.classList.toggle('is-active', due > 0);
+            schedChip.querySelector('.chip-label').textContent = due
+                ? t('{n} scheduled', { n: due })
+                : t('Scheduled');
+
+            const ghostChip = $('chipGhost');
+            ghostChip.classList.toggle('is-active', !!conv.ephemeral);
+            ghostChip.querySelector('.chip-label').textContent = conv.ephemeral
+                ? t('Ghost on')
+                : t('Ghost');
+
+            const bot = Chat.botFor(conv);
+            const botChip = $('chipBot');
+            botChip.classList.toggle('is-active', !!bot);
+            botChip.querySelector('.chip-label').textContent = bot ? bot.name : t('Bot');
+
+            const space = Chat.workspaceFor(conv);
+            const spaceChip = $('chipWorkspace');
+            spaceChip.classList.toggle('is-active', !!space);
+            spaceChip.querySelector('.chip-label').textContent = space
+                ? space.name
+                : t('Workspace');
+
             const webChip = $('chipWeb');
             webChip.classList.toggle('is-active', !!this.settings.webSearch);
 
@@ -1373,12 +1736,12 @@
             $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
             $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
 
-            this.renderContextBar(repos, persona, hasSystem);
+            this.renderContextBar(repos, persona, hasSystem, space);
             this.renderBalance();
             this.updateHints();
         },
 
-        renderContextBar(repos, persona, hasSystem) {
+        renderContextBar(repos, persona, hasSystem, space) {
             const bar = $('contextBar');
             bar.innerHTML = '';
             const chips = [];
@@ -1394,13 +1757,20 @@
                     w.appendChild(Icons.node('pencil', { size: 10 }));
                     chip.appendChild(w);
                 }
-                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
-                chip.addEventListener('click', () => {
-                    this.conv = Store.updateConversation(this.conv.id, {
-                        repoIds: (this.conv.repoIds || []).filter(id => id !== r.id)
+                // A repository the workspace carries is not this chat's to drop:
+                // it goes when the workspace does.
+                const own = (this.conv.repoIds || []).includes(r.id);
+                if (own) {
+                    chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
+                    chip.addEventListener('click', () => {
+                        this.conv = Store.updateConversation(this.conv.id, {
+                            repoIds: (this.conv.repoIds || []).filter(id => id !== r.id)
+                        });
+                        this.refreshToolbar();
                     });
-                    this.refreshToolbar();
-                });
+                } else {
+                    chip.title = t('From the workspace');
+                }
                 chips.push(chip);
             }
             if (persona) {
@@ -1413,6 +1783,14 @@
                     this.conv = Store.updateConversation(this.conv.id, { personaId: null });
                     this.refreshToolbar();
                 });
+                chips.push(chip);
+            }
+            if (space) {
+                const chip = el('button', 'context-chip');
+                chip.type = 'button';
+                chip.appendChild(document.createTextNode(space.name));
+                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
+                chip.addEventListener('click', () => this.useWorkspace(null));
                 chips.push(chip);
             }
             if (hasSystem) {
@@ -2104,6 +2482,9 @@
             $('setHaptic').checked = !!s.hapticOnReply;
             $('setAutoSpeak').checked = !!s.autoSpeak;
             $('setRate').value = String(s.speechRate || 1);
+            $('setAutoDelete').value = String(s.autoDeleteDays || 0);
+            $('setAutoContinue').value = String(s.autoContinue || 0);
+            $('setProgress').checked = s.showProgress !== false;
             this.renderVoices();
             $('voiceFields').hidden = !Speech.canSpeak();
             this.modalStatus('appearanceStatus', '');
@@ -2148,7 +2529,10 @@
                 hapticOnReply: $('setHaptic').checked,
                 autoSpeak: $('setAutoSpeak').checked,
                 voiceUri: $('setVoice').value || null,
-                speechRate: Number($('setRate').value) || 1
+                speechRate: Number($('setRate').value) || 1,
+                autoDeleteDays: Number($('setAutoDelete').value) || 0,
+                autoContinue: Number($('setAutoContinue').value) || 0,
+                showProgress: $('setProgress').checked
             });
             this.renderList();
             this.renderMessages();
@@ -2167,6 +2551,1261 @@
                 list.appendChild(row);
             }
             this.openModal('modalShortcuts');
+        },
+
+        openArtifact(id) {
+            const entry = Artifacts.get(this.conv.id, id);
+            if (!entry) return;
+            this.artifact = entry;
+            $('artifactTitle').value = entry.title;
+            $('artifactLang').textContent = entry.lang || 'text';
+            $('artifactBody').value = entry.body;
+            $('artifactSave').hidden = true;
+            this.modalStatus('artifactStatus', '');
+            $('artifactPanel').hidden = false;
+            document.querySelector('.shell').classList.add('has-artifact');
+            this.setArtifactTab(Artifacts.previewable(entry.lang) ? 'preview' : 'source');
+            this.renderArtifactStrip();
+        },
+
+        closeArtifact() {
+            this.artifact = null;
+            $('artifactPanel').hidden = true;
+            $('artifactFrame').srcdoc = '';
+            document.querySelector('.shell').classList.remove('has-artifact');
+            this.renderArtifactStrip();
+        },
+
+        setArtifactTab(tab) {
+            const entry = this.artifact;
+            if (!entry) return;
+            const canPreview = Artifacts.previewable(entry.lang);
+            this.artifactTab = (tab === 'preview' && !canPreview) ? 'source' : tab;
+            for (const b of document.querySelectorAll('.artifact-tabs .pill')) {
+                b.classList.toggle('is-active', b.dataset.tab === this.artifactTab);
+                b.hidden = b.dataset.tab === 'preview' && !canPreview;
+            }
+            $('artifactPreview').hidden = this.artifactTab !== 'preview';
+            $('artifactSource').hidden = this.artifactTab !== 'source';
+            $('artifactVersions').hidden = this.artifactTab !== 'versions';
+            if (this.artifactTab === 'preview') this.renderArtifactPreview();
+            if (this.artifactTab === 'versions') this.renderArtifactVersions();
+        },
+
+        renderArtifactPreview() {
+            const entry = this.artifact;
+            if (!entry) return;
+            const lang = (entry.lang || '').toLowerCase();
+            const frame = $('artifactFrame');
+            const reader = $('artifactReader');
+            if (lang === 'markdown' || lang === 'md') {
+                frame.hidden = true;
+                reader.hidden = false;
+                reader.innerHTML = MD.render(entry.body, {
+                    wrap: this.settings.codeWrap,
+                    lineNumbers: this.settings.lineNumbers
+                });
+                return;
+            }
+            reader.hidden = true;
+            frame.hidden = false;
+            frame.srcdoc = lang === 'svg'
+                ? `<body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${entry.body}</body>`
+                : entry.body;
+        },
+
+        renderArtifactVersions() {
+            const entry = this.artifact;
+            if (!entry) return;
+            const list = $('versionList');
+            list.innerHTML = '';
+            const versions = (entry.versions || []).slice().reverse();
+            versions.forEach((v, i) => {
+                const at = versions.length - i;
+                const row = el('div', 'version-row' + (i === 0 ? ' is-current' : ''));
+                const main = el('div', 'version-main');
+                main.appendChild(el('span', 'version-name', t('Version {n}', { n: at })));
+                main.appendChild(el('span', 'version-sub',
+                    `${this.dayLabel(v.at)} ${this.timeLabel(v.at)} · `
+                    + t('{n} lines', { n: String(v.body || '').split('\n').length })));
+                row.appendChild(main);
+                if (i !== 0) {
+                    const back = el('button', 'row-btn', t('Restore'));
+                    back.type = 'button';
+                    back.addEventListener('click', () => {
+                        const index = (entry.versions || []).length - 1 - i;
+                        const updated = Artifacts.revert(this.conv.id, entry.id, index);
+                        if (updated) {
+                            this.artifact = updated;
+                            $('artifactBody').value = updated.body;
+                            this.renderArtifactVersions();
+                            this.toast(t('Restored.'));
+                        }
+                    });
+                    row.appendChild(back);
+                }
+                list.appendChild(row);
+            });
+            if (!versions.length) list.appendChild(el('p', 'hint', t('No versions yet.')));
+        },
+
+        saveArtifact() {
+            const entry = this.artifact;
+            if (!entry) return;
+            const updated = Artifacts.update(this.conv.id, entry.id, $('artifactBody').value);
+            if (!updated) return;
+            this.artifact = updated;
+            $('artifactSave').hidden = true;
+            this.modalStatus('artifactStatus',
+                t('Saved as version {n}.', { n: (updated.versions || []).length }), 'ok');
+            this.renderMessages();
+            if (this.artifactTab === 'preview') this.renderArtifactPreview();
+        },
+
+        renderArtifactStrip() {
+            const made = Artifacts.all(this.conv.id);
+            const chip = $('chipArtifacts');
+            chip.hidden = made.length === 0;
+            chip.classList.toggle('is-active', !!this.artifact);
+            chip.querySelector('.chip-label').textContent = made.length === 1
+                ? t('1 artifact')
+                : t('{n} artifacts', { n: made.length });
+        },
+
+        openArtifactList() {
+            const made = Artifacts.all(this.conv.id).slice().reverse();
+            const list = $('artifactList');
+            list.innerHTML = '';
+            if (!made.length) {
+                list.appendChild(el('p', 'hint',
+                    t('Nothing yet. A reply with a whole file in it lands here.')));
+            }
+            for (const a of made) {
+                const row = el('div', 'repo-row');
+                const main = el('div', 'repo-main');
+                main.appendChild(el('span', 'repo-name', a.title));
+                main.appendChild(el('span', 'repo-sub', [
+                    a.lang || 'text',
+                    t('{n} lines', { n: a.body.split('\n').length }),
+                    t('v{n}', { n: (a.versions || []).length })
+                ].join(' · ')));
+                main.style.cursor = 'pointer';
+                main.addEventListener('click', () => {
+                    this.closeModals();
+                    this.openArtifact(a.id);
+                });
+                row.appendChild(main);
+                const actions = el('div', 'row-actions');
+                const open = el('button', 'row-btn', t('Open'));
+                open.type = 'button';
+                open.addEventListener('click', () => {
+                    this.closeModals();
+                    this.openArtifact(a.id);
+                });
+                actions.appendChild(open);
+                const del = el('button', 'row-btn danger', t('Delete'));
+                del.type = 'button';
+                del.addEventListener('click', () => {
+                    Artifacts.remove(this.conv.id, a.id);
+                    if (this.artifact && this.artifact.id === a.id) this.closeArtifact();
+                    this.openArtifactList();
+                    this.renderArtifactStrip();
+                    this.renderMessages();
+                });
+                actions.appendChild(del);
+                row.appendChild(actions);
+                list.appendChild(row);
+            }
+            this.openModal('modalArtifacts');
+        },
+
+        /// A chip only ever showed a title. A card shows where it came from
+        /// and what it said, which is what makes a citation checkable rather
+        /// than decorative. The mark is a letter, never a fetched favicon, so
+        /// a citation cannot become a tracking pixel.
+        citationCards(sources) {
+            const wrap = el('div', 'citations');
+            const cards = sources.slice(0, 8);
+            wrap.appendChild(el('p', 'citations-head', cards.length === 1
+                ? t('1 source')
+                : t('{n} sources', { n: cards.length })));
+            cards.forEach((s, i) => {
+                const url = typeof s.url === 'string' ? s.url : '';
+                let host = '';
+                try {
+                    host = url ? new URL(url).hostname.replace(/^www\./, '') : '';
+                } catch (_) { }
+                const title = s.title || s.name || host || t('source');
+                const card = el(url ? 'a' : 'div', 'citation');
+                if (url) {
+                    card.href = url;
+                    card.target = '_blank';
+                    card.rel = 'noopener noreferrer';
+                }
+                const mark = el('span', 'citation-mark',
+                    (host || title).slice(0, 1).toUpperCase());
+                card.appendChild(mark);
+                const main = el('span', 'citation-main');
+                main.appendChild(el('strong', null, `${i + 1}. ${title}`));
+                if (host) main.appendChild(el('span', 'citation-host', host));
+                const snippet = s.snippet || s.description || s.excerpt || '';
+                if (snippet) main.appendChild(el('span', 'citation-snippet', snippet));
+                card.appendChild(main);
+                if (url) card.appendChild(Icons.node('link', { size: 12 }));
+                wrap.appendChild(card);
+            });
+            return wrap;
+        },
+
+        // --- what a reply cost -------------------------------------------------
+
+        /// Everything the device actually knows about one reply's price. It is
+        /// deliberately not an estimate re-run after the fact: what is shown is
+        /// what the worker charged and what it said it did to earn it.
+        costRows(m) {
+            const pro = !!m.model;
+            const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
+            const rows = [
+                [t('Charged'), t('{n} credits', { n: m.cost })],
+                [t('Tier'), pro ? t('Pro') : t('Standard')],
+                [t('Model'), m.model || t('Auto-routed')],
+                [t('At today\'s price'), t('{n} sats', { n: sats })]
+            ];
+            if (m.calls && m.calls > 1) {
+                rows.push([t('Model calls'), String(m.calls)]);
+            }
+            if (m.task) rows.push([t('Routed as'), m.task]);
+            if (m.repos && m.repos.length) {
+                rows.push([t('Repositories read'), m.repos.join(', ')]);
+            }
+            if (m.sources && m.sources.length) {
+                rows.push([t('Sources read'), String(m.sources.length)]);
+            }
+            rows.push([t('When'), `${this.dayLabel(m.ts)} ${this.timeLabel(m.ts)}`]);
+            return rows;
+        },
+
+        openCost(m) {
+            const box = $('costRows');
+            box.innerHTML = '';
+            for (const [label, value] of this.costRows(m)) {
+                const row = el('div', 'cost-row');
+                row.appendChild(el('span', 'cost-label', label));
+                row.appendChild(el('span', 'cost-value', value));
+                box.appendChild(row);
+            }
+            $('costNote').textContent = m.model
+                ? t('A Pro reply costs the model\'s base and then scales with the length of the answer, up to that model\'s cap. The cap is held when you send and only the real cost is taken.')
+                : t('A standard reply is one credit, whichever model the router picked for it.');
+            this.openModal('modalCost');
+        },
+
+        // --- help --------------------------------------------------------------
+
+        helpTopics() {
+            return [
+                {
+                    title: t('Asking, and what it costs'),
+                    body: t('Every reply is paid for a message at a time, in credits you buy over Lightning. Standard replies are auto-routed; Pro pins a model you choose. The toolbar says which is answering and roughly what the next reply will cost. Type ? in the composer for the full list of commands.')
+                },
+                {
+                    title: t('Artifacts'),
+                    body: t('A reply that contains a whole page, script or document opens beside the chat instead of scrolling away. Edit it there and every save is kept as a version you can restore. Rewriting the same file in a later reply updates the artifact rather than making a second copy.')
+                },
+                {
+                    title: t('Comparing two models'),
+                    body: t('Compare sends one prompt to two models at once, each on its own thread, so neither sees the other\'s answer. Keep the one you prefer and the chat carries on from it. Two replies means two charges.')
+                },
+                {
+                    title: t('Workspaces'),
+                    body: t('A workspace is standing context a run of chats shares: instructions, reference files and repositories. Every chat in one starts with that context, and a new chat opened from it inherits the workspace. The files stay on this device.')
+                },
+                {
+                    title: t('Bots'),
+                    body: t('A bot is a way of answering: a name, standing instructions, a model and a few openers. Share one as a link or publish it under your npub. A shared bot carries none of your repositories, tokens or files — only how it answers.')
+                },
+                {
+                    title: t('Repositories'),
+                    body: t('Connect as many repositories as you like and tick the ones a chat can see. Pro replies read their code and, with writes on, commit, branch and open pull requests. Access tokens are stored only on this device and sent per request — never stored server-side or published to relays.')
+                },
+                {
+                    title: t('Ghost chats and auto-delete'),
+                    body: t('A ghost chat is never written to this device and publishes no archive copy: it is gone when you close the app. Auto-delete sweeps chats older than the window you choose when the app opens, and never touches a pinned one.')
+                },
+                {
+                    title: t('Long tasks, and carrying them on'),
+                    body: t('A repo task runs the model in a loop — reading, searching, writing — and that loop has an allowance. When it runs out with work left, Nymbot stops and says so. Set a continuation budget in Appearance and it buys another allowance instead, one leg at a time, each leg saying what it cost, until the budget is spent or the task is done. Stop cancels the rest.')
+                },
+                {
+                    title: t('Watching it work'),
+                    body: t('While a reply is generating, Nymbot reports what it is doing under the spinner: what it routed to, what it searched for, which files it is reading, which model call it is on, and the model\'s own reasoning as each call returns. It is scoped to the key that asked — in anonymous mode that is the throwaway key, so watching reveals nothing the message did not.')
+                },
+                {
+                    title: t('Scheduled prompts'),
+                    body: t('A prompt Nymbot sends for you: once, hourly, daily or weekly. There is no server doing it — a run happens while the app is open, and a run that came due while it was shut fires once when you come back.')
+                },
+                {
+                    title: t('Anonymous mode'),
+                    body: t('Anonymous mode routes a chat through a throwaway key funded by blind vouchers, so the credits cannot be matched to your nym. Turn on the automatic transfer and the key tops itself up rather than being funded by hand.')
+                },
+                {
+                    title: t('Your keys and your data'),
+                    body: t('Your private key lives on this device. Your public key — npub or hex — is how somebody addresses you and is safe to share. The post-quantum recovery code is what lets a second device hold the same encryption key. Export everything from Appearance; there is no account on a server to recover from.')
+                },
+                {
+                    title: t('Voice, attachments and export'),
+                    body: t('Dictate a message with the microphone and have replies read aloud from Appearance. Attach text, code and images to a message. Any conversation exports as Markdown, plain text or JSON.')
+                },
+                {
+                    title: t('Keyboard'),
+                    body: t('Command palette with Ctrl/Cmd+K, new chat with Ctrl/Cmd+N, find in chat with Ctrl/Cmd+F, search everything with Ctrl/Cmd+Shift+F. The full list is under Keyboard shortcuts in Appearance.')
+                }
+            ];
+        },
+
+        openHelp(term) {
+            $('helpSearch').value = term || '';
+            this.renderHelp();
+            this.openModal('modalHelp');
+        },
+
+        renderHelp() {
+            const needle = ($('helpSearch').value || '').toLowerCase().trim();
+            const box = $('helpBody');
+            box.innerHTML = '';
+            const topics = this.helpTopics().filter(x => !needle
+                || x.title.toLowerCase().includes(needle)
+                || x.body.toLowerCase().includes(needle));
+            if (!topics.length) {
+                box.appendChild(el('p', 'hint',
+                    t('Nothing in the guide matches that. The knowledge base is fuller, or email us.')));
+                return;
+            }
+            for (const topic of topics) {
+                const item = el('details', 'help-topic');
+                if (needle) item.open = true;
+                const head = el('summary', null, topic.title);
+                item.appendChild(head);
+                item.appendChild(el('p', null, topic.body));
+                box.appendChild(item);
+            }
+        },
+
+        /// Paints a scrollbar only while something is being scrolled. Capture,
+        /// because a scroll event does not bubble, and passive so it can never
+        /// hold up the scroll it is watching.
+        watchScrolling() {
+            const fades = new WeakMap();
+            document.addEventListener('scroll', (e) => {
+                const node = e.target === document || e.target === window
+                    ? document.documentElement
+                    : e.target;
+                if (!node || !node.classList) return;
+                node.classList.add('is-scrolling');
+                clearTimeout(fades.get(node));
+                fades.set(node, setTimeout(() => node.classList.remove('is-scrolling'), 900));
+            }, { capture: true, passive: true });
+        },
+
+        // --- scheduled prompts -------------------------------------------------
+
+        openSchedules() {
+            if (!this.scheduleEditing) this.resetScheduleForm();
+            this.renderSchedules();
+            this.openModal('modalSchedules');
+        },
+
+        localInputValue(ts) {
+            const d = new Date(ts);
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+                + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        },
+
+        resetScheduleForm() {
+            this.scheduleEditing = null;
+            $('scheduleTitle').value = '';
+            $('schedulePrompt').value = '';
+            $('scheduleRepeat').value = 'daily';
+            $('scheduleWhen').value = this.localInputValue(Date.now() + 3600000);
+            $('scheduleHere').checked = false;
+            $('scheduleFormTitle').textContent = t('New scheduled prompt');
+            this.modalStatus('scheduleStatus', '');
+        },
+
+        editSchedule(id) {
+            const entry = Store.schedule(id);
+            if (!entry) return;
+            this.scheduleEditing = id;
+            $('scheduleTitle').value = entry.title || '';
+            $('schedulePrompt').value = entry.prompt || '';
+            $('scheduleRepeat').value = entry.repeat || 'once';
+            $('scheduleWhen').value = this.localInputValue(entry.nextAt || Date.now());
+            $('scheduleHere').checked = !!entry.convId;
+            $('scheduleFormTitle').textContent = t('Edit scheduled prompt');
+            this.modalStatus('scheduleStatus', '');
+        },
+
+        repeatLabel(repeat) {
+            switch (repeat) {
+                case 'hourly': return t('Every hour');
+                case 'daily': return t('Every day');
+                case 'weekly': return t('Every week');
+                default: return t('Once');
+            }
+        },
+
+        renderSchedules() {
+            const list = $('scheduleList');
+            list.innerHTML = '';
+            const all = Store.schedules();
+            if (!all.length) {
+                list.appendChild(el('p', 'hint',
+                    t('Nothing scheduled. A standing question — a digest, a check on a repository — goes here.')));
+            }
+            for (const entry of all) {
+                const row = el('div', 'repo-row' + (entry.enabled ? ' is-on' : ''));
+                const main = el('div', 'repo-main');
+                main.appendChild(el('span', 'repo-name', entry.title || t('Untitled')));
+                const when = entry.enabled
+                    ? `${this.dayLabel(entry.nextAt)} ${this.timeLabel(entry.nextAt)}`
+                    : t('Paused');
+                main.appendChild(el('span', 'repo-sub', [
+                    this.repeatLabel(entry.repeat),
+                    when,
+                    entry.runs ? t('{n} runs', { n: entry.runs }) : t('never run')
+                ].join(' · ')));
+                row.appendChild(main);
+                const actions = el('div', 'row-actions');
+                const toggle = el('button', 'row-btn', entry.enabled ? t('Pause') : t('Resume'));
+                toggle.type = 'button';
+                toggle.addEventListener('click', () => {
+                    Store.saveSchedule(Object.assign({}, entry, { enabled: !entry.enabled }));
+                    this.renderSchedules();
+                    this.refreshToolbar();
+                });
+                actions.appendChild(toggle);
+                const now = el('button', 'row-btn', t('Run now'));
+                now.type = 'button';
+                now.addEventListener('click', () => this.runSchedule(entry.id));
+                actions.appendChild(now);
+                const edit = el('button', 'row-btn', t('Edit'));
+                edit.type = 'button';
+                edit.addEventListener('click', () => this.editSchedule(entry.id));
+                actions.appendChild(edit);
+                const del = el('button', 'row-btn danger', t('Delete'));
+                del.type = 'button';
+                del.addEventListener('click', () => {
+                    Store.deleteSchedule(entry.id);
+                    if (this.scheduleEditing === entry.id) this.resetScheduleForm();
+                    this.renderSchedules();
+                    this.refreshToolbar();
+                });
+                actions.appendChild(del);
+                row.appendChild(actions);
+                list.appendChild(row);
+            }
+        },
+
+        saveScheduleForm() {
+            const prompt = ($('schedulePrompt').value || '').trim();
+            if (!prompt) {
+                this.modalStatus('scheduleStatus', t('Give it something to ask.'), 'warn');
+                return;
+            }
+            const when = $('scheduleWhen').value
+                ? new Date($('scheduleWhen').value).getTime()
+                : Date.now();
+            if (!Number.isFinite(when)) {
+                this.modalStatus('scheduleStatus', t('That is not a time.'), 'warn');
+                return;
+            }
+            const prior = this.scheduleEditing ? Store.schedule(this.scheduleEditing) : null;
+            Store.saveSchedule(Object.assign({}, prior || {}, {
+                id: this.scheduleEditing || undefined,
+                title: ($('scheduleTitle').value || '').trim() || Chat.titleFor(prompt),
+                prompt,
+                repeat: $('scheduleRepeat').value,
+                nextAt: when,
+                convId: $('scheduleHere').checked && this.conv ? this.conv.id : null,
+                enabled: true
+            }));
+            this.resetScheduleForm();
+            this.renderSchedules();
+            this.refreshToolbar();
+            this.modalStatus('scheduleStatus', t('Saved.'), 'ok');
+        },
+
+        advance(entry) {
+            const step = { hourly: 3600000, daily: 86400000, weekly: 604800000 }[entry.repeat];
+            if (!step) return Object.assign({}, entry, { enabled: false, runs: (entry.runs || 0) + 1 });
+            // Forward to the next slot after now, so a run missed while the app
+            // was shut does not queue up every slot it went past.
+            let next = entry.nextAt + step;
+            while (next <= Date.now()) next += step;
+            return Object.assign({}, entry, {
+                nextAt: next, runs: (entry.runs || 0) + 1, lastRunAt: Date.now()
+            });
+        },
+
+        /// Nothing runs on a server, so a run happens here, in the open tab,
+        /// and only when the app is not already waiting on a reply.
+        async runSchedule(id) {
+            const entry = Store.schedule(id);
+            if (!entry || this.sending) return;
+            const target = entry.convId ? Store.conversation(entry.convId) : null;
+            const conv = target || this.newConversation({ title: entry.title });
+            if (!this.conv || this.conv.id !== conv.id) this.open(conv);
+            this.closeModals();
+            Store.saveSchedule(this.advance(entry));
+            this.renderSchedules();
+            this.refreshToolbar();
+            this.note(t('Running “{name}”.', { name: entry.title || t('Untitled') }));
+            await this.send(entry.prompt);
+        },
+
+        dueSchedules() {
+            const now = Date.now();
+            return Store.schedules().filter(s => s.enabled && (s.nextAt || 0) <= now);
+        },
+
+        async runDueSchedules() {
+            if (this.sending) return;
+            const due = this.dueSchedules();
+            if (!due.length) return;
+            await this.runSchedule(due[0].id);
+        },
+
+        startScheduler() {
+            if (this._schedulerTimer) clearInterval(this._schedulerTimer);
+            this._schedulerTimer = setInterval(() => {
+                this.runDueSchedules().catch(() => { });
+            }, 60000);
+        },
+
+        // --- ghost mode --------------------------------------------------------
+
+        /// Turning it on moves what has already been said off the disk, and
+        /// turning it off writes back what is on screen — so the switch never
+        /// silently loses a conversation either way.
+        async toggleGhost() {
+            if (!this.conv) return;
+            const on = !this.conv.ephemeral;
+            if (on) {
+                const go = await this.ask({
+                    title: t('Make this a ghost chat?'),
+                    body: t('Nothing it says will be written to this device, and no archive copy will be published. It is gone when you close the app.'),
+                    confirm: t('Make it a ghost')
+                });
+                if (!go) return;
+                Store.makeGhost(this.conv.id);
+                this.conv = Store.updateConversation(this.conv.id, { ephemeral: true });
+            } else {
+                this.conv = Store.updateConversation(this.conv.id, { ephemeral: false });
+                Store.unmakeGhost(this.conv.id);
+            }
+            this.refreshToolbar();
+            this.renderList();
+            this.toast(on
+                ? t('Ghost chat. Nothing here is being kept.')
+                : t('This chat is being kept again.'));
+        },
+
+        // --- bots --------------------------------------------------------------
+
+        async openBots() {
+            this.renderBotIcons();
+            await this.fillBotModels();
+            this.renderBots();
+            this.openModal('modalBots');
+        },
+
+        async fillBotModels() {
+            const sel = $('botModel');
+            if (sel.dataset.filled === '1') return;
+            if (!this.models) {
+                try { this.models = await Api.models(); } catch (_) { }
+            }
+            sel.innerHTML = '';
+            const auto = document.createElement('option');
+            auto.value = '';
+            auto.textContent = t('Auto-routed (standard)');
+            sel.appendChild(auto);
+            for (const m of (this.models && this.models.models) || []) {
+                const opt = document.createElement('option');
+                opt.value = m.key;
+                opt.textContent = `${m.label} · ${m.credits || 1}`;
+                sel.appendChild(opt);
+            }
+            sel.dataset.filled = '1';
+        },
+
+        renderBotIcons() {
+            const box = $('botIcons');
+            box.innerHTML = '';
+            for (const name of Icons.PERSONA_ICONS) {
+                const b = el('button', 'icon-choice' + (name === this.botIcon ? ' is-active' : ''));
+                b.type = 'button';
+                b.title = name;
+                b.appendChild(Icons.node(name, { size: 17 }));
+                b.addEventListener('click', () => {
+                    this.botIcon = name;
+                    this.renderBotIcons();
+                });
+                box.appendChild(b);
+            }
+        },
+
+        resetBotForm() {
+            this.botEditing = null;
+            this.botIcon = 'robot';
+            $('botName').value = '';
+            $('botTagline').value = '';
+            $('botInstructions').value = '';
+            $('botStarters').value = '';
+            $('botModel').value = '';
+            $('botFormTitle').textContent = t('New bot');
+            this.modalStatus('botStatus', '');
+            this.renderBotIcons();
+        },
+
+        editBot(id) {
+            const bot = Bots.get(id);
+            if (!bot) return;
+            this.botEditing = id;
+            this.botIcon = bot.icon || 'robot';
+            $('botName').value = bot.name || '';
+            $('botTagline').value = bot.tagline || '';
+            $('botInstructions').value = bot.instructions || '';
+            $('botStarters').value = (bot.starters || []).join('\n');
+            $('botModel').value = bot.modelKey || '';
+            $('botFormTitle').textContent = t('Edit bot');
+            this.modalStatus('botStatus', '');
+            this.renderBotIcons();
+        },
+
+        renderBots() {
+            const list = $('botList');
+            list.innerHTML = '';
+            const bots = Bots.all();
+            const active = this.conv && this.conv.botId;
+            if (!bots.length) {
+                list.appendChild(el('p', 'hint',
+                    t('No bots yet. Make one, or add a link somebody sent you.')));
+            }
+            for (const bot of bots) {
+                const row = el('div', 'repo-row' + (bot.id === active ? ' is-on' : ''));
+                const mark = el('span', 'persona-emoji');
+                mark.appendChild(Icons.node(bot.icon || 'robot', { size: 15 }));
+                row.appendChild(mark);
+                const main = el('div', 'repo-main');
+                main.appendChild(el('span', 'repo-name', bot.name || t('Untitled')));
+                main.appendChild(el('span', 'repo-sub',
+                    bot.tagline || bot.modelLabel || t('Auto-routed')));
+                main.style.cursor = 'pointer';
+                main.addEventListener('click', () => this.useBot(
+                    bot.id === active ? null : bot.id));
+                row.appendChild(main);
+                const actions = el('div', 'row-actions');
+                const use = el('button', 'row-btn',
+                    bot.id === active ? t('In this chat') : t('Use here'));
+                use.type = 'button';
+                use.addEventListener('click', () => this.useBot(
+                    bot.id === active ? null : bot.id));
+                actions.appendChild(use);
+                const share = el('button', 'row-btn', t('Share'));
+                share.type = 'button';
+                share.addEventListener('click', () => this.shareBot(bot.id));
+                actions.appendChild(share);
+                const edit = el('button', 'row-btn', t('Edit'));
+                edit.type = 'button';
+                edit.addEventListener('click', () => this.editBot(bot.id));
+                actions.appendChild(edit);
+                const del = el('button', 'row-btn danger', t('Delete'));
+                del.type = 'button';
+                del.addEventListener('click', () => {
+                    Bots.remove(bot.id);
+                    if (this.conv && this.conv.botId === bot.id) this.useBot(null);
+                    if (this.botEditing === bot.id) this.resetBotForm();
+                    this.renderBots();
+                });
+                actions.appendChild(del);
+                row.appendChild(actions);
+                list.appendChild(row);
+            }
+            const add = el('button', 'btn', t('Add a shared bot'));
+            add.type = 'button';
+            add.addEventListener('click', () => this.openAddBot());
+            list.appendChild(add);
+        },
+
+        saveBot() {
+            const name = ($('botName').value || '').trim();
+            if (!name) {
+                this.modalStatus('botStatus', t('Give the bot a name.'), 'warn');
+                return;
+            }
+            const key = $('botModel').value || null;
+            const found = key && this.models
+                ? (this.models.models || []).find(m => m.key === key)
+                : null;
+            const saved = Bots.save({
+                id: this.botEditing || undefined,
+                name,
+                tagline: ($('botTagline').value || '').trim(),
+                icon: this.botIcon,
+                instructions: ($('botInstructions').value || '').trim(),
+                modelKey: key,
+                modelLabel: found ? found.label : null,
+                starters: ($('botStarters').value || '').split('\n')
+                    .map(x => x.trim()).filter(Boolean)
+            });
+            this.resetBotForm();
+            this.renderBots();
+            this.refreshToolbar();
+            this.modalStatus('botStatus', t('Saved {name}.', { name: saved.name }), 'ok');
+        },
+
+        useBot(id) {
+            if (!this.conv) return;
+            const bot = id ? Bots.get(id) : null;
+            const patch = { botId: id };
+            if (bot && bot.modelKey) {
+                const full = this.models
+                    ? (this.models.models || []).find(m => m.key === bot.modelKey)
+                    : null;
+                patch.proModel = full || { key: bot.modelKey, label: bot.modelLabel || bot.modelKey };
+            } else if (!id) {
+                patch.proModel = null;
+            }
+            this.conv = Store.updateConversation(this.conv.id, patch);
+            this.renderBots();
+            this.refreshToolbar();
+            this.renderMessages();
+            this.toast(bot
+                ? t('{name} is answering this chat.', { name: bot.name })
+                : t('Back to plain Nymbot.'));
+        },
+
+        shareBot(id) {
+            const bot = Bots.get(id);
+            if (!bot) return;
+            this.sharingBot = id;
+            const link = Bots.link(bot);
+            $('shareBotTitle').textContent = bot.name || t('Share this bot');
+            $('shareBotLink').value = link;
+            $('shareBotAddr').hidden = !bot.naddr;
+            $('shareBotNaddr').value = bot.naddr || '';
+            this.modalStatus('shareBotStatus', '');
+            this.openModal('modalShareBot');
+            try {
+                QR.draw($('shareBotQr'), link, { width: 240 });
+            } catch (_) {
+                this.modalStatus('shareBotStatus',
+                    t('That bot is too big for a QR code — send the link instead.'));
+            }
+        },
+
+        /// Publishing is a claim of authorship, so it is always signed by the
+        /// account and never by a throwaway key, whatever mode the chat is in.
+        async publishBot() {
+            const bot = Bots.get(this.sharingBot);
+            if (!bot) return;
+            this.modalStatus('shareBotStatus', t('Publishing…'));
+            try {
+                const signed = await Identity.signEvent(Bots.event(bot, Identity.pubkey));
+                const accepted = await Relays.publish(signed, 5000);
+                if (!accepted) {
+                    this.modalStatus('shareBotStatus',
+                        t('No relay accepted it. Check your connection and try again.'), 'warn');
+                    return;
+                }
+                const naddr = Bots.naddr(bot, Identity.pubkey);
+                Bots.save(Object.assign({}, bot, { naddr, author: Identity.pubkey }));
+                $('shareBotAddr').hidden = !naddr;
+                $('shareBotNaddr').value = naddr;
+                this.renderBots();
+                this.modalStatus('shareBotStatus',
+                    t('Published to {n} relays. Republishing replaces it rather than making a second copy.',
+                        { n: accepted }), 'ok');
+            } catch (e) {
+                this.modalStatus('shareBotStatus', (e && e.message) || t('The request failed.'), 'warn');
+            }
+        },
+
+        openAddBot() {
+            this.pendingBot = null;
+            $('addBotInput').value = '';
+            $('addBotPreview').hidden = true;
+            $('addBotAccept').hidden = true;
+            this.modalStatus('addBotStatus', '');
+            this.openModal('modalAddBot');
+        },
+
+        async fetchBot() {
+            const text = ($('addBotInput').value || '').trim();
+            if (!text) {
+                this.modalStatus('addBotStatus', t('Paste a link or an address first.'), 'warn');
+                return;
+            }
+            let bot = Bots.fromLink(text);
+            if (!bot) {
+                const pointer = Bots.pointerFor(text.replace(/^nostr:/i, ''));
+                if (!pointer) {
+                    this.modalStatus('addBotStatus', t('That is not a bot link or address.'), 'warn');
+                    return;
+                }
+                this.modalStatus('addBotStatus', t('Looking it up on the relays…'));
+                let events = [];
+                try {
+                    events = await Relays.fetch(Bots.filterFor(pointer), 5000);
+                } catch (_) { }
+                const newest = events
+                    .filter(e => e && e.pubkey === pointer.pubkey)
+                    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+                bot = newest ? Bots.fromEvent(newest) : null;
+                if (!bot) {
+                    this.modalStatus('addBotStatus',
+                        t('No relay had that bot. It may have been unpublished.'), 'warn');
+                    return;
+                }
+            }
+            this.pendingBot = bot;
+            this.showBotPreview(bot);
+        },
+
+        showBotPreview(bot) {
+            const box = $('addBotPreview');
+            box.innerHTML = '';
+            box.hidden = false;
+            const head = el('div', 'bot-preview-head');
+            head.appendChild(Icons.node(bot.icon || 'robot', { size: 16 }));
+            head.appendChild(el('strong', null, bot.name));
+            box.appendChild(head);
+            if (bot.tagline) box.appendChild(el('p', 'bot-preview-line', bot.tagline));
+            box.appendChild(el('p', 'bot-preview-line',
+                bot.modelLabel ? t('Model: {name}', { name: bot.modelLabel }) : t('Auto-routed')));
+            if (bot.instructions) {
+                box.appendChild(el('pre', 'bot-preview-body', bot.instructions.slice(0, 800)));
+            }
+            box.appendChild(el('p', 'hint',
+                t('Instructions from a stranger are still instructions. Read them before you use it.')));
+            $('addBotAccept').hidden = false;
+            this.modalStatus('addBotStatus', '');
+        },
+
+        acceptBot() {
+            if (!this.pendingBot) return;
+            const saved = Bots.save(this.pendingBot);
+            this.pendingBot = null;
+            this.closeModals();
+            this.renderBots();
+            this.toast(t('Added {name}.', { name: saved.name }));
+            this.openBots();
+        },
+
+        /// A link opened in the browser lands here. The fragment is dropped
+        /// straight away so a reload does not re-offer the same bot.
+        offerBotFromUrl() {
+            const hash = location.hash || '';
+            if (!/(^|[#&])bot=/.test(hash)) return;
+            const bot = Bots.fromLink(hash);
+            history.replaceState(null, '', location.pathname + location.search);
+            if (!bot) return;
+            this.pendingBot = bot;
+            this.openModal('modalAddBot');
+            $('addBotInput').value = '';
+            this.showBotPreview(bot);
+        },
+
+        // --- workspaces --------------------------------------------------------
+
+        openWorkspaces() {
+            if (!this.workspaceDraft) this.resetWorkspaceForm();
+            this.renderWorkspaces();
+            this.openModal('modalWorkspaces');
+        },
+
+        resetWorkspaceForm() {
+            this.workspaceEditing = null;
+            this.workspaceDraft = { instructions: '', files: [], repoIds: [] };
+            $('workspaceName').value = '';
+            $('workspaceInstructions').value = '';
+            $('workspaceFormTitle').textContent = t('New workspace');
+            this.modalStatus('workspaceStatus', '');
+            this.renderWorkspaceForm();
+        },
+
+        editWorkspace(id) {
+            const space = Store.workspace(id);
+            if (!space) return;
+            this.workspaceEditing = id;
+            this.workspaceDraft = {
+                instructions: space.instructions || '',
+                files: (space.files || []).map(f => Object.assign({}, f)),
+                repoIds: (space.repoIds || []).slice()
+            };
+            $('workspaceName').value = space.name || '';
+            $('workspaceInstructions').value = space.instructions || '';
+            $('workspaceFormTitle').textContent = t('Edit workspace');
+            this.modalStatus('workspaceStatus', '');
+            this.renderWorkspaceForm();
+        },
+
+        renderWorkspaces() {
+            const list = $('workspaceList');
+            list.innerHTML = '';
+            const spaces = Store.workspaces();
+            const active = this.conv && this.conv.workspaceId;
+            if (!spaces.length) {
+                list.appendChild(el('p', 'hint',
+                    t('No workspaces yet. One holds the instructions, files and repositories a run of chats shares.')));
+            }
+            for (const space of spaces) {
+                const row = el('div', 'repo-row' + (space.id === active ? ' is-on' : ''));
+                const main = el('div', 'repo-main');
+                main.appendChild(el('span', 'repo-name', space.name || t('Untitled')));
+                main.appendChild(el('span', 'repo-sub', [
+                    t('{n} files', { n: (space.files || []).length }),
+                    t('{n} repos', { n: (space.repoIds || []).length })
+                ].join(' · ')));
+                main.style.cursor = 'pointer';
+                main.addEventListener('click', () => this.useWorkspace(
+                    space.id === active ? null : space.id));
+                row.appendChild(main);
+                const actions = el('div', 'row-actions');
+                const use = el('button', 'row-btn',
+                    space.id === active ? t('In this chat') : t('Use here'));
+                use.type = 'button';
+                use.addEventListener('click', () => this.useWorkspace(
+                    space.id === active ? null : space.id));
+                actions.appendChild(use);
+                const edit = el('button', 'row-btn', t('Edit'));
+                edit.type = 'button';
+                edit.addEventListener('click', () => this.editWorkspace(space.id));
+                actions.appendChild(edit);
+                const del = el('button', 'row-btn danger', t('Delete'));
+                del.type = 'button';
+                del.addEventListener('click', async () => {
+                    const go = await this.ask({
+                        title: t('Delete this workspace?'),
+                        body: t('Chats that used it keep everything already said, but stop starting with its context.'),
+                        confirm: t('Delete')
+                    });
+                    if (!go) return;
+                    Store.deleteWorkspace(space.id);
+                    if (this.conv && this.conv.workspaceId === space.id) {
+                        this.conv = Store.conversation(this.conv.id);
+                    }
+                    if (this.workspaceEditing === space.id) this.resetWorkspaceForm();
+                    this.renderWorkspaces();
+                    this.refreshToolbar();
+                });
+                actions.appendChild(del);
+                row.appendChild(actions);
+                list.appendChild(row);
+            }
+        },
+
+        renderWorkspaceForm() {
+            const draft = this.workspaceDraft;
+            const picks = $('workspaceRepos');
+            picks.innerHTML = '';
+            const repos = Store.repos();
+            if (!repos.length) {
+                picks.appendChild(el('p', 'hint',
+                    t('Connect a repository first and it can be attached here.')));
+            }
+            for (const repo of repos) {
+                const on = draft.repoIds.includes(repo.id);
+                const pick = el('button', 'repo-pick' + (on ? ' is-on' : ''),
+                    repo.label || repo.repo);
+                pick.type = 'button';
+                pick.addEventListener('click', () => {
+                    draft.repoIds = on
+                        ? draft.repoIds.filter(x => x !== repo.id)
+                        : draft.repoIds.concat([repo.id]);
+                    this.renderWorkspaceForm();
+                });
+                picks.appendChild(pick);
+            }
+
+            const files = $('workspaceFiles');
+            files.innerHTML = '';
+            if (!draft.files.length) {
+                files.appendChild(el('p', 'hint',
+                    t('No files yet. Text and code go in whole; nothing is uploaded anywhere.')));
+            }
+            draft.files.forEach((file, i) => {
+                const row = el('div', 'file-row');
+                row.appendChild(Icons.node('copy', { size: 14 }));
+                const main = el('div', 'file-main');
+                main.appendChild(el('span', 'file-name', file.name));
+                main.appendChild(el('span', 'file-sub',
+                    Attach.humanSize(file.body.length)));
+                row.appendChild(main);
+                const del = el('button', 'row-btn danger', t('Remove'));
+                del.type = 'button';
+                del.addEventListener('click', () => {
+                    draft.files.splice(i, 1);
+                    this.renderWorkspaceForm();
+                });
+                row.appendChild(del);
+                files.appendChild(row);
+            });
+        },
+
+        async addWorkspaceFiles(fileList) {
+            const draft = this.workspaceDraft;
+            let added = 0;
+            for (const file of Array.from(fileList || [])) {
+                try {
+                    const built = await Attach.fromFile(file);
+                    if (!built || built.kind !== 'text') {
+                        this.modalStatus('workspaceStatus',
+                            t('Only text and code can be project knowledge.'), 'warn');
+                        continue;
+                    }
+                    draft.files.push({
+                        id: Store.uid(),
+                        name: built.name,
+                        mime: built.mime,
+                        body: built.text
+                    });
+                    added++;
+                } catch (e) {
+                    this.modalStatus('workspaceStatus', (e && e.message) || t('That file could not be read.'), 'warn');
+                }
+            }
+            if (added) this.modalStatus('workspaceStatus', '');
+            this.renderWorkspaceForm();
+        },
+
+        saveWorkspace() {
+            const name = ($('workspaceName').value || '').trim();
+            if (!name) {
+                this.modalStatus('workspaceStatus', t('Give the workspace a name.'), 'warn');
+                return;
+            }
+            const draft = this.workspaceDraft;
+            const saved = Store.saveWorkspace({
+                id: this.workspaceEditing || undefined,
+                name,
+                instructions: ($('workspaceInstructions').value || '').trim(),
+                files: draft.files,
+                repoIds: draft.repoIds
+            });
+            this.resetWorkspaceForm();
+            this.renderWorkspaces();
+            this.refreshToolbar();
+            this.modalStatus('workspaceStatus', t('Saved {name}.', { name: saved.name }), 'ok');
+        },
+
+        useWorkspace(id) {
+            if (!this.conv) return;
+            this.conv = Store.updateConversation(this.conv.id, { workspaceId: id });
+            this.renderWorkspaces();
+            this.refreshToolbar();
+            this.toast(id
+                ? t('This chat starts with that workspace.')
+                : t('This chat is on its own again.'));
+        },
+
+        // --- comparing two models ---------------------------------------------
+
+        async openCompare(prefill) {
+            this.openModal('modalCompare');
+            $('compareGrid').hidden = true;
+            $('compareGrid').innerHTML = '';
+            this.compare = null;
+            this.modalStatus('compareStatus', '');
+            const text = prefill != null ? prefill : ($('input').value || '').trim();
+            if (text) $('comparePrompt').value = text;
+
+            const a = $('compareA'), b = $('compareB');
+            if (!this.models) {
+                a.innerHTML = '';
+                b.innerHTML = '';
+                this.modalStatus('compareStatus', t('Loading the catalog…'));
+                this.models = await Api.models();
+                this.modalStatus('compareStatus', '');
+            }
+            if (!this.models || !this.models.models) {
+                this.modalStatus('compareStatus',
+                    t('The model catalog is unavailable right now.'), 'warn');
+                return;
+            }
+            const rows = this.models.models.slice().sort((x, y) => {
+                const fx = this.favourites.includes(x.key) ? 0 : 1;
+                const fy = this.favourites.includes(y.key) ? 0 : 1;
+                return fx - fy || x.label.localeCompare(y.label);
+            });
+            const fill = (sel, chosen) => {
+                sel.innerHTML = '';
+                for (const m of rows) {
+                    const opt = document.createElement('option');
+                    opt.value = m.key;
+                    opt.textContent = `${m.label} · ${m.credits || 1}`;
+                    if (m.key === chosen) opt.selected = true;
+                    sel.appendChild(opt);
+                }
+            };
+            const current = (this.conv && this.conv.proModel) || this.settings.proModel;
+            const first = current ? current.key : (rows[0] && rows[0].key);
+            const second = (rows.find(m => m.key !== first) || {}).key;
+            fill(a, first);
+            fill(b, second);
+        },
+
+        compareSeed(limit) {
+            return Store.messages(this.conv.id)
+                .filter(x => x.role === 'self' || x.role === 'bot')
+                .slice(-(limit || 8))
+                .map(x => `${x.role === 'self' ? 'User' : 'Assistant'}: ${MD.plain(x.content).slice(0, 700)}`)
+                .join('\n\n');
+        },
+
+        async runCompare() {
+            if (this.sending) return;
+            const text = ($('comparePrompt').value || '').trim();
+            if (!text) {
+                this.modalStatus('compareStatus', t('Type a prompt for both of them first.'), 'warn');
+                return;
+            }
+            const byKey = new Map((this.models.models || []).map(m => [m.key, m]));
+            const a = byKey.get($('compareA').value);
+            const b = byKey.get($('compareB').value);
+            if (!a || !b || a.key === b.key) {
+                this.modalStatus('compareStatus', t('Pick two different models.'), 'warn');
+                return;
+            }
+
+            const go = await this.ask({
+                title: t('Ask both?'),
+                body: t('{a} and {b} each answer once, so this costs two replies — about {n} credits.',
+                    { a: a.label, b: b.label, n: (a.credits || 1) + (b.credits || 1) }),
+                confirm: t('Ask both')
+            });
+            if (!go) return;
+
+            this.setSending(true);
+            this.modalStatus('compareStatus', t('Waiting on both…'));
+            $('compareGrid').hidden = false;
+            $('compareGrid').innerHTML = '';
+            let out;
+            try {
+                out = await Chat.compare(this.conv, text, this.settings, [a, b], {
+                    seed: this.compareSeed()
+                });
+            } catch (e) {
+                this.setSending(false);
+                this.modalStatus('compareStatus', (e && e.message) || t('The request failed.'), 'warn');
+                return;
+            }
+            this.setSending(false);
+            this.compare = { prompt: text, runs: out };
+            const spent = out.reduce((n, r) => n + ((r.result && r.result.cost) || 0), 0);
+            Store.recordUsage(spent);
+            this.bumpStats(spent);
+            const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
+            if (balance) {
+                this.balance[balance.pro ? 'pro' : 'standard'] = balance.balance;
+                this.renderBalance();
+            }
+            this.modalStatus('compareStatus', out.every(r => r.ok)
+                ? t('Both answered. Keep the one you want to carry on from.')
+                : t('One of them did not answer.'), out.every(r => r.ok) ? 'ok' : 'warn');
+            this.renderCompare();
+        },
+
+        renderCompare() {
+            const grid = $('compareGrid');
+            grid.innerHTML = '';
+            if (!this.compare) { grid.hidden = true; return; }
+            grid.hidden = false;
+            this.compare.runs.forEach((run, i) => {
+                const col = el('div', 'compare-col');
+                const head = el('div', 'compare-head');
+                head.appendChild(Icons.node('model', { size: 13 }));
+                head.appendChild(el('span', 'compare-name', run.model.label));
+                if (run.ok) {
+                    head.appendChild(el('span', 'compare-cost',
+                        t('{n} credits', { n: (run.result.cost || 0) })));
+                }
+                col.appendChild(head);
+                const body = el('div', 'compare-body' + (run.ok ? '' : ' is-error'));
+                if (run.ok) {
+                    body.innerHTML = MD.render(run.result.reply, {
+                        wrap: this.settings.codeWrap,
+                        lineNumbers: this.settings.lineNumbers
+                    });
+                } else {
+                    body.textContent = run.error;
+                }
+                col.appendChild(body);
+                const foot = el('div', 'compare-foot');
+                if (run.ok) {
+                    const keep = el('button', 'btn primary', t('Keep this one'));
+                    keep.type = 'button';
+                    keep.addEventListener('click', () => this.keepCompare(i));
+                    foot.appendChild(keep);
+                    const copy = el('button', 'btn', t('Copy'));
+                    copy.type = 'button';
+                    copy.addEventListener('click', () => this.writeClipboard(run.result.reply));
+                    foot.appendChild(copy);
+                }
+                col.appendChild(foot);
+                grid.appendChild(col);
+            });
+        },
+
+        /// Folds the winning answer into the chat. Neither reply was on this
+        /// chat's thread, so the worker has never seen this turn: the chat
+        /// takes a fresh thread and carries the transcript forward as its seed,
+        /// exactly as a branch does.
+        keepCompare(index) {
+            const run = this.compare && this.compare.runs[index];
+            if (!run || !run.ok) return;
+
+            const mine = {
+                id: Store.uid(), role: 'self', content: this.compare.prompt, ts: Date.now()
+            };
+            const reply = {
+                id: Store.uid(),
+                role: 'bot',
+                content: run.result.reply,
+                thinking: run.result.thinking || null,
+                cost: run.result.cost || 0,
+                model: run.model.label,
+                sources: run.result.sources || null,
+                calls: run.result.modelCalls || 1,
+                task: run.result.taskType || null,
+                ts: Date.now()
+            };
+            Store.addMessage(this.conv.id, mine);
+            Store.addMessage(this.conv.id, reply);
+            Artifacts.harvest(this.conv.id, reply);
+
+            this.conv = Store.updateConversation(this.conv.id, {
+                rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
+                seed: this.compareSeed()
+            });
+            Store.dropThread(this.conv.id);
+            if (!this.conv.title) {
+                this.conv = Store.updateConversation(this.conv.id,
+                    { title: Chat.titleFor(this.compare.prompt) });
+                $('chatTitle').textContent = this.conv.title;
+            }
+
+            this.compare = null;
+            this.closeModals();
+            $('input').value = '';
+            Store.setDraft(this.conv.id, '');
+            this.autoGrow();
+            this.renderMessages();
+            this.renderArtifactStrip();
+            this.renderList();
+            this.toast(t('Kept {model}.', { model: run.model.label }));
         },
 
         codeAction(act, id, node) {
@@ -2443,6 +4082,10 @@
             $('settingsWho').textContent = Identity.method === 'nip07'
                 ? t('Signed in with a browser extension, which holds your key.')
                 : t('Your key lives on this device and nowhere else.');
+            $('setNpub').value = Identity.pubkey
+                ? NT().nip19.npubEncode(Identity.pubkey)
+                : '';
+            $('setHex').value = Identity.pubkey || '';
             const nsecRow = $('setNsec').closest('.reveal-row');
             if (Identity.isLocal) {
                 nsecRow.hidden = false;
@@ -2884,6 +4527,39 @@
                     else this.setModel(null);
                 },
                 'open-models': () => this.openModels(),
+                'open-help': () => this.openHelp(),
+                'open-schedules': () => this.openSchedules(),
+                'schedule-save': () => this.saveScheduleForm(),
+                'schedule-reset': () => this.resetScheduleForm(),
+                'toggle-ghost': () => this.toggleGhost(),
+                'open-bots': () => this.openBots(),
+                'bot-save': () => this.saveBot(),
+                'bot-reset': () => this.resetBotForm(),
+                'bot-copy-link': () => this.writeClipboard($('shareBotLink').value),
+                'bot-publish': () => this.publishBot(),
+                'bot-fetch': () => this.fetchBot(),
+                'bot-accept': () => this.acceptBot(),
+                'open-workspaces': () => this.openWorkspaces(),
+                'workspace-save': () => this.saveWorkspace(),
+                'workspace-reset': () => this.resetWorkspaceForm(),
+                'workspace-add-file': () => $('workspaceFileInput').click(),
+                'open-compare': () => this.openCompare(),
+                'compare-run': () => this.runCompare(),
+                'open-artifacts': () => this.openArtifactList(),
+                'artifact-open': (target) => this.openArtifact(target.dataset.artifact),
+                'artifact-close': () => this.closeArtifact(),
+                'artifact-tab': (target) => this.setArtifactTab(target.dataset.tab),
+                'artifact-save': () => this.saveArtifact(),
+                'artifact-copy': () => {
+                    if (this.artifact) this.writeClipboard($('artifactBody').value);
+                },
+                'artifact-download': () => {
+                    const a = this.artifact;
+                    if (!a) return;
+                    const name = a.title.replace(/[^\w.-]+/g, '-').toLowerCase()
+                        + '.' + Artifacts.extensionFor(a.lang);
+                    Exporter.download(name, 'text/plain', $('artifactBody').value);
+                },
                 'open-repos': () => this.openRepos(),
                 'open-personas': () => this.openPersonas(),
                 'open-prompts': () => this.openPrompts(),
@@ -3011,6 +4687,8 @@
                 if (e.key === 'Escape') {
                     if (e.shiftKey && this.sending) { this.stop(); return; }
                     if (this.dialogOpen()) this.settleDialog(false);
+                    else if (this.artifact && !document.querySelector('.modal:not([hidden])')
+                        && $('palette').hidden) this.closeArtifact();
                     else if (!$('palette').hidden) this.closePalette();
                     else if (!$('findBar').hidden && document.activeElement === $('findInput')) this.closeFind();
                     else if ($('suggest').hidden === false) this.hideSuggest();
@@ -3026,7 +4704,9 @@
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); this.openModels(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); this.openRepos(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); this.openPrompts(); return; }
-                if (mod && e.shiftKey && e.key.toLowerCase() === 'r') {
+                // Not R: Ctrl/Cmd+Shift+R is the browser's hard refresh, and
+                // taking it away leaves no way to reload a stale shell.
+                if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
                     e.preventDefault();
                     this.handleCommand('?retry');
                     return;
@@ -3118,6 +4798,11 @@
                 this.addFiles(Array.from(e.target.files || []));
                 e.target.value = '';
             });
+            $('helpSearch').addEventListener('input', () => this.renderHelp());
+            $('workspaceFileInput').addEventListener('change', (e) => {
+                this.addWorkspaceFiles(e.target.files);
+                e.target.value = '';
+            });
             $('importPicker').addEventListener('change', (e) => {
                 const file = (e.target.files || [])[0];
                 if (file) this.importBackup(file);
@@ -3126,6 +4811,20 @@
 
             $('messages').addEventListener('scroll', () => {
                 $('jumpBtn').hidden = this.nearBottom();
+            });
+
+            $('artifactBody').addEventListener('input', () => {
+                if (!this.artifact) return;
+                $('artifactSave').hidden = $('artifactBody').value === this.artifact.body;
+            });
+            $('artifactTitle').addEventListener('change', () => {
+                if (!this.artifact) return;
+                const updated = Artifacts.rename(this.conv.id, this.artifact.id,
+                    $('artifactTitle').value.trim() || this.artifact.title);
+                if (updated) {
+                    this.artifact = updated;
+                    this.renderMessages();
+                }
             });
 
             $('convSearch').addEventListener('input', () => this.renderList());
