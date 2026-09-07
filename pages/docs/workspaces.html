@@ -61,12 +61,18 @@
                 would be a lie, because the workspace would put it straight back.</p>
 
             <h2 id="knowledge-files">Knowledge files</h2>
-            <p>Text and code files attached to a workspace travel inside the first message of any chat that
-                uses it, the same way a persona's instructions do. They are not uploaded anywhere: they sit
-                on the device and are encrypted into the message like everything else you send.</p>
-            <p>There is a limit to how much a model can hold at once, so each file and the set as a whole
-                are capped. A file that had to be cut short says so in the message rather than arriving
-                silently half-read.</p>
+            <p>Text and code files attached to a workspace are searched on your device against whatever you
+                just asked, and the passages that bear on it travel inside that message. They are not
+                uploaded anywhere: they sit on the device, the search runs there, and only the passages
+                that matched are encrypted into the message like everything else you send.</p>
+            <p>This happens on every message, not just the first, so a workspace does not stop applying
+                partway down a long conversation. Every file is named in the message even when nothing from
+                it was sent, so the model knows what else it could be told about &mdash; ask for a file by
+                name and the next message carries more of it.</p>
+            <p>Retrieval is what makes a large workspace usable at all: a model can only hold so much at
+                once, and filling that space with the whole shelf leaves no room for the conversation.
+                Nothing is summarised and nothing is sent to a server to be indexed &mdash; it is a plain
+                keyword search over your own files, running on your own device.</p>
 
             <h2 id="bots">Bots</h2>
             <p>A bot is a way of answering: a name, standing instructions, a model to answer with, and a

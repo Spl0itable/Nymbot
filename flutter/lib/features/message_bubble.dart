@@ -22,6 +22,7 @@ enum MessageAction {
   rateUp,
   rateDown,
   pin,
+  remember,
   retry,
   delete,
 }
@@ -40,9 +41,14 @@ class MessageBubble extends StatefulWidget {
     this.highlighted = false,
     this.artifacts = const [],
     this.onOpenArtifact,
+    this.onUndoCheckpoint,
     this.actionsOpen = false,
     this.onToggleActions,
   });
+
+  /// Puts back what a repo run changed. Absent when there is nothing to put
+  /// back, which is what decides whether the card offers a way.
+  final Future<void> Function()? onUndoCheckpoint;
 
   final ChatMessage message;
   final String selfPubkey;
@@ -193,38 +199,34 @@ class _MessageBubbleState extends State<MessageBubble> {
               child: Text(t('edited'),
                   style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
             ),
-          // The price of a reply belongs beside its byline, at the far end of
-          // the row, rather than trailing the words it charged for.
-          if (m.cost > 0) ...[
-            const Spacer(),
-            InkWell(
-              borderRadius: BorderRadius.circular(4),
-              onTap: () => showCostSheet(context, m),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                      color: NymbotColors.lightning.withValues(alpha: 0.4)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.bolt,
-                        size: 11, color: NymbotColors.lightning),
-                    Text('${m.cost}',
-                        style: const TextStyle(
-                            fontSize: 10, color: NymbotColors.lightning)),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
+
+  /// The price of a reply belongs on the bubble's footer, to the right of the
+  /// time, rather than trailing the words it charged for.
+  Widget _cost(BuildContext context, ChatMessage m) => InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: () => showCostSheet(context, m),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          decoration: BoxDecoration(
+            border: Border.all(
+                color: NymbotColors.lightning.withValues(alpha: 0.4)),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.bolt, size: 11, color: NymbotColors.lightning),
+              Text('${m.cost}',
+                  style: const TextStyle(
+                      fontSize: 10, color: NymbotColors.lightning)),
+            ],
+          ),
+        ),
+      );
 
   static const _botSuffix = '4bb2';
 
@@ -273,7 +275,10 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             if (m.quote != null && m.quote!.isNotEmpty) _quoted(context, m.quote!),
             if (m.thinking != null) _reasoning(context, m),
-            if (m.role == ChatRole.bot)
+            // Your own messages render the same way the replies do. Typing a
+            // fenced block and watching it come out as literal backticks is
+            // the wrong answer to "can I paste code in here".
+            if (m.role == ChatRole.bot || m.role == ChatRole.self)
               MarkdownBody(
                 m.content,
                 monospace: settings.monospaceReplies,
@@ -287,23 +292,28 @@ class _MessageBubbleState extends State<MessageBubble> {
                 ),
               ),
             if (m.sources.isNotEmpty) _sources(context, m),
+            if (m.checkpoint != null) _checkpoint(context, m),
             for (final a in widget.artifacts)
               ArtifactCard(
                 artifact: a,
                 onOpen: () => widget.onOpenArtifact?.call(a),
               ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (settings.timestamps)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (settings.timestamps)
+                    Text(
                       _time(m.at),
                       style: TextStyle(fontSize: 10, color: theme.hintColor),
                     ),
-                  ),
-              ],
+                  if (m.cost > 0) ...[
+                    const SizedBox(width: 6),
+                    _cost(context, m),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -455,6 +465,103 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
+  /// What a repo run changed, and the way back. Turning writes on is a promise
+  /// you can take back, so what it touched is stated rather than left in prose.
+  Widget _checkpoint(BuildContext context, ChatMessage m) {
+    final theme = Theme.of(context);
+    final mark = m.checkpoint!;
+    final paths = (mark['paths'] as List?)?.cast<String>() ?? const <String>[];
+    final branches = (mark['branches'] as List?)?.cast<String>() ?? const <String>[];
+    final pulls = (mark['pulls'] as List?)?.length ?? 0;
+    final undone = mark['undone'] == true;
+    final undoable = mark['undoable'] == true && paths.isNotEmpty;
+
+    final bits = <String>[
+      if (paths.length == 1)
+        t('1 file changed')
+      else if (paths.isNotEmpty)
+        t('{n} files changed', {'n': paths.length}),
+      for (final b in branches) t('branch {name}', {'name': b}),
+      if (pulls == 1) t('1 pull request') else if (pulls > 1) t('{n} pull requests', {'n': pulls}),
+    ];
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(
+            color: undone ? theme.dividerColor : NymbotColors.lightning,
+            width: 2,
+          ),
+          top: BorderSide(color: theme.dividerColor),
+          right: BorderSide(color: theme.dividerColor),
+          bottom: BorderSide(color: theme.dividerColor),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Opacity(
+        opacity: undone ? 0.7 : 1,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.account_tree_outlined, size: 13),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    '${mark['repo']}${mark['branch'] == null ? '' : ' · ${mark['branch']}'}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        color: theme.hintColor),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(bits.join(' · '), style: const TextStyle(fontSize: 12.5)),
+            if (paths.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(paths.join(', '),
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                      color: theme.hintColor)),
+            ],
+            const SizedBox(height: 6),
+            if (undone)
+              Text(t('Put back.'),
+                  style: TextStyle(fontSize: 11, color: theme.hintColor))
+            else if (!undoable)
+              // Say why rather than showing a button that cannot work.
+              Text(
+                t('This one cannot be undone from here — no commit was '
+                    'recorded to read the old files back from.'),
+                style: TextStyle(fontSize: 11, color: theme.hintColor),
+              )
+            else ...[
+              OutlinedButton(
+                onPressed: widget.onUndoCheckpoint,
+                child: Text(t('Undo these changes')),
+              ),
+              if (branches.isNotEmpty || pulls > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  t('Files only. A branch or pull request it opened is left '
+                      'where it is.'),
+                  style: TextStyle(fontSize: 11, color: theme.hintColor),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _actions(BuildContext context, ChatMessage m) {
     final self = m.role == ChatRole.self;
     final bot = m.role == ChatRole.bot;
@@ -499,12 +606,13 @@ class _MessageBubbleState extends State<MessageBubble> {
           on: m.rating == -1);
     }
     if (self) {
-      add(Icons.edit_outlined, t('Edit and resend'), MessageAction.edit);
+      add(Icons.edit_outlined, t('Ask this differently'), MessageAction.edit);
       add(Icons.send_outlined, t('Send again'), MessageAction.resend);
     }
     add(m.pinned ? Icons.star : Icons.star_border, t('Save this message'),
         MessageAction.pin,
         on: m.pinned);
+    add(Icons.psychology_outlined, t('Remember this'), MessageAction.remember);
     add(Icons.close, t('Delete'), MessageAction.delete);
 
     return Padding(

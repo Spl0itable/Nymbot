@@ -444,6 +444,28 @@ kbd {
     padding: 0.7rem 0.6rem 0.25rem;
 }
 
+/* The row is the button plus the menu that acts on it. The menu is always
+   there — a control that only appears on hover cannot be found by anyone
+   looking for it, and is not there at all on a touch screen. It stays quiet
+   instead of hidden: faint until you reach for it. */
+.conv-row { display: flex; align-items: center; gap: 0.1rem; }
+.conv-row .conv-item { min-width: 0; }
+.conv-menu {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+}
+.conv-menu:hover, .conv-menu:focus-visible { color: var(--text); background: var(--bubble-bot); }
+.conv-row:hover .conv-menu { color: var(--text-dim); }
+
 .conv-item {
     display: flex;
     align-items: center;
@@ -534,6 +556,7 @@ kbd {
     position: absolute;
     top: 100%;
     right: 0.6rem;
+    left: auto;
     z-index: 20;
     min-width: 200px;
     background: var(--bg-raised);
@@ -544,6 +567,10 @@ kbd {
     max-height: 70vh;
     overflow-y: auto;
 }
+/* Opened from a row rather than the header, it is placed against that row and
+   so has to leave the header's coordinate system. */
+.menu.is-floating { position: fixed; top: 0; left: 0; right: auto; }
+
 .menu button {
     display: block;
     width: 100%;
@@ -571,16 +598,35 @@ kbd {
 
 /* --- the AI toolbar ------------------------------------------------------ */
 
+/* Only the chips scroll. The tier switch and the balance are anchored either
+   side of them, so a chat with a long model name or a dozen repositories can
+   never push the button that buys credits out of reach. */
 .bot-control-bar {
     display: flex;
     align-items: center;
     gap: 0.4rem;
     padding: 0.5rem 0.85rem;
     border-bottom: 1px solid var(--line);
+}
+.toolbar-rail {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
 }
-.bot-control-bar::-webkit-scrollbar { display: none; }
+.toolbar-rail::-webkit-scrollbar { display: none; }
+/* Whatever is on for this chat sorts to the front, and this is where the
+   group ends. */
+.toolbar-split {
+    flex: 0 0 auto;
+    width: 1px;
+    align-self: stretch;
+    margin: 0.1rem 0.15rem;
+    background: var(--line);
+}
 
 /* 10px around a 7px inner button: the two radii are concentric at this padding,
    which is what keeps the track from looking like a sticker behind the tab. */
@@ -619,7 +665,7 @@ kbd {
 .chip:hover { border-color: var(--line-strong); color: var(--text); }
 .chip.is-active { border-color: var(--secondary); color: var(--secondary); }
 .chip .chip-label { overflow: hidden; text-overflow: ellipsis; }
-.chip-buy { margin-left: auto; border-color: rgba(247, 147, 26, 0.5); color: var(--lightning); }
+.chip-buy { flex: 0 0 auto; border-color: rgba(247, 147, 26, 0.5); color: var(--lightning); }
 
 .context-bar {
     display: flex;
@@ -810,13 +856,27 @@ html[data-mono="on"] .message-content { font-family: var(--mono); font-size: 0.8
     font-size: 0.66rem;
     color: var(--text-faint);
     text-align: right;
-    margin-top: 3px;
     white-space: nowrap;
     line-height: 1;
 }
 html[data-timestamps="off"] .bubble-time-inner { display: none; }
 
-.message-content > * + * { margin-top: 0.6rem; }
+/* The bubble's last line: the time, and to the right of it what the reply
+   cost. Turning timestamps off leaves the price where it was. */
+.bubble-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.4rem;
+}
+
+/* Markdown renders into .msg-text, so a rule on .message-content's own
+   children never reaches the paragraphs — which is how consecutive paragraphs
+   ended up running together with no gap at all under the global reset. */
+.message-content > * + *, .msg-text > * + * { margin-top: 0.6rem; }
+.message-content > .bubble-foot { margin-top: 4px; }
+.msg-text > h3 + *, .msg-text > h4 + *, .msg-text > h5 + *, .msg-text > h6 + * { margin-top: 0.35rem; }
+.msg-text > * + h3, .msg-text > * + h4, .msg-text > * + h5, .msg-text > * + h6 { margin-top: 0.85rem; }
 .message-content h3, .message-content h4, .message-content h5, .message-content h6 { font-size: 1rem; }
 .message-content ul, .message-content ol { padding-left: 1.25rem; }
 .message-content li { margin: 0.12rem 0; }
@@ -911,10 +971,9 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .reasoning-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; }
 .reasoning-chip, .cost-chip { display: inline-flex; align-items: center; gap: 0.25rem; vertical-align: middle; }
-/* The price of a reply belongs beside its byline, at the far end of the row,
+/* The price of a reply belongs on its footer, to the right of the time,
    rather than trailing the words it charged for. */
 .cost-chip {
-    margin-left: auto;
     border-color: rgba(247, 147, 26, 0.4);
     color: var(--lightning);
     cursor: pointer;
@@ -925,7 +984,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     padding: 0.22rem 0.4rem;
 }
 .cost-chip:hover { border-color: var(--lightning); }
-.chat-message.self .cost-chip { margin-left: 0.35rem; margin-right: 0; }
 
 .cost-rows { display: grid; gap: 0.1rem; margin-top: 0.4rem; }
 .cost-row {
@@ -1612,6 +1670,31 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .row-btn:hover { background: var(--bubble-bot); color: var(--text); }
 .row-btn.danger:hover { color: var(--danger); }
 .repo-check { width: 16px; height: 16px; flex: 0 0 auto; }
+
+/* What a token can reach, ticked rather than typed. */
+.repo-browse {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0.5rem;
+    margin: 0.4rem 0 0.6rem;
+    background: var(--bg-sunken);
+}
+.repo-browse-head { display: flex; align-items: center; gap: 0.5rem; }
+.repo-browse-head input { flex: 1; min-width: 0; }
+.repo-browse-count { font-size: 0.72rem; color: var(--text-faint); white-space: nowrap; }
+.repo-browse-list { display: grid; gap: 0.25rem; margin: 0.5rem 0; max-height: 32vh; overflow-y: auto; }
+.repo-browse-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    cursor: pointer;
+}
+.repo-browse-row:hover { border-color: var(--line-strong); }
+.repo-browse-row.is-known { opacity: 0.55; cursor: default; }
+.repo-browse-row input { width: 16px; height: 16px; flex: 0 0 auto; }
 .repo-writes { font-size: 0.68rem; color: var(--lightning); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; }
 .persona-emoji { flex: 0 0 auto; display: inline-flex; color: var(--text-dim); }
 .persona-row.is-on .persona-emoji { color: var(--primary); }
@@ -1710,6 +1793,78 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .dialog .modal-card { width: min(460px, 100%); }
 .dialog-body { color: var(--text-dim); font-size: 0.88rem; white-space: pre-line; }
 .dialog footer { justify-content: flex-end; }
+
+/* What a repo run changed, and the way back. Turning writes on is a promise
+   you can take back, so what it touched is stated rather than left in prose. */
+.checkpoint-card {
+    display: grid;
+    gap: 0.3rem;
+    justify-items: start;
+    margin-top: 0.6rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--lightning);
+    border-radius: 8px;
+    background: var(--bg-sunken);
+}
+.checkpoint-card.is-undone { border-left-color: var(--line-strong); opacity: 0.7; }
+.checkpoint-head { display: flex; align-items: center; gap: 0.35rem; }
+.checkpoint-repo { font-size: 0.76rem; font-family: var(--mono); color: var(--text-dim); }
+.checkpoint-what { font-size: 0.8rem; }
+.checkpoint-paths {
+    font-size: 0.72rem;
+    font-family: var(--mono);
+    color: var(--text-faint);
+    overflow-wrap: anywhere;
+}
+.checkpoint-note { font-size: 0.72rem; color: var(--text-faint); }
+
+/* What you typed while it was still writing. Held rather than dropped, and
+   shown so the queue is never a surprise. */
+.queue-strip { display: grid; gap: 0.25rem; padding: 0 0 0.35rem; }
+.queue-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+.queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-order { flex: 0 0 auto; font-size: 0.66rem; color: var(--text-faint); }
+
+.toast-undo {
+    margin-left: 0.6rem;
+    border: 0;
+    background: transparent;
+    color: var(--primary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+}
+.toast-undo:hover { text-decoration: underline; }
+
+/* What is remembered about you, one fact per row so each can be read and
+   thrown away on its own. */
+.memory-list { display: grid; gap: 0.35rem; margin: 0.6rem 0; max-height: 34vh; overflow-y: auto; }
+.memory-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+.memory-row:hover { border-color: var(--line-strong); }
+.memory-main { flex: 1; min-width: 0; }
+.memory-topic { display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.memory-scope { font-size: 0.62rem; text-transform: none; letter-spacing: 0; color: var(--text-faint); border: 1px solid var(--line); border-radius: 999px; padding: 0 0.3rem; }
+.memory-text { display: block; margin-top: 0.2rem; font-size: 0.88rem; }
+.memory-form { border-top: 1px solid var(--line); padding-top: 0.6rem; }
+.memory-form textarea { width: 100%; resize: vertical; }
 
 .toast {
     position: fixed;

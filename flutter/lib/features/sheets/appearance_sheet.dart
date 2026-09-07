@@ -49,8 +49,27 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(t('Appearance'), style: Theme.of(context).textTheme.titleMedium),
+            Text(t('Settings'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
+            // The language a reader wants is a setting like any other, not
+            // something to go looking for behind their keys.
+            if (I18n.available.isNotEmpty) ...[
+              DropdownButtonFormField<String>(
+                // ignore: deprecated_member_use
+                value: I18n.lang,
+                decoration: InputDecoration(labelText: t('Language')),
+                items: [
+                  const DropdownMenuItem(value: 'en', child: Text('English')),
+                  for (final lang in I18n.available)
+                    if (lang.code != 'en')
+                      DropdownMenuItem(value: lang.code, child: Text(lang.label)),
+                ],
+                onChanged: (code) {
+                  if (code != null) app.setLanguage(code);
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
             DropdownButtonFormField<ChatTheme>(
               // ignore: deprecated_member_use
               value: s.theme,

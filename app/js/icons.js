@@ -20,14 +20,22 @@
         verified: '<circle cx="12" cy="12" r="9"></circle><polyline points="8.2 12.3 10.8 14.9 15.8 9.4"></polyline>',
         thought: '<path d="M7.5 16A4.5 4.5 0 0 1 7 7a5 5 0 0 1 9.6-1.3A4 4 0 0 1 17 16Z"></path><circle cx="6" cy="19" r="1.6"></circle><circle cx="10" cy="21.2" r="1"></circle>',
         bolt: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>',
+        more: '<circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle>',
+        memory: '<path d="M12 5.2a2.6 2.6 0 0 0-4.9-1.2A2.7 2.7 0 0 0 4.2 7a2.7 2.7 0 0 0-.6 4.3 2.8 2.8 0 0 0 .9 4.3A2.9 2.9 0 0 0 9 19.6a3 3 0 0 0 3-2.3Z"></path><path d="M12 5.2a2.6 2.6 0 0 1 4.9-1.2A2.7 2.7 0 0 1 19.8 7a2.7 2.7 0 0 1 .6 4.3 2.8 2.8 0 0 1-.9 4.3A2.9 2.9 0 0 1 15 19.6a3 3 0 0 1-3-2.3Z"></path><path d="M8.2 8.6c1.4.2 2.5 1.2 2.8 2.6"></path><path d="M15.8 8.6c-1.4.2-2.5 1.2-2.8 2.6"></path>',
         search: '<circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>',
-        tools: '<path d="M14.7 6.3a4 4 0 0 0 5.3 5.3l-8 8a2.8 2.8 0 0 1-4-4Z"></path><path d="m6 6 3 3"></path><path d="M3.5 8.5 8.5 3.5l3 3-2 2-3-3"></path>',
+        tools: '<path d="M14.8 6.4a1.1 1.1 0 0 0 0 1.6l1.6 1.6a1.1 1.1 0 0 0 1.6 0l3.2-3.2a5.8 5.8 0 0 1-7.7 7.7l-6.7 6.7a2.2 2.2 0 0 1-3-3l6.7-6.7a5.8 5.8 0 0 1 7.7-7.7l-3.4 3Z"></path>',
         pen: '<path d="M4 20s2-6 7-11 8-6 8-6 0 3-4 8-11 9-11 9Z"></path><path d="M4 20h6"></path>',
         graduation: '<path d="M12 4 2 9l10 5 10-5-10-5Z"></path><path d="M6 11.5V17c0 1.5 3 3 6 3s6-1.5 6-3v-5.5"></path>',
         chart: '<line x1="3" y1="21" x2="21" y2="21"></line><rect x="5" y="12" width="3.5" height="6"></rect><rect x="10.2" y="7" width="3.5" height="11"></rect><rect x="15.4" y="3.5" width="3.5" height="14.5"></rect>',
         robot: '<rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 4v4"></path><circle cx="12" cy="3" r="1.4"></circle><line x1="9" y1="13" x2="9" y2="14.5"></line><line x1="15" y1="13" x2="15" y2="14.5"></line><line x1="9.5" y1="17" x2="14.5" y2="17"></line>',
         terse: '<line x1="4" y1="8" x2="20" y2="8"></line><line x1="4" y1="12" x2="14" y2="12"></line><line x1="4" y1="16" x2="9" y2="16"></line>',
         person: '<circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path>',
+        code: '<polyline points="8.5 8 4 12 8.5 16"></polyline><polyline points="15.5 8 20 12 15.5 16"></polyline><line x1="13.6" y1="5.5" x2="10.4" y2="18.5"></line>',
+        flask: '<line x1="8" y1="3" x2="16" y2="3"></line><path d="M9 3v6.4L4.8 16.8A2 2 0 0 0 6.5 20h11a2 2 0 0 0 1.7-3.2L15 9.4V3"></path><line x1="7.3" y1="14.4" x2="16.7" y2="14.4"></line>',
+        scale: '<line x1="12" y1="4.5" x2="12" y2="20"></line><line x1="8" y1="20" x2="16" y2="20"></line><line x1="4" y1="7.5" x2="20" y2="7.5"></line><path d="M4 7.5 1.6 12.8a2.9 2.9 0 0 0 4.8 0Z"></path><path d="M20 7.5l-2.4 5.3a2.9 2.9 0 0 0 4.8 0Z"></path>',
+        compass: '<circle cx="12" cy="12" r="9"></circle><polygon points="16 8 13.4 13.4 8 16 10.6 10.6"></polygon>',
+        lightbulb: '<path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z"></path><line x1="9.6" y1="18.6" x2="14.4" y2="18.6"></line><line x1="10.6" y1="21" x2="13.4" y2="21"></line>',
+        globe: '<circle cx="12" cy="12" r="9"></circle><line x1="3" y1="12" x2="21" y2="12"></line><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"></path>',
         model: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path>',
         globe: '<circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"></path>',
         eyeOff: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><line x1="3" y1="21" x2="21" y2="3"></line>',
@@ -51,10 +59,12 @@
         dot: '<circle cx="12" cy="12" r="5"></circle>',
         thumbUp: '<path d="M7 21V10l5-7a2 2 0 0 1 3 2l-1 5h5a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.6 21H7Z"></path><rect x="2" y="10" width="5" height="11" rx="1"></rect>',
         thumbDown: '<path d="M17 3v11l-5 7a2 2 0 0 1-3-2l1-5H5a2 2 0 0 1-2-2.4l1.4-7A2 2 0 0 1 6.4 3H17Z"></path><rect x="17" y="3" width="5" height="11" rx="1"></rect>',
-        stop: '<rect x="6" y="6" width="12" height="12" rx="2"></rect>'
+        stop: '<rect x="6" y="6" width="12" height="12" rx="2"></rect>',
+        more: '<circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle>'
     };
 
-    const PERSONA_ICONS = ['tools', 'search', 'pen', 'graduation', 'chart', 'terse', 'robot', 'model', 'person', 'bolt'];
+    const PERSONA_ICONS = ['tools', 'code', 'search', 'pen', 'graduation', 'chart', 'flask',
+        'scale', 'compass', 'lightbulb', 'globe', 'terse', 'robot', 'model', 'person', 'bolt'];
 
     function markup(name, options) {
         const opts = options || {};

@@ -98,6 +98,38 @@
         };
     }
 
+    // A wall of pasted text is a document, not a sentence. Past this it goes in
+    // as an attachment rather than filling the composer, so the question you
+    // are asking about it stays readable — and so the composer does not become
+    // a scroll view of somebody's log file.
+    const PASTE_AS_FILE_CHARS = 1500;
+    const PASTE_AS_FILE_LINES = 30;
+
+    function pasteIsLong(text) {
+        const body = String(text || '');
+        if (body.length >= PASTE_AS_FILE_CHARS) return true;
+        return body.split('\n').length >= PASTE_AS_FILE_LINES;
+    }
+
+    /// Wraps pasted or dropped text as an attachment. Named rather than
+    /// guessed at: calling it a .txt it is not would be worse than saying
+    /// plainly where it came from.
+    function fromText(text, name) {
+        const body = String(text || '');
+        const kept = body.length > MAX_TEXT_BYTES ? body.slice(0, MAX_TEXT_BYTES) : body;
+        return {
+            id: window.NymbotStore.uid(),
+            kind: 'text',
+            name: name || t('Pasted text'),
+            mime: 'text/plain',
+            size: kept.length,
+            lang: '',
+            lines: kept.split('\n').length,
+            text: kept,
+            truncated: kept.length < body.length
+        };
+    }
+
     async function fromClipboard(items) {
         const out = [];
         for (const item of items || []) {
@@ -127,5 +159,8 @@
         return (n / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    window.NymbotAttach = { fromFile, fromClipboard, wireBlock, humanSize, looksTextual, langFor };
+    window.NymbotAttach = {
+        fromFile, fromClipboard, fromText, pasteIsLong,
+        wireBlock, humanSize, looksTextual, langFor
+    };
 })();

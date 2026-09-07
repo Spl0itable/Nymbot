@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
+import '../../services/git_forge.dart';
+import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 
 Future<void> showReposSheet(BuildContext context) => showModalBottomSheet<void>(
@@ -29,6 +31,10 @@ class _ReposSheetState extends State<_ReposSheet> {
   bool _writes = false;
   String? _editingId;
   String? _error;
+  List<ForgeRepo>? _found;
+  final _picked = <String>{};
+  final _filter = TextEditingController();
+  bool _asking = false;
 
   @override
   void dispose() {
@@ -38,6 +44,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     _branch.dispose();
     _paths.dispose();
     _label.dispose();
+    _filter.dispose();
     super.dispose();
   }
 
@@ -53,7 +60,182 @@ class _ReposSheetState extends State<_ReposSheet> {
       _branch.clear();
       _paths.clear();
       _label.clear();
+      _found = null;
+      _picked.clear();
+      _filter.clear();
     });
+  }
+
+  /// Asks the forge what the token in the form can reach, so a chat is wired
+  /// to a repository by ticking it rather than by typing its name exactly
+  /// right. The request goes from this device straight to the forge.
+  Future<void> _browse(AppController app) async {
+    final token = _token.text.trim();
+    if (token.isEmpty) {
+      setState(() => _error =
+          t('Paste a token first, and this will list what it can reach.'));
+      return;
+    }
+    setState(() {
+      _asking = true;
+      _error = null;
+    });
+    try {
+      final found = await GitForge.listRepos(
+        provider: _provider,
+        token: token,
+        host: _host.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _found = found;
+        _picked.clear();
+        _filter.clear();
+        _error = found.isEmpty ? t('That token reaches no repositories.') : null;
+      });
+    } on ForgeException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = switch (e.reason) {
+            ForgeFailure.denied => t(
+                'That token was refused. Check it has read access to repositories.'),
+            ForgeFailure.noHost =>
+              t('A self-hosted forge needs its host before it can be asked.'),
+            ForgeFailure.unsupported => t(
+                'This provider has no list to ask for. Type the repository in below.'),
+            ForgeFailure.unreachable => t(
+                'Could not reach that host from this device. Type the repository in below instead.'),
+            _ => t('The forge answered with an error. Type the repository in below instead.'),
+          });
+    } finally {
+      if (mounted) setState(() => _asking = false);
+    }
+  }
+
+  /// Connects every ticked repository, carrying the token, provider, host and
+  /// writes flag from the form, and puts them all in this chat.
+  Future<void> _link(AppController app) async {
+    final found = _found;
+    if (found == null) return;
+    final picked = found.where((r) => _picked.contains(r.repo)).toList();
+    if (picked.isEmpty) {
+      setState(() => _error = t('Tick at least one.'));
+      return;
+    }
+    for (final r in picked) {
+      await app.saveRepo(
+        GitRepo(
+          id: bytesToHex(randomBytes(8)),
+          repo: r.repo,
+          token: _token.text.trim(),
+          provider: _provider,
+          host: _host.text.trim(),
+          branch: r.branch,
+          allowWrites: _writes,
+        ),
+        useHere: true,
+      );
+    }
+    _reset();
+  }
+
+  Widget _browseList(AppController app, ThemeData theme) {
+    final found = _found;
+    if (found == null) return const SizedBox.shrink();
+    final known = app.repos.map((r) => r.repo.toLowerCase()).toSet();
+    final needle = _filter.text.trim().toLowerCase();
+    final rows = found
+        .where((r) =>
+            needle.isEmpty ||
+            r.repo.toLowerCase().contains(needle) ||
+            r.description.toLowerCase().contains(needle))
+        .toList();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 4),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _filter,
+            decoration: InputDecoration(
+              isDense: true,
+              labelText: t('Filter'),
+              prefixIcon: const Icon(Icons.search, size: 18),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: rows.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(t('Nothing matches that.'),
+                        style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                  )
+                : ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final r in rows)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: _picked.contains(r.repo),
+                          // Connecting one already connected would make a
+                          // duplicate, so it is shown as connected instead.
+                          onChanged: known.contains(r.repo.toLowerCase())
+                              ? null
+                              : (on) => setState(() {
+                                    if (on == true) {
+                                      _picked.add(r.repo);
+                                    } else {
+                                      _picked.remove(r.repo);
+                                    }
+                                  }),
+                          title: Text(r.repo,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13)),
+                          subtitle: Text(
+                            [
+                              if (r.branch.isNotEmpty) r.branch,
+                              r.private ? t('private') : t('public'),
+                              if (known.contains(r.repo.toLowerCase()))
+                                t('already connected'),
+                              if (r.description.isNotEmpty) r.description,
+                            ].join(' · '),
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 11, color: theme.hintColor),
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              FilledButton(
+                onPressed: () => _link(app),
+                child: Text(t('Link the ticked ones')),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () => setState(() {
+                  _found = null;
+                  _picked.clear();
+                }),
+                child: Text(t('Close the list')),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   void _edit(GitRepo r) {
@@ -185,6 +367,18 @@ class _ReposSheetState extends State<_ReposSheet> {
               obscureText: true,
               decoration: InputDecoration(labelText: t('Access token')),
             ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              icon: _asking
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.playlist_add_check, size: 18),
+              label: Text(t('List what this token can reach')),
+              onPressed: _asking ? null : () => _browse(app),
+            ),
+            _browseList(app, Theme.of(context)),
             const SizedBox(height: 10),
             TextField(
               controller: _repo,

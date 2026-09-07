@@ -19,8 +19,13 @@ import 'package:nymbot/models/bot.dart';
 import 'package:nymbot/models/schedule.dart';
 import 'package:nymbot/models/compare.dart';
 import 'package:nymbot/models/conversation.dart';
+import 'package:nymbot/models/memory.dart';
 import 'package:nymbot/models/workspace.dart';
+import 'package:nymbot/services/attachments.dart';
 import 'package:nymbot/services/chat_engine.dart';
+import 'package:nymbot/services/git_forge.dart';
+import 'package:nymbot/services/memory_keeper.dart';
+import 'package:nymbot/services/voice.dart';
 import 'package:nymbot/state/app_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -473,22 +478,80 @@ ls -la
     expect(head, contains('[custom instructions]'));
     expect(head, contains('Always cite the file you changed.'));
     expect(head, contains('[project knowledge]'));
-    expect(head, contains('--- style.md ---'));
+    expect(head, contains('style.md'));
     expect(head, contains('# House style'));
+    expect(head, contains(ChatEngine.standingEnd),
+        reason: 'the worker needs to know where the repeats stop');
     expect(head, isNot(contains(r'${')));
   });
 
-  test('a file too big for the window is cut and says so', () {
+  test('knowledge is retrieved against the question, not poured in whole', () {
+    // Sending all of it put 90,000 characters in the first message, which the
+    // worker cut to 1000 the moment it stopped being the current turn — so a
+    // workspace quietly stopped applying after one reply.
     final space = Workspace(
       id: 'w1',
-      files: [
-        KnowledgeFile(id: 'f1', name: 'huge.txt', body: 'x' * 40000),
+      files: const [
+        KnowledgeFile(
+          id: 'f1',
+          name: 'retry.md',
+          body: '# Backoff\n\nThe retry loop sleeps 2s, 4s then 8s.\n\n'
+              '# Deadlines\n\nA request is abandoned after 30 seconds.',
+        ),
+        KnowledgeFile(
+          id: 'f2',
+          name: 'billing.md',
+          body: '# Credits\n\nA credit is 100 sats on the pro tier.\n\n'
+              '# Refunds\n\nAn unspent reservation is released, never charged.',
+        ),
       ],
     );
-    final block = ChatEngine.knowledgeBlock(space);
-    expect(block.contains('[…trimmed to fit]'), isTrue);
-    expect(block.length, lessThan(40000));
+
+    final retry = ChatEngine.knowledgeBlock(
+        space, 'why does the retry loop back off so slowly?');
+    expect(retry, contains('sleeps 2s, 4s then 8s'),
+        reason: 'the passage that answers the question is the one sent');
+    expect(retry, isNot(contains('100 sats')),
+        reason: 'and the passages that do not are left behind');
+    expect(retry, contains('retry.md'));
+    expect(retry, contains('billing.md'),
+        reason: 'every file is named, so the model knows what else there is');
+
+    final credits = ChatEngine.knowledgeBlock(space, 'how many sats is a credit?');
+    expect(credits, contains('100 sats'));
+    expect(credits, isNot(contains('sleeps 2s')));
+
+    expect(ChatEngine.knowledgeBlock(space, 'what is the capital of France'),
+        isNotEmpty,
+        reason: 'a question that matches nothing still gets something to orient on');
+
+    final huge = Workspace(
+      id: 'w2',
+      files: [KnowledgeFile(id: 'f1', name: 'huge.txt', body: 'x ' * 30000)],
+    );
+    expect(ChatEngine.knowledgeBlock(huge, 'anything').length, lessThan(6000),
+        reason: 'a file far too big for the window never travels whole');
     expect(ChatEngine.knowledgeBlock(null), isEmpty);
+  });
+
+  test('standing context rides every message, and the seed rides once', () {
+    final space = Workspace(id: 'w1', instructions: 'Be terse.');
+    final conv = Conversation(id: 'c1', rootId: 'r1', workspaceId: 'w1');
+    final first = ChatEngine.preamble(conv, const [], null, space, null, 'q');
+    final later = ChatEngine.preamble(conv, const [], null, space, null, 'q');
+    expect(later, first,
+        reason: 'what stands is sent every turn, not only the first');
+
+    final seeded = Conversation(
+        id: 'c2', rootId: 'r2', workspaceId: 'w1', seed: 'We agreed on X.');
+    final head = ChatEngine.preamble(seeded, const [], null, space, null, 'q');
+    expect(head.indexOf('[earlier in this conversation]'),
+        greaterThan(head.indexOf(ChatEngine.standingEnd)),
+        reason: 'the seed sits past the marker, because nothing re-sends it');
+
+    final bare = Conversation(id: 'c3', rootId: 'r3');
+    expect(ChatEngine.preamble(bare, const [], null), isEmpty,
+        reason: 'a chat with nothing standing sends no stray marker');
   });
 
   test('a chat with no workspace is unchanged', () {
@@ -672,6 +735,387 @@ ls -la
     expect(left, contains(fresh.id));
     expect(left, isNot(contains(ghost.id)));
     expect(left, isNot(contains(stale.id)));
+  });
+
+  testWidgets('a chat can be renamed, pinned and deleted without opening it',
+      (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+
+    final here = await controller.newConversation();
+    await controller.open(here);
+    final there = await controller.newConversation();
+    await controller.open(here);
+
+    await controller.renameCurrent('Somewhere else', target: there);
+    await controller.togglePin(target: there);
+    expect(there.title, 'Somewhere else');
+    expect(there.pinned, isTrue,
+        reason: 'a row acts on its own chat, not the one on screen');
+    expect(here.title, isNot('Somewhere else'));
+    expect(controller.current?.id, here.id,
+        reason: 'and leaves you where you were reading');
+
+    await controller.toggleArchive(target: there);
+    expect(there.archived, isTrue);
+    expect(controller.current?.id, here.id,
+        reason: 'archiving elsewhere does not move you either');
+
+    await controller.deleteCurrent(target: there);
+    expect(controller.conversations.map((c) => c.id), isNot(contains(there.id)));
+    expect(controller.current?.id, here.id,
+        reason: 'nor does deleting elsewhere');
+  });
+
+  test('a forge listing becomes repositories, whatever forge answered', () {
+    final github = GitForge.parse('github', [
+      {'full_name': 'nym/beta', 'default_branch': 'trunk', 'private': false},
+      {'full_name': 'nym/alpha', 'default_branch': 'main', 'private': true},
+      {'name': 'no full name'},
+    ]);
+    expect(github.map((r) => r.repo), ['nym/alpha', 'nym/beta'],
+        reason: 'sorted, and a row without a name is dropped rather than shown blank');
+    expect(github.first.branch, 'main');
+    expect(github.first.private, isTrue);
+
+    final gitlab = GitForge.parse('gitlab', [
+      {
+        'path_with_namespace': 'group/thing',
+        'default_branch': 'develop',
+        'visibility': 'private',
+      },
+    ]);
+    expect(gitlab.single.repo, 'group/thing');
+    expect(gitlab.single.branch, 'develop');
+    expect(gitlab.single.private, isTrue);
+
+    final bitbucket = GitForge.parse('bitbucket', {
+      'values': [
+        {
+          'full_name': 'team/repo',
+          'mainbranch': {'name': 'master'},
+          'is_private': false,
+        },
+      ],
+    });
+    expect(bitbucket.single.repo, 'team/repo');
+    expect(bitbucket.single.branch, 'master');
+    expect(bitbucket.single.private, isFalse);
+
+    expect(GitForge.parse('github', {'not': 'a list'}), isEmpty);
+    expect(GitForge.needsHost('gitea'), isTrue,
+        reason: 'a self-hosted forge has no host to guess');
+    expect(GitForge.needsHost('github'), isFalse);
+  });
+
+  test('listing refuses before it asks when it has nothing to ask with', () async {
+    await expectLater(
+      GitForge.listRepos(provider: 'github', token: ''),
+      throwsA(isA<ForgeException>()
+          .having((e) => e.reason, 'reason', ForgeFailure.noToken)),
+    );
+    await expectLater(
+      GitForge.listRepos(provider: 'gitea', token: 'x'),
+      throwsA(isA<ForgeException>()
+          .having((e) => e.reason, 'reason', ForgeFailure.noHost)),
+    );
+    await expectLater(
+      GitForge.listRepos(provider: 'sourcehut', token: 'x'),
+      throwsA(isA<ForgeException>()
+          .having((e) => e.reason, 'reason', ForgeFailure.unsupported)),
+    );
+  });
+
+  test('a standing fact is noticed, but a question never is', () {
+    final conv = Conversation(id: 'c1', rootId: 'r1');
+    expect(MemoryKeeper.propose('call me Lux, by the way', conv).single.topic, 'Name');
+    expect(
+        MemoryKeeper.propose('I prefer answers that show the code first.', conv)
+            .single
+            .topic,
+        'Preference');
+    expect(MemoryKeeper.propose('what do I prefer for breakfast?', conv), isEmpty,
+        reason: 'a question about a preference is not a preference');
+    expect(MemoryKeeper.propose('should I use rust for this?', conv), isEmpty);
+    expect(
+        MemoryKeeper.propose(
+            'call me Lux', Conversation(id: 'c', rootId: 'r', ephemeral: true)),
+        isEmpty,
+        reason: 'a ghost chat notices nothing at all');
+  });
+
+  test('memory is scoped to the workspace it was saved in', () {
+    final all = [
+      Memory(id: 'm1', text: 'I work in TypeScript.', topic: 'Tools'),
+      Memory(id: 'm2', text: 'This one ships on Fridays.', scope: 'w-alpha'),
+      Memory(id: 'm3', text: 'That one is in Go.', scope: 'w-beta'),
+    ];
+    final loose = MemoryKeeper.forConv(all, Conversation(id: 'c', rootId: 'r'));
+    expect(loose.length, 1,
+        reason: 'a chat outside a workspace sees only what was saved loose');
+
+    final alpha = MemoryKeeper.forConv(
+        all, Conversation(id: 'c', rootId: 'r', workspaceId: 'w-alpha'));
+    expect(alpha.map((m) => m.id), containsAll(['m1', 'm2']));
+    expect(alpha.map((m) => m.id), isNot(contains('m3')),
+        reason: 'and never another workspace');
+
+    expect(
+        MemoryKeeper.forConv(all,
+            Conversation(id: 'c', rootId: 'r', workspaceId: 'w-alpha', ephemeral: true)),
+        isEmpty,
+        reason: 'a ghost chat reads none of it');
+  });
+
+  test('what rides a message is what bears on it, plus who you are', () {
+    final all = [
+      Memory(id: 'm1', text: 'Always answer in British English.', topic: 'How to answer'),
+      Memory(id: 'm2', text: 'My name is Lux.', topic: 'Name'),
+      Memory(id: 'm3', text: 'The staging database is called nym-staging.', topic: 'Note'),
+      Memory(id: 'm4', text: 'I run a 2019 ThinkPad.', topic: 'Note'),
+    ];
+    final conv = Conversation(id: 'c', rootId: 'r');
+    final onTopic =
+        MemoryKeeper.block(all, conv, 'what is the staging database called?');
+    expect(onTopic, contains('nym-staging'));
+    expect(onTopic, contains('British English'),
+        reason: 'how to answer travels whatever the question is');
+
+    final offTopic = MemoryKeeper.block(all, conv, 'write me a poem');
+    expect(offTopic, contains('British English'));
+    expect(offTopic, contains('Lux'), reason: 'and so does your name');
+    expect(offTopic, isNot(contains('ThinkPad')),
+        reason: 'while an unrelated fact stays behind');
+
+    expect(MemoryKeeper.block(const [], conv, 'anything'), isEmpty);
+    expect(
+        MemoryKeeper.block(
+            all, Conversation(id: 'c', rootId: 'r', ephemeral: true), 'anything'),
+        isEmpty);
+  });
+
+  testWidgets('the same fact told twice is one fact, and rides the preamble',
+      (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+
+    final conv = await controller.newConversation();
+    await controller.open(conv);
+    await controller.saveMemory(Memory(id: 'm1', text: 'Call me Lux.', topic: 'Name'));
+    await controller.saveMemory(Memory(id: 'm2', text: 'call me lux.', topic: 'Name'));
+    expect(controller.memories.length, 1,
+        reason: 'matching on the text keeps a repeat from becoming a copy');
+    expect(controller.memories.single.id, 'm2',
+        reason: 'the later wording is the one kept, not the first');
+
+    final head = ChatEngine.preamble(
+        conv, const [], null, null, null, 'who am I?', controller.memories);
+    expect(head, contains('[remembered about you]'));
+    expect(head.indexOf('[remembered about you]'),
+        lessThan(head.indexOf(ChatEngine.standingEnd)),
+        reason: 'inside the part the worker strips, since it is sent every turn');
+
+    await controller.deleteMemory('m2');
+    expect(controller.memories, isEmpty,
+        reason: 'and one can be thrown away on its own');
+  });
+
+  testWidgets('typing while it is still writing holds the message', (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+
+    final conv = await controller.newConversation();
+    await controller.open(conv);
+
+    // The send itself needs the worker; what is under test is the queue.
+    controller.sending = true;
+    expect(await controller.send('and what about the deadline?'), isFalse,
+        reason: 'it says it did not go, so nothing reads out a reply yet');
+    await controller.send('also, which branch?');
+    expect(controller.queued, ['and what about the deadline?', 'also, which branch?'],
+        reason: 'held in the order it was typed, not dropped');
+
+    controller.unqueue(0);
+    expect(controller.queued, ['also, which branch?'],
+        reason: 'one waiting can be taken back out');
+
+    controller.stop();
+    expect(controller.queued, isEmpty,
+        reason: 'stop means stop: nothing waiting behind it is sent');
+
+    controller.sending = true;
+    await controller.send('one more');
+    expect(controller.queued, ['one more']);
+    await controller.open(conv);
+    expect(controller.queued, isEmpty,
+        reason: 'a queue belongs to the chat it was typed into');
+  });
+
+  testWidgets('asking it to think harder is priced as the work it is',
+      (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+
+    final conv = await controller.newConversation();
+    await controller.open(conv);
+    const model = {'key': 'x', 'label': 'A model', 'credits': 2, 'max': 6};
+
+    final normal = ChatEngine.estimate('hi', model, conv: conv);
+    expect(normal.low, 2, reason: 'a normal reply is one pass');
+
+    conv.effort = 'careful';
+    expect(ChatEngine.estimate('hi', model, conv: conv).low, 4,
+        reason: 'a careful one costs two');
+    conv.effort = 'deep';
+    final deep = ChatEngine.estimate('hi', model, conv: conv);
+    expect(deep.low, 6, reason: 'a deep one costs three');
+    expect(deep.high, greaterThan(normal.high),
+        reason: 'and the ceiling moves with it too');
+
+    expect(ChatEngine.estimate('hi', model, conv: conv, hasRepos: true).low, 2,
+        reason: 'a repo task loops on a budget of its own and ignores it');
+    expect(ChatEngine.estimate('hi', null, conv: conv).tier, 'standard',
+        reason: 'a standard reply is untouched by any of it');
+
+    conv.effort = 'enormous';
+    expect(ChatEngine.effortOf(conv), 'normal',
+        reason: 'an effort nobody asked for is normal');
+
+    conv.effort = 'normal';
+    expect(await controller.cycleEffort(), 'careful');
+    expect(await controller.cycleEffort(), 'deep');
+    expect(await controller.cycleEffort(), 'normal',
+        reason: 'the chip cycles and comes back round');
+    expect(await controller.cycleEffort('deep'), 'deep',
+        reason: 'and it can be set by name');
+    expect(Conversation.fromJson(conv.toJson()).effort, 'deep',
+        reason: 'and it survives a round trip through JSON');
+  });
+
+  testWidgets('asking a question differently branches rather than overwriting',
+      (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+
+    final conv = await controller.newConversation();
+    await controller.open(conv);
+    conv.systemPrompt = 'Cite the file.';
+    conv.effort = 'careful';
+    await controller.store.saveConversations(controller.conversations);
+
+    final q2 = ChatMessage(id: 'q2', role: ChatRole.self, content: 'second question');
+    controller.messages = [
+      ChatMessage(id: 'q1', role: ChatRole.self, content: 'first question'),
+      ChatMessage(id: 'a1', role: ChatRole.bot, content: 'first answer'),
+      q2,
+      ChatMessage(id: 'a2', role: ChatRole.bot, content: 'second answer'),
+    ];
+    await controller.store.saveMessages(conv.id, controller.messages);
+    controller.artifacts = [
+      Artifact(id: 'art1', messageId: 'a1', title: 'thing.js', lang: 'js', body: 'const x = 1;'),
+    ];
+
+    final copy = await controller.branchBefore(q2);
+
+    expect(controller.store.messages(conv.id).length, 4,
+        reason: 'the chat it came from is left exactly as it was');
+    expect(controller.store.messages(copy.id).map((m) => m.id), ['q1', 'a1'],
+        reason: 'the branch carries what came before, not the question itself');
+    expect(copy.title, contains('branch'));
+    expect(copy.effort, 'careful', reason: 'carrying the effort the chat was set to');
+    expect(copy.systemPrompt, 'Cite the file.', reason: 'and its instructions');
+    expect(copy.seed, contains('first answer'));
+    expect(copy.rootId, isNot(conv.rootId),
+        reason: 'on a thread of its own, not the old one');
+    expect(controller.store.artifacts(copy.id).map((a) => a.id), ['art1'],
+        reason: 'and the files those messages produced come with them');
+  });
+
+  test('a checkpoint survives a round trip, and says what it can undo', () {
+    final m = ChatMessage(
+      id: 'ck1',
+      role: ChatRole.bot,
+      content: 'Done — two files.',
+      checkpoint: const {
+        'repo': 'nym/alpha',
+        'branch': 'main',
+        'baseSha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'paths': ['src/retry.js', 'README.md'],
+        'branches': ['fix/retry'],
+        'pulls': ['Opened pull request #7'],
+        'undoable': true,
+      },
+    );
+    final back = ChatMessage.fromJson(m.toJson());
+    expect(back.checkpoint, isNotNull,
+        reason: 'the way back has to outlive the session that made it');
+    expect(back.checkpoint!['baseSha'], m.checkpoint!['baseSha']);
+    expect((back.checkpoint!['paths'] as List).length, 2);
+    expect(back.checkpoint!['undoable'], isTrue);
+
+    // A run with nothing to read the old files back from must not offer a
+    // button that cannot work.
+    final noBase = ChatMessage(
+      id: 'ck2',
+      role: ChatRole.bot,
+      content: 'Made a branch.',
+      checkpoint: const {'repo': 'nym/alpha', 'paths': [], 'undoable': false},
+    );
+    expect(noBase.checkpoint!['undoable'], isFalse);
+
+    expect(
+        ChatMessage(id: 'plain', role: ChatRole.bot, content: 'hi')
+            .toJson()
+            .containsKey('checkpoint'),
+        isFalse,
+        reason: 'a reply that changed nothing carries nothing');
+
+    final marked = m.copyWith(checkpoint: {...m.checkpoint!, 'undone': true});
+    expect(marked.checkpoint!['undone'], isTrue);
+    expect(m.checkpoint!.containsKey('undone'), isFalse,
+        reason: 'and marking one spent does not reach back into the original');
+  });
+
+  test('a long paste is a document, not a sentence', () {
+    expect(Attachments.pasteIsLong('a normal thing somebody types'), isFalse,
+        reason: 'what you type by hand stays typed');
+    expect(Attachments.pasteIsLong('x' * 1600), isTrue,
+        reason: 'a lot of characters counts');
+    expect(
+        Attachments.pasteIsLong(List.filled(31, 'a').join('\n')), isTrue,
+        reason: 'and so does a lot of lines, however short they are');
+    expect(Attachments.pasteIsLong(List.filled(5, 'a').join('\n')), isFalse);
+
+    final long = List.generate(40, (i) => 'line $i of a log').join('\n');
+    final a = Attachments.fromText(long, id: 'a1');
+    expect(a.kind, AttachmentKind.text);
+    expect(a.name, 'Pasted text',
+        reason: 'named for what it is, not a filename it never had');
+    expect(a.lines, 40, reason: 'counting its lines');
+    expect(a.measure, '40 lines',
+        reason: 'lines say more about a pasted wall of text than bytes do');
+    expect(a.text, long, reason: 'and keeping every one of them');
+    expect(a.wireBlock, contains('```'),
+        reason: 'it travels fenced, so the model reads it as a block');
+    expect(Attachment.fromJson(a.toJson()).lines, 40,
+        reason: 'and that survives a round trip');
+    // A file keeps its bytes; only something pasted is measured in lines.
+    final file = Attachment(
+        id: 'f1', kind: AttachmentKind.text, name: 'notes.md', size: 2048);
+    expect(file.measure, '2 KB');
+  });
+
+  test('dictation says why it stopped, when there is a why worth saying', () {
+    expect(Voice.reasonFor('error_permission'), contains('permission'),
+        reason: 'a refused microphone says what to do about it');
+    expect(Voice.reasonFor('error_audio'), contains('No microphone'));
+    expect(Voice.reasonFor('error_network'), contains('connection'));
+    expect(Voice.reasonFor('error_no_match'), contains('Nothing was heard'));
+    expect(Voice.reasonFor('error_busy'), contains('still busy'));
+    expect(Voice.reasonFor('error_client'), isNull,
+        reason: 'stopping it yourself is not an error worth reporting');
+    expect(Voice.reasonFor('something-new'), isNotNull,
+        reason: 'and an error nobody has seen before still says something');
   });
 
   test('auto-delete is off unless it is asked for', () {

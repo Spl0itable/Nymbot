@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../services/chat_engine.dart';
 import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
 import 'i18n/i18n.dart';
@@ -32,123 +33,197 @@ class NymbotToolbar extends StatelessWidget {
     final persona = app.activePersona;
     final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
 
+    // Every chip that can be on for this chat, in the order the bar reads.
+    final chips = <_ChipSpec>[
+      _ChipSpec(
+        icon: Icons.auto_awesome,
+        label: pro ? model['label'] as String : t('Auto-routed'),
+        active: pro,
+        onTap: () => showModelsSheet(context),
+      ),
+      _ChipSpec(
+        icon: Icons.account_tree_outlined,
+        label: repos.isEmpty
+            ? t('Git')
+            : repos.length == 1
+                ? repos.first.display
+                : t('{n} repos', {'n': repos.length}),
+        active: repos.isNotEmpty,
+        onTap: () => showReposSheet(context),
+      ),
+      _ChipSpec(
+        icon: Icons.person_outline,
+        label: persona != null
+            ? persona.name
+            : hasSystem
+                ? t('Custom')
+                : t('Persona'),
+        active: persona != null || hasSystem,
+        onTap: () => showPersonasSheet(context),
+      ),
+      _ChipSpec(
+        icon: Icons.schedule,
+        label: app.schedules.where((s) => s.enabled).isEmpty
+            ? t('Scheduled')
+            : t('{n} scheduled',
+                {'n': app.schedules.where((s) => s.enabled).length}),
+        active: app.schedules.any((s) => s.enabled),
+        onTap: () => showSchedulesSheet(context),
+      ),
+      _ChipSpec(
+        icon: app.current?.ephemeral == true
+            ? Icons.no_accounts
+            : Icons.history_toggle_off,
+        label: app.current?.ephemeral == true ? t('Ghost on') : t('Ghost'),
+        active: app.current?.ephemeral == true,
+        onTap: () => _confirmGhost(context, app),
+      ),
+      _ChipSpec(
+        icon: NymIcons.forPersona(app.activeBot?.icon ?? 'robot'),
+        label: app.activeBot?.name ?? t('Bot'),
+        active: app.activeBot != null,
+        onTap: () => showBotsSheet(context),
+      ),
+      _ChipSpec(
+        icon: Icons.folder_outlined,
+        label: app.activeWorkspace?.name ?? t('Workspace'),
+        active: app.activeWorkspace != null,
+        onTap: () => showWorkspacesSheet(context),
+      ),
+      _ChipSpec(
+        icon: Icons.splitscreen_outlined,
+        label: t('Compare'),
+        active: false,
+        onTap: () => showCompareSheet(context),
+      ),
+      if (app.artifacts.isNotEmpty)
+        _ChipSpec(
+          icon: Icons.description_outlined,
+          label: app.artifacts.length == 1
+              ? t('1 artifact')
+              : t('{n} artifacts', {'n': app.artifacts.length}),
+          active: true,
+          onTap: () => showArtifactsSheet(context),
+        ),
+      // Only a Pro reply outside a repo task can be asked to think harder:
+      // standard replies are one routed call, and a repo task already loops on
+      // a budget of its own.
+      if (pro && repos.isEmpty)
+        _ChipSpec(
+          icon: Icons.lightbulb_outline,
+          label: switch (ChatEngine.effortOf(app.current)) {
+            'careful' => t('Careful'),
+            'deep' => t('Deep'),
+            _ => t('Effort'),
+          },
+          active: ChatEngine.effortOf(app.current) != 'normal',
+          onTap: () => _cycleEffort(context, app),
+        ),
+      _ChipSpec(
+        icon: Icons.public,
+        label: t('Web'),
+        active: app.settings.webSearch,
+        onTap: () => app.setWebSearch(!app.settings.webSearch),
+      ),
+      _ChipSpec(
+        icon: Icons.visibility_off_outlined,
+        label: app.anon.enabled ? t('Anon on') : t('Anon'),
+        active: app.anon.enabled,
+        onTap: () => showAnonSheet(context),
+      ),
+    ];
+
+    // Whatever is on for this chat sorts to the front, with a rule after it,
+    // so the settings in force are the ones you see before you scroll.
+    final on = chips.where((c) => c.active).toList();
+    final off = chips.where((c) => !c.active).toList();
+
+    Widget spaced(List<Widget> children) {
+      final out = <Widget>[];
+      for (final child in children) {
+        if (out.isNotEmpty) out.add(const SizedBox(width: 6));
+        out.add(child);
+      }
+      return Row(children: out);
+    }
+
     return Container(
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: theme.dividerColor)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _TierSwitch(pro: pro, accent: accent),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.auto_awesome,
-              label: pro ? model['label'] as String : t('Auto-routed'),
-              active: pro,
-              onTap: () => showModelsSheet(context),
+      // Only the chips scroll. The tier switch and the balance are anchored
+      // either side of them, so a chat with a long model name or a shelf of
+      // repositories can never push the button that buys credits out of reach.
+      child: Row(
+        children: [
+          _TierSwitch(pro: pro, accent: accent),
+          const SizedBox(width: 6),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: spaced([
+                for (final c in on) c.build(context),
+                if (on.isNotEmpty && off.isNotEmpty)
+                  Container(
+                    width: 1,
+                    height: 20,
+                    color: theme.dividerColor,
+                  ),
+                for (final c in off) c.build(context),
+              ]),
             ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.account_tree_outlined,
-              label: repos.isEmpty
-                  ? t('Git')
-                  : repos.length == 1
-                      ? repos.first.display
-                      : t('{n} repos', {'n': repos.length}),
-              active: repos.isNotEmpty,
-              onTap: () => showReposSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.person_outline,
-              label: persona != null
-                  ? persona.name
-                  : hasSystem
-                      ? t('Custom')
-                      : t('Persona'),
-              active: persona != null || hasSystem,
-              onTap: () => showPersonasSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.schedule,
-              label: app.schedules.where((s) => s.enabled).isEmpty
-                  ? t('Scheduled')
-                  : t('{n} scheduled',
-                      {'n': app.schedules.where((s) => s.enabled).length}),
-              active: app.schedules.any((s) => s.enabled),
-              onTap: () => showSchedulesSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: app.current?.ephemeral == true
-                  ? Icons.no_accounts
-                  : Icons.history_toggle_off,
-              label: app.current?.ephemeral == true ? t('Ghost on') : t('Ghost'),
-              active: app.current?.ephemeral == true,
-              onTap: () => _confirmGhost(context, app),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: NymIcons.forPersona(app.activeBot?.icon ?? 'robot'),
-              label: app.activeBot?.name ?? t('Bot'),
-              active: app.activeBot != null,
-              onTap: () => showBotsSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.folder_outlined,
-              label: app.activeWorkspace?.name ?? t('Workspace'),
-              active: app.activeWorkspace != null,
-              onTap: () => showWorkspacesSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.splitscreen_outlined,
-              label: t('Compare'),
-              active: false,
-              onTap: () => showCompareSheet(context),
-            ),
-            if (app.artifacts.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              _Chip(
-                icon: Icons.description_outlined,
-                label: app.artifacts.length == 1
-                    ? t('1 artifact')
-                    : t('{n} artifacts', {'n': app.artifacts.length}),
-                active: true,
-                onTap: () => showArtifactsSheet(context),
-              ),
-            ],
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.public,
-              label: t('Web'),
-              active: app.settings.webSearch,
-              onTap: () => app.setWebSearch(!app.settings.webSearch),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.visibility_off_outlined,
-              label: app.anon.enabled ? t('Anon on') : t('Anon'),
-              active: app.anon.enabled,
-              onTap: () => showAnonSheet(context),
-            ),
-            const SizedBox(width: 6),
-            _Chip(
-              icon: Icons.bolt,
-              label: app.shownBalance?.toString() ?? t('Buy'),
-              active: false,
-              color: NymbotColors.lightning,
-              onTap: () => showCreditsSheet(context),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 6),
+          _Chip(
+            icon: Icons.bolt,
+            label: app.shownBalance?.toString() ?? t('Buy'),
+            active: false,
+            color: NymbotColors.lightning,
+            onTap: () => showCreditsSheet(context),
+          ),
+        ],
       ),
     );
   }
+}
+
+/// One toolbar chip, described rather than built, so the bar can sort the ones
+/// that are on to the front before any of them is laid out.
+class _ChipSpec {
+  const _ChipSpec({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  Widget build(BuildContext context) =>
+      _Chip(icon: icon, label: label, active: active, onTap: onTap);
+}
+
+/// Each step is another model call the reply takes and the balance pays for,
+/// so what it costs is said rather than left to be discovered on the bill.
+Future<void> _cycleEffort(BuildContext context, AppController app) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final next = await app.cycleEffort();
+  messenger
+    ..clearSnackBars()
+    ..showSnackBar(SnackBar(
+      duration: const Duration(seconds: 4),
+      content: Text(switch (next) {
+        'careful' => t('Careful: it plans before it answers. Two passes, so '
+            'about twice the credits.'),
+        'deep' => t('Deep: it plans, answers, then checks its answer. Three '
+            'passes, so about three times the credits.'),
+        _ => t('Normal effort: one pass.'),
+      }),
+    ));
 }
 
 /// Turning ghost mode on is a promise about what is kept, so it is asked for

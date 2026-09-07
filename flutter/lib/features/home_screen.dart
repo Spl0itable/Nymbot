@@ -5,10 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app.dart';
+import '../core/crypto/keys.dart';
 import '../core/theme/theme.dart';
 import '../models/conversation.dart';
+import '../models/memory.dart';
 import '../models/workspace.dart';
 import '../services/attachments.dart';
+import '../services/chat_engine.dart';
 import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
@@ -29,6 +32,7 @@ import 'sheets/appearance_sheet.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/identity_sheet.dart';
 import 'sheets/library_sheets.dart';
+import 'sheets/memory_sheet.dart';
 import 'sheets/models_sheet.dart';
 import 'sheets/personas_sheet.dart';
 import 'sheets/prompts_sheet.dart';
@@ -50,6 +54,10 @@ class _HomeScreenState extends State<HomeScreen> {
   final _keys = <String, GlobalKey>{};
 
   String _suggestTerm = '';
+
+  /// What the composer held before the last change, so a paste can be told
+  /// apart from typing by how much one change added.
+  String _lastInput = '';
   String? _highlighted;
 
   /// Which message has its action row open. One at a time, so a thread does
@@ -119,6 +127,20 @@ class _HomeScreenState extends State<HomeScreen> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+  }
+
+  /// A message that can be taken back. Anything the app decides to keep on your
+  /// behalf says so this way, so undoing it is one tap rather than a hunt
+  /// through a settings screen.
+  void _sayUndo(String text, VoidCallback undo) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(text),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(label: t('Undo'), onPressed: undo),
+      ));
   }
 
   /// Commands handled here, free of charge, never sent anywhere.
@@ -322,6 +344,42 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'retry':
         await app.retryLast();
         return true;
+      case 'effort':
+        if (arg.isNotEmpty && !ChatEngine.effortLevels.containsKey(arg.toLowerCase())) {
+          await app.note(t('Effort is normal, careful or deep.'));
+          return true;
+        }
+        final level = await app.cycleEffort(arg.isEmpty ? null : arg.toLowerCase());
+        _say(switch (level) {
+          'careful' => t('Careful: it plans before it answers. Two passes, so '
+              'about twice the credits.'),
+          'deep' => t('Deep: it plans, answers, then checks its answer. Three '
+              'passes, so about three times the credits.'),
+          _ => t('Normal effort: one pass.'),
+        });
+        return true;
+      case 'remember':
+        if (arg.isNotEmpty) {
+          final saved = await app.saveMemory(Memory(
+            id: bytesToHex(randomBytes(8)),
+            text: arg,
+            scope: app.current?.workspaceId,
+            source: 'you',
+          ));
+          if (saved != null) {
+            _sayUndo(t('Remembered.'), () => app.deleteMemory(saved.id));
+          }
+        } else if (mounted) {
+          await showMemorySheet(context);
+        }
+        return true;
+      case 'memory':
+        await showMemorySheet(context);
+        return true;
+      case 'forget':
+        await app.clearMemories();
+        _say(t('Forgotten.'));
+        return true;
       case 'clear':
         await app.clearCurrent();
         return true;
@@ -383,6 +441,38 @@ class _HomeScreenState extends State<HomeScreen> {
     return true;
   }
 
+  /// What one change added, when it added anything. A paste arrives as a
+  /// single insert at one point, so the common prefix and suffix bracket it.
+  static String? _insertedRun(String before, String after) {
+    if (after.length <= before.length) return null;
+    var head = 0;
+    while (head < before.length && before[head] == after[head]) {
+      head++;
+    }
+    var tail = 0;
+    while (tail < before.length - head &&
+        before[before.length - 1 - tail] == after[after.length - 1 - tail]) {
+      tail++;
+    }
+    final run = after.substring(head, after.length - tail);
+    return run.isEmpty ? null : run;
+  }
+
+  /// Dictation adds to what is already in the composer rather than replacing
+  /// it, and says why it stopped when it stops for a reason.
+  Future<void> _dictate() async {
+    final from = _input.text;
+    await _voice.toggleListening((text) {
+      final join = from.isEmpty || from.endsWith(' ') ? '' : ' ';
+      final joined = '$from$join$text';
+      _input.text = joined;
+      _input.selection = TextSelection.collapsed(offset: joined.length);
+      _lastInput = joined;
+    });
+    final why = _voice.lastError;
+    if (why != null && why.isNotEmpty && mounted) _say(why);
+  }
+
   Future<void> _send([String? override]) async {
     final text = override ?? _input.text.trim();
     if (text.isEmpty) return;
@@ -397,9 +487,26 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     _toBottom();
-    await app.send(text);
+    // Read for standing facts before the reply comes back, so what is
+    // remembered is offered while the message is still on screen.
+    final noticed = await app.noticeMemories(text);
+    if (noticed.isNotEmpty && mounted) {
+      _sayUndo(
+        noticed.length == 1
+            ? t('Remembered: {what}', {'what': noticed.first.text})
+            : t('Remembered {n} things from that.', {'n': noticed.length}),
+        () {
+          for (final entry in noticed) {
+            app.deleteMemory(entry.id);
+          }
+        },
+      );
+    }
+    // A message typed while it was still writing is held, not sent, so nothing
+    // below should read out a reply that has not happened yet.
+    final went = await app.send(text);
     _toBottom();
-    if (!mounted) return;
+    if (!mounted || !went) return;
     if (app.settings.hapticOnReply) unawaited(HapticFeedback.lightImpact());
     if (app.settings.autoSpeak && app.messages.isNotEmpty) {
       final last = app.messages.last;
@@ -436,6 +543,23 @@ class _HomeScreenState extends State<HomeScreen> {
       case MessageAction.pin:
         await app.togglePinMessage(m);
         _say(m.pinned ? t('Removed from saved messages.') : t('Saved.'));
+      case MessageAction.remember:
+        // The words, not the markup: what is remembered has to read as a
+        // sentence when it comes back in another chat.
+        final words = MarkdownBody.plain(m.content).trim();
+        if (words.isEmpty) {
+          _say(t('There is nothing in that to remember.'));
+        } else {
+          final saved = await app.saveMemory(Memory(
+            id: bytesToHex(randomBytes(8)),
+            text: words.length > Memory.textCap
+                ? words.substring(0, Memory.textCap)
+                : words,
+            scope: app.current?.workspaceId,
+            source: 'you',
+          ));
+          if (saved != null) _sayUndo(t('Remembered.'), () => app.deleteMemory(saved.id));
+        }
       case MessageAction.retry:
         final again = m.retry;
         await app.deleteMessage(m);
@@ -445,31 +569,100 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _edit(ChatMessage m) async {
+  /// Asking the question differently. By default that happens on a branch: the
+  /// chat you had is worth keeping, and rewriting in place threw away
+  /// everything said after the edited message with no way back.
+  /// Putting a repo run back, once it is asked for out loud: it writes to
+  /// someone's repository, so it is confirmed rather than done on a tap.
+  Future<void> _undo(ChatMessage m) async {
     final app = AppScope.read(context);
-    final controller = TextEditingController(text: m.content);
-    final value = await showDialog<String>(
+    final mark = m.checkpoint;
+    if (mark == null) return;
+    final paths = (mark['paths'] as List?)?.length ?? 0;
+    final go = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(t('Edit and resend')),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          minLines: 3,
-          maxLines: 10,
-        ),
+      builder: (ctx) => AlertDialog(
+        title: Text(t('Undo these changes')),
+        content: Text(t(
+            'Put {n} file(s) back to how they were before this reply, on '
+            '{branch}? This commits them as they were — nothing is erased from '
+            'the history.',
+            {'n': paths, 'branch': mark['branch'] ?? ''})),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t('Cancel'))),
           FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: Text(t('Send')),
+            style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t('Undo them')),
           ),
         ],
       ),
     );
+    if (go != true) return;
+    try {
+      final data = await app.revertCheckpoint(m);
+      final done = ((data['restored'] as List?)?.length ?? 0) +
+          ((data['deleted'] as List?)?.length ?? 0);
+      final failed = (data['failed'] as List?)?.length ?? 0;
+      _say(failed > 0
+          ? t('Put {done} back; {failed} could not be. Check the repository.',
+              {'done': done, 'failed': failed})
+          : t('Put back: {n} file(s) are as they were before that reply.',
+              {'n': done}));
+    } on ChatFailure catch (e) {
+      _say(e.message);
+    } catch (_) {
+      _say(t('Could not put that back.'));
+    }
+  }
+
+  Future<void> _edit(ChatMessage m) async {
+    final app = AppScope.read(context);
+    final controller = TextEditingController(text: m.content);
+    var branch = true;
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: Text(t('Ask this differently')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 10,
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: branch,
+                title: Text(t('Keep this chat and answer on a branch'),
+                    style: const TextStyle(fontSize: 13)),
+                onChanged: (v) => setLocal(() => branch = v ?? true),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text),
+              child: Text(t('Send')),
+            ),
+          ],
+        ),
+      ),
+    );
     if (value == null || value.trim().isEmpty) return;
-    await app.truncateFrom(m);
+    if (branch) {
+      await app.branchBefore(m);
+      _say(t('Branched. The chat you had is still in the list.'));
+    } else {
+      await app.truncateFrom(m);
+    }
     await _send(value.trim());
   }
 
@@ -684,6 +877,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onToggleActions: () => setState(
                 () => _openActions = _openActions == m.id ? null : m.id),
             onOpenArtifact: (a) => showArtifact(context, a),
+            onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
             selfPubkey: selfPubkey,
             selfName: me?.name,
             selfPicture: me?.picture ?? '',
@@ -821,10 +1015,47 @@ class _HomeScreenState extends State<HomeScreen> {
                               : Icons.description_outlined,
                           size: 15,
                         ),
-                        label: Text('${a.name} · ${a.humanSize}',
+                        label: Text('${a.name} · ${a.measure}',
                             style: const TextStyle(fontSize: 11)),
                         onDeleted: () => app.removeAttachment(a.id),
                       ),
+                  ],
+                ),
+              ),
+            // What you typed while it was still writing. Shown so the queue is
+            // never a surprise, and each one can be taken back out while it
+            // waits.
+            for (var i = 0; i < app.queued.length; i++)
+              Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.fromLTRB(8, 3, 2, 3),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: Theme.of(context).dividerColor,
+                      style: BorderStyle.solid),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Text('#${i + 1}',
+                        style: TextStyle(
+                            fontSize: 10, color: Theme.of(context).hintColor)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        app.queued[i],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12, color: Theme.of(context).hintColor),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 15),
+                      tooltip: t('Do not send this'),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => app.unqueue(i),
+                    ),
                   ],
                 ),
               ),
@@ -877,11 +1108,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: Icon(_voice.listening ? Icons.mic : Icons.mic_none, size: 20),
                     color: _voice.listening ? NymbotColors.danger : null,
                     tooltip: t('Dictate'),
-                    onPressed: () => _voice.toggleListening((text) {
-                      _input.text = text;
-                      _input.selection =
-                          TextSelection.collapsed(offset: text.length);
-                    }),
+                    onPressed: _dictate,
                   ),
                 Expanded(
                   child: TextField(
@@ -892,6 +1119,24 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? TextInputAction.send
                         : TextInputAction.newline,
                     onChanged: (v) {
+                      // A wall of pasted text is a document, not a sentence:
+                      // it goes in as an attachment so the question you are
+                      // asking about it stays readable. Only a paste can add
+                      // this much in one change; typing cannot.
+                      final run = _insertedRun(_lastInput, v);
+                      if (run != null && Attachments.pasteIsLong(run)) {
+                        final rest = v.replaceFirst(run, '');
+                        app.addAttachment(Attachments.fromText(run,
+                            id: bytesToHex(randomBytes(8))));
+                        _input.text = rest;
+                        _input.selection =
+                            TextSelection.collapsed(offset: rest.length);
+                        _lastInput = rest;
+                        final conv = app.current;
+                        if (conv != null) app.store.setDraft(conv.id, rest);
+                        return;
+                      }
+                      _lastInput = v;
                       final conv = app.current;
                       if (conv != null) app.store.setDraft(conv.id, v);
                       final next = v.startsWith('?') ? v : '';
@@ -937,85 +1182,124 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _menu(AppController app) async {
+  Future<void> _rename() async {
+    final app = AppScope.read(context);
     final conv = app.current;
+    if (conv == null) return;
+    await renameChatDialog(context, app, conv);
+  }
+
+  Future<void> _menu(AppController app, {Conversation? target}) async {
+    final conv = target ?? app.current;
     if (conv == null) return;
     final choice = await showChatMenu(context, conv);
     if (choice == null || !mounted) return;
-    switch (choice) {
-      case 'find':
-        setState(() => _findTerm = '');
-      case 'rename':
-        await _rename();
-      case 'pin':
-        await app.togglePin();
-      case 'archive':
-        await app.toggleArchive();
-      case 'duplicate':
-        await app.duplicateCurrent();
-      case 'system':
-        await showSystemPromptSheet(context);
-      case 'tags':
-        await showTagsSheet(context);
-      case 'stats':
-        await showStatsSheet(context);
-      case 'share':
-        await _share(app);
-      case 'copy':
-        await Clipboard.setData(ClipboardData(
-            text: Transcript.markdown(conv, app.messages, repos: app.activeRepos)));
-        _say(t('Copied.'));
-      case 'clear':
-        await app.clearCurrent();
-      case 'delete':
-        await _confirmDelete();
+    if (choice == 'find') {
+      if (conv.id != app.current?.id) await app.open(conv);
+      if (mounted) setState(() => _findTerm = '');
+      return;
     }
+    await runChatMenuChoice(context, app, conv, choice);
+  }
+}
+
+/// One item from the chat menu, run against [conv] — which need not be the chat
+/// on screen, since the sidebar opens this menu on a row. The items that open
+/// an editor bound to the chat in view select it first; everything else acts
+/// where it stands. 'find' belongs to the chat screen and is handled there.
+Future<void> runChatMenuChoice(BuildContext context, AppController app,
+    Conversation conv, String choice) async {
+  final elsewhere = conv.id != app.current?.id;
+  final messenger = ScaffoldMessenger.of(context);
+  // Selecting the chat first is an await, so the context that opens the sheet
+  // afterwards has to be checked rather than assumed.
+  Future<bool> select() async {
+    if (elsewhere) await app.open(conv);
+    return context.mounted;
   }
 
-  Future<void> _rename() async {
-    final app = AppScope.read(context);
-    final controller = TextEditingController(text: app.current?.title ?? '');
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(t('Name this chat')),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: Text(t('Save')),
-          ),
-        ],
-      ),
-    );
-    if (value != null) await app.renameCurrent(value);
+  switch (choice) {
+    case 'rename':
+      await renameChatDialog(context, app, conv);
+    case 'pin':
+      await app.togglePin(target: conv);
+    case 'archive':
+      await app.toggleArchive(target: conv);
+    case 'duplicate':
+      await app.duplicateCurrent(target: conv);
+    case 'system':
+      if (await select() && context.mounted) await showSystemPromptSheet(context);
+    case 'tags':
+      if (await select() && context.mounted) await showTagsSheet(context);
+    case 'stats':
+      if (await select() && context.mounted) await showStatsSheet(context);
+    case 'share':
+      await Share.share(
+        Transcript.markdown(conv,
+            elsewhere ? app.store.messages(conv.id) : app.messages,
+            repos: app.activeRepos),
+        subject: conv.title.isEmpty ? 'Nymbot' : conv.title,
+      );
+    case 'copy':
+      await Clipboard.setData(ClipboardData(text: Transcript.markdown(
+          conv,
+          elsewhere ? app.store.messages(conv.id) : app.messages,
+          repos: app.activeRepos)));
+      messenger
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(
+            content: Text(t('Copied.')),
+            duration: const Duration(seconds: 3)));
+    case 'clear':
+      await app.clearCurrent(target: conv);
+    case 'delete':
+      await confirmDeleteChat(context, app, conv);
   }
+}
 
-  Future<void> _confirmDelete() async {
-    final app = AppScope.read(context);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(t('Delete this chat?')),
-        content: Text(
-          t('Its messages are encrypted to your key and cannot be recovered.'),
+Future<void> renameChatDialog(
+    BuildContext context, AppController app, Conversation conv) async {
+  final controller = TextEditingController(text: conv.title);
+  final value = await showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(t('Name this chat')),
+      content: TextField(controller: controller, autofocus: true),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, controller.text),
+          child: Text(t('Save')),
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(t('Cancel'))),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(t('Delete')),
-          ),
-        ],
+      ],
+    ),
+  );
+  if (value != null) await app.renameCurrent(value, target: conv);
+}
+
+Future<void> confirmDeleteChat(
+    BuildContext context, AppController app, Conversation conv) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(t('Delete this chat?')),
+      content: Text(
+        t('Its messages are encrypted to your key and cannot be recovered.'),
       ),
-    );
-    if (ok == true) await app.deleteCurrent();
-  }
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(t('Cancel'))),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(t('Delete')),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) await app.deleteCurrent(target: conv);
 }
 
 class _ChatDrawer extends StatefulWidget {
@@ -1087,9 +1371,27 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             : Text(bits.join(' · '),
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11)),
-        trailing: conv.anon
-            ? const Text('anon', style: TextStyle(fontSize: 11))
-            : null,
+        // The same menu the chat header carries, on the row, so renaming or
+        // deleting a chat does not mean opening it first.
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (conv.anon)
+              const Text('anon', style: TextStyle(fontSize: 11)),
+            IconButton(
+              icon: const Icon(Icons.more_vert, size: 18),
+              tooltip: t('Chat options'),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              onPressed: () async {
+                final choice = await showChatMenu(context, conv);
+                if (choice == null || !context.mounted) return;
+                await runChatMenuChoice(context, app, conv, choice);
+              },
+            ),
+          ],
+        ),
         onTap: () async {
           await app.open(conv);
           if (context.mounted) Navigator.pop(context);
@@ -1188,7 +1490,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               (Icons.star_border, t('Saved messages'), () async {
                 await showSavedMessagesSheet(context);
               }),
-              (Icons.tune, t('Appearance'), () => showAppearanceSheet(context)),
+              (Icons.psychology_outlined, t('Memory'),
+                  () => showMemorySheet(context)),
+              (Icons.tune, t('Settings'), () => showAppearanceSheet(context)),
               (Icons.help_outline, t('Help'), () => showHelpSheet(context)),
               (Icons.keyboard_outlined, t('Getting around'),
                   () => showShortcutsSheet(context)),

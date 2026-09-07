@@ -4,11 +4,17 @@ class NymIcons {
   const NymIcons._();
 
   static const persona = <String, IconData>{
-    'tools': Icons.handyman_outlined,
+    'tools': Icons.build_outlined,
+    'code': Icons.code,
     'search': Icons.plagiarism_outlined,
     'pen': Icons.edit_note_outlined,
     'graduation': Icons.school_outlined,
     'chart': Icons.insights_outlined,
+    'flask': Icons.science_outlined,
+    'scale': Icons.balance_outlined,
+    'compass': Icons.explore_outlined,
+    'lightbulb': Icons.lightbulb_outline,
+    'globe': Icons.public,
     'terse': Icons.short_text,
     'robot': Icons.smart_toy_outlined,
     'model': Icons.auto_awesome,
@@ -17,8 +23,9 @@ class NymIcons {
   };
 
   static const personaOrder = <String>[
-    'tools', 'search', 'pen', 'graduation', 'chart',
-    'terse', 'robot', 'model', 'person', 'bolt',
+    'tools', 'code', 'search', 'pen', 'graduation', 'chart', 'flask',
+    'scale', 'compass', 'lightbulb', 'globe', 'terse', 'robot', 'model',
+    'person', 'bolt',
   ];
 
   static IconData forPersona(String? name) =>

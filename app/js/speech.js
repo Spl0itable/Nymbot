@@ -8,11 +8,42 @@
         listening: false,
         speakingId: null,
         onListenChange: null,
+        onListenError: null,
         onSpeakChange: null,
         onTranscript: null,
         _recogniser: null,
 
         canListen() { return !!Recognition; },
+
+        _failed(code) {
+            const why = this.reasonFor(code);
+            if (why && this.onListenError) this.onListenError(why, code);
+        },
+
+        /// Why dictation stopped, in words a reader can act on. Every one of
+        /// these used to end as a button that turned itself off again with
+        /// nothing said, which is indistinguishable from a broken button.
+        reasonFor(code) {
+            switch (code) {
+                case 'not-allowed':
+                case 'service-not-allowed':
+                    return t('Dictation needs permission to use the microphone. Allow it in the site settings and try again.');
+                case 'audio-capture':
+                    return t('No microphone was found.');
+                case 'network':
+                    return t('Dictation could not reach the speech service. It needs a connection.');
+                case 'no-speech':
+                    return t('Nothing was heard.');
+                case 'aborted':
+                    return '';
+                case 'busy':
+                    return t('The microphone is still busy from the last time. Try again in a moment.');
+                case 'insecure':
+                    return t('Dictation only works over a secure connection (https).');
+                default:
+                    return t('Dictation stopped unexpectedly.');
+            }
+        },
         canSpeak() { return !!synth; },
 
         voices() {
@@ -22,6 +53,12 @@
 
         startListening(lang) {
             if (!Recognition || this.listening) return false;
+            // Chrome refuses on an insecure origin without ever firing an
+            // error, so the button appears to do nothing at all. Say so first.
+            if (window.isSecureContext === false) {
+                this._failed('insecure');
+                return false;
+            }
             const r = new Recognition();
             r.lang = lang || document.documentElement.lang || 'en-US';
             r.continuous = true;
@@ -38,7 +75,10 @@
                 }
                 if (this.onTranscript) this.onTranscript(settled + interim, settled);
             };
-            r.onerror = () => this.stopListening();
+            r.onerror = (e) => {
+                this._failed((e && e.error) || 'unknown');
+                this.stopListening();
+            };
             r.onend = () => {
                 this.listening = false;
                 this._recogniser = null;
@@ -48,7 +88,16 @@
             this._recogniser = r;
             this.listening = true;
             if (this.onListenChange) this.onListenChange(true);
-            try { r.start(); } catch (_) { this.stopListening(); return false; }
+            try {
+                r.start();
+            } catch (_) {
+                // Chrome throws here when a previous session has not finished
+                // releasing the microphone. Silence made that look like a dead
+                // button; saying so at least explains the wait.
+                this._failed('busy');
+                this.stopListening();
+                return false;
+            }
             return true;
         },
 

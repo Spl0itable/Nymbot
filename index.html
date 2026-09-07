@@ -504,6 +504,50 @@
 
             <div class="faq-item">
                 <div class="faq-question">
+                    <div class="faq-question-text">Does it remember me between chats?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>If you let it. Standing facts &mdash; what to call you, what you work on, how you want answers written &mdash; are kept as separate entries you can read line by line, correct and delete. Not a rolling summary, because a summary cannot be argued with.</p>
+                    <p>They never leave your device except as the handful that bear on a question, encrypted into that message like everything else. Anything noticed as you chat says so at the time with one tap to take it back, and a <a href="/docs/chats/#ghost-mode">ghost chat</a> neither reads memory nor adds to it. See <a href="/docs/chats/#memory">what carries between chats</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Does a reply get more expensive the longer the chat gets?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>No. A reply is given the most recent stretch of the conversation, and what that costs does not grow with how long you have been talking. Sending the whole history every time would raise the price of every reply for ever &mdash; which is the pricing that makes people start a new chat to save money and throw away the context they were paying for.</p>
+                    <p>Turns that fall outside the window are still listed for the model, and a Pro reply can read any of them back in full when the answer depends on one. That look-up is one more model call, so it costs one more base credit &mdash; on the replies that actually need it, and not on the ones that do not. See <a href="/docs/chats/#recall">reading back what fell out</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">What if it changes something in my repo that I did not want?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>Every reply that wrote to your repository says what it touched, and offers to put it back. Undo reads each of those files at the commit your branch stood on before the run and commits them as they were &mdash; a revert, not a rewrite, so nothing is erased and anyone who pulled in between keeps a checkout that works.</p>
+                    <p>It costs no credits, because it touches no model. A branch or pull request the run opened is listed and left alone: closing somebody's pull request for them is not an undo. See <a href="/docs/git/#undo">undoing what a run changed</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
+                    <div class="faq-question-text">Do I have to type my repository names in by hand?</div>
+                    <div class="faq-icon">+</div>
+                </div>
+                <div class="faq-answer">
+                    <p>No. Paste an access token and Nymbot asks the forge what that token can reach, then shows the answer as a list you tick &mdash; each one connected with its default branch already filled in. GitHub, GitLab, Gitea, Forgejo, Codeberg and Bitbucket all answer.</p>
+                    <p>That request goes from your device straight to the forge, not through our worker, so the token does not travel anywhere it does not already go. See <a href="/docs/git/#connecting">connecting a repository</a>.</p>
+                </div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-question">
                     <div class="faq-question-text">Is it open source?</div>
                     <div class="faq-icon">+</div>
                 </div>

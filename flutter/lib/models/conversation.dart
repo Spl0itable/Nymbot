@@ -12,6 +12,7 @@ class Conversation {
     this.title = '',
     this.anon = false,
     this.ephemeral = false,
+    this.effort = 'normal',
     this.pinned = false,
     this.archived = false,
     this.folderId,
@@ -40,6 +41,12 @@ class Conversation {
   /// A ghost chat: nothing it says is written to this device, and no archive
   /// copy is published for it. It exists for as long as the app is open.
   bool ephemeral;
+
+  /// How hard each reply in this chat is asked to think: 'normal', 'careful'
+  /// or 'deep'. Each step is another model call the reply takes and the
+  /// balance pays for.
+  String effort;
+
   bool pinned;
   bool archived;
   String? folderId;
@@ -62,6 +69,7 @@ class Conversation {
         'title': title,
         'anon': anon,
         'ephemeral': ephemeral,
+        'effort': effort,
         'pinned': pinned,
         'archived': archived,
         'folderId': folderId,
@@ -85,6 +93,7 @@ class Conversation {
         title: j['title'] as String? ?? '',
         anon: j['anon'] as bool? ?? false,
         ephemeral: j['ephemeral'] as bool? ?? false,
+        effort: j['effort'] as String? ?? 'normal',
         pinned: j['pinned'] as bool? ?? false,
         archived: j['archived'] as bool? ?? false,
         folderId: j['folderId'] as String?,
@@ -131,6 +140,7 @@ class ChatMessage {
     this.model,
     this.calls = 1,
     this.task,
+    this.checkpoint,
     this.rating = 0,
     this.pinned = false,
     this.edited = false,
@@ -156,6 +166,10 @@ class ChatMessage {
   /// breakdown reports it rather than re-deriving a guess after the fact.
   final int calls;
   final String? task;
+
+  /// What this reply changed in a repository, and where the branch stood
+  /// before it did, so the run can be put back.
+  final Map<String, dynamic>? checkpoint;
   int rating;
   bool pinned;
   final bool edited;
@@ -166,7 +180,9 @@ class ChatMessage {
   final List<Map<String, dynamic>> sources;
   final DateTime at;
 
-  ChatMessage copyWith({int? rating, bool? pinned}) => ChatMessage(
+  ChatMessage copyWith(
+          {int? rating, bool? pinned, Map<String, dynamic>? checkpoint}) =>
+      ChatMessage(
         id: id,
         role: role,
         content: content,
@@ -175,6 +191,7 @@ class ChatMessage {
         model: model,
         calls: calls,
         task: task,
+        checkpoint: checkpoint ?? this.checkpoint,
         rating: rating ?? this.rating,
         pinned: pinned ?? this.pinned,
         edited: edited,
@@ -194,6 +211,7 @@ class ChatMessage {
         'cost': cost,
         'model': model,
         'calls': calls,
+        if (checkpoint != null) 'checkpoint': checkpoint,
         'task': task,
         'rating': rating,
         'pinned': pinned,
@@ -217,6 +235,7 @@ class ChatMessage {
         cost: (j['cost'] as num?)?.toInt() ?? 0,
         model: j['model'] as String?,
         calls: (j['calls'] as num?)?.toInt() ?? 1,
+        checkpoint: j['checkpoint'] as Map<String, dynamic>?,
         task: j['task'] as String?,
         rating: (j['rating'] as num?)?.toInt() ?? 0,
         pinned: j['pinned'] == true,

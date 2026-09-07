@@ -41,6 +41,8 @@ String toolLabel(String name) {
       return t('Creating a branch');
     case 'open_pull_request':
       return t('Opening a pull request');
+    case 'recall':
+      return t('Looking back through this chat');
     default:
       return t('Working');
   }

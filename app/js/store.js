@@ -3,6 +3,11 @@
 
     const P = window.NymbotConfig.storagePrefix;
     const MSG_CAP = 800;
+    // A memory is one standing fact, not a transcript: short enough that a
+    // handful of them cost a paragraph of context, and capped in number so the
+    // list stays something a person can actually read through.
+    const MEMORY_TEXT_CAP = 400;
+    const MEMORY_MAX = 200;
 
     function read(key, fallback) {
         try {
@@ -37,6 +42,9 @@
         anonAutoTopAmount: 25,
         anonAutoTopTier: 'both',
         autoDeleteDays: 0,
+        // Whether a durable fact you mention in passing is offered to memory.
+        // Explicit saves work either way; this is only the noticing.
+        memoryCapture: true,
         // A repo task can stop at its tool-call cap with work left. This is
         // how much you are willing to spend letting it carry on: 0 is never,
         // -1 is whatever the balance holds.
@@ -294,6 +302,50 @@
 
         deleteSchedule(id) {
             write('schedules', this.schedules().filter(s => s.id !== id));
+        },
+
+        /// What Nymbot has been told to remember about you: standing facts, kept
+        /// as separate readable entries rather than one summary, so each can be
+        /// read, corrected or thrown away on its own. Never leaves the device
+        /// except as the handful of entries that bear on a question.
+        memories() {
+            const list = read('memories', []);
+            return Array.isArray(list) ? list : [];
+        },
+
+        memory(id) { return this.memories().find(m => m.id === id) || null; },
+
+        saveMemory(memory) {
+            const list = this.memories();
+            const entry = Object.assign({
+                id: uid(), text: '', topic: '', scope: null,
+                source: 'you', convId: null, createdAt: Date.now()
+            }, memory);
+            if (!entry.id) entry.id = uid();
+            entry.text = String(entry.text || '').trim().slice(0, MEMORY_TEXT_CAP);
+            entry.topic = String(entry.topic || '').trim().slice(0, 60);
+            entry.updatedAt = Date.now();
+            if (!entry.text) return null;
+            // The same fact told twice is one fact. Matching on the text keeps
+            // a chat that repeats itself from filling memory with copies.
+            const same = list.findIndex(m => m.id !== entry.id
+                && m.scope === entry.scope
+                && m.text.toLowerCase() === entry.text.toLowerCase());
+            if (same !== -1) list.splice(same, 1);
+            const at = list.findIndex(m => m.id === entry.id);
+            if (at === -1) list.unshift(entry); else list[at] = entry;
+            write('memories', list.slice(0, MEMORY_MAX));
+            return entry;
+        },
+
+        deleteMemory(id) {
+            write('memories', this.memories().filter(m => m.id !== id));
+        },
+
+        clearMemories(scope) {
+            write('memories', scope === undefined
+                ? []
+                : this.memories().filter(m => m.scope !== scope));
         },
 
         workspaces() {
@@ -582,6 +634,7 @@
                 personas: this.customPersonas(),
                 prompts: this.prompts(),
                 workspaces: this.workspaces(),
+                memories: this.memories(),
                 schedules: this.schedules(),
                 bots: (function () { const b = read('bots', []); return Array.isArray(b) ? b : []; })(),
                 conversations: this.conversations().map(c => ({
@@ -600,6 +653,7 @@
             if (Array.isArray(payload.personas)) write('personas', payload.personas);
             if (Array.isArray(payload.prompts)) write('prompts', payload.prompts);
             if (Array.isArray(payload.workspaces)) write('workspaces', payload.workspaces);
+            if (Array.isArray(payload.memories)) write('memories', payload.memories);
             if (Array.isArray(payload.schedules)) write('schedules', payload.schedules);
             if (Array.isArray(payload.bots)) write('bots', payload.bots);
             let count = 0;

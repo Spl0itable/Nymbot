@@ -42,8 +42,32 @@
         return (space > 24 ? cut.slice(0, space) : cut).replace(/[,;:.\-]$/, '') + '…';
     }
 
+    // Project knowledge is retrieved per message rather than poured into the
+    // first one. The old caps sent up to 90,000 characters in turn one, where
+    // the worker cut it to 1000 the moment it became history — so a workspace
+    // stopped applying after a single reply. A few relevant passages, sent
+    // every turn, are both smaller on the wire and actually there when the
+    // question needs them.
+    const KNOWLEDGE_CHUNK_MAX = 1200;
+    const KNOWLEDGE_SEND_CAP = 5000;
     const KNOWLEDGE_FILE_CAP = 24000;
-    const KNOWLEDGE_TOTAL_CAP = 90000;
+
+    // Marks where the context the client repeats every turn ends and the
+    // message begins, so the worker can drop the repeats from historical
+    // turns. A block of knowledge has blank lines in it, so the boundary
+    // cannot be found by looking — it has to be written down.
+    const STANDING_END = '[end of standing context]';
+
+    // Words too common to say anything about which passage is wanted.
+    const STOP_WORDS = new Set(('a an and are as at be but by can could did do does for from '
+        + 'had has have how i if in is it its me my not of on or our so than that the their '
+        + 'them then there these they this to was we were what when where which who why will '
+        + 'with would you your').split(' '));
+
+    function terms(text) {
+        return String(text || '').toLowerCase().split(/[^a-z0-9]+/)
+            .filter(w => w.length > 1 && !STOP_WORDS.has(w));
+    }
 
     function workspaceFor(conv) {
         return conv && conv.workspaceId ? Store.workspace(conv.workspaceId) : null;
@@ -67,26 +91,128 @@
             .filter(r => r && r.enabled !== false && r.token && r.repo);
     }
 
-    /// The workspace's files, trimmed to something a context window can hold.
-    /// A file that is cut says so, so nothing silently half-arrives.
-    function knowledgeBlock(space) {
+    /// Splits one file into retrievable passages, on blank lines and headings,
+    /// each under a ceiling. A markdown heading is carried onto the passages
+    /// beneath it, so a passage still says what it is about once it has been
+    /// lifted out of the file it came from.
+    function chunkFile(file) {
+        const body = String(file.body || '').slice(0, KNOWLEDGE_FILE_CAP);
+        const name = file.name || 'untitled';
+        const chunks = [];
+        let heading = '';
+        let buffer = [];
+        let at = 0;
+
+        const flush = () => {
+            const text = buffer.join('\n\n').trim();
+            buffer = [];
+            if (!text) return;
+            chunks.push({ file: name, at: at++, heading, text });
+        };
+
+        for (const para of body.split(/\n\s*\n/)) {
+            const block = para.trim();
+            if (!block) continue;
+            const head = /^(#{1,6})\s+(.*)$/.exec(block.split('\n')[0]);
+            if (head) {
+                flush();
+                heading = head[2].trim();
+            }
+            // A single paragraph over the ceiling is cut into pieces rather
+            // than dropped: a long table or code block is often the answer.
+            if (block.length > KNOWLEDGE_CHUNK_MAX) {
+                flush();
+                for (let i = 0; i < block.length; i += KNOWLEDGE_CHUNK_MAX) {
+                    buffer.push(block.slice(i, i + KNOWLEDGE_CHUNK_MAX));
+                    flush();
+                }
+                continue;
+            }
+            const running = buffer.join('\n\n').length;
+            if (running + block.length > KNOWLEDGE_CHUNK_MAX) flush();
+            buffer.push(block);
+        }
+        flush();
+        return chunks;
+    }
+
+    /// Ranks passages against the question with BM25 over plain terms.
+    ///
+    /// Deliberately not embeddings: this runs on the device, for every message,
+    /// with no model to call and nothing downloaded. Term overlap is weaker
+    /// than a vector search and enormously better than sending the first
+    /// 90,000 characters and hoping.
+    function rankChunks(chunks, query) {
+        const want = terms(query);
+        if (!want.length || !chunks.length) return [];
+        const K = 1.2;
+        const B = 0.75;
+        const docs = chunks.map(c => terms(c.heading + ' ' + c.text));
+        const avg = docs.reduce((n, d) => n + d.length, 0) / docs.length || 1;
+        const df = new Map();
+        for (const doc of docs) {
+            for (const term of new Set(doc)) df.set(term, (df.get(term) || 0) + 1);
+        }
+        const scored = chunks.map((chunk, i) => {
+            const doc = docs[i];
+            const freq = new Map();
+            for (const term of doc) freq.set(term, (freq.get(term) || 0) + 1);
+            let score = 0;
+            for (const term of new Set(want)) {
+                const tf = freq.get(term) || 0;
+                if (!tf) continue;
+                const n = df.get(term) || 0;
+                const idf = Math.log(1 + (chunks.length - n + 0.5) / (n + 0.5));
+                score += idf * (tf * (K + 1)) / (tf + K * (1 - B + B * doc.length / avg));
+            }
+            return { chunk, score };
+        });
+        return scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+    }
+
+    /// The passages of the workspace's files that bear on this question, plus
+    /// the names of every file so the model knows what else it could be told
+    /// about. When nothing matches, the opening of each file goes instead —
+    /// enough to say what the project is rather than nothing at all.
+    function knowledgeBlock(space, query) {
         const files = (space && space.files) || [];
         if (!files.length) return '';
-        const parts = [];
-        let budget = KNOWLEDGE_TOTAL_CAP;
-        for (const file of files) {
-            if (budget <= 0) break;
-            const room = Math.min(KNOWLEDGE_FILE_CAP, budget);
-            const body = String(file.body || '');
-            const cut = body.length > room;
-            const text = cut ? body.slice(0, room) : body;
-            budget -= text.length;
-            parts.push(`--- ${file.name || 'untitled'} ---\n${text}`
-                + (cut ? '\n[…trimmed to fit]' : ''));
+        const chunks = [];
+        for (const file of files) chunks.push(...chunkFile(file));
+        if (!chunks.length) return '';
+
+        let budget = KNOWLEDGE_SEND_CAP;
+        const picked = [];
+        const take = (chunk) => {
+            if (picked.includes(chunk) || chunk.text.length > budget) return;
+            budget -= chunk.text.length;
+            picked.push(chunk);
+        };
+        for (const hit of rankChunks(chunks, query)) take(hit.chunk);
+        if (!picked.length) {
+            for (const file of files) {
+                const first = chunks.find(c => c.file === (file.name || 'untitled'));
+                if (first) take(first);
+            }
         }
-        const left = files.length - parts.length;
-        return '[project knowledge]\n' + parts.join('\n\n')
-            + (left > 0 ? `\n\n[${left} more file(s) not sent — too much to fit]` : '');
+        if (!picked.length) return '';
+
+        // Back into document order, so passages from one file read forwards.
+        picked.sort((a, b) => a.file.localeCompare(b.file) || a.at - b.at);
+        const names = files.map(f => f.name || 'untitled');
+        const parts = [];
+        let last = null;
+        for (const chunk of picked) {
+            const label = chunk.file + (chunk.heading ? ' — ' + chunk.heading : '');
+            if (label !== last) parts.push('--- ' + label + ' ---');
+            last = label;
+            parts.push(chunk.text);
+        }
+        const partial = picked.length < chunks.length;
+        return '[project knowledge]\n'
+            + 'Files in this workspace: ' + names.join(', ') + '.\n'
+            + (partial ? 'The passages below are the parts that match this question.\n' : '')
+            + parts.join('\n\n');
     }
 
     function repoPayload(repo) {
@@ -102,7 +228,16 @@
         };
     }
 
-    function preambleFor(conv, repos) {
+    /// The context that holds for every message in a chat: who the bot is being,
+    /// what it can read, and the part of the workspace that bears on what was
+    /// just asked.
+    ///
+    /// Sent on every message rather than only the first. It used to go once, at
+    /// the top of turn one, and the worker cut that turn to 1000 characters the
+    /// moment it became history — so instructions and project knowledge stopped
+    /// applying after a single reply, silently. The worker strips these blocks
+    /// from historical turns, so repeating them costs one copy, not twenty.
+    function standingContext(conv, repos, query) {
         const parts = [];
         const space = workspaceFor(conv);
         const bot = botFor(conv);
@@ -123,23 +258,54 @@
             ).join('\n') + '\nRefer to a repository by its name when you cite a file.');
         }
         if (space) {
-            const knowledge = knowledgeBlock(space);
+            const knowledge = knowledgeBlock(space, query);
             if (knowledge) parts.push(knowledge);
         }
+        const Memory = window.NymbotMemory;
+        if (Memory) {
+            const remembered = Memory.block(conv, query);
+            if (remembered) parts.push(remembered);
+        }
+        return parts;
+    }
+
+    function preambleFor(conv, repos, query) {
+        const standing = standingContext(conv, repos, query);
+        const parts = standing.length
+            ? [standing.join('\n\n') + '\n\n' + STANDING_END]
+            : [];
+        // Past the marker, because nothing re-sends it: the client clears the
+        // seed after the first message, so stripping it from history would
+        // lose what the branch was branched from.
         if (conv.seed) {
             parts.push('[earlier in this conversation]\n' + conv.seed);
         }
         return parts.length ? parts.join('\n\n') + '\n\n' : '';
     }
 
+    // How hard a reply is asked to think, as the number of model calls it takes.
+    // A careful reply plans before it answers; a deep one also reads its answer
+    // back against the question before sending it. Both are charged as what
+    // they are — more model calls — so the price says what the work was.
+    const EFFORT = { normal: 1, careful: 2, deep: 3 };
+
+    function effortOf(conv) {
+        const name = conv && conv.effort;
+        return EFFORT[name] ? name : 'normal';
+    }
+
+    function effortCalls(conv) { return EFFORT[effortOf(conv)] || 1; }
+
     function estimateCredits(text, settings, conv) {
         const model = (conv && conv.proModel) || settings.proModel;
         if (!model) return { tier: 'standard', low: 1, high: 1 };
         const size = String(text || '').length;
         const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
-        const low = model.credits || 1;
-        const high = Math.max(low, (model.max || low) + bump);
-        return { tier: 'pro', low, high };
+        // A repo task loops on its own budget and ignores the effort level.
+        const calls = reposFor(conv || {}).length ? 1 : effortCalls(conv);
+        const low = (model.credits || 1) * calls;
+        const high = Math.max(low, ((model.max || model.credits || 1) + bump) * calls);
+        return { tier: 'pro', low, high, calls };
     }
 
     const Chat = {
@@ -175,8 +341,7 @@
             const attachments = opts.attachments || [];
             const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
             const isFresh = /^\s*!\s*\S/.test(text);
-            const firstTurn = Store.thread(conv.id).length === 0;
-            const preamble = (firstTurn || isFresh) ? preambleFor(conv, repos) : '';
+            const preamble = preambleFor(conv, repos, text);
             const quoted = opts.quote
                 ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
                 : '';
@@ -233,6 +398,11 @@
             }
             if (model) {
                 extra.proModel = model.key;
+                // How hard this chat asked the reply to think. Only meaningful
+                // on Pro, and only outside a repo task, which does its own
+                // looping and is charged for that.
+                const effort = effortOf(conv);
+                if (effort !== 'normal' && !repos.length) extra.effort = effort;
                 if (repos.length) {
                     extra.git = repoPayload(repos[0]);
                     extra.repos = repos.map(repoPayload);
@@ -285,10 +455,15 @@
             const opened = await Wire.unwrap(data.event, anon ? Anon.recipient() : null);
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
-            const ids = Store.thread(conv.id);
-            ids.push(wrap.id);
-            if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
-            Store.setThread(conv.id, ids);
+            // A '!' question is answered without the conversation and stays out
+            // of it, on this side as on the worker's: it was asked that way so
+            // it would not become context. The chat still shows it.
+            if (!isFresh) {
+                const ids = Store.thread(conv.id);
+                ids.push(wrap.id);
+                if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
+                Store.setThread(conv.id, ids);
+            }
 
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });
 
@@ -304,6 +479,9 @@
                 // Set when the run hit its cap with work left. The token buys
                 // one more leg; the client decides whether to spend it.
                 truncated: !!data.truncated,
+                // What this reply changed in a repository, and where the
+                // branch stood before it did.
+                checkpoint: data.checkpoint || null,
                 resumeToken: data.resumeToken || null,
                 nextReserve: data.nextReserve || 0,
                 taskType: data.taskType || null,
@@ -372,7 +550,41 @@
         workspaceFor,
         botFor,
         knowledgeBlock,
+        chunkFile,
+        rankChunks,
+        /// Puts a repo run back: each path the run wrote is read at the commit
+        /// the branch stood on before it and committed as it was. A revert,
+        /// not a rewrite — what the model did stays in the history, it is
+        /// simply no longer the state of the branch. Costs nothing: it touches
+        /// no model.
+        async revert(conv, checkpoint) {
+            const repos = reposFor(conv);
+            const repo = repos.find(r => r.repo === checkpoint.repo) || repos[0];
+            if (!repo) throw new Error(t('That repository is no longer connected.'));
+            if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
+            const anon = !!(conv.anon && Anon.ready());
+            const signer = anon ? Anon.signer() : null;
+            const { status, data } = await Api.call('pm-revert', {
+                git: repoPayload(repo),
+                checkpoint: {
+                    repo: checkpoint.repo,
+                    branch: checkpoint.branch,
+                    baseSha: checkpoint.baseSha,
+                    paths: checkpoint.paths || [],
+                    branches: checkpoint.branches || [],
+                    pulls: checkpoint.pulls || []
+                }
+            }, { signer });
+            if (status >= 400 || !data || data.error) {
+                throw new Error((data && data.error) || t('Could not put that back.'));
+            }
+            return data;
+        },
+
         estimateCredits,
+        effortOf,
+        effortCalls,
+        EFFORT,
         preambleFor
     };
 

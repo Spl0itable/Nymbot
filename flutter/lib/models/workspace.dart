@@ -113,9 +113,26 @@ class KnowledgeFile {
       );
 }
 
+/// One retrievable passage of a knowledge file: enough of it to answer with,
+/// labelled with where it came from so it still says what it is about once it
+/// has been lifted out of the file.
+class KnowledgeChunk {
+  const KnowledgeChunk({
+    required this.file,
+    required this.at,
+    required this.heading,
+    required this.text,
+  });
+
+  final String file;
+  final int at;
+  final String heading;
+  final String text;
+}
+
 /// Standing context a run of chats shares: instructions, reference files and
-/// repositories. Everything in it lives on this device and travels only inside
-/// the first message of a chat that uses it.
+/// repositories. Everything in it lives on this device, and the parts of it
+/// that bear on a question travel inside that message.
 class Workspace {
   Workspace({
     required this.id,
@@ -415,6 +432,7 @@ class Attachment {
     this.lang = '',
     this.text,
     this.bytesBase64,
+    this.lines = 0,
   });
 
   final String id;
@@ -425,6 +443,13 @@ class Attachment {
   final String lang;
   final String? text;
   final String? bytesBase64;
+
+  /// Set when this came from a paste rather than a file. Lines say more about
+  /// a wall of pasted text than bytes do.
+  final int lines;
+
+  /// What to put on the chip: lines for something pasted, bytes for a file.
+  String get measure => lines > 0 ? '$lines lines' : humanSize;
 
   String get humanSize {
     if (size < 1024) return '$size B';
@@ -446,6 +471,7 @@ class Attachment {
         'mime': mime,
         'size': size,
         'lang': lang,
+        if (lines > 0) 'lines': lines,
         if (text != null) 'text': text,
         if (bytesBase64 != null) 'bytesBase64': bytesBase64,
       };
@@ -468,6 +494,7 @@ class Attachment {
         lang: j['lang'] as String? ?? '',
         text: j['text'] as String?,
         bytesBase64: j['bytesBase64'] as String?,
+        lines: (j['lines'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -501,6 +528,7 @@ class AppSettings {
     this.anonAutoTopAmount = 25,
     this.anonAutoTopTier = 'both',
     this.autoDeleteDays = 0,
+    this.memoryCapture = true,
     this.autoContinue = 0,
     this.showProgress = true,
     this.grouping = SidebarGrouping.date,
@@ -534,6 +562,10 @@ class AppSettings {
   /// means never, which is the default: deleting things is the user's call.
   int autoDeleteDays;
 
+  /// Whether a durable fact mentioned in passing is offered to memory.
+  /// Explicit saves work either way; this is only the noticing.
+  bool memoryCapture;
+
   /// How much you are willing to spend letting a capped repo run carry on:
   /// 0 is never, -1 is whatever the balance holds.
   int autoContinue;
@@ -565,6 +597,7 @@ class AppSettings {
         'anonAutoTopAmount': anonAutoTopAmount,
         'anonAutoTopTier': anonAutoTopTier,
         'autoDeleteDays': autoDeleteDays,
+        'memoryCapture': memoryCapture,
         'autoContinue': autoContinue,
         'showProgress': showProgress,
         'grouping': grouping.name,
@@ -602,6 +635,7 @@ class AppSettings {
         anonAutoTopAmount: (j['anonAutoTopAmount'] as num?)?.toInt() ?? 25,
         anonAutoTopTier: j['anonAutoTopTier'] as String? ?? 'both',
         autoDeleteDays: (j['autoDeleteDays'] as num?)?.toInt() ?? 0,
+        memoryCapture: j['memoryCapture'] as bool? ?? true,
         autoContinue: (j['autoContinue'] as num?)?.toInt() ?? 0,
         showProgress: j['showProgress'] as bool? ?? true,
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),

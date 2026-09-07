@@ -11,11 +11,13 @@ import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/compare.dart';
 import '../models/conversation.dart';
+import '../models/memory.dart';
 import '../models/schedule.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../services/anon.dart';
 import '../services/chat_engine.dart';
+import '../services/memory_keeper.dart';
 import '../services/nymbot_api.dart';
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
@@ -647,6 +649,78 @@ class AppController extends ChangeNotifier {
     });
   }
 
+  /// Puts a repo run back. Free: it touches no model and spends no credits.
+  /// The token travels with the request as it always does, and never anywhere
+  /// else.
+  Future<Map<String, dynamic>> revertCheckpoint(ChatMessage m) async {
+    final mark = m.checkpoint;
+    final conv = current;
+    if (mark == null || conv == null) {
+      throw ChatFailure(t('There is nothing recorded to put back.'));
+    }
+    final repos = activeRepos;
+    final repo = repos.where((r) => r.repo == mark['repo']).firstOrNull ??
+        (repos.isEmpty ? null : repos.first);
+    if (repo == null) {
+      throw ChatFailure(t('That repository is no longer connected.'));
+    }
+    if (!repo.allowWrites) {
+      throw ChatFailure(t('Writes are off for that repository.'));
+    }
+    final signer = conv.anon ? await anon.signer() : identity.signer;
+    final data = await chat.revert(
+        repo: repo, checkpoint: mark, signer: signer);
+    final failed = (data['failed'] as List?)?.length ?? 0;
+    messages = messages
+        .map((x) => x.id == m.id
+            ? x.copyWith(checkpoint: {...mark, 'undone': failed == 0})
+            : x)
+        .toList();
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
+    return data;
+  }
+
+  List<Memory> get memories => store.memories();
+
+  Future<Memory?> saveMemory(Memory entry) async {
+    final saved = await store.saveMemory(entry);
+    notifyListeners();
+    return saved;
+  }
+
+  Future<void> deleteMemory(String id) async {
+    await store.deleteMemory(id);
+    notifyListeners();
+  }
+
+  Future<void> clearMemories() async {
+    await store.clearMemories();
+    notifyListeners();
+  }
+
+  /// Reads one message for standing facts and keeps what it finds, handing
+  /// back what was saved so the caller can offer to take it straight back.
+  /// Nothing enters memory without the writer seeing it happen.
+  Future<List<Memory>> noticeMemories(String text) async {
+    if (!settings.memoryCapture) return const [];
+    final found = MemoryKeeper.propose(text, current);
+    if (found.isEmpty) return const [];
+    final saved = <Memory>[];
+    for (final proposal in found) {
+      final entry = await store.saveMemory(Memory(
+        id: bytesToHex(randomBytes(8)),
+        text: proposal.text,
+        topic: proposal.topic,
+        scope: current?.workspaceId,
+        source: 'chat',
+      ));
+      if (entry != null) saved.add(entry);
+    }
+    if (saved.isNotEmpty) notifyListeners();
+    return saved;
+  }
+
   List<Workspace> get workspaces => store.workspaces();
 
   Future<void> setWorkspace(String? id) async {
@@ -814,6 +888,8 @@ class AppController extends ChangeNotifier {
     messages = store.messages(conv.id);
     artifacts = store.artifacts(conv.id);
     attachments = [];
+    // A queue belongs to the chat it was typed into, not to the app.
+    queued = [];
     quote = null;
     notifyListeners();
   }
@@ -935,8 +1011,10 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> renameCurrent(String title) async {
-    final conv = current;
+  /// The chat-scoped actions all take an optional target, because the sidebar
+  /// can act on a chat without opening it first.
+  Future<void> renameCurrent(String title, {Conversation? target}) async {
+    final conv = target ?? current;
     if (conv == null) return;
     conv.title = title.trim().isEmpty ? 'New chat' : title.trim();
     conv.updatedAt = DateTime.now();
@@ -944,20 +1022,21 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> togglePin() async {
-    final conv = current;
+  Future<void> togglePin({Conversation? target}) async {
+    final conv = target ?? current;
     if (conv == null) return;
     conv.pinned = !conv.pinned;
     await store.saveConversations(conversations);
     notifyListeners();
   }
 
-  Future<void> toggleArchive() async {
-    final conv = current;
+  Future<void> toggleArchive({Conversation? target}) async {
+    final conv = target ?? current;
     if (conv == null) return;
     conv.archived = !conv.archived;
     await store.saveConversations(conversations);
-    if (conv.archived) {
+    // Only step off a chat you are actually looking at.
+    if (conv.archived && conv.id == current?.id) {
       final live = conversations.where((c) => !c.archived).toList();
       if (live.isEmpty) {
         await newConversation();
@@ -968,12 +1047,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteCurrent() async {
-    final conv = current;
+  Future<void> deleteCurrent({Conversation? target}) async {
+    final conv = target ?? current;
     if (conv == null) return;
+    final wasOpen = conv.id == current?.id;
     conversations.removeWhere((c) => c.id == conv.id);
     await store.saveConversations(conversations);
     await store.dropConversation(conv.id);
+    if (!wasOpen) {
+      notifyListeners();
+      return;
+    }
     final live = conversations.where((c) => !c.archived).toList();
     if (live.isEmpty) {
       await newConversation();
@@ -982,8 +1066,8 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<Conversation> duplicateCurrent() async {
-    final conv = current!;
+  Future<Conversation> duplicateCurrent({Conversation? target}) async {
+    final conv = target ?? current!;
     final copy = Conversation(
       id: bytesToHex(randomBytes(8)),
       rootId: bytesToHex(randomBytes(32)),
@@ -1003,10 +1087,12 @@ class AppController extends ChangeNotifier {
     return copy;
   }
 
-  Future<Conversation> forkAt(ChatMessage message) async {
+  /// A copy of this chat carrying everything up to a point, on a thread of its
+  /// own, with the whole standing setup — repositories, persona, workspace,
+  /// bot, model, effort — so the branch answers the way the chat it came from
+  /// does. The original is untouched, which is the whole point of a branch.
+  Future<Conversation> branchFrom(List<ChatMessage> kept) async {
     final conv = current!;
-    final at = messages.indexWhere((m) => m.id == message.id);
-    final kept = messages.sublist(0, at + 1);
     final seed = kept
         .where((m) => m.role == ChatRole.self || m.role == ChatRole.bot)
         .toList()
@@ -1023,10 +1109,14 @@ class AppController extends ChangeNotifier {
       rootId: bytesToHex(randomBytes(32)),
       title: '${conv.title.isEmpty ? 'New chat' : conv.title} ${t('(branch)')}',
       anon: conv.anon,
+      ephemeral: conv.ephemeral,
+      effort: conv.effort,
       folderId: conv.folderId,
       tags: [...conv.tags],
       repoIds: [...conv.repoIds],
       personaId: conv.personaId,
+      workspaceId: conv.workspaceId,
+      botId: conv.botId,
       systemPrompt: conv.systemPrompt,
       proModel: conv.proModel,
       seed: seed,
@@ -1034,20 +1124,40 @@ class AppController extends ChangeNotifier {
     conversations.insert(0, copy);
     await store.saveConversations(conversations);
     await store.saveMessages(copy.id, kept);
+    // The files a branch was built on belong to it as much as the words that
+    // produced them, and they are cheap to carry.
+    final ids = kept.map((m) => m.id).toSet();
+    final carried =
+        artifacts.where((a) => ids.contains(a.messageId)).toList();
+    if (carried.isNotEmpty) await store.saveArtifacts(copy.id, carried);
     await open(copy);
     return copy;
   }
 
+  Future<Conversation> forkAt(ChatMessage message) async {
+    final at = messages.indexWhere((m) => m.id == message.id);
+    return branchFrom(messages.sublist(0, at + 1));
+  }
+
+  /// Asking the question differently, on a branch: everything before it comes
+  /// along, the question itself is replaced by what was typed instead.
+  Future<Conversation> branchBefore(ChatMessage message) async {
+    final at = messages.indexWhere((m) => m.id == message.id);
+    return branchFrom(messages.sublist(0, at < 0 ? 0 : at));
+  }
+
   /// A fresh root id is what actually resets the model's context: the worker
   /// scopes history to the marker, so a new one is a new thread.
-  Future<void> clearCurrent() async {
-    final conv = current;
+  Future<void> clearCurrent({Conversation? target}) async {
+    final conv = target ?? current;
     if (conv == null) return;
     conv.rootId = bytesToHex(randomBytes(32));
     conv.messageCount = 0;
     conv.creditsSpent = 0;
-    messages = [];
-    artifacts = [];
+    if (conv.id == current?.id) {
+      messages = [];
+      artifacts = [];
+    }
     await store.saveArtifacts(conv.id, const []);
     await store.saveMessages(conv.id, const []);
     await store.setThread(conv.id, const []);
@@ -1147,8 +1257,9 @@ class AppController extends ChangeNotifier {
 
   void stop() {
     // Stop means stop: a run carrying itself on must not start another leg
-    // after the one being aborted.
+    // after the one being aborted, and nothing waiting behind it goes either.
     _stopped = true;
+    queued = [];
     _stopWatching();
     chat.abort();
     sending = false;
@@ -1214,6 +1325,7 @@ class AppController extends ChangeNotifier {
           persona: persona,
           workspace: space,
           bot: bot,
+          memories: store.memories(),
           webSearch: settings.webSearch,
           firstTurn: true,
           onThreadIds: (_) {},
@@ -1278,9 +1390,36 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> send(String text) async {
+  /// What was typed while a reply was still being written, in the order it was
+  /// typed. Held rather than dropped: typing mid-reply used to do nothing at
+  /// all, with no sign the message had gone anywhere.
+  List<String> queued = [];
+
+  void unqueue(int at) {
+    if (at < 0 || at >= queued.length) return;
+    queued.removeAt(at);
+    notifyListeners();
+  }
+
+  /// Sends the next thing that was waiting. One at a time: they were typed as
+  /// a conversation, so they have to arrive as one.
+  Future<void> _sendQueued() async {
+    if (_stopped || sending || queued.isEmpty) return;
+    final next = queued.removeAt(0);
+    notifyListeners();
+    await send(next);
+  }
+
+  /// Returns false when the message was held for later rather than sent, so a
+  /// caller does not go on to read out a reply that has not happened yet.
+  Future<bool> send(String text) async {
     final conv = current;
-    if (conv == null || sending || text.trim().isEmpty) return;
+    if (conv == null || text.trim().isEmpty) return false;
+    if (sending) {
+      queued.add(text.trim());
+      notifyListeners();
+      return false;
+    }
     _stopped = false;
     continuedSpend = 0;
     final body = text.trim();
@@ -1321,6 +1460,7 @@ class AppController extends ChangeNotifier {
         persona: activePersona,
         workspace: activeWorkspace,
         bot: activeBot,
+        memories: store.memories(),
         attachments: sent,
         quote: quoted,
         webSearch: settings.webSearch,
@@ -1340,6 +1480,9 @@ class AppController extends ChangeNotifier {
         cost: res.cost,
         model: res.pro ? (activeModel?['label'] as String?) : null,
         calls: res.modelCalls,
+        // What it changed in a repository, and where the branch stood before
+        // it did — so the run can be put back.
+        checkpoint: res.checkpoint,
         repos: res.repos.length > 1 ? res.repos : const [],
         sources: res.sources,
       );
@@ -1415,6 +1558,8 @@ class AppController extends ChangeNotifier {
       status = null;
       notifyListeners();
     }
+    await _sendQueued();
+    return true;
   }
 
   /// A repo run stopped at its tool-call cap with work left. Spend the budget
@@ -1431,7 +1576,7 @@ class AppController extends ChangeNotifier {
     }
     var left = continueBudget;
     if (left <= 0) {
-      await note(t('That answer stopped early. Turn on continuing in Appearance, or ask it to carry on.'));
+      await note(t('That answer stopped early. Turn on continuing in Settings, or ask it to carry on.'));
       return;
     }
     if (reserve > left) {
@@ -1454,6 +1599,7 @@ class AppController extends ChangeNotifier {
           persona: activePersona,
           workspace: activeWorkspace,
           bot: activeBot,
+          memories: store.memories(),
           webSearch: settings.webSearch,
           firstTurn: false,
           resume: token,
@@ -1516,7 +1662,7 @@ class AppController extends ChangeNotifier {
         return;
       }
       if (token != null && token.isNotEmpty && left <= 0) {
-        await note(t('Budget spent — {n} credits on carrying that on. Raise it in Appearance to go further.',
+        await note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
             {'n': continuedSpend}));
         return;
       }
@@ -1556,7 +1702,25 @@ class AppController extends ChangeNotifier {
   int satsFor(int credits, String tier) =>
       credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
 
-  CostEstimate estimate(String text) => ChatEngine.estimate(text, activeModel);
+  CostEstimate estimate(String text) => ChatEngine.estimate(text, activeModel,
+      conv: current, hasRepos: activeRepos.isNotEmpty);
+
+  /// Normal, careful, deep and back. Each step is another model call the reply
+  /// takes and the balance pays for, so the toolbar's estimate moves with it.
+  Future<String> cycleEffort([String? to]) async {
+    const order = ['normal', 'careful', 'deep'];
+    final conv = current;
+    if (conv == null) return 'normal';
+    final at = order.indexOf(ChatEngine.effortOf(conv));
+    final next = (to != null && order.contains(to))
+        ? to
+        : order[(at + 1) % order.length];
+    conv.effort = next;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return next;
+  }
 
   ({int sent, int replies, int credits, int words}) currentStats() {
     var sent = 0;

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../config.dart';
@@ -6,10 +7,12 @@ import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart';
 import '../models/bot.dart';
 import '../models/conversation.dart';
+import '../models/memory.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
+import 'memory_keeper.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
 import 'pq_announce.dart';
@@ -48,6 +51,9 @@ typedef TurnResult = ({
   bool truncated,
   String? resumeToken,
   int nextReserve,
+  /// What this reply changed in a repository, and where the branch stood
+  /// before it did, so the run can be put back.
+  Map<String, dynamic>? checkpoint,
   String eventId,
 });
 
@@ -101,48 +107,264 @@ class ChatEngine {
     return (thinking: null, body: text);
   }
 
-  static CostEstimate estimate(String text, Map<String, dynamic>? model) {
+  static CostEstimate estimate(String text, Map<String, dynamic>? model,
+      {Conversation? conv, bool hasRepos = false}) {
     if (model == null) return (tier: 'standard', low: 1, high: 1);
     final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
-    final low = (model['credits'] as num?)?.toInt() ?? 1;
-    final max = (model['max'] as num?)?.toInt() ?? low;
-    final high = max + bump < low ? low : max + bump;
+    // A repo task loops on a budget of its own and ignores the effort level.
+    final calls = hasRepos ? 1 : effortCalls(conv);
+    final low = ((model['credits'] as num?)?.toInt() ?? 1) * calls;
+    final max = (model['max'] as num?)?.toInt() ?? 1;
+    final high = (max + bump) * calls < low ? low : (max + bump) * calls;
     return (tier: 'pro', low: low, high: high);
   }
 
-  static const knowledgeFileCap = 24000;
-  static const knowledgeTotalCap = 90000;
+  // Project knowledge is retrieved per message rather than poured into the
+  // first one. The old caps sent up to 90,000 characters in turn one, where the
+  // worker cut it to 1000 the moment it became history — so a workspace stopped
+  // applying after a single reply. A few relevant passages, sent every turn,
+  // are both smaller on the wire and actually there when the question needs
+  // them.
+  // How hard a reply is asked to think, as the number of model calls it takes.
+  // A careful reply plans before it answers; a deep one also reads its answer
+  // back against the question before sending it. Both are charged as what they
+  // are — more model calls — so the price says what the work was.
+  static const effortLevels = {'normal': 1, 'careful': 2, 'deep': 3};
 
-  /// The workspace's files, trimmed to something a context window can hold. A
-  /// file that is cut says so, so nothing silently half-arrives.
-  static String knowledgeBlock(Workspace? space) {
-    final files = space?.files ?? const <KnowledgeFile>[];
-    if (files.isEmpty) return '';
-    final parts = <String>[];
-    var budget = knowledgeTotalCap;
-    for (final file in files) {
-      if (budget <= 0) break;
-      final room = knowledgeFileCap < budget ? knowledgeFileCap : budget;
-      final cut = file.body.length > room;
-      final text = cut ? file.body.substring(0, room) : file.body;
-      budget -= text.length;
-      final name = file.name.isEmpty ? 'untitled' : file.name;
-      parts.add('--- $name ---\n$text${cut ? '\n[…trimmed to fit]' : ''}');
-    }
-    final left = files.length - parts.length;
-    final tail = left > 0
-        ? '\n\n[$left more file(s) not sent — too much to fit]'
-        : '';
-    return '[project knowledge]\n${parts.join('\n\n')}$tail';
+  static String effortOf(Conversation? conv) {
+    final name = conv?.effort ?? 'normal';
+    return effortLevels.containsKey(name) ? name : 'normal';
   }
 
-  static String preamble(
+  static int effortCalls(Conversation? conv) =>
+      effortLevels[effortOf(conv)] ?? 1;
+
+  static const knowledgeChunkMax = 1200;
+  static const knowledgeSendCap = 5000;
+  static const knowledgeFileCap = 24000;
+
+  /// Marks where the context repeated every turn ends and the message begins,
+  /// so the worker can drop the repeats from historical turns. A block of
+  /// knowledge has blank lines in it, so the boundary cannot be found by
+  /// looking — it has to be written down.
+  static const standingEnd = '[end of standing context]';
+
+  static const _stopWords = {
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'could',
+    'did', 'do', 'does', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if',
+    'in', 'is', 'it', 'its', 'me', 'my', 'not', 'of', 'on', 'or', 'our', 'so',
+    'than', 'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they',
+    'this', 'to', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'who',
+    'why', 'will', 'with', 'would', 'you', 'your',
+  };
+
+  static List<String> _terms(String text) => text
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((w) => w.length > 1 && !_stopWords.contains(w))
+      .toList();
+
+  /// Splits one file into retrievable passages, on blank lines and headings,
+  /// each under a ceiling. A markdown heading is carried onto the passages
+  /// beneath it, so a passage still says what it is about once it has been
+  /// lifted out of the file it came from.
+  static List<KnowledgeChunk> chunkFile(KnowledgeFile file) {
+    final body = file.body.length > knowledgeFileCap
+        ? file.body.substring(0, knowledgeFileCap)
+        : file.body;
+    final name = file.name.isEmpty ? 'untitled' : file.name;
+    final chunks = <KnowledgeChunk>[];
+    var heading = '';
+    var buffer = <String>[];
+    var at = 0;
+
+    void flush() {
+      final text = buffer.join('\n\n').trim();
+      buffer = [];
+      if (text.isEmpty) return;
+      chunks.add(KnowledgeChunk(
+          file: name, at: at++, heading: heading, text: text));
+    }
+
+    for (final para in body.split(RegExp(r'\n\s*\n'))) {
+      final block = para.trim();
+      if (block.isEmpty) continue;
+      final head =
+          RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(block.split('\n').first);
+      if (head != null) {
+        flush();
+        heading = head.group(2)!.trim();
+      }
+      // A single paragraph over the ceiling is cut into pieces rather than
+      // dropped: a long table or code block is often the answer.
+      if (block.length > knowledgeChunkMax) {
+        flush();
+        for (var i = 0; i < block.length; i += knowledgeChunkMax) {
+          final end = i + knowledgeChunkMax;
+          buffer.add(block.substring(i, end > block.length ? block.length : end));
+          flush();
+        }
+        continue;
+      }
+      if (buffer.join('\n\n').length + block.length > knowledgeChunkMax) {
+        flush();
+      }
+      buffer.add(block);
+    }
+    flush();
+    return chunks;
+  }
+
+  /// Ranks passages against the question with BM25 over plain terms.
+  ///
+  /// Deliberately not embeddings: this runs on the device, for every message,
+  /// with no model to call and nothing downloaded. Term overlap is weaker than
+  /// a vector search and enormously better than sending the first 90,000
+  /// characters and hoping.
+  static List<KnowledgeChunk> rankChunks(
+      List<KnowledgeChunk> chunks, String query) {
+    final want = _terms(query).toSet();
+    if (want.isEmpty || chunks.isEmpty) return const [];
+    const k = 1.2;
+    const b = 0.75;
+    final docs = chunks.map((c) => _terms('${c.heading} ${c.text}')).toList();
+    final lengths = docs.map((d) => d.length).toList();
+    final avg = lengths.isEmpty
+        ? 1.0
+        : lengths.reduce((x, y) => x + y) / lengths.length;
+    final df = <String, int>{};
+    for (final doc in docs) {
+      for (final term in doc.toSet()) {
+        df[term] = (df[term] ?? 0) + 1;
+      }
+    }
+    final scored = <({KnowledgeChunk chunk, double score})>[];
+    for (var i = 0; i < chunks.length; i++) {
+      final freq = <String, int>{};
+      for (final term in docs[i]) {
+        freq[term] = (freq[term] ?? 0) + 1;
+      }
+      var score = 0.0;
+      for (final term in want) {
+        final tf = freq[term] ?? 0;
+        if (tf == 0) continue;
+        final n = df[term] ?? 0;
+        final idf = math.log(1 + (chunks.length - n + 0.5) / (n + 0.5));
+        score += idf *
+            (tf * (k + 1)) /
+            (tf + k * (1 - b + b * (avg == 0 ? 1 : docs[i].length / avg)));
+      }
+      if (score > 0) scored.add((chunk: chunks[i], score: score));
+    }
+    scored.sort((x, y) => y.score.compareTo(x.score));
+    return scored.map((x) => x.chunk).toList();
+  }
+
+  /// Puts a repo run back: each path the run wrote is read at the commit the
+  /// branch stood on before it and committed as it was. A revert, not a
+  /// rewrite — what the model did stays in the history, it is simply no longer
+  /// the state of the branch. Costs nothing: it touches no model.
+  Future<Map<String, dynamic>> revert({
+    required GitRepo repo,
+    required Map<String, dynamic> checkpoint,
+    required EventSigner signer,
+  }) async {
+    final res = await api.call('pm-revert', signer, extra: {
+      'git': repo.toPayload(),
+      'checkpoint': {
+        'repo': checkpoint['repo'],
+        'branch': checkpoint['branch'],
+        'baseSha': checkpoint['baseSha'],
+        'paths': checkpoint['paths'] ?? const [],
+        'branches': checkpoint['branches'] ?? const [],
+        'pulls': checkpoint['pulls'] ?? const [],
+      },
+    });
+    final data = res.data;
+    if (data['error'] != null) {
+      throw ChatFailure(data['error'] as String);
+    }
+    return data;
+  }
+
+  /// The passages of the workspace's files that bear on this question, plus the
+  /// names of every file so the model knows what else it could be told about.
+  /// When nothing matches, the opening of each file goes instead — enough to
+  /// say what the project is rather than nothing at all.
+  static String knowledgeBlock(Workspace? space, [String query = '']) {
+    final files = space?.files ?? const <KnowledgeFile>[];
+    if (files.isEmpty) return '';
+    final chunks = <KnowledgeChunk>[];
+    for (final file in files) {
+      chunks.addAll(chunkFile(file));
+    }
+    if (chunks.isEmpty) return '';
+
+    var budget = knowledgeSendCap;
+    final picked = <KnowledgeChunk>[];
+    void take(KnowledgeChunk chunk) {
+      if (picked.contains(chunk) || chunk.text.length > budget) return;
+      budget -= chunk.text.length;
+      picked.add(chunk);
+    }
+
+    for (final hit in rankChunks(chunks, query)) {
+      take(hit);
+    }
+    if (picked.isEmpty) {
+      for (final file in files) {
+        final name = file.name.isEmpty ? 'untitled' : file.name;
+        for (final chunk in chunks) {
+          if (chunk.file == name) {
+            take(chunk);
+            break;
+          }
+        }
+      }
+    }
+    if (picked.isEmpty) return '';
+
+    // Back into document order, so passages from one file read forwards.
+    picked.sort((a, b) {
+      final byFile = a.file.compareTo(b.file);
+      return byFile != 0 ? byFile : a.at.compareTo(b.at);
+    });
+    final names =
+        files.map((f) => f.name.isEmpty ? 'untitled' : f.name).join(', ');
+    final parts = <String>[];
+    String? last;
+    for (final chunk in picked) {
+      final label =
+          chunk.heading.isEmpty ? chunk.file : '${chunk.file} — ${chunk.heading}';
+      if (label != last) parts.add('--- $label ---');
+      last = label;
+      parts.add(chunk.text);
+    }
+    final partial = picked.length < chunks.length;
+    return '[project knowledge]\n'
+        'Files in this workspace: $names.\n'
+        '${partial ? 'The passages below are the parts that match this question.\n' : ''}'
+        '${parts.join('\n\n')}';
+  }
+
+  /// The context that holds for every message in a chat: who the bot is being,
+  /// what it can read, and the part of the workspace that bears on what was
+  /// just asked.
+  ///
+  /// Sent on every message rather than only the first. It used to go once, at
+  /// the top of turn one, and the worker cut that turn to 1000 characters the
+  /// moment it became history — so instructions and project knowledge stopped
+  /// applying after a single reply, silently. The worker strips these blocks
+  /// from historical turns, so repeating them costs one copy, not twenty.
+  static List<String> standingContext(
     Conversation conv,
     List<GitRepo> repos,
-    Persona? persona, [
+    Persona? persona,
     Workspace? space,
     Bot? bot,
-  ]) {
+    String query,
+    List<Memory> memories,
+  ) {
     final parts = <String>[];
     final instructions = [
       bot?.instructions ?? '',
@@ -165,8 +387,31 @@ class ChatEngine {
       parts.add('[repositories in scope]\n${lines.join('\n')}\n'
           'Refer to a repository by its name when you cite a file.');
     }
-    final knowledge = knowledgeBlock(space);
+    final knowledge = knowledgeBlock(space, query);
     if (knowledge.isNotEmpty) parts.add(knowledge);
+    final remembered = MemoryKeeper.block(memories, conv, query);
+    if (remembered.isNotEmpty) parts.add(remembered);
+    return parts;
+  }
+
+  static String preamble(
+    Conversation conv,
+    List<GitRepo> repos,
+    Persona? persona, [
+    Workspace? space,
+    Bot? bot,
+    String query = '',
+    List<Memory> memories = const [],
+  ]) {
+    final standing =
+        standingContext(conv, repos, persona, space, bot, query, memories);
+    final parts = <String>[];
+    if (standing.isNotEmpty) {
+      parts.add('${standing.join('\n\n')}\n\n$standingEnd');
+    }
+    // Past the marker, because nothing re-sends it: the client clears the seed
+    // after the first message, so stripping it from history would lose what
+    // the branch was branched from.
     final seed = conv.seed;
     if (seed != null && seed.isNotEmpty) {
       parts.add('[earlier in this conversation]\n$seed');
@@ -209,6 +454,9 @@ class ChatEngine {
     Persona? persona,
     Workspace? workspace,
     Bot? bot,
+    /// The standing facts this chat may see. Passed in rather than read here,
+    /// so a caller that must not use memory simply does not hand any over.
+    List<Memory> memories = const [],
     /// Continues a run parked by an earlier truncated turn.
     String? resume,
     /// Called with the turn's own event id as soon as it is published, so a
@@ -246,7 +494,7 @@ class ChatEngine {
 
     final fresh = RegExp(r'^\s*!\s*\S').hasMatch(text);
     final head =
-        (firstTurn || fresh) ? preamble(conv, repos, persona, workspace, bot) : '';
+        preamble(conv, repos, persona, workspace, bot, text, memories);
     final quoted = (quote == null || quote.isEmpty)
         ? ''
         : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
@@ -309,6 +557,10 @@ class ChatEngine {
       if (attachments.isNotEmpty)
         'attachments': attachments.map((a) => a.toPayload()).toList(),
       if (proModel != null) 'proModel': proModel['key'],
+      // How hard this chat asked the reply to think. Only meaningful on Pro,
+      // and only outside a repo task, which loops on a budget of its own.
+      if (proModel != null && repos.isEmpty && effortOf(conv) != 'normal')
+        'effort': effortOf(conv),
       if (proModel != null && repos.isNotEmpty) 'git': repos.first.toPayload(),
       if (proModel != null && repos.isNotEmpty)
         'repos': repos.map((r) => r.toPayload()).toList(),
@@ -382,7 +634,12 @@ class ChatEngine {
       throw ChatFailure(t('Nymbot replied, but this device could not decrypt it.'));
     }
 
-    onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
+    // A '!' question is answered without the conversation and stays out of it,
+    // on this side as on the worker's: it was asked that way so it would not
+    // become context. The chat still shows it.
+    if (!fresh) {
+      onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
+    }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');
     return (
@@ -399,6 +656,7 @@ class ChatEngine {
       truncated: data['truncated'] == true,
       resumeToken: data['resumeToken'] as String?,
       nextReserve: (data['nextReserve'] as num?)?.toInt() ?? 0,
+      checkpoint: data['checkpoint'] as Map<String, dynamic>?,
       eventId: wrap.id,
     );
   }

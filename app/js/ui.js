@@ -20,6 +20,7 @@
     const Icons = window.NymbotIcons;
     const Profile = window.NymbotProfile;
     const Artifacts = window.NymbotArtifacts;
+    const GitApi = window.NymbotGitApi;
     const NT = () => window.NostrTools;
 
     const $ = (id) => document.getElementById(id);
@@ -38,7 +39,10 @@
         { keys: [MODIFIER, 'Shift', 'F'], what: t('Search every chat') },
         { keys: [MODIFIER, 'F'], what: t('Find in this chat') },
         { keys: [MODIFIER, 'N'], what: t('New chat') },
-        { keys: [MODIFIER, 'B'], what: t('Show or hide the chat list') },
+        { keys: [MODIFIER, 'B'], what: t('Show or hide the chat list — bold, while writing') },
+        { keys: [MODIFIER, 'I'], what: t('Italic, while writing') },
+        { keys: [MODIFIER, 'E'], what: t('Code, while writing') },
+        { keys: [MODIFIER, 'Shift', 'E'], what: t('Code block, while writing') },
         { keys: [MODIFIER, 'Enter'], what: t('Send, whatever the Enter setting is') },
         { keys: [MODIFIER, 'Shift', 'C'], what: t('Copy the last reply') },
         { keys: [MODIFIER, 'Shift', 'S'], what: t('Ask the last question again') },
@@ -68,6 +72,9 @@
         sending: false,
         invoice: null,
         attachments: [],
+        // What was typed while a reply was still being written, in the order it
+        // was typed. Held rather than dropped.
+        queue: [],
         quote: null,
         editing: null,
         convFilter: 'all',
@@ -157,11 +164,25 @@
             if (Speech.canListen()) $('micBtn').hidden = false;
             Speech.onListenChange = (on) => {
                 $('micBtn').classList.toggle('is-on', on);
-                if (!on) this.status(null);
-                else this.status(t('Listening…'));
+                // Dictation adds to what is already in the composer rather than
+                // replacing it: it used to overwrite whatever you had typed,
+                // and a second dictation overwrote the first.
+                if (on) this._dictationFrom = $('input').value;
+                this.status(on ? t('Listening…') : null);
+            };
+            Speech.onListenError = (why, code) => {
+                this.status(null);
+                if (!why) return;
+                // Hearing nothing is a moment, not a problem worth keeping in
+                // the transcript. Anything that needs you to go and change a
+                // setting stays where it can be read twice.
+                if (code === 'no-speech') this.toast(why);
+                else this.note(why);
             };
             Speech.onTranscript = (text) => {
-                $('input').value = text;
+                const before = this._dictationFrom || '';
+                const join = before && !/\s$/.test(before) ? ' ' : '';
+                $('input').value = before + join + text;
                 this.autoGrow();
                 this.updateHints();
             };
@@ -232,6 +253,9 @@
             if (this.conv && !this.editing) Store.setDraft(this.conv.id, $('input') ? $('input').value : '');
             this.conv = conv;
             this.attachments = [];
+            // A queue belongs to the chat it was typed into, not to the app.
+            this.queue = [];
+            this.renderQueue();
             this.quote = null;
             this.editing = null;
             this.renderAttachments();
@@ -314,7 +338,20 @@
                 btn.appendChild(main);
                 if (conv.anon) btn.appendChild(el('span', 'conv-badge', 'anon'));
                 btn.addEventListener('click', () => this.open(Store.conversation(conv.id)));
+                li.className = 'conv-row';
                 li.appendChild(btn);
+                // The same menu the chat header carries, on the row, so
+                // renaming or deleting a chat does not mean opening it first.
+                const more = el('button', 'conv-menu');
+                more.type = 'button';
+                more.title = t('Chat options');
+                more.setAttribute('aria-label', t('Chat options'));
+                more.appendChild(Icons.node('more', { size: 15, filled: true }));
+                more.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.openChatMenu(conv.id, more);
+                });
+                li.appendChild(more);
                 list.appendChild(li);
             }
             if (!conversations.length) {
@@ -471,16 +508,6 @@
                     tick.appendChild(Icons.node('verified', { size: 12 }));
                     who.appendChild(tick);
                     if (m.model) who.appendChild(el('span', 'author-model', m.model));
-                    if (m.cost) {
-                        const cost = el('button', 'cost-chip');
-                        cost.type = 'button';
-                        cost.dataset.act = 'msg-cost';
-                        cost.dataset.id = m.id;
-                        cost.title = t('What this reply cost');
-                        cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
-                        cost.appendChild(el('span', null, String(m.cost)));
-                        who.appendChild(cost);
-                    }
                 } else {
                     const me = this.selfIdentity();
                     who.classList.add(me.colour);
@@ -528,7 +555,12 @@
             }
 
             const text = el('div', 'msg-text');
-            if (m.role === 'bot') {
+            if (m.role === 'bot' || m.role === 'self') {
+                // Your own messages render the same way the replies do. Typing
+                // a fenced block and watching it come out as literal backticks
+                // is the wrong answer to "can I paste code in here". The
+                // renderer escapes HTML, so this is no more dangerous than
+                // showing the text was.
                 text.innerHTML = MD.render(m.content, {
                     wrap: this.settings.codeWrap,
                     lineNumbers: this.settings.lineNumbers
@@ -541,6 +573,9 @@
 
             if (m.sources && m.sources.length) {
                 body.appendChild(this.citationCards(m.sources));
+            }
+            if (m.checkpoint) {
+                body.appendChild(this.checkpointCard(m));
             }
 
 
@@ -571,7 +606,22 @@
                 body.appendChild(tray);
             }
 
-            body.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
+            // The time and the price share the bubble's last line, the price to
+            // the right of it, so a reply's cost reads as part of its footer
+            // rather than as a chip wedged into the byline.
+            const foot = el('span', 'bubble-foot');
+            foot.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
+            if (m.cost) {
+                const cost = el('button', 'cost-chip');
+                cost.type = 'button';
+                cost.dataset.act = 'msg-cost';
+                cost.dataset.id = m.id;
+                cost.title = t('What this reply cost');
+                cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
+                cost.appendChild(el('span', null, String(m.cost)));
+                foot.appendChild(cost);
+            }
+            body.appendChild(foot);
             node.appendChild(body);
             const actions = this.actionsFor(m);
             node.appendChild(actions);
@@ -625,12 +675,13 @@
                 if (m.rating === -1) down.classList.add('is-on');
             }
             if (m.role === 'self') {
-                add('pencil', t('Edit and resend'), 'msg-edit');
+                add('pencil', t('Ask this differently'), 'msg-edit');
                 add('sendAgain', t('Send again'), 'msg-resend');
             }
             if (m.role === 'bot' || m.role === 'self') {
                 const pin = add('star', t('Save this message'), 'msg-pin', { filled: !!m.pinned });
                 if (m.pinned) pin.classList.add('is-on');
+                add('memory', t('Remember this'), 'msg-remember');
             }
             if (m.role === 'error') {
                 add('refresh', t('Try again'), 'msg-retry');
@@ -709,7 +760,7 @@
             }
             let left = this.continueBudget();
             if (left <= 0) {
-                this.note(t('That answer stopped early. Turn on continuing in Appearance, or ask it to carry on.'));
+                this.note(t('That answer stopped early. Turn on continuing in Settings, or ask it to carry on.'));
                 return;
             }
             if (reserve && reserve > left) {
@@ -773,7 +824,7 @@
                     return;
                 }
                 if (token && left <= 0) {
-                    this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Appearance to go further.',
+                    this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
                         { n: spent }));
                     return;
                 }
@@ -821,6 +872,7 @@
                 case 'write_file': return t('Writing');
                 case 'create_branch': return t('Creating a branch');
                 case 'open_pull_request': return t('Opening a pull request');
+                case 'recall': return t('Looking back through this chat');
                 default: return t('Working');
             }
         },
@@ -913,12 +965,6 @@
                     if (stick) $('messages').scrollTop = $('messages').scrollHeight;
                     if (at >= target.length) {
                         caret.remove();
-                        if (message.cost) {
-                            const chip = el('span', 'cost-chip');
-                            chip.appendChild(Icons.node('bolt', { size: 10 }));
-                            chip.appendChild(el('span', null, String(message.cost)));
-                            text.appendChild(chip);
-                        }
                         resolve();
                         return;
                     }
@@ -933,14 +979,32 @@
         async send(override) {
             const input = $('input');
             const text = override != null ? override : input.value.trim();
-            if (!text || this.sending) return;
+            if (!text) return;
 
+            // Commands run whatever else is happening: they are free, instant,
+            // and one of them is how you stop the thing you are waiting on.
             if (override == null && await this.handleCommand(text)) {
                 input.value = '';
                 Store.setDraft(this.conv.id, '');
                 this.autoGrow();
                 this.updateHints();
                 this.hideSuggest();
+                return;
+            }
+
+            // Typing while it is still writing used to do nothing at all — the
+            // message was dropped on the floor with no sign it had been. It
+            // waits its turn instead, and says that it is waiting.
+            if (this.sending) {
+                this.queue.push(text);
+                this.renderQueue();
+                if (override == null) {
+                    input.value = '';
+                    Store.setDraft(this.conv.id, '');
+                    this.autoGrow();
+                    this.updateHints();
+                    this.hideSuggest();
+                }
                 return;
             }
 
@@ -972,6 +1036,9 @@
             };
             Store.addMessage(this.conv.id, mine);
             this.appendMessage(mine);
+            // Read for standing facts before the reply comes back, so what is
+            // remembered is offered while the message is still on screen.
+            this.noticeMemories(text);
 
             if (!this.conv.title) {
                 const title = Chat.titleFor(text);
@@ -1010,6 +1077,9 @@
                     // it did rather than re-deriving a guess after the fact.
                     calls: res.modelCalls || 1,
                     task: res.taskType || null,
+                    // What it changed in a repository, and where the branch
+                    // stood before it did — so the run can be put back.
+                    checkpoint: res.checkpoint || null,
                     ts: Date.now()
                 };
                 Store.addMessage(this.conv.id, reply);
@@ -1071,7 +1141,41 @@
             } finally {
                 this.setSending(false);
                 this.status(null);
+                this.sendQueued();
             }
+        },
+
+        /// Renders what is waiting to be sent. Each one can be taken back out
+        /// while it waits, which is the whole reason for showing them.
+        renderQueue() {
+            const strip = $('queueStrip');
+            strip.innerHTML = '';
+            strip.hidden = this.queue.length === 0;
+            this.queue.forEach((text, i) => {
+                const row = el('div', 'queue-item');
+                row.appendChild(el('span', 'queue-order', t('#{n}', { n: i + 1 })));
+                row.appendChild(el('span', 'queue-text', text));
+                const drop = el('button', 'icon-btn');
+                drop.type = 'button';
+                drop.setAttribute('aria-label', t('Do not send this'));
+                drop.title = t('Do not send this');
+                drop.appendChild(Icons.node('close', { size: 13 }));
+                drop.addEventListener('click', () => {
+                    this.queue.splice(i, 1);
+                    this.renderQueue();
+                });
+                row.appendChild(drop);
+                strip.appendChild(row);
+            });
+        },
+
+        /// Sends the next thing that was waiting. One at a time: they were
+        /// typed as a conversation, so they have to arrive as one.
+        sendQueued() {
+            if (this.stopped || !this.queue.length || this.sending) return;
+            const next = this.queue.shift();
+            this.renderQueue();
+            setTimeout(() => this.send(next), 0);
         },
 
         setSending(on) {
@@ -1084,8 +1188,14 @@
         stop() {
             clearTimeout(this._typeTimer);
             // Stop means stop: a run carrying itself on must not start another
-            // leg after the one being aborted.
+            // leg after the one being aborted, and nothing that was waiting
+            // behind it should go either.
             this.stopped = true;
+            if (this.queue.length) {
+                this.queue = [];
+                this.renderQueue();
+                this.note(t('Stopped. Anything waiting behind it was not sent.'));
+            }
             this.stopWatchingTurn();
             if (!Chat.abort()) this.setSending(false);
         },
@@ -1182,6 +1292,17 @@
                     this.toast(pinned ? t('Saved.') : t('Removed from saved messages.'));
                     return;
                 }
+                case 'msg-remember': {
+                    // The words, not the markup: what is remembered has to read
+                    // as a sentence when it comes back in another chat.
+                    const text = MD.plain(m.content || '').trim();
+                    if (!text) {
+                        this.toast(t('There is nothing in that to remember.'));
+                        return;
+                    }
+                    this.rememberText(text.slice(0, 400));
+                    return;
+                }
                 case 'msg-retry':
                     if (m.retry) {
                         Store.deleteMessage(this.conv.id, m.id);
@@ -1209,24 +1330,40 @@
             await this.send(question.content);
         },
 
+        /// Asking the question differently. By default that happens on a branch:
+        /// the chat you had is worth keeping, and rewriting in place threw away
+        /// everything said after the edited message with no way back.
         async editMessage(m) {
             const value = await this.ask({
-                title: t('Edit and resend'),
+                title: t('Ask this differently'),
                 area: true,
                 label: t('Your message'),
                 value: m.content,
-                confirm: t('Send')
+                confirm: t('Send'),
+                check: t('Keep this chat and answer on a branch'),
+                checkOn: true
             });
             if (value == null || !value.trim()) return;
-            Store.truncateFrom(this.conv.id, m.id, true);
-            this.renderMessages();
+            const branch = this.dialogChecked;
+            if (branch) {
+                const msgs = Store.messages(this.conv.id);
+                const at = msgs.findIndex(x => x.id === m.id);
+                const copy = this.branchFrom(msgs.slice(0, Math.max(0, at)));
+                this.open(Store.conversation(copy.id));
+                this.toast(t('Branched. The chat you had is still in the list.'));
+            } else {
+                Store.truncateFrom(this.conv.id, m.id, true);
+                this.renderMessages();
+            }
             await this.send(value.trim());
         },
 
-        forkAt(m) {
-            const msgs = Store.messages(this.conv.id);
-            const at = msgs.findIndex(x => x.id === m.id);
-            const kept = msgs.slice(0, at + 1);
+        /// A copy of this chat carrying everything up to a point, on a thread of
+        /// its own, with the whole standing setup — repositories, persona,
+        /// workspace, bot, model, effort — so the branch answers the way the
+        /// chat it came from does. The original is untouched, which is the
+        /// whole point of a branch.
+        branchFrom(kept) {
             const seed = kept
                 .filter(x => x.role === 'self' || x.role === 'bot')
                 .slice(-8)
@@ -1236,15 +1373,31 @@
                 title: (this.conv.title || t('New chat')) + ' ' + t('(branch)'),
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
                 anon: this.conv.anon,
+                ephemeral: this.conv.ephemeral,
                 folderId: this.conv.folderId,
                 tags: (this.conv.tags || []).slice(),
                 repoIds: (this.conv.repoIds || []).slice(),
                 personaId: this.conv.personaId,
+                workspaceId: this.conv.workspaceId,
+                botId: this.conv.botId,
                 systemPrompt: this.conv.systemPrompt,
                 proModel: this.conv.proModel,
+                effort: this.conv.effort,
                 seed
             });
             Store.saveMessages(copy.id, kept);
+            // The files a branch was built on belong to it as much as the words
+            // that produced them, and they are cheap to carry.
+            const ids = new Set(kept.map(x => x.id));
+            const carried = Artifacts.all(this.conv.id).filter(a => ids.has(a.messageId));
+            if (carried.length) Artifacts.save(copy.id, carried);
+            return copy;
+        },
+
+        forkAt(m) {
+            const msgs = Store.messages(this.conv.id);
+            const at = msgs.findIndex(x => x.id === m.id);
+            const copy = this.branchFrom(msgs.slice(0, at + 1));
             this.open(Store.conversation(copy.id));
             this.toast(t('Branched. The new chat carries what was said up to that point.'));
         },
@@ -1382,10 +1535,10 @@
                         this.note(t('Tagged.'));
                         return true;
                     }
-                    this.openTags();
+                    this.openTags(this.conv);
                     return true;
                 case 'folder':
-                    this.openTags();
+                    this.openTags(this.conv);
                     return true;
                 case 'rename':
                     if (arg) {
@@ -1443,6 +1596,28 @@
                     this.note(t('There is nothing to ask again.'));
                     return true;
                 }
+                case 'effort':
+                    if (arg && !Chat.EFFORT[arg.toLowerCase()]) {
+                        this.note(t('Effort is normal, careful or deep.'));
+                        return true;
+                    }
+                    this.cycleEffort(arg ? arg.toLowerCase() : null);
+                    return true;
+                case 'remember':
+                    if (arg) {
+                        this.rememberText(arg);
+                    } else {
+                        this.openMemory();
+                        $('memoryText').focus();
+                    }
+                    return true;
+                case 'memory':
+                    this.openMemory();
+                    return true;
+                case 'forget':
+                    this.openMemory();
+                    await this.clearMemories();
+                    return true;
                 case 'clear':
                     await this.clearChat();
                     return true;
@@ -1590,7 +1765,11 @@
                     img.alt = '';
                     item.appendChild(img);
                 }
-                item.appendChild(el('span', null, `${a.name} · ${Attach.humanSize(a.size)}`));
+                // Lines say more about a pasted wall of text than bytes do.
+                const measure = a.lines
+                    ? t('{n} lines', { n: a.lines })
+                    : Attach.humanSize(a.size);
+                item.appendChild(el('span', null, `${a.name} · ${measure}`));
                 const x = el('button', null, '×');
                 x.type = 'button';
                 x.title = t('Remove');
@@ -1725,6 +1904,16 @@
                 ? space.name
                 : t('Workspace');
 
+            const effortChip = $('chipEffort');
+            const effort = Chat.effortOf(conv);
+            // Only a Pro reply outside a repo task can be asked to think
+            // harder: standard replies are one routed call, and a repo task
+            // already loops on a budget of its own.
+            const canEffort = !!model && !repos.length;
+            effortChip.hidden = !canEffort;
+            effortChip.classList.toggle('is-active', canEffort && effort !== 'normal');
+            effortChip.querySelector('.chip-label').textContent = this.effortLabel(effort);
+
             const webChip = $('chipWeb');
             webChip.classList.toggle('is-active', !!this.settings.webSearch);
 
@@ -1736,9 +1925,62 @@
             $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
             $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
 
+            this.groupChips();
             this.renderContextBar(repos, persona, hasSystem, space);
             this.renderBalance();
             this.updateHints();
+        },
+
+        /// Sorts whatever is on for this chat to the front of the rail, with a
+        /// rule after it, so the settings in force are the ones you see first
+        /// rather than the ones you scroll to. Order within each half is the
+        /// order the markup gives, so a chip never wanders between refreshes.
+        effortLabel(name) {
+            switch (name) {
+                case 'careful': return t('Careful');
+                case 'deep': return t('Deep');
+                default: return t('Effort');
+            }
+        },
+
+        /// Normal, careful, deep and back. Each step is another model call the
+        /// reply takes and the balance pays for, so the toolbar's own estimate
+        /// moves with it.
+        cycleEffort(to) {
+            const order = ['normal', 'careful', 'deep'];
+            const at = order.indexOf(Chat.effortOf(this.conv));
+            const next = to && order.indexOf(to) !== -1
+                ? to
+                : order[(at + 1) % order.length];
+            this.conv = Store.updateConversation(this.conv.id, { effort: next });
+            this.refreshToolbar();
+            this.toast(next === 'normal'
+                ? t('Normal effort: one pass.')
+                : next === 'careful'
+                    ? t('Careful: it plans before it answers. Two passes, so about twice the credits.')
+                    : t('Deep: it plans, answers, then checks its answer. Three passes, so about three times the credits.'));
+        },
+
+        groupChips() {
+            const rail = $('toolbarRail');
+            if (!rail) return;
+            const split = $('toolbarSplit');
+            if (!this._chipOrder) {
+                this._chipOrder = [...rail.querySelectorAll('.chip')].map(c => c.id);
+            }
+            const chips = this._chipOrder.map(id => $(id)).filter(Boolean);
+            const on = chips.filter(c => c.classList.contains('is-active'));
+            const off = chips.filter(c => !c.classList.contains('is-active'));
+            split.hidden = !on.length
+                || !on.some(c => !c.hidden)
+                || !off.some(c => !c.hidden);
+            const order = [...on, split, ...off];
+            if (order.every((node, i) => rail.children[i] === node)) return;
+            // Moving nodes resets the rail's scroll; putting it back keeps a
+            // refresh mid-scroll from yanking the reader to the start.
+            const left = rail.scrollLeft;
+            for (const node of order) rail.appendChild(node);
+            rail.scrollLeft = left;
         },
 
         renderContextBar(repos, persona, hasSystem, space) {
@@ -1978,6 +2220,7 @@
 
         editRepo(repo) {
             this.repoEditing = repo.id;
+            this.closeRepoBrowse();
             $('gitProvider').value = repo.provider || 'github';
             $('gitHost').value = repo.host || '';
             $('gitToken').value = repo.token || '';
@@ -1994,6 +2237,7 @@
 
         resetRepoForm() {
             this.repoEditing = null;
+            this.closeRepoBrowse();
             $('gitProvider').value = 'github';
             $('gitHost').value = '';
             $('gitToken').value = '';
@@ -2006,6 +2250,134 @@
             $('repoSaveBtn').textContent = t('Add repository');
             $('repoResetBtn').hidden = true;
             this.modalStatus('gitStatus', '');
+        },
+
+        /// Asks the forge what the token in the form can reach, so a chat is
+        /// wired to a repository by ticking it rather than by typing its name
+        /// exactly right. The request goes from this device straight to the
+        /// forge: the token is not sent anywhere it does not already go.
+        async browseRepos() {
+            const cfg = {
+                provider: $('gitProvider').value,
+                host: $('gitHost').value.trim(),
+                token: $('gitToken').value.trim()
+            };
+            if (!cfg.token) {
+                this.modalStatus('gitStatus', t('Paste a token first, and this will list what it can reach.'), 'warn');
+                return;
+            }
+            if (!GitApi.supports(cfg.provider)) {
+                this.modalStatus('gitStatus', t('This provider has no list to ask for. Type the repository in below.'), 'warn');
+                return;
+            }
+            if (GitApi.needsHost(cfg.provider) && !cfg.host) {
+                this.modalStatus('gitStatus', t('A self-hosted forge needs its host before it can be asked.'), 'warn');
+                return;
+            }
+            const button = $('repoBrowseBtn');
+            button.disabled = true;
+            this.modalStatus('gitStatus', t('Asking…'));
+            try {
+                this.browsed = await GitApi.listRepos(cfg);
+                this.browsedPicked = new Set();
+                $('repoBrowseFilter').value = '';
+                $('repoBrowse').hidden = false;
+                this.renderBrowsedRepos();
+                this.modalStatus('gitStatus', this.browsed.length
+                    ? t('{n} repositories this token can reach.', { n: this.browsed.length })
+                    : t('That token reaches no repositories.'), this.browsed.length ? 'ok' : 'warn');
+            } catch (e) {
+                const why = String(e && e.message || '');
+                this.modalStatus('gitStatus', why === 'denied'
+                    ? t('That token was refused. Check it has read access to repositories.')
+                    : why === 'unreachable'
+                        ? t('Could not reach that host from this device. Type the repository in below instead.')
+                        : t('The forge answered with an error. Type the repository in below instead.'), 'warn');
+            } finally {
+                button.disabled = false;
+            }
+        },
+
+        renderBrowsedRepos() {
+            const list = $('repoBrowseList');
+            list.innerHTML = '';
+            const needle = $('repoBrowseFilter').value.trim().toLowerCase();
+            const known = new Set(Store.repos().map(r => (r.repo || '').toLowerCase()));
+            const rows = (this.browsed || []).filter(r =>
+                !needle || r.repo.toLowerCase().includes(needle)
+                || (r.description || '').toLowerCase().includes(needle));
+            $('repoBrowseCount').textContent = rows.length === (this.browsed || []).length
+                ? ''
+                : t('{n} of {total}', { n: rows.length, total: (this.browsed || []).length });
+            if (!rows.length) {
+                list.appendChild(el('p', 'hint', t('Nothing matches that.')));
+                return;
+            }
+            for (const r of rows) {
+                const already = known.has(r.repo.toLowerCase());
+                const row = el('label', 'repo-browse-row' + (already ? ' is-known' : ''));
+                const check = document.createElement('input');
+                check.type = 'checkbox';
+                check.checked = this.browsedPicked.has(r.repo);
+                check.disabled = already;
+                check.addEventListener('change', () => {
+                    if (check.checked) this.browsedPicked.add(r.repo);
+                    else this.browsedPicked.delete(r.repo);
+                });
+                row.appendChild(check);
+                const main = el('div', 'repo-main');
+                main.appendChild(el('span', 'repo-name', r.repo));
+                const bits = [];
+                if (r.branch) bits.push(r.branch);
+                bits.push(r.private ? t('private') : t('public'));
+                if (already) bits.push(t('already connected'));
+                if (r.description) bits.push(r.description);
+                main.appendChild(el('span', 'repo-sub', bits.join(' · ')));
+                row.appendChild(main);
+                list.appendChild(row);
+            }
+        },
+
+        /// Connects every ticked repository, carrying the token, provider, host
+        /// and writes flag from the form, and ticks them all into this chat.
+        linkBrowsedRepos() {
+            const picked = (this.browsed || []).filter(r => this.browsedPicked.has(r.repo));
+            if (!picked.length) {
+                this.modalStatus('gitStatus', t('Tick at least one.'), 'warn');
+                return;
+            }
+            const token = $('gitToken').value.trim();
+            const provider = $('gitProvider').value;
+            const host = $('gitHost').value.trim();
+            const allowWrites = $('gitWrites').checked;
+            const next = new Set((this.conv.repoIds || []));
+            for (const r of picked) {
+                const entry = Store.addRepo({
+                    provider, host, token,
+                    repo: r.repo,
+                    branch: r.branch,
+                    paths: '',
+                    label: '',
+                    allowWrites
+                });
+                next.add(entry.id);
+            }
+            this.conv = Store.updateConversation(this.conv.id, { repoIds: Array.from(next) });
+            this.closeRepoBrowse();
+            this.resetRepoForm();
+            this.renderRepos();
+            this.refreshToolbar();
+            this.renderList();
+            this.modalStatus('gitStatus', picked.length === 1
+                ? t('Connected {repo}.', { repo: picked[0].repo })
+                : t('Connected {n} repositories.', { n: picked.length }), 'ok');
+        },
+
+        closeRepoBrowse() {
+            $('repoBrowse').hidden = true;
+            $('repoBrowseList').innerHTML = '';
+            this.browsed = null;
+            this.browsedPicked = new Set();
         },
 
         saveRepo() {
@@ -2167,14 +2539,22 @@
             this.modalStatus('personaStatus', t('Saved.'), 'ok');
         },
 
-        openSystem() {
-            $('systemBody').value = (this.conv && this.conv.systemPrompt) || '';
+        openSystem(target) {
+            const conv = target || this.conv;
+            this.editConvId = conv && conv.id;
+            $('systemBody').value = (conv && conv.systemPrompt) || '';
             this.modalStatus('systemStatus', '');
             this.openModal('modalSystem');
         },
 
+        /// The chat an open editor belongs to, which is not always the one on
+        /// screen: these can be reached from a row in the sidebar.
+        editChat() {
+            return (this.editConvId && Store.conversation(this.editConvId)) || this.conv;
+        },
+
         saveSystem() {
-            this.conv = Store.updateConversation(this.conv.id, { systemPrompt: $('systemBody').value.trim() });
+            this.patchChat(this.editChat(), { systemPrompt: $('systemBody').value.trim() });
             this.refreshToolbar();
             this.closeModals();
             this.toast(t('Custom instructions saved for this chat.'));
@@ -2274,6 +2654,155 @@
             this.resetPromptForm();
             this.renderPrompts();
             this.modalStatus('promptStatus', t('Saved.'), 'ok');
+        },
+
+        openMemory() {
+            this.memoryEditing = null;
+            this.resetMemoryForm();
+            this.renderMemories();
+            $('setMemoryCapture').checked = this.settings.memoryCapture !== false;
+            this.openModal('modalMemory');
+        },
+
+        resetMemoryForm() {
+            this.memoryEditing = null;
+            $('memoryText').value = '';
+            $('memoryTopic').value = '';
+            const scope = $('memoryScope');
+            scope.innerHTML = '';
+            const everywhere = document.createElement('option');
+            everywhere.value = '';
+            everywhere.textContent = t('Every chat');
+            scope.appendChild(everywhere);
+            for (const space of Store.workspaces()) {
+                const option = document.createElement('option');
+                option.value = space.id;
+                option.textContent = space.name || t('Untitled');
+                scope.appendChild(option);
+            }
+            scope.value = (this.conv && this.conv.workspaceId) || '';
+            $('memorySaveBtn').textContent = t('Remember it');
+            $('memoryResetBtn').hidden = true;
+            this.modalStatus('memoryStatus', '');
+        },
+
+        renderMemories() {
+            const list = $('memoryList');
+            list.innerHTML = '';
+            const needle = ($('memorySearch').value || '').trim().toLowerCase();
+            const rows = Store.memories().filter(m => !needle
+                || m.text.toLowerCase().includes(needle)
+                || (m.topic || '').toLowerCase().includes(needle));
+            if (!rows.length) {
+                list.appendChild(el('p', 'hint', needle
+                    ? t('Nothing remembered matches that.')
+                    : t('Nothing remembered yet. Tell Nymbot something about how you work, or use the star-and-brain under any message.')));
+                return;
+            }
+            for (const entry of rows) {
+                const row = el('div', 'memory-row');
+                const main = el('div', 'memory-main');
+                const head = el('span', 'memory-topic');
+                head.appendChild(document.createTextNode(entry.topic || t('Note')));
+                const space = entry.scope ? Store.workspace(entry.scope) : null;
+                if (space) head.appendChild(el('span', 'memory-scope', space.name || t('Untitled')));
+                if (entry.source === 'chat') {
+                    head.appendChild(el('span', 'memory-scope', t('noticed')));
+                }
+                main.appendChild(head);
+                main.appendChild(el('span', 'memory-text', entry.text));
+                row.appendChild(main);
+
+                const actions = el('div', 'row-actions');
+                const edit = el('button', 'row-btn', t('Edit'));
+                edit.type = 'button';
+                edit.addEventListener('click', () => {
+                    this.memoryEditing = entry.id;
+                    $('memoryText').value = entry.text;
+                    $('memoryTopic').value = entry.topic || '';
+                    $('memoryScope').value = entry.scope || '';
+                    $('memorySaveBtn').textContent = t('Save changes');
+                    $('memoryResetBtn').hidden = false;
+                    $('memoryText').focus();
+                });
+                actions.appendChild(edit);
+                const del = el('button', 'row-btn danger', t('Forget'));
+                del.type = 'button';
+                del.addEventListener('click', () => {
+                    Store.deleteMemory(entry.id);
+                    this.renderMemories();
+                });
+                actions.appendChild(del);
+                row.appendChild(actions);
+                list.appendChild(row);
+            }
+        },
+
+        saveMemory() {
+            const text = $('memoryText').value.trim();
+            if (!text) {
+                this.modalStatus('memoryStatus', t('Say what to remember.'), 'warn');
+                return;
+            }
+            Store.saveMemory({
+                id: this.memoryEditing || undefined,
+                text,
+                topic: $('memoryTopic').value.trim(),
+                scope: $('memoryScope').value || null,
+                source: 'you'
+            });
+            this.resetMemoryForm();
+            this.renderMemories();
+            this.modalStatus('memoryStatus', t('Remembered.'), 'ok');
+        },
+
+        async clearMemories() {
+            const ok = await this.ask({
+                title: t('Forget everything'),
+                body: t('Throw away everything Nymbot remembers about you? This cannot be undone.'),
+                confirm: t('Forget it all'),
+                danger: true
+            });
+            if (!ok) return;
+            Store.clearMemories();
+            this.renderMemories();
+            this.modalStatus('memoryStatus', t('Forgotten.'), 'ok');
+        },
+
+        /// Saves what a message said worth keeping. Used by the message action
+        /// and by ?remember, so both land in the same place.
+        rememberText(text, topic) {
+            const entry = Store.saveMemory({
+                text: String(text || '').trim(),
+                topic: topic || '',
+                scope: (this.conv && this.conv.workspaceId) || null,
+                source: 'you'
+            });
+            if (!entry) return null;
+            this.toastUndo(t('Remembered.'), () => {
+                Store.deleteMemory(entry.id);
+                this.toast(t('Forgotten.'));
+            });
+            return entry;
+        },
+
+        /// Reads a message for standing facts and saves what it finds, saying
+        /// so with a way to take it straight back. Nothing enters memory
+        /// without the writer seeing it happen.
+        noticeMemories(text) {
+            if (this.settings.memoryCapture === false) return;
+            const Memory = window.NymbotMemory;
+            if (!Memory) return;
+            const found = Memory.propose(text, this.conv);
+            if (!found.length) return;
+            const saved = found.map(m => Store.saveMemory(m)).filter(Boolean);
+            if (!saved.length) return;
+            this.toastUndo(saved.length === 1
+                ? t('Remembered: {what}', { what: saved[0].text })
+                : t('Remembered {n} things from that.', { n: saved.length }), () => {
+                for (const entry of saved) Store.deleteMemory(entry.id);
+                this.toast(t('Forgotten.'));
+            });
         },
 
         openPinned() {
@@ -2394,8 +2923,10 @@
             this.jumpToMessage(this.findMatches[this.findAt]);
         },
 
-        openTags() {
-            $('tagInput').value = (this.conv.tags || []).join(', ');
+        openTags(target) {
+            const conv = target || this.editChat();
+            this.editConvId = conv.id;
+            $('tagInput').value = (conv.tags || []).join(', ');
             const select = $('folderSelect');
             select.innerHTML = '';
             const none = document.createElement('option');
@@ -2406,7 +2937,7 @@
                 const option = document.createElement('option');
                 option.value = folder.id;
                 option.textContent = folder.name;
-                option.selected = folder.id === this.conv.folderId;
+                option.selected = folder.id === conv.folderId;
                 select.appendChild(option);
             }
             $('newFolder').value = '';
@@ -2416,7 +2947,7 @@
 
         saveTags() {
             const tags = $('tagInput').value.split(',').map(x => x.trim()).filter(Boolean);
-            this.conv = Store.updateConversation(this.conv.id, {
+            this.patchChat(this.editChat(), {
                 tags,
                 folderId: $('folderSelect').value || null
             });
@@ -2435,8 +2966,9 @@
             this.modalStatus('tagStatus', t('Folder created.'), 'ok');
         },
 
-        openStats() {
-            const msgs = Store.messages(this.conv.id);
+        openStats(target) {
+            const conv = target || this.conv;
+            const msgs = Store.messages(conv.id);
             const grid = $('statGrid');
             grid.innerHTML = '';
             const mine = msgs.filter(m => m.role === 'self').length;
@@ -2486,6 +3018,7 @@
             $('setAutoContinue').value = String(s.autoContinue || 0);
             $('setProgress').checked = s.showProgress !== false;
             this.renderVoices();
+            this.renderLanguages();
             $('voiceFields').hidden = !Speech.canSpeak();
             this.modalStatus('appearanceStatus', '');
             this.openModal('modalAppearance');
@@ -2670,6 +3203,7 @@
             chip.querySelector('.chip-label').textContent = made.length === 1
                 ? t('1 artifact')
                 : t('{n} artifacts', { n: made.length });
+            this.groupChips();
         },
 
         openArtifactList() {
@@ -2717,6 +3251,86 @@
                 list.appendChild(row);
             }
             this.openModal('modalArtifacts');
+        },
+
+        /// What a repo run changed, and the way back. Turning writes on is a
+        /// promise you can take back: the card says what was touched, and undo
+        /// reads each of those paths at the commit the branch stood on before
+        /// the run and commits them as they were.
+        checkpointCard(m) {
+            const mark = m.checkpoint;
+            const card = el('div', 'checkpoint-card' + (mark.undone ? ' is-undone' : ''));
+            const head = el('div', 'checkpoint-head');
+            head.appendChild(Icons.node('branch', { size: 13 }));
+            head.appendChild(el('span', 'checkpoint-repo',
+                mark.repo + (mark.branch ? ' · ' + mark.branch : '')));
+            card.appendChild(head);
+
+            const bits = [];
+            if ((mark.paths || []).length) {
+                bits.push(mark.paths.length === 1
+                    ? t('1 file changed')
+                    : t('{n} files changed', { n: mark.paths.length }));
+            }
+            for (const name of mark.branches || []) bits.push(t('branch {name}', { name }));
+            if ((mark.pulls || []).length) {
+                bits.push(mark.pulls.length === 1
+                    ? t('1 pull request')
+                    : t('{n} pull requests', { n: mark.pulls.length }));
+            }
+            card.appendChild(el('div', 'checkpoint-what', bits.join(' · ')));
+            if ((mark.paths || []).length) {
+                card.appendChild(el('div', 'checkpoint-paths', mark.paths.join(', ')));
+            }
+
+            if (mark.undone) {
+                card.appendChild(el('div', 'checkpoint-note', t('Put back.')));
+                return card;
+            }
+            if (!mark.undoable) {
+                // Say why rather than showing a button that cannot work.
+                card.appendChild(el('div', 'checkpoint-note',
+                    t('This one cannot be undone from here — no commit was recorded to read the old files back from.')));
+                return card;
+            }
+            const undo = el('button', 'btn btn-small', t('Undo these changes'));
+            undo.type = 'button';
+            undo.addEventListener('click', () => this.revertCheckpoint(m, undo));
+            card.appendChild(undo);
+            if ((mark.branches || []).length || (mark.pulls || []).length) {
+                card.appendChild(el('div', 'checkpoint-note',
+                    t('Files only. A branch or pull request it opened is left where it is.')));
+            }
+            return card;
+        },
+
+        async revertCheckpoint(m, button) {
+            const mark = m.checkpoint;
+            const ok = await this.ask({
+                title: t('Undo these changes'),
+                body: t('Put {n} file(s) back to how they were before this reply, on {branch}? This commits them as they were — nothing is erased from the history.', { n: (mark.paths || []).length, branch: mark.branch }),
+                confirm: t('Undo them'),
+                danger: true
+            });
+            if (!ok) return;
+            button.disabled = true;
+            button.textContent = t('Putting it back…');
+            try {
+                const res = await Chat.revert(this.conv, mark);
+                const done = (res.restored || []).length + (res.deleted || []).length;
+                const failed = (res.failed || []).length;
+                Store.patchMessage(this.conv.id, m.id,
+                    { checkpoint: Object.assign({}, mark, { undone: !failed }) });
+                this.replaceMessage(Store.messages(this.conv.id).find(x => x.id === m.id) || m);
+                this.note(failed
+                    ? t('Put {done} back; {failed} could not be. Check the repository.',
+                        { done, failed })
+                    : t('Put back: {n} file(s) are as they were before that reply.', { n: done }));
+            } catch (e) {
+                button.disabled = false;
+                button.textContent = t('Undo these changes');
+                this.note((e && e.message) || t('Could not put that back.'));
+            }
         },
 
         /// A chip only ever showed a title. A card shows where it came from
@@ -2818,7 +3432,7 @@
                 },
                 {
                     title: t('Workspaces'),
-                    body: t('A workspace is standing context a run of chats shares: instructions, reference files and repositories. Every chat in one starts with that context, and a new chat opened from it inherits the workspace. The files stay on this device.')
+                    body: t('A workspace is standing context a run of chats shares: instructions, reference files and repositories. Every message in one carries that context, not just the first, so it still applies deep into a long chat. The files stay on this device: they are searched here against what you asked, and only the passages that bear on it travel with the message.')
                 },
                 {
                     title: t('Bots'),
@@ -2826,15 +3440,43 @@
                 },
                 {
                     title: t('Repositories'),
-                    body: t('Connect as many repositories as you like and tick the ones a chat can see. Pro replies read their code and, with writes on, commit, branch and open pull requests. Access tokens are stored only on this device and sent per request — never stored server-side or published to relays.')
+                    body: t('Paste a token and Nymbot lists what it can reach, so you tick the repositories you want rather than typing each name exactly right. Pro replies read their code and, with writes on, commit, branch and open pull requests. The list is asked for by this device, straight from the forge; access tokens are stored only here and sent per request — never stored server-side or published to relays.')
+                },
+                {
+                    title: t('Memory'),
+                    body: t('Standing facts Nymbot carries between chats: what to call you, what you work on, how you want answers written. Kept one entry at a time so you can read the list, correct the line that is wrong and throw away the one you never meant to save — a rolling summary cannot be argued with. Facts you mention in passing are noticed and always said out loud, with one tap to take them back; turn the noticing off and ?remember still works. They live on this device, and the few that bear on a question travel inside that message. A ghost chat neither reads them nor adds to them.')
+                },
+                {
+                    title: t('What a long chat remembers'),
+                    body: t('A reply is given the most recent stretch of the conversation, decided by a budget rather than a fixed number of messages — so a few long turns get the room they need instead of each being clipped to the same short length. Your instructions, the repositories in scope and the part of a workspace that bears on the question ride every message, so they still apply on turn fifty. Anything the window cannot hold is listed for the model as a line each, and a Pro reply can read those turns back in full when the answer depends on them. Looking back is one more model call, so it costs one more base credit — and only when it happens.')
+                },
+                {
+                    title: t('Keeping the chat list in order'),
+                    body: t('Every row in the sidebar carries the same menu the chat header does, behind the … button: rename, pin, archive, duplicate, tag, export or delete. It acts on that row\'s chat, so tidying the list never moves you off the one you are reading.')
                 },
                 {
                     title: t('Ghost chats and auto-delete'),
                     body: t('A ghost chat is never written to this device and publishes no archive copy: it is gone when you close the app. Auto-delete sweeps chats older than the window you choose when the app opens, and never touches a pinned one.')
                 },
                 {
+                    title: t('Undoing what a repo run changed'),
+                    body: t('A reply that wrote to a repository says what it touched: the repository, the branch, and every file. Undo puts them back — each path is read at the commit the branch stood on before the run and committed as it was. That is a revert, not a rewrite: what Nymbot did stays in the history, it is simply no longer the state of the branch. It costs nothing, because it touches no model. Files only: a branch or pull request it opened is left where it is, because closing somebody\'s pull request on their behalf is not an undo.')
+                },
+                {
                     title: t('Long tasks, and carrying them on'),
-                    body: t('A repo task runs the model in a loop — reading, searching, writing — and that loop has an allowance. When it runs out with work left, Nymbot stops and says so. Set a continuation budget in Appearance and it buys another allowance instead, one leg at a time, each leg saying what it cost, until the budget is spent or the task is done. Stop cancels the rest.')
+                    body: t('A repo task runs the model in a loop — reading, searching, writing — and that loop has an allowance. When it runs out with work left, Nymbot stops and says so. Set a continuation budget in Settings and it buys another allowance instead, one leg at a time, each leg saying what it cost, until the budget is spent or the task is done. Stop cancels the rest.')
+                },
+                {
+                    title: t('Asking a question differently'),
+                    body: t('Under any message you sent, "Ask this differently" reopens it. By default the chat you had stays exactly as it is and the new answer arrives on a branch carrying everything said before that question — along with the repositories, persona, workspace, model and effort it was set to, and the files those messages produced. Untick the box and it rewrites in place instead, throwing away everything after it. That used to be the only behaviour; it is no longer the default, because nothing about it could be undone.')
+                },
+                {
+                    title: t('Asking it to think harder'),
+                    body: t('The Effort chip on a Pro chat says how much work each reply is worth. Normal is one pass. Careful plans the answer before writing it, and Deep also reads its answer back against the question and corrects it before you see it. Each step is another model call, so a careful reply costs about twice a normal one and a deep reply about three times — the toolbar says the range before you send. A repo task ignores it: it already loops on a budget of its own.')
+                },
+                {
+                    title: t('Typing while it is still writing'),
+                    body: t('You do not have to wait for a reply to land before saying the next thing. Anything typed mid-reply waits its turn, shown above the composer in the order it was typed, and goes as soon as the current one is done. Take one back out while it waits, or press Stop and nothing behind it is sent either. Commands are the exception: they are free and instant, so they run straight away rather than queueing.')
                 },
                 {
                     title: t('Watching it work'),
@@ -2850,15 +3492,15 @@
                 },
                 {
                     title: t('Your keys and your data'),
-                    body: t('Your private key lives on this device. Your public key — npub or hex — is how somebody addresses you and is safe to share. The post-quantum recovery code is what lets a second device hold the same encryption key. Export everything from Appearance; there is no account on a server to recover from.')
+                    body: t('Your private key lives on this device. Your public key — npub or hex — is how somebody addresses you and is safe to share. The post-quantum recovery code is what lets a second device hold the same encryption key. Export everything from Settings; there is no account on a server to recover from.')
                 },
                 {
-                    title: t('Voice, attachments and export'),
-                    body: t('Dictate a message with the microphone and have replies read aloud from Appearance. Attach text, code and images to a message. Any conversation exports as Markdown, plain text or JSON.')
+                    title: t('Writing, pasting, dictating and exporting'),
+                    body: t('Write in markdown: fenced blocks, inline code and the rest render in your own messages the same way they do in the replies. Ctrl/Cmd+B, I and E format what you have selected, and Ctrl/Cmd+Shift+E opens a code block. Paste something long and it goes in as an attachment rather than filling the composer. Dictate with the microphone and have replies read aloud from Settings; if dictation stops it says why rather than going quiet. Attach text, code and images. Any conversation exports as Markdown, plain text or JSON.')
                 },
                 {
                     title: t('Keyboard'),
-                    body: t('Command palette with Ctrl/Cmd+K, new chat with Ctrl/Cmd+N, find in chat with Ctrl/Cmd+F, search everything with Ctrl/Cmd+Shift+F. The full list is under Keyboard shortcuts in Appearance.')
+                    body: t('Command palette with Ctrl/Cmd+K, new chat with Ctrl/Cmd+N, find in chat with Ctrl/Cmd+F, search everything with Ctrl/Cmd+Shift+F. The full list is under Keyboard shortcuts in Settings.')
                 }
             ];
         },
@@ -4098,7 +4740,6 @@
             $('rootHint').textContent = Identity.rootLocked
                 ? t('This account already advertises another device\'s key. Paste that device\'s code below to link this one; until then replies come back without the post-quantum layer.')
                 : t('Paste this into another device — or into Nymchat — so both hold the same post-quantum key.');
-            this.renderLanguages();
             const usage = Store.usage();
             $('usageLine').textContent = t('{replies} replies, {credits} credits spent on this device.',
                 { replies: usage.replies, credits: usage.credits });
@@ -4171,50 +4812,106 @@
 
         // --- chat menu ------------------------------------------------------------
 
-        async clearChat() {
+        /// Opens the chat menu against a row, or against the header when no
+        /// anchor is given. A row's menu acts on that row's chat, which need
+        /// not be the one on screen.
+        openChatMenu(convId, anchor) {
+            const menu = $('chatMenu');
+            const open = !menu.hidden && this.menuConvId === convId;
+            this.closeChatMenu();
+            if (open) return;
+            this.menuConvId = convId || null;
+            const conv = this.menuChat();
+            if (!conv) return;
+            $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
+            $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
+            if (anchor) {
+                // Anchored to the row rather than to the header it lives in,
+                // and kept inside the viewport when the row is near the bottom.
+                const box = anchor.getBoundingClientRect();
+                menu.classList.add('is-floating');
+                menu.hidden = false;
+                const height = menu.offsetHeight;
+                const width = menu.offsetWidth;
+                menu.style.top = Math.max(8, Math.min(box.bottom + 4, innerHeight - height - 8)) + 'px';
+                menu.style.left = Math.max(8, Math.min(box.right - width, innerWidth - width - 8)) + 'px';
+            } else {
+                menu.hidden = false;
+            }
+        },
+
+        closeChatMenu() {
+            const menu = $('chatMenu');
+            menu.hidden = true;
+            menu.classList.remove('is-floating');
+            menu.style.top = '';
+            menu.style.left = '';
+            this.menuConvId = null;
+        },
+
+        /// The chat a menu action applies to.
+        menuChat() {
+            return (this.menuConvId && Store.conversation(this.menuConvId)) || this.conv;
+        },
+
+        /// Writes to a chat a menu is acting on. When that chat is also the one
+        /// on screen, the screen's copy has to move with it.
+        patchChat(conv, patch) {
+            const next = Store.updateConversation(conv.id, patch);
+            if (this.conv && next && next.id === this.conv.id) this.conv = next;
+            return next;
+        },
+
+        async clearChat(target) {
+            const conv = target || this.conv;
             // A fresh root id is what actually resets the model's context: the
             // worker scopes history to the marker, so a new one is a new thread.
             const rootId = window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)));
-            Store.saveMessages(this.conv.id, []);
-            Store.setThread(this.conv.id, []);
-            this.conv = Store.updateConversation(this.conv.id, { rootId, stats: { messages: 0, credits: 0 } });
-            this.renderMessages();
+            Store.saveMessages(conv.id, []);
+            Store.setThread(conv.id, []);
+            const next = this.patchChat(conv, { rootId, stats: { messages: 0, credits: 0 } });
+            if (this.conv && next.id === this.conv.id) this.renderMessages();
             this.toast(t('Cleared.'));
         },
 
-        async renameChat() {
+        async renameChat(target) {
+            const conv = target || this.conv;
             const title = await this.ask({
                 title: t('Name this chat'),
                 prompt: true,
                 label: t('Chat name'),
-                value: this.conv.title || '',
+                value: conv.title || '',
                 confirm: t('Rename')
             });
             if (title == null) return;
-            this.conv = Store.updateConversation(this.conv.id, { title: title.trim() || t('New chat') });
-            $('chatTitle').textContent = this.conv.title;
+            const next = this.patchChat(conv, { title: title.trim() || t('New chat') });
+            if (this.conv && next.id === this.conv.id) $('chatTitle').textContent = next.title;
             this.renderList();
         },
 
-        pinChat() {
-            this.conv = Store.updateConversation(this.conv.id, { pinned: !this.conv.pinned });
+        pinChat(target) {
+            const conv = target || this.conv;
+            const next = this.patchChat(conv, { pinned: !conv.pinned });
             this.refreshToolbar();
             this.renderList();
-            this.toast(this.conv.pinned ? t('Pinned.') : t('Unpinned.'));
+            this.toast(next.pinned ? t('Pinned.') : t('Unpinned.'));
         },
 
-        archiveChat() {
-            const archived = !this.conv.archived;
-            this.conv = Store.updateConversation(this.conv.id, { archived });
+        archiveChat(target) {
+            const conv = target || this.conv;
+            const archived = !conv.archived;
+            const next = this.patchChat(conv, { archived });
             this.renderList();
             this.toast(archived ? t('Archived.') : t('Unarchived.'));
-            if (archived) {
+            // Only step off a chat you are actually looking at.
+            if (archived && this.conv && next.id === this.conv.id) {
                 const list = Store.conversations().filter(c => !c.archived);
                 this.open(list.length ? list[0] : this.newConversation());
             }
         },
 
-        async deleteChat() {
+        async deleteChat(target) {
+            const conv = target || this.conv;
             const ok = await this.ask({
                 title: t('Delete this chat'),
                 body: t('Delete this chat? Its messages are encrypted to your key and cannot be recovered.'),
@@ -4222,7 +4919,9 @@
                 danger: true
             });
             if (!ok) return;
-            Store.deleteConversation(this.conv.id);
+            const wasOpen = !!this.conv && conv.id === this.conv.id;
+            Store.deleteConversation(conv.id);
+            if (!wasOpen) { this.renderList(); return; }
             const list = Store.conversations().filter(c => !c.archived);
             this.open(list.length ? list[0] : this.newConversation());
         },
@@ -4253,14 +4952,15 @@
                 { label: t('Custom instructions'), hint: '', run: () => this.openSystem() },
                 { label: t('Prompt library'), hint: MODIFIER + '+Shift+P', run: () => this.openPrompts() },
                 { label: t('Saved messages'), hint: '', run: () => this.openPinned() },
-                { label: t('Appearance'), hint: '', run: () => this.openAppearance() },
+                { label: t('Settings'), hint: '', run: () => this.openAppearance() },
+                { label: t('Memory'), hint: '', run: () => this.openMemory() },
                 { label: t('Keyboard shortcuts'), hint: '', run: () => this.openShortcuts() },
                 { label: t('Buy credits'), hint: '', run: () => this.openCredits() },
                 { label: t('Anonymous chat'), hint: '', run: () => this.openAnon() },
                 { label: t('Identity'), hint: '', run: () => this.openSettings() },
                 { label: t('Chat statistics'), hint: '', run: () => this.openStats() },
                 { label: t('Export this chat as Markdown'), hint: '', run: () => Exporter.conversation(this.conv, 'md') },
-                { label: t('Tags and folder'), hint: '', run: () => this.openTags() },
+                { label: t('Tags and folder'), hint: '', run: () => this.openTags(this.conv) },
                 { label: t('Clear this chat'), hint: '', run: () => this.clearChat() }
             ];
             for (const a of actions) {
@@ -4380,7 +5080,7 @@
             $('scrim').hidden = true;
             $('palette').hidden = true;
             for (const m of document.querySelectorAll('.modal')) m.hidden = true;
-            $('chatMenu').hidden = true;
+            this.closeChatMenu();
             const frame = $('previewFrame');
             if (frame) frame.srcdoc = '';
         },
@@ -4405,6 +5105,12 @@
             input.placeholder = o.placeholder || '';
             $('dialogLabel').textContent = o.label || '';
             $('dialogAreaLabel').textContent = o.label || '';
+            // An optional second question the dialog can ask alongside the
+            // first, read back afterwards as `dialogChecked`.
+            $('dialogCheckRow').hidden = !o.check;
+            $('dialogCheckLabel').textContent = o.check || '';
+            $('dialogCheck').checked = !!o.checkOn;
+            this.dialogChecked = !!o.checkOn;
             const confirm = $('dialogConfirm');
             confirm.textContent = o.confirm || t('OK');
             confirm.classList.toggle('btn-danger', !!o.danger);
@@ -4423,6 +5129,7 @@
         settleDialog(ok) {
             const resolve = this._dialogResolve;
             if (!resolve) return;
+            this.dialogChecked = $('dialogCheck').checked;
             const value = this._dialogArea ? $('dialogTextarea').value : $('dialogInput').value;
             this._dialogResolve = null;
             $('dialog').hidden = true;
@@ -4450,6 +5157,66 @@
             node.hidden = false;
             clearTimeout(this._toastTimer);
             this._toastTimer = setTimeout(() => { node.hidden = true; }, 4000);
+        },
+
+        /// A toast that can be taken back. Anything the app decides to keep on
+        /// your behalf says so this way, so undoing it is one tap and never a
+        /// hunt through a settings screen.
+        toastUndo(text, undo) {
+            const node = $('toast');
+            node.innerHTML = '';
+            node.appendChild(el('span', null, text));
+            const button = el('button', 'toast-undo', t('Undo'));
+            button.type = 'button';
+            button.addEventListener('click', () => {
+                node.hidden = true;
+                clearTimeout(this._toastTimer);
+                try { undo(); } catch (_) { }
+            });
+            node.appendChild(button);
+            node.hidden = false;
+            clearTimeout(this._toastTimer);
+            this._toastTimer = setTimeout(() => { node.hidden = true; }, 8000);
+        },
+
+        /// Wraps what is selected in the composer, or opens an empty pair and
+        /// puts the caret inside it. Pressing the same shortcut again on a
+        /// selection that already carries the marks takes them off, so it
+        /// toggles rather than nesting.
+        wrapSelection(mark) {
+            const input = $('input');
+            const value = input.value;
+            const from = input.selectionStart;
+            const to = input.selectionEnd;
+            const picked = value.slice(from, to);
+
+            if (mark === 'fence') {
+                // A block wants its own lines, whatever the caret was sitting
+                // next to.
+                const before = value.slice(0, from);
+                const after = value.slice(to);
+                const lead = (!before || /\n$/.test(before)) ? '' : '\n';
+                const tail = (!after || /^\n/.test(after)) ? '' : '\n';
+                const body = picked || '';
+                const open = lead + '```\n';
+                const close = '\n```' + tail;
+                input.value = before + open + body + close + after;
+                const at = from + open.length;
+                input.setSelectionRange(at, at + body.length);
+            } else if (picked.startsWith(mark) && picked.endsWith(mark)
+                && picked.length >= mark.length * 2) {
+                const bare = picked.slice(mark.length, picked.length - mark.length);
+                input.value = value.slice(0, from) + bare + value.slice(to);
+                input.setSelectionRange(from, from + bare.length);
+            } else {
+                input.value = value.slice(0, from) + mark + picked + mark + value.slice(to);
+                const at = from + mark.length;
+                input.setSelectionRange(at, at + picked.length);
+            }
+            input.focus();
+            this.autoGrow();
+            this.updateHints();
+            Store.setDraft(this.conv.id, input.value);
         },
 
         autoGrow() {
@@ -4488,26 +5255,30 @@
                 'close-sidebar': () => this.toggleSidebar(false),
                 'open-settings': () => this.openSettings(),
                 'open-palette': () => this.openPalette(),
-                'chat-menu': () => { $('chatMenu').hidden = !$('chatMenu').hidden; },
-                'rename-chat': () => { $('chatMenu').hidden = true; this.renameChat(); },
-                'pin-chat': () => { $('chatMenu').hidden = true; this.pinChat(); },
-                'archive-chat': () => { $('chatMenu').hidden = true; this.archiveChat(); },
+                // Every item below reads the chat before the menu closes, since
+                // closing it forgets which row it was opened from.
+                'chat-menu': () => this.openChatMenu(this.conv && this.conv.id, null),
+                'rename-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.renameChat(c); },
+                'pin-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.pinChat(c); },
+                'archive-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.archiveChat(c); },
                 'fork-chat': () => {
-                    $('chatMenu').hidden = true;
-                    const copy = Store.duplicateConversation(this.conv.id, (this.conv.title || t('New chat')) + ' ' + t('(copy)'));
+                    const c = this.menuChat();
+                    this.closeChatMenu();
+                    const copy = Store.duplicateConversation(c.id, (c.title || t('New chat')) + ' ' + t('(copy)'));
                     if (copy) this.open(Store.conversation(copy.id));
                 },
-                'open-system': () => { $('chatMenu').hidden = true; this.openSystem(); },
-                'open-tags': () => { $('chatMenu').hidden = true; this.openTags(); },
-                'open-stats': () => { $('chatMenu').hidden = true; this.openStats(); },
-                'export-md': () => { $('chatMenu').hidden = true; Exporter.conversation(this.conv, 'md'); },
-                'export-json': () => { $('chatMenu').hidden = true; Exporter.conversation(this.conv, 'json'); },
+                'open-system': () => { const c = this.menuChat(); this.closeChatMenu(); this.openSystem(c); },
+                'open-tags': () => { const c = this.menuChat(); this.closeChatMenu(); this.openTags(c); },
+                'open-stats': () => { const c = this.menuChat(); this.closeChatMenu(); this.openStats(c); },
+                'export-md': () => { const c = this.menuChat(); this.closeChatMenu(); Exporter.conversation(c, 'md'); },
+                'export-json': () => { const c = this.menuChat(); this.closeChatMenu(); Exporter.conversation(c, 'json'); },
                 'copy-transcript': () => {
-                    $('chatMenu').hidden = true;
-                    this.writeClipboard(Exporter.clipboardMarkdown(this.conv));
+                    const c = this.menuChat();
+                    this.closeChatMenu();
+                    this.writeClipboard(Exporter.clipboardMarkdown(c));
                 },
-                'clear-chat': () => { $('chatMenu').hidden = true; this.clearChat(); },
-                'delete-chat': () => { $('chatMenu').hidden = true; this.deleteChat(); },
+                'clear-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.clearChat(c); },
+                'delete-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.deleteChat(c); },
                 'conv-filter': (target) => {
                     this.convFilter = target.dataset.filter;
                     for (const b of document.querySelectorAll('#sidebarFilters .pill')) {
@@ -4564,6 +5335,11 @@
                 'open-personas': () => this.openPersonas(),
                 'open-prompts': () => this.openPrompts(),
                 'open-pinned': () => this.openPinned(),
+                'cycle-effort': () => this.cycleEffort(),
+                'open-memory': () => this.openMemory(),
+                'memory-save': () => this.saveMemory(),
+                'memory-reset': () => this.resetMemoryForm(),
+                'memory-clear': () => this.clearMemories(),
                 'open-appearance': () => this.openAppearance(),
                 'open-shortcuts': () => this.openShortcuts(),
                 'open-anon': () => this.openAnon(),
@@ -4575,6 +5351,9 @@
                 'close-modal': () => this.closeModals(),
                 'model-off': () => { this.setModel(null); this.closeModals(); },
                 'repo-save': () => this.saveRepo(),
+                'repo-browse': () => this.browseRepos(),
+                'repo-link': () => this.linkBrowsedRepos(),
+                'repo-browse-close': () => this.closeRepoBrowse(),
                 'repo-reset': () => this.resetRepoForm(),
                 'repo-none': () => {
                     this.conv = Store.updateConversation(this.conv.id, { repoIds: [] });
@@ -4659,7 +5438,7 @@
             document.addEventListener('click', (e) => {
                 const target = e.target.closest('[data-act]');
                 if (!target) {
-                    if (!e.target.closest('#chatMenu')) $('chatMenu').hidden = true;
+                    if (!e.target.closest('#chatMenu, .conv-menu')) this.closeChatMenu();
                     return;
                 }
                 if (this.dialogOpen() && !e.target.closest('#dialog')) return;
@@ -4746,6 +5525,23 @@
                 if (this.conv) Store.setDraft(this.conv.id, input.value);
             });
             input.addEventListener('keydown', (e) => {
+                // Formatting, while the composer has focus. Cmd/Ctrl+B means
+                // bold in every other text field there is, so inside this one
+                // it means bold rather than the sidebar — the sidebar toggle is
+                // still there everywhere else.
+                const mod = e.metaKey || e.ctrlKey;
+                if (mod && !e.altKey) {
+                    const key = e.key.toLowerCase();
+                    const wrap = e.shiftKey
+                        ? (key === 'e' ? 'fence' : null)
+                        : ({ b: '**', i: '*', e: '`' })[key] || null;
+                    if (wrap) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.wrapSelection(wrap);
+                        return;
+                    }
+                }
                 if (!$('suggest').hidden) {
                     if (e.key === 'ArrowDown') { e.preventDefault(); this.moveSuggest(1); return; }
                     if (e.key === 'ArrowUp') { e.preventDefault(); this.moveSuggest(-1); return; }
@@ -4773,14 +5569,26 @@
                 }
             });
             input.addEventListener('paste', async (e) => {
-                const items = e.clipboardData && e.clipboardData.items;
-                if (!items) return;
-                const files = Array.from(items).filter(i => i.kind === 'file');
-                if (!files.length) return;
+                const data = e.clipboardData;
+                if (!data) return;
+                const files = Array.from(data.items || []).filter(i => i.kind === 'file');
+                if (files.length) {
+                    e.preventDefault();
+                    const built = await Attach.fromClipboard(data.items);
+                    this.attachments = this.attachments.concat(built);
+                    this.renderAttachments();
+                    return;
+                }
+                // A wall of pasted text is a document, not a sentence: it goes
+                // in as an attachment so the question you are asking about it
+                // stays readable.
+                const pasted = data.getData('text/plain') || '';
+                if (!Attach.pasteIsLong(pasted)) return;
                 e.preventDefault();
-                const built = await Attach.fromClipboard(items);
-                this.attachments = this.attachments.concat(built);
+                this.attachments = this.attachments.concat([Attach.fromText(pasted)]);
                 this.renderAttachments();
+                this.updateHints();
+                input.focus();
             });
 
             const drop = document.querySelector('.main');
@@ -4830,6 +5638,11 @@
             $('convSearch').addEventListener('input', () => this.renderList());
             $('modelSearch').addEventListener('input', () => this.renderModels());
             $('promptSearch').addEventListener('input', () => this.renderPrompts());
+            $('repoBrowseFilter').addEventListener('input', () => this.renderBrowsedRepos());
+            $('memorySearch').addEventListener('input', () => this.renderMemories());
+            $('setMemoryCapture').addEventListener('change', (e) => {
+                this.saveSettings({ memoryCapture: e.target.checked });
+            });
             $('globalSearch').addEventListener('input', () => this.renderSearch());
             $('searchArchived').addEventListener('change', () => this.renderSearch());
             $('findInput').addEventListener('input', () => this.runFind());

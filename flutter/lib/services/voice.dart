@@ -13,6 +13,37 @@ class Voice extends ChangeNotifier {
   bool listening = false;
   String? speakingId;
 
+  /// Why dictation stopped, when it stopped for a reason worth saying. Every
+  /// one of these used to end as a button that turned itself off again with
+  /// nothing said, which is indistinguishable from a broken button.
+  String? lastError;
+
+  static String? reasonFor(String code) {
+    switch (code) {
+      case 'error_permission':
+      case 'error_speech_timeout_permission':
+        return 'Dictation needs permission to use the microphone. Allow it in '
+            'the app settings and try again.';
+      case 'error_audio':
+      case 'error_audio_error':
+        return 'No microphone was found.';
+      case 'error_network':
+      case 'error_network_timeout':
+        return 'Dictation could not reach the speech service. It needs a '
+            'connection.';
+      case 'error_no_match':
+      case 'error_speech_timeout':
+        return 'Nothing was heard.';
+      case 'error_busy':
+        return 'The microphone is still busy from the last time. Try again in '
+            'a moment.';
+      case 'error_client':
+        return null;
+      default:
+        return 'Dictation stopped unexpectedly.';
+    }
+  }
+
   Future<bool> canListen() async {
     if (_sttChecked) return _sttReady;
     _sttChecked = true;
@@ -22,17 +53,23 @@ class Voice extends ChangeNotifier {
           listening = false;
           notifyListeners();
         }
-      }, onError: (_) {
+      }, onError: (e) {
+        lastError = reasonFor(e.errorMsg);
         listening = false;
         notifyListeners();
       });
+      if (!_sttReady) {
+        lastError = 'Dictation is not available on this device.';
+      }
     } catch (_) {
       _sttReady = false;
+      lastError = 'Dictation is not available on this device.';
     }
     return _sttReady;
   }
 
   Future<void> startListening(void Function(String text) onText) async {
+    lastError = null;
     if (!await canListen() || listening) return;
     listening = true;
     notifyListeners();
@@ -42,6 +79,7 @@ class Voice extends ChangeNotifier {
         listenOptions: SpeechListenOptions(partialResults: true),
       );
     } catch (_) {
+      lastError = reasonFor('error_busy');
       listening = false;
       notifyListeners();
     }

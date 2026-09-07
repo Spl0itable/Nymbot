@@ -80,6 +80,25 @@
             <p>The catalog moves as models are released and retired. A model you pinned that has since gone
                 away falls back to standard routing rather than failing, and tells you.</p>
 
+            <h2 id="effort">Asking it to think harder</h2>
+            <p>The <strong>Effort</strong> chip on a Pro chat says how much work each reply is worth, and
+                <code>?effort</code> sets it by name.</p>
+            <ul>
+                <li><strong>Normal</strong> &mdash; one pass. The default.</li>
+                <li><strong>Careful</strong> &mdash; the model plans the answer before writing it: what is
+                    actually being asked, what it depends on, what would make an obvious answer wrong. You
+                    never see the plan; you see what it produced.</li>
+                <li><strong>Deep</strong> &mdash; it also reads its own answer back against the question and
+                    corrects it before you see it.</li>
+            </ul>
+            <p>Each step is another model call, so a careful reply costs roughly twice a normal one and a
+                deep reply roughly three times. The toolbar shows the range before you send, and the
+                reservation covers every pass the level could take &mdash; only what was actually used is
+                charged.</p>
+            <p>A <a href="/docs/git/">repo task</a> ignores the setting. It already runs the model in a loop
+                on a budget of its own, and stacking a second budget on top of it would only make the price
+                harder to predict.</p>
+
             <h2 id="reasoning">Reasoning and vision</h2>
             <p>When a model shows its chain of thought &mdash; the standard tier's reasoning route, or a Pro
                 model that exposes it &mdash; the reply carries a collapsed

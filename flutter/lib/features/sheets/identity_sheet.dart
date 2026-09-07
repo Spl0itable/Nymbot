@@ -172,23 +172,6 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   ),
                 ),
               ),
-            if (I18n.available.isNotEmpty) ...[
-              const Divider(height: 32),
-              DropdownButtonFormField<String>(
-                // ignore: deprecated_member_use
-                value: I18n.lang,
-                decoration: InputDecoration(labelText: t('Language')),
-                items: [
-                  const DropdownMenuItem(value: 'en', child: Text('English')),
-                  for (final lang in I18n.available)
-                    if (lang.code != 'en')
-                      DropdownMenuItem(value: lang.code, child: Text(lang.label)),
-                ],
-                onChanged: (code) {
-                  if (code != null) app.setLanguage(code);
-                },
-              ),
-            ],
             const Divider(height: 32),
             TextButton(
               onPressed: () => _transfer(app),

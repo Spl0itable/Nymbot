@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/conversation.dart';
+import '../models/memory.dart';
 import '../models/schedule.dart';
 import '../models/workspace.dart';
 
@@ -124,6 +125,43 @@ class Store {
 
   Future<void> saveWorkspaces(List<Workspace> list) => _prefs.setString(
       'workspaces', Workspace.encodeList(list.take(40).toList()));
+
+  /// What Nymbot has been told to remember, newest first.
+  List<Memory> memories() => Memory.decodeList(_prefs.getString('memories'));
+
+  Future<void> saveMemories(List<Memory> list) => _prefs.setString(
+      'memories', Memory.encodeList(list.take(Memory.maxKept).toList()));
+
+  /// Adds or replaces one entry. The same fact told twice is one fact: a chat
+  /// that repeats itself should not fill memory with copies.
+  Future<Memory?> saveMemory(Memory entry) async {
+    entry.text = entry.text.trim();
+    if (entry.text.length > Memory.textCap) {
+      entry.text = entry.text.substring(0, Memory.textCap);
+    }
+    if (entry.text.isEmpty) return null;
+    entry.updatedAt = DateTime.now();
+    final list = memories();
+    list.removeWhere((m) =>
+        m.id != entry.id &&
+        m.scope == entry.scope &&
+        m.text.toLowerCase() == entry.text.toLowerCase());
+    final at = list.indexWhere((m) => m.id == entry.id);
+    if (at == -1) {
+      list.insert(0, entry);
+    } else {
+      list[at] = entry;
+    }
+    await saveMemories(list);
+    return entry;
+  }
+
+  Future<void> deleteMemory(String id) async {
+    final list = memories()..removeWhere((m) => m.id == id);
+    await saveMemories(list);
+  }
+
+  Future<void> clearMemories() => saveMemories(const []);
 
   List<SavedPrompt> prompts() {
     final raw = _prefs.getString('prompts');
@@ -302,6 +340,7 @@ class Store {
       'personas': customPersonas().map((p) => p.toJson()).toList(),
       'prompts': prompts().map((p) => p.toJson()).toList(),
       'workspaces': workspaces().map((w) => w.toJson()).toList(),
+      'memories': memories().map((m) => m.toJson()).toList(),
       'bots': bots().map((b) => b.toJson()).toList(),
       'schedules': schedules().map((s) => s.toJson()).toList(),
       'conversations': conversations()
