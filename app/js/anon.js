@@ -85,7 +85,10 @@
 
         setEnabled(on) {
             Store.setSettings({ anon: !!on });
-            if (on) { this.ensure(); this.flush().catch(() => { }); }
+            if (on) {
+                this.ensure();
+                this.flush().then(() => this.autoTopUp()).catch(() => { });
+            }
         },
 
         ready() { return !!(this.enabled() && this.state && this.state.current); },
@@ -365,6 +368,54 @@
             let credited = 0;
             while (this._tokens(tier).length) credited += await this._redeem(tier);
             return credited;
+        },
+
+        /// Moves credits across on its own, so anonymous mode does not mean
+        /// remembering to fund a key by hand before every chat.
+        ///
+        /// Only ever moves from the nym to the throwaway key, never the other
+        /// way, and never more than the nym actually holds. One call at a time:
+        /// a second while the first is still minting would spend the same
+        /// balance twice.
+        async autoTopUp(options) {
+            const opts = options || {};
+            const settings = Store.settings();
+            if (!settings.anonAutoTop || !this.ready()) return null;
+            if (this._topping) return this._topping;
+
+            const floor = Math.max(0, parseInt(settings.anonAutoTopFloor, 10) || 0);
+            const amount = Math.max(1, parseInt(settings.anonAutoTopAmount, 10) || 25);
+            const want = settings.anonAutoTopTier || 'both';
+            const tiers = want === 'both' ? ['standard', 'pro'] : [want];
+
+            this._topping = (async () => {
+                const moved = {};
+                try {
+                    const b = await this.balances();
+                    for (const tier of tiers) {
+                        const here = tier === 'pro' ? b.anonPro : b.anon;
+                        const nym = tier === 'pro' ? b.identityPro : b.identity;
+                        if (here == null || nym == null) continue;
+                        if (!opts.force && here >= floor) continue;
+                        if (opts.force && here >= floor + amount) continue;
+                        const take = Math.min(amount, nym);
+                        if (take <= 0) continue;
+                        try {
+                            const credited = await this.moveCredits(take, tier);
+                            if (credited > 0) moved[tier] = credited;
+                        } catch (_) {
+                            // A tier that cannot be funded is not a reason to
+                            // skip the other one.
+                        }
+                    }
+                } catch (_) {
+                    return null;
+                } finally {
+                    this._topping = null;
+                }
+                return Object.keys(moved).length ? moved : null;
+            })();
+            return this._topping;
         },
 
         async balances() {

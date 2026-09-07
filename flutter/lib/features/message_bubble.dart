@@ -29,6 +29,8 @@ class MessageBubble extends StatefulWidget {
     required this.selfPubkey,
     required this.settings,
     required this.onAction,
+    this.selfName,
+    this.selfPicture = '',
     this.grouped = false,
     this.speaking = false,
     this.highlighted = false,
@@ -36,6 +38,11 @@ class MessageBubble extends StatefulWidget {
 
   final ChatMessage message;
   final String selfPubkey;
+
+  /// A published kind-0 name and picture, when the account has them and the
+  /// chat is not anonymous.
+  final String? selfName;
+  final String selfPicture;
   final AppSettings settings;
   final void Function(MessageAction action, ChatMessage message) onAction;
   final bool grouped;
@@ -73,7 +80,11 @@ class _MessageBubbleState extends State<MessageBubble> {
     final avatar = settings.avatars && !widget.grouped
         ? (m.role == ChatRole.bot
             ? const NymAvatar(seed: 'nymbot', size: 30, bot: true)
-            : NymAvatar(seed: widget.selfPubkey, size: 30))
+            : NymAvatar(
+                seed: widget.selfPubkey,
+                size: 30,
+                picture: widget.selfPicture,
+              ))
         : const SizedBox(width: 30, height: 0);
 
     final bubble = Flexible(
@@ -108,8 +119,14 @@ class _MessageBubbleState extends State<MessageBubble> {
   Widget _author(BuildContext context, ChatMessage m, bool self) {
     final theme = Theme.of(context);
     final bot = m.role == ChatRole.bot;
-    final name = bot ? 'nymbot' : NymIdentity.name(widget.selfPubkey);
+    final published = widget.selfName;
+    final name = bot
+        ? 'nymbot'
+        : (published != null && published.isNotEmpty)
+            ? published
+            : NymIdentity.name(widget.selfPubkey);
     final suffix = bot ? 'nymbot' : widget.selfPubkey;
+    final showSuffix = bot || published == null || published.isEmpty;
     return Padding(
       padding: const EdgeInsets.only(bottom: 3),
       child: Row(
@@ -123,15 +140,16 @@ class _MessageBubbleState extends State<MessageBubble> {
               color: bot ? theme.colorScheme.primary : NymIdentity.colour(suffix),
             ),
           ),
-          Text(
-            '#${bot ? _botSuffix : NymIdentity.suffix(widget.selfPubkey)}',
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w300,
-              color: (bot ? theme.colorScheme.primary : NymIdentity.colour(suffix))
-                  .withValues(alpha: 0.7),
+          if (showSuffix)
+            Text(
+              '#${bot ? _botSuffix : NymIdentity.suffix(widget.selfPubkey)}',
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w300,
+                color: (bot ? theme.colorScheme.primary : NymIdentity.colour(suffix))
+                    .withValues(alpha: 0.7),
+              ),
             ),
-          ),
           if (bot)
             Padding(
               padding: const EdgeInsets.only(left: 3),
@@ -228,9 +246,15 @@ class _MessageBubbleState extends State<MessageBubble> {
                           color: NymbotColors.lightning.withValues(alpha: 0.4)),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text('⚡ ${m.cost}',
-                        style: const TextStyle(
-                            fontSize: 10, color: NymbotColors.lightning)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt, size: 11, color: NymbotColors.lightning),
+                        Text('${m.cost}',
+                            style: const TextStyle(
+                                fontSize: 10, color: NymbotColors.lightning)),
+                      ],
+                    ),
                   ),
                 if (settings.timestamps)
                   Padding(
@@ -346,7 +370,9 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('💭 ${t('Reasoning')}', style: const TextStyle(fontSize: 10.5)),
+                const Icon(Icons.psychology_outlined, size: 12),
+                const SizedBox(width: 3),
+                Text(t('Reasoning'), style: const TextStyle(fontSize: 10.5)),
                 Icon(open ? Icons.expand_less : Icons.expand_more, size: 13),
               ],
             ),

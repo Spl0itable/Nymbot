@@ -29,6 +29,12 @@ const { slugs, runtime: runtimeStrings, sources } = site;
 const html = site.documents.find((d) => d.slug === null).html;
 const terms = site.documents.find((d) => d.slug === 'terms').html;
 const pageSources = sourceStrings(html);
+
+// Read out of the page rather than written down twice. The four assertions
+// below are about what the pipeline does to body copy, not about what the copy
+// currently says, and hardcoding the sentence made them fail the day it was
+// reworded rather than the day the pipeline broke.
+const TAGLINE = /<p class="tagline">([^<]+)<\/p>/.exec(html)[1];
 const render = (doc, lang, strings, avail, opts = {}) =>
   renderPage(doc, lang, strings, avail, { slugs, runtime: runtimeStrings, ...opts });
 
@@ -40,7 +46,7 @@ ok(!sources.includes('Nymbot'), 'a bare brand name is protected from translation
 ok(!sources.some((s) => s.startsWith('https://')), 'URLs are not extracted');
 ok(applyTranslations(html, (v) => v) === html,
    'an identity substitution reproduces the document byte for byte');
-ok(sources.includes('Private. Paid in sats. Yours alone.'), 'the tagline is translatable');
+ok(sources.includes(TAGLINE), 'the tagline is translatable', TAGLINE);
 
 // --- the demo chat in the phone mockup -------------------------------------
 // Its bubbles are written by script.js at runtime, so they are marked with
@@ -88,7 +94,7 @@ ok(pathFor('en', 'terms') === '/terms/' && pathFor('es', 'terms') === '/es/terms
   ok(withQuote.includes('&quot; onload=&quot;alert(1)&quot;'), 'it is escaped instead');
 
   const withTags = applyTranslations(html, (v) =>
-    v === 'Private. Paid in sats. Yours alone.' ? '<script>alert(1)</script>' : v);
+    v === TAGLINE ? '<script>alert(1)</script>' : v);
   ok(!withTags.includes('<script>alert(1)</script>'), 'a tag in translated body text is escaped');
   ok(withTags.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'it renders as literal text');
 
@@ -107,7 +113,7 @@ ok(!es.includes('dir="rtl"'), 'a LTR language gets no dir attribute');
 ok(es.includes(`<link rel="canonical" href="${SITE}/es/">`), 'canonical points at the language path');
 ok(es.includes(`<meta property="og:url" content="${SITE}/es/">`), 'og:url points at the language path');
 ok(es.includes('<meta property="og:locale" content="es">'), 'og:locale is set');
-ok(es.includes('[es]Private. Paid in sats. Yours alone.'), 'body copy is translated');
+ok(es.includes(`[es]${TAGLINE}`), 'body copy is translated');
 ok(es.includes('#######'), 'the ASCII logo survives untouched');
 ok(!es.includes('[es]Nymbot</p>'), 'the brand name is not mangled');
 
@@ -118,7 +124,7 @@ ok(isRtl('ar') && !isRtl('es'), 'the RTL set is correct');
 const en = render(html, 'en', {}, available);
 ok(en.includes('<html lang="en">'), 'English keeps its language attribute');
 ok(en.includes(`<link rel="canonical" href="${SITE}/">`), 'English canonical stays at the root');
-ok(en.includes('Private. Paid in sats. Yours alone.') && !en.includes('[es]'),
+ok(en.includes(TAGLINE) && !en.includes('[es]'),
    'English is passed through untranslated');
 
 // --- a standalone page renders at its own path -----------------------------

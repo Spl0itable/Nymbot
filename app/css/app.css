@@ -360,11 +360,29 @@ kbd {
 }
 
 .brand {
-    font-family: var(--mono);
-    font-weight: 700;
-    letter-spacing: 0.06em;
+    display: inline-flex;
+    align-items: center;
     color: var(--primary);
 }
+.brand-mark { display: block; }
+
+.icon { display: block; flex: 0 0 auto; }
+.icon-wrap { display: inline-flex; }
+
+.icon-picker { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+.icon-choice {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-btn);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+.icon-choice:hover { border-color: var(--line-strong); color: var(--text); }
+.icon-choice.is-active { border-color: var(--primary); color: var(--primary); background: var(--bubble-self); }
 
 .sidebar-head-actions { display: flex; align-items: center; gap: 0.15rem; }
 
@@ -410,7 +428,7 @@ kbd {
 .conv-badge { font-size: 0.62rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; flex: 0 0 auto; }
 .conv-badge.is-repo { color: var(--lightning); }
 .conv-badge.is-tag { color: var(--text-faint); }
-.conv-pin { color: var(--lightning); font-size: 0.7rem; flex: 0 0 auto; }
+.conv-pin { color: var(--lightning); flex: 0 0 auto; display: inline-flex; }
 
 .sidebar-links { border-top: 1px solid var(--line); padding: 0.35rem 0.45rem; display: grid; gap: 1px; }
 .side-link {
@@ -445,15 +463,16 @@ kbd {
     min-width: 0;
     /* Tall enough to hit with a thumb before the balance line arrives. */
     min-height: 40px;
-    justify-content: center;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
+    gap: 0.5rem;
     border: 0;
     background: transparent;
     cursor: pointer;
     text-align: left;
 }
+.who-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.who-nym { display: flex; align-items: center; gap: 0.2rem; }
 .who-nym { font-family: var(--mono); font-size: 0.85rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .who-balance { font-size: 0.75rem; color: var(--text-faint); }
 
@@ -588,6 +607,8 @@ kbd {
 .context-chip.is-repo { border-color: rgba(247, 147, 26, 0.45); color: var(--lightning); }
 .context-chip.is-persona { border-color: var(--line-strong); color: var(--primary); }
 .context-chip .x { opacity: 0.6; }
+.chip-writes { display: inline-flex; opacity: 0.75; }
+.chat-badge { display: inline-flex; align-items: center; gap: 0.25rem; }
 
 /* --- messages ------------------------------------------------------------ */
 
@@ -646,6 +667,10 @@ html[data-avatars="off"] .message-group { gap: 0; }
     background: var(--bubble-bot);
 }
 
+.who-row { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
+.who-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; background: var(--bubble-bot); }
+.who-nip05 { color: var(--secondary); }
+
 .chat-message {
     display: flex;
     flex-wrap: wrap;
@@ -686,7 +711,7 @@ html[data-avatars="off"] .message-group { gap: 0; }
 .chat-message.self .message-author { justify-content: flex-end; }
 .message-author .nym-suffix { opacity: 0.7; font-size: 0.9em; font-weight: 100; }
 .bot-author { color: var(--primary); }
-.verified-tick { margin-left: 0.2rem; color: var(--secondary); }
+.verified-tick { margin-left: 0.2rem; color: var(--secondary); display: inline-flex; align-items: center; }
 .author-model { color: var(--text-faint); font-weight: 400; font-size: 0.92em; margin-left: 0.3rem; }
 
 .message-content {
@@ -845,6 +870,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     cursor: pointer;
 }
 .reasoning-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; }
+.reasoning-chip, .cost-chip { display: inline-flex; align-items: center; gap: 0.25rem; vertical-align: middle; }
 .cost-chip { margin-left: 0.35rem; border-color: rgba(247, 147, 26, 0.4); color: var(--lightning); cursor: default; }
 .repo-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; border-color: rgba(247, 147, 26, 0.35); color: var(--lightning); cursor: default; }
 .source-chip { margin: 0.35rem 0.3rem 0 0; }
@@ -903,6 +929,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     align-items: center;
     gap: 0.2rem;
 }
+.msg-action { justify-content: center; min-width: 24px; }
 .msg-action:hover { background: var(--bubble-bot); color: var(--text); }
 .msg-action.is-on { color: var(--primary); }
 .msg-action.is-down.is-on { color: var(--danger); }
@@ -1123,7 +1150,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .model-name { flex: 1; min-width: 0; }
 .model-desc { display: block; font-size: 0.78rem; color: var(--text-faint); }
 .model-cost { font-size: 0.78rem; color: var(--lightning); white-space: nowrap; }
-.model-star { border: 0; background: transparent; cursor: pointer; color: var(--text-faint); font-size: 0.9rem; padding: 0 0.2rem; }
+.model-star { border: 0; background: transparent; cursor: pointer; color: var(--text-faint); padding: 0 0.2rem; display: inline-flex; align-items: center; }
 .model-star.is-on { color: var(--lightning); }
 
 .repo-list, .persona-list, .prompt-list, .pinned-list, .search-list { display: grid; gap: 0.35rem; margin: 0.6rem 0; max-height: 38vh; overflow-y: auto; }
@@ -1152,7 +1179,8 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .row-btn.danger:hover { color: var(--danger); }
 .repo-check { width: 16px; height: 16px; flex: 0 0 auto; }
 .repo-writes { font-size: 0.68rem; color: var(--lightning); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; }
-.persona-emoji { font-size: 1.1rem; flex: 0 0 auto; }
+.persona-emoji { flex: 0 0 auto; display: inline-flex; color: var(--text-dim); }
+.persona-row.is-on .persona-emoji { color: var(--primary); }
 
 .repo-form { border-top: 1px solid var(--line); padding-top: 0.5rem; margin-top: 0.6rem; }
 

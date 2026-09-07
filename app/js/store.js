@@ -32,6 +32,10 @@
         proModel: null,
         git: null,
         anon: false,
+        anonAutoTop: true,
+        anonAutoTopFloor: 10,
+        anonAutoTopAmount: 25,
+        anonAutoTopTier: 'both',
         theme: 'system',
         density: 'comfortable',
         fontScale: 1,
@@ -64,42 +68,42 @@
         {
             id: 'builtin-engineer',
             builtin: true,
-            emoji: '🛠️',
+            icon: 'tools',
             name: 'Staff engineer',
             instructions: 'You are a meticulous staff software engineer. Prefer precise, working code over prose. Name the files and lines you mean. Call out edge cases, failure modes and the cheapest correct fix. Never invent APIs — say when you are unsure.'
         },
         {
             id: 'builtin-reviewer',
             builtin: true,
-            emoji: '🔍',
+            icon: 'search',
             name: 'Code reviewer',
             instructions: 'Review the code as a demanding reviewer would. Report only real defects and concrete simplifications, most severe first, each with the failing scenario that proves it. No praise, no summary of what the code does.'
         },
         {
             id: 'builtin-writer',
             builtin: true,
-            emoji: '✍️',
+            icon: 'pen',
             name: 'Editor',
             instructions: 'You are a ruthless editor. Cut every sentence that carries no information. Prefer plain words, active voice and concrete nouns. Preserve the author\'s meaning and voice exactly.'
         },
         {
             id: 'builtin-socratic',
             builtin: true,
-            emoji: '🎓',
+            icon: 'graduation',
             name: 'Tutor',
             instructions: 'Teach by building the idea up from what the reader already knows. Give one worked example before any abstraction, check understanding with a single pointed question, and never dump a wall of definitions.'
         },
         {
             id: 'builtin-analyst',
             builtin: true,
-            emoji: '📊',
+            icon: 'chart',
             name: 'Analyst',
             instructions: 'Answer with structure: the claim, the evidence, the uncertainty. Quantify wherever a number exists. State explicitly which parts are estimates and what would change your mind.'
         },
         {
             id: 'builtin-terse',
             builtin: true,
-            emoji: '⚡',
+            icon: 'terse',
             name: 'Terse',
             instructions: 'Answer in as few words as the question allows. No preamble, no restating the question, no closing offer of further help.'
         }
@@ -204,6 +208,9 @@
         savePersona(persona) {
             const list = this.customPersonas();
             const entry = Object.assign({ id: persona.id || uid() }, persona, { builtin: false });
+            // Anything stored before the icon set existed carried an emoji.
+            if (!entry.icon || !/^[a-z]+$/.test(entry.icon)) entry.icon = 'robot';
+            delete entry.emoji;
             const i = list.findIndex(p => p.id === entry.id);
             if (i === -1) list.push(entry); else list[i] = entry;
             write('personas', list.slice(0, 60));

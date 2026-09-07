@@ -6,6 +6,8 @@ import 'package:nymbot/features/command_sheet.dart';
 import 'package:nymbot/features/gate_screen.dart';
 import 'package:nymbot/features/markdown_body.dart';
 import 'package:nymbot/features/nym_avatar.dart';
+import 'package:nymbot/features/nym_icons.dart';
+import 'package:nymbot/services/profiles.dart';
 import 'package:nymbot/models/conversation.dart';
 import 'package:nymbot/models/workspace.dart';
 import 'package:nymbot/services/chat_engine.dart';
@@ -264,6 +266,89 @@ void main() {
     expect(back.model, 'Claude Opus 5');
     expect(back.repos, ['nymbot/app']);
     expect(back.attachments.single.name, 'x.txt');
+  });
+
+  test('a persona carries an icon name, not an emoji', () {
+    for (final p in Persona.builtins) {
+      expect(NymIcons.persona.containsKey(p.icon), isTrue, reason: p.name);
+      expect(p.icon, matches(RegExp(r'^[a-z]+$')), reason: p.name);
+    }
+    // Anything written before the icon set existed falls back rather than
+    // drawing a blank square.
+    expect(NymIcons.forPersona('\u{1F916}'), NymIcons.forPersona('robot'));
+    expect(NymIcons.forPersona(null), NymIcons.forPersona('robot'));
+  });
+
+  testWidgets('the app mark is drawn rather than a letter', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(body: Center(child: NymbotMark(size: 32))),
+    ));
+    await tester.pump();
+    expect(find.byType(NymbotMark), findsOneWidget);
+    expect(find.byType(CustomPaint), findsWidgets);
+    expect(find.byType(Text), findsNothing);
+  });
+
+  testWidgets('an avatar falls back to the identicon without a picture',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Column(children: [
+          NymAvatar(seed: 'abc', size: 30),
+          NymAvatar(seed: 'nymbot', size: 30, bot: true),
+        ]),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byType(NymAvatar), findsNWidgets(2));
+    // The bot wears the app mark; a person with no profile wears their grid.
+    expect(find.byType(NymbotMark), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+  });
+
+  test('the auto top-up settings survive a round trip and default sensibly', () {
+    final fresh = AppSettings();
+    expect(fresh.anonAutoTop, isTrue);
+    expect(fresh.anonAutoTopFloor, greaterThan(0));
+    expect(fresh.anonAutoTopAmount, greaterThan(0));
+    expect(fresh.anonAutoTopTier, 'both');
+
+    final tuned = AppSettings(
+      anonAutoTop: false,
+      anonAutoTopFloor: 3,
+      anonAutoTopAmount: 50,
+      anonAutoTopTier: 'pro',
+    );
+    final back = AppSettings.fromJson(tuned.toJson());
+    expect(back.anonAutoTop, isFalse);
+    expect(back.anonAutoTopFloor, 3);
+    expect(back.anonAutoTopAmount, 50);
+    expect(back.anonAutoTopTier, 'pro');
+  });
+
+  testWidgets('nothing is moved while anonymous mode is off', (tester) async {
+    final controller = await AppController.boot();
+    addTearDown(controller.dispose);
+    // The setting is on by default; the mode is not, and the mode is what
+    // decides. Without a throwaway key there is nothing to fund.
+    expect(controller.settings.anonAutoTop, isTrue);
+    expect(controller.anon.enabled, isFalse);
+    expect(await controller.autoTopUp(), isNull);
+    expect(await controller.autoTopUp(force: true), isNull);
+  });
+
+  test('a profile only replaces the generated nym when there is one', () {
+    const empty = NostrProfile();
+    expect(empty.isEmpty, isTrue);
+    const named = NostrProfile(name: 'satoshi');
+    expect(named.isEmpty, isFalse);
+    final back = NostrProfile.fromJson(
+      const NostrProfile(name: 'satoshi', nip05: 'a@b.c', picture: 'https://x/y.png')
+          .toJson(),
+    );
+    expect(back.name, 'satoshi');
+    expect(back.nip05, 'a@b.c');
+    expect(back.picture, 'https://x/y.png');
   });
 
   test('every local command is one the app answers itself', () {

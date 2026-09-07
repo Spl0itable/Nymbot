@@ -12,6 +12,7 @@ import '../services/anon.dart';
 import '../services/chat_engine.dart';
 import '../services/nymbot_api.dart';
 import '../services/pq_announce.dart';
+import '../services/profiles.dart';
 import '../services/relay_pool.dart';
 import 'identity.dart';
 import 'store.dart';
@@ -29,6 +30,8 @@ class AppController extends ChangeNotifier {
     final api = NymbotApi();
     final anon = AnonMode(store, api, pq);
     final c = AppController._(store, identity, relays, pq, api, anon);
+    c.profiles = Profiles(store, relays);
+    c.profiles.addListener(c.notifyListeners);
     await anon.load();
     c.signedIn = await identity.restore();
     c._loadSettings();
@@ -42,6 +45,7 @@ class AppController extends ChangeNotifier {
   final PqAnnounce pq;
   final NymbotApi api;
   final AnonMode anon;
+  late final Profiles profiles;
 
   late final ChatEngine chat = ChatEngine(
     identity: identity,
@@ -55,6 +59,7 @@ class AppController extends ChangeNotifier {
   bool _entered = false;
   Timer? _bootWork;
   bool sending = false;
+  bool _topping = false;
   String? status;
   int relaysUp = 0;
 
@@ -150,8 +155,68 @@ class AppController extends ChangeNotifier {
 
   Future<void> setAnonEnabled(bool on) async {
     await anon.setEnabled(on);
-    if (on) await anon.flush(identity: identity.signer);
+    if (on) {
+      await anon.flush(identity: identity.signer);
+      await autoTopUp();
+    }
     notifyListeners();
+  }
+
+  /// Moves credits onto the throwaway key when it is running low, so
+  /// anonymous mode does not mean funding a key by hand before every chat.
+  ///
+  /// Only ever moves from the nym to the throwaway key, never the other way,
+  /// and never more than the nym actually holds. One call at a time: a second
+  /// while the first is still minting would spend the same balance twice.
+  Future<Map<String, int>?> autoTopUp({bool force = false}) async {
+    if (!settings.anonAutoTop || !anon.ready) return null;
+    if (_topping) return null;
+    _topping = true;
+    try {
+      final floor = settings.anonAutoTopFloor < 0 ? 0 : settings.anonAutoTopFloor;
+      final amount =
+          settings.anonAutoTopAmount < 1 ? 1 : settings.anonAutoTopAmount;
+      final want = settings.anonAutoTopTier;
+      final tiers = want == 'both' ? const ['standard', 'pro'] : [want];
+
+      final here = await api.balance(await anon.signer());
+      final mine = await api.balance(identity.signer);
+      if (here.data['error'] != null || mine.data['error'] != null) return null;
+
+      final moved = <String, int>{};
+      for (final tier in tiers) {
+        final key = tier == 'pro' ? 'proBalance' : 'balance';
+        final have = (here.data[key] as num?)?.toInt();
+        final nym = (mine.data[key] as num?)?.toInt();
+        if (have == null || nym == null) continue;
+        if (!force && have >= floor) continue;
+        if (force && have >= floor + amount) continue;
+        final take = amount < nym ? amount : nym;
+        if (take <= 0) continue;
+        try {
+          final credited = await anon.moveCredits(identity.signer, take, tier);
+          if (credited > 0) moved[tier] = credited;
+        } catch (_) {
+          // A tier that cannot be funded is not a reason to skip the other.
+        }
+      }
+      if (moved.isEmpty) return null;
+      await refreshBalance();
+      return moved;
+    } catch (_) {
+      return null;
+    } finally {
+      _topping = false;
+    }
+  }
+
+  String describeTopUp(Map<String, int> moved) {
+    final parts = <String>[];
+    if (moved['standard'] != null) {
+      parts.add(t('{n} standard', {'n': moved['standard']}));
+    }
+    if (moved['pro'] != null) parts.add(t('{n} Pro', {'n': moved['pro']}));
+    return t('Moved {what} onto the throwaway key.', {'what': parts.join(', ')});
   }
 
   Future<void> setWebSearch(bool on) async {
@@ -371,6 +436,10 @@ class AppController extends ChangeNotifier {
       }
       await refreshBalance();
       await anon.flush(identity: identity.signer);
+      await autoTopUp();
+      // A published profile is what the account already tells the world;
+      // showing it costs no privacy and makes the app feel signed in.
+      await profiles.load(identity.pubkey);
       notifyListeners();
     });
   }
@@ -727,11 +796,19 @@ class AppController extends ChangeNotifier {
         }
       }
       if (res.lowBalance) {
-        await note(res.pro
-            ? t('Pro credits running low: {n} left. Tap Buy to top up.',
-                {'n': res.balance})
-            : t('Credits running low: {n} left. Tap Buy to top up.',
-                {'n': res.balance}));
+        // In an anonymous chat a low balance is usually the throwaway key
+        // running dry rather than the nym, which is what the automatic
+        // transfer is for.
+        final topped = conv.anon ? await autoTopUp() : null;
+        if (topped != null) {
+          await note(describeTopUp(topped));
+        } else {
+          await note(res.pro
+              ? t('Pro credits running low: {n} left. Tap Buy to top up.',
+                  {'n': res.balance})
+              : t('Credits running low: {n} left. Tap Buy to top up.',
+                  {'n': res.balance}));
+        }
       }
     } on ChatFailure catch (e) {
       if (e.cancelled) {
@@ -742,7 +819,13 @@ class AppController extends ChangeNotifier {
         } else {
           standardBalance = e.balance;
         }
-        await note(e.message);
+        final topped = conv.anon ? await autoTopUp(force: true) : null;
+        if (topped != null) {
+          await note('${describeTopUp(topped)} '
+              '${t('Send that again when you are ready.')}');
+        } else {
+          await note(e.message);
+        }
       } else {
         await _add(ChatMessage(
           id: bytesToHex(randomBytes(8)),

@@ -16,6 +16,7 @@ import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'message_bubble.dart';
 import 'nym_avatar.dart';
+import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
 import 'sheets/appearance_sheet.dart';
 import 'sheets/credits_sheet.dart';
@@ -273,7 +274,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final scoped = app.current?.repoIds ?? const <String>[];
       await app.note(app.repos
           .map((r) =>
-              '${scoped.contains(r.id) ? '●' : '○'} ${r.repo}'
+              '${scoped.contains(r.id) ? '[x]' : '[ ]'} ${r.repo}'
               '${r.branch.isEmpty ? '' : '@${r.branch}'}'
               '${r.allowWrites ? ' (writes)' : ''}')
           .join('\n'));
@@ -576,9 +577,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _messages(BuildContext context, AppController app) {
     if (app.messages.isEmpty && !app.sending) return _empty(context, app);
-    final selfPubkey = (app.current?.anon ?? false) && app.anon.ready
-        ? app.anon.pubkey ?? app.identity.pubkey
-        : app.identity.pubkey;
+    // An anonymous chat deliberately shows the throwaway key's own generated
+    // nym, never the published profile: the avatar would give away exactly
+    // what the mode exists to hide.
+    final anonymous = (app.current?.anon ?? false) && app.anon.ready;
+    final selfPubkey =
+        anonymous ? (app.anon.pubkey ?? app.identity.pubkey) : app.identity.pubkey;
+    final me = anonymous ? null : app.profiles.of(selfPubkey);
 
     return ListView.builder(
       controller: _scroll,
@@ -606,6 +611,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: MessageBubble(
             message: m,
             selfPubkey: selfPubkey,
+            selfName: me?.name,
+            selfPicture: me?.picture ?? '',
             settings: app.settings,
             grouped: grouped,
             speaking: _voice.speakingId == m.id,
@@ -1014,8 +1021,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         child: Column(
           children: [
             ListTile(
-              title: const Text('nymbot',
-                  style: TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold)),
+              title: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: NymbotMark(size: 26),
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.add),
                 tooltip: t('New chat'),
@@ -1092,20 +1101,53 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               ),
             const Divider(height: 1),
             ListTile(
-              leading: Icon(
-                Icons.circle,
-                size: 10,
-                color: app.relaysUp > 0
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).disabledColor,
+              leading: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  NymAvatar(
+                    seed: app.identity.pubkey,
+                    size: 28,
+                    picture: app.profiles.of(app.identity.pubkey).picture,
+                  ),
+                  Positioned(
+                    right: -1,
+                    bottom: -1,
+                    child: Icon(
+                      Icons.circle,
+                      size: 9,
+                      color: app.relaysUp > 0
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).disabledColor,
+                    ),
+                  ),
+                ],
               ),
-              title: Text(
-                app.identity.pubkey.isEmpty
-                    ? ''
-                    : NymIdentity.handle(app.identity.pubkey),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                overflow: TextOverflow.ellipsis,
-              ),
+              title: Builder(builder: (context) {
+                if (app.identity.pubkey.isEmpty) return const Text('');
+                final who = app.profiles.of(app.identity.pubkey);
+                return Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        who.hasProfile
+                            ? who.name
+                            : NymIdentity.handle(app.identity.pubkey),
+                        style: TextStyle(
+                          fontFamily: who.hasProfile ? null : 'monospace',
+                          fontSize: 13,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (who.nip05.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(Icons.verified,
+                            size: 12, color: Theme.of(context).colorScheme.secondary),
+                      ),
+                  ],
+                );
+              }),
               subtitle: Text(
                 app.standardBalance == null
                     ? t('{n} relays', {'n': app.relaysUp})

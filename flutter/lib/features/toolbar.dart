@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../core/theme/theme.dart';
 import 'i18n/i18n.dart';
+import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/models_sheet.dart';
@@ -109,7 +110,7 @@ class ContextBar extends StatelessWidget {
     }
 
     Widget chip(String label, Color colour, VoidCallback? onClear,
-        {VoidCallback? onTap}) {
+        {VoidCallback? onTap, IconData? leading, IconData? badge}) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap ?? onClear,
@@ -122,7 +123,15 @@ class ContextBar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (leading != null) ...[
+                Icon(leading, size: 12, color: colour),
+                const SizedBox(width: 4),
+              ],
               Text(label, style: TextStyle(fontSize: 11, color: colour)),
+              if (badge != null) ...[
+                const SizedBox(width: 3),
+                Icon(badge, size: 11, color: colour.withValues(alpha: 0.75)),
+              ],
               if (onClear != null) ...[
                 const SizedBox(width: 4),
                 Icon(Icons.close, size: 12, color: colour.withValues(alpha: 0.7)),
@@ -145,14 +154,15 @@ class ContextBar extends StatelessWidget {
         children: [
           for (final r in repos)
             chip(
-              '${r.display}${r.branch.isEmpty ? '' : '@${r.branch}'}'
-              '${r.allowWrites ? ' ✎' : ''}',
+              '${r.display}${r.branch.isEmpty ? '' : '@${r.branch}'}',
               NymbotColors.lightning,
               () => app.toggleRepoHere(r.id),
+              badge: r.allowWrites ? Icons.edit_outlined : null,
             ),
           if (persona != null)
-            chip('${persona.emoji} ${persona.name}', theme.colorScheme.primary,
-                () => app.setPersona(null)),
+            chip(persona.name, theme.colorScheme.primary,
+                () => app.setPersona(null),
+                leading: NymIcons.forPersona(persona.icon)),
           if (hasSystem)
             chip(t('Custom instructions'), theme.colorScheme.secondary, null,
                 onTap: () => showSystemPromptSheet(context)),

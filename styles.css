@@ -1339,16 +1339,21 @@ footer {
     min-width: 12rem;
     max-width: min(90vw, 34rem);
     overflow-y: auto;
-    columns: 2;
-    column-gap: 0.4rem;
+    /* Grid, not `columns`. A multi-column box with a capped height does not
+       scroll down at the cap — it fragments SIDEWAYS into as many columns as
+       the content needs, so 130-odd languages became a ten-column horizontal
+       scroll on a phone. A grid fills row by row and scrolls vertically, which
+       is the only way to reach the bottom of a list this long. */
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 0.4rem;
+    align-content: start;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
     background: var(--darker);
     border: 1px solid var(--glass-border);
     border-radius: 0.75rem;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-}
-
-.lang-picker-list li {
-    break-inside: avoid;
 }
 
 .lang-picker-list a {
@@ -1359,6 +1364,8 @@ footer {
     text-decoration: none;
     font-size: 0.82rem;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .lang-picker-list a:hover {
@@ -1373,7 +1380,7 @@ footer {
 
 @media (max-width: 640px) {
     .lang-picker-list {
-        columns: 1;
+        grid-template-columns: minmax(0, 1fr);
         max-width: 80vw;
     }
 }

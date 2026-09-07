@@ -1,14 +1,42 @@
 import 'package:flutter/material.dart';
 
+import 'nym_icons.dart';
+
 class NymAvatar extends StatelessWidget {
-  const NymAvatar({super.key, required this.seed, this.size = 30, this.bot = false});
+  const NymAvatar({
+    super.key,
+    required this.seed,
+    this.size = 30,
+    this.bot = false,
+    this.picture = '',
+  });
 
   final String seed;
   final double size;
   final bool bot;
 
+  /// A published kind-0 picture, when the account has one. A broken or slow
+  /// URL falls back to the generated identicon rather than a blank circle.
+  final String picture;
+
   @override
   Widget build(BuildContext context) {
+    if (!bot && picture.isNotEmpty) {
+      return ClipOval(
+        child: Image.network(
+          picture,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (context, _, __) => ClipOval(
+            child: CustomPaint(
+              size: Size.square(size),
+              painter: _IdenticonPainter(seed),
+            ),
+          ),
+        ),
+      );
+    }
     if (bot) {
       return Container(
         width: size,
@@ -18,15 +46,7 @@ class NymAvatar extends StatelessWidget {
           color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
         ),
         alignment: Alignment.center,
-        child: Text(
-          'n',
-          style: TextStyle(
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.bold,
-            fontSize: size * 0.52,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-        ),
+        child: NymbotMark(size: size * 0.74),
       );
     }
     return ClipOval(

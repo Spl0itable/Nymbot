@@ -92,28 +92,31 @@ class Persona {
     required this.id,
     required this.name,
     required this.instructions,
-    this.emoji = '🤖',
+    this.icon = 'robot',
     this.builtin = false,
   });
 
   final String id;
   final String name;
   final String instructions;
-  final String emoji;
+
+  /// A name from the shared icon set rather than an emoji, so the web app and
+  /// this one draw the same mark for the same persona.
+  final String icon;
   final bool builtin;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'instructions': instructions,
-        'emoji': emoji,
+        'icon': icon,
       };
 
   static Persona fromJson(Map<String, dynamic> j) => Persona(
         id: j['id'] as String,
         name: j['name'] as String? ?? '',
         instructions: j['instructions'] as String? ?? '',
-        emoji: j['emoji'] as String? ?? '🤖',
+        icon: j['icon'] as String? ?? 'robot',
       );
 
   static String encodeList(List<Persona> list) =>
@@ -134,7 +137,7 @@ class Persona {
     Persona(
       id: 'builtin-engineer',
       builtin: true,
-      emoji: '🛠️',
+      icon: 'tools',
       name: 'Staff engineer',
       instructions:
           'You are a meticulous staff software engineer. Prefer precise, working code over prose. '
@@ -144,7 +147,7 @@ class Persona {
     Persona(
       id: 'builtin-reviewer',
       builtin: true,
-      emoji: '🔍',
+      icon: 'search',
       name: 'Code reviewer',
       instructions:
           'Review the code as a demanding reviewer would. Report only real defects and concrete '
@@ -154,7 +157,7 @@ class Persona {
     Persona(
       id: 'builtin-writer',
       builtin: true,
-      emoji: '✍️',
+      icon: 'pen',
       name: 'Editor',
       instructions:
           'You are a ruthless editor. Cut every sentence that carries no information. Prefer plain '
@@ -163,7 +166,7 @@ class Persona {
     Persona(
       id: 'builtin-socratic',
       builtin: true,
-      emoji: '🎓',
+      icon: 'graduation',
       name: 'Tutor',
       instructions:
           'Teach by building the idea up from what the reader already knows. Give one worked example '
@@ -173,7 +176,7 @@ class Persona {
     Persona(
       id: 'builtin-analyst',
       builtin: true,
-      emoji: '📊',
+      icon: 'chart',
       name: 'Analyst',
       instructions:
           'Answer with structure: the claim, the evidence, the uncertainty. Quantify wherever a number '
@@ -182,7 +185,7 @@ class Persona {
     Persona(
       id: 'builtin-terse',
       builtin: true,
-      emoji: '⚡',
+      icon: 'terse',
       name: 'Terse',
       instructions:
           'Answer in as few words as the question allows. No preamble, no restating the question, '
@@ -398,6 +401,10 @@ class AppSettings {
     this.reduceMotion = false,
     this.webSearch = false,
     this.showCostEstimate = true,
+    this.anonAutoTop = true,
+    this.anonAutoTopFloor = 10,
+    this.anonAutoTopAmount = 25,
+    this.anonAutoTopTier = 'both',
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
@@ -420,6 +427,10 @@ class AppSettings {
   bool reduceMotion;
   bool webSearch;
   bool showCostEstimate;
+  bool anonAutoTop;
+  int anonAutoTopFloor;
+  int anonAutoTopAmount;
+  String anonAutoTopTier;
   SidebarGrouping grouping;
   String? defaultPersonaId;
   List<String> defaultRepoIds;
@@ -442,6 +453,10 @@ class AppSettings {
         'reduceMotion': reduceMotion,
         'webSearch': webSearch,
         'showCostEstimate': showCostEstimate,
+        'anonAutoTop': anonAutoTop,
+        'anonAutoTopFloor': anonAutoTopFloor,
+        'anonAutoTopAmount': anonAutoTopAmount,
+        'anonAutoTopTier': anonAutoTopTier,
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
@@ -472,6 +487,10 @@ class AppSettings {
         reduceMotion: j['reduceMotion'] == true,
         webSearch: j['webSearch'] == true,
         showCostEstimate: j['showCostEstimate'] != false,
+        anonAutoTop: j['anonAutoTop'] != false,
+        anonAutoTopFloor: (j['anonAutoTopFloor'] as num?)?.toInt() ?? 10,
+        anonAutoTopAmount: (j['anonAutoTopAmount'] as num?)?.toInt() ?? 25,
+        anonAutoTopTier: j['anonAutoTopTier'] as String? ?? 'both',
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:

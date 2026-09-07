@@ -121,7 +121,7 @@
     <div class="shell" id="shell" hidden>
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-head">
-                <span class="brand">nymbot</span>
+                <span class="brand" id="brand" title="Nymbot" role="img" aria-label="Nymbot"></span>
                 <div class="sidebar-head-actions">
                     <button class="icon-btn" type="button" data-act="open-palette" title="Command palette" aria-label="Command palette">
                         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -169,8 +169,11 @@
             </div>
             <div class="sidebar-foot">
                 <button class="who" type="button" data-act="open-settings">
-                    <span class="who-nym" id="whoNym">…</span>
-                    <span class="who-balance" id="whoBalance"></span>
+                    <img class="who-avatar" id="whoAvatar" alt="" hidden>
+                    <span class="who-text">
+                        <span class="who-nym" id="whoNym"></span>
+                        <span class="who-balance" id="whoBalance"></span>
+                    </span>
                 </button>
                 <span class="relay-dot" id="relayDot" title="Relays"></span>
             </div>
@@ -388,8 +391,8 @@
                 <h3 class="section-head" id="personaFormTitle">New persona</h3>
                 <div class="field-grid">
                     <div>
-                        <label for="personaEmoji">Icon</label>
-                        <input data-i18n-skip type="text" id="personaEmoji" placeholder="🤖" maxlength="4" autocomplete="off">
+                        <label id="personaIconLabel">Icon</label>
+                        <div class="icon-picker" id="personaIcons" role="radiogroup" aria-labelledby="personaIconLabel"></div>
                     </div>
                     <div>
                         <label for="personaName">Name</label>
@@ -605,6 +608,25 @@
                 throwaway key generated on this device. Credits move across as blind vouchers Nymbot signs
                 without seeing, so its own records cannot link the two.</p>
             <label class="check"><input type="checkbox" id="anonToggle"> Route new chats through a throwaway key</label>
+            <label class="check"><input type="checkbox" id="anonAutoTop"> Keep it topped up automatically</label>
+            <p class="hint">When the throwaway key runs low, move credits across without asking. Same blind
+                vouchers, same unlinkability &mdash; it just saves doing it by hand before every chat.</p>
+            <div class="field-grid" id="anonAutoFields">
+                <div>
+                    <label for="anonAutoFloor">Top up below</label>
+                    <input type="number" id="anonAutoFloor" min="0" value="10">
+                </div>
+                <div>
+                    <label for="anonAutoAmount">Move each time</label>
+                    <input type="number" id="anonAutoAmount" min="1" value="25">
+                </div>
+            </div>
+            <label for="anonAutoTier">Which balance</label>
+            <select id="anonAutoTier">
+                <option value="both">Standard and Pro</option>
+                <option value="standard">Standard only</option>
+                <option value="pro">Pro only</option>
+            </select>
             <div class="anon-balances" id="anonBalances"></div>
             <label for="anonAmount">Move credits across</label>
             <div class="anon-move">
@@ -726,7 +748,9 @@
     <script src="/app/js/wire.js"></script>
     <script src="/app/js/api.js"></script>
     <script src="/app/js/anon.js"></script>
+    <script src="/app/js/icons.js"></script>
     <script src="/app/js/avatar.js"></script>
+    <script src="/app/js/profile.js"></script>
     <script src="/app/js/attach.js"></script>
     <script src="/app/js/commands.js"></script>
     <script src="/app/js/speech.js"></script>

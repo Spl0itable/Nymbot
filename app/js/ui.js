@@ -16,6 +16,8 @@
     const Commands = window.NymbotCommands;
     const Speech = window.NymbotSpeech;
     const Exporter = window.NymbotExport;
+    const Icons = window.NymbotIcons;
+    const Profile = window.NymbotProfile;
     const NT = () => window.NostrTools;
 
     const $ = (id) => document.getElementById(id);
@@ -27,7 +29,7 @@
     };
 
     const BOT_SUFFIX = C.botPubkey.slice(-4);
-    const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : 'Ctrl';
+    const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
 
     const shortcuts = () => [
         { keys: [MODIFIER, 'K'], what: t('Command palette') },
@@ -77,6 +79,7 @@
         suggestRows: [],
         repoEditing: null,
         personaEditing: null,
+        personaIcon: 'robot',
         promptEditing: null,
         _lastGroup: null,
         _lastKey: null,
@@ -88,6 +91,7 @@
             // rendered until it has landed (or failed, which is English).
             await window.NymbotI18n.ready;
             this.favourites = Store.read('favouriteModels', []) || [];
+            $('brand').appendChild(Icons.wordmark({ size: 24 }));
             this.applyAppearance();
             this.bind();
             Anon.load();
@@ -142,10 +146,21 @@
                 try { await PQ.announce(); } catch (_) { }
                 if (Identity.rootLocked) this.toast(t('This account already uses another device\'s post-quantum key. Open Identity to link this one.'));
                 this.refreshBalance();
-                Anon.flush().catch(() => { });
+                Anon.flush().then(() => this.runAutoTopUp()).catch(() => { });
             }, 300);
 
             Chat.onStatus = (text) => this.status(text);
+
+            // A published profile is what the account already tells the world;
+            // showing it here costs no privacy and makes the app feel signed
+            // in rather than anonymous-by-accident.
+            Profile.onChange = (pubkey) => {
+                if (pubkey === Identity.pubkey) {
+                    this.renderIdentity();
+                    this.renderMessages();
+                }
+            };
+            Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
         },
 
         applyAppearance() {
@@ -250,7 +265,11 @@
                 const li = el('li');
                 const btn = el('button', 'conv-item' + (this.conv && conv.id === this.conv.id ? ' is-active' : ''));
                 btn.type = 'button';
-                if (conv.pinned) btn.appendChild(el('span', 'conv-pin', '★'));
+                if (conv.pinned) {
+                    const pin = el('span', 'conv-pin');
+                    pin.appendChild(Icons.node('star', { size: 11, filled: true }));
+                    btn.appendChild(pin);
+                }
                 const main = el('div', 'conv-main');
                 main.appendChild(el('span', 'conv-title', conv.title || t('New chat')));
                 const bits = [];
@@ -271,17 +290,24 @@
             $('repoCount').textContent = repos.length ? String(repos.length) : '';
         },
 
+        /// Who the messages in this chat are from. An anonymous chat is
+        /// deliberately NOT the account: it shows the throwaway key's own
+        /// generated nym, never the published profile, or the whole point of
+        /// the mode would be undone by the avatar.
         selfIdentity() {
-            const pk = (this.conv && this.conv.anon && Anon.ready() && Anon.sender())
-                ? Anon.sender().pubkey
-                : Identity.pubkey;
-            return {
-                pubkey: pk,
-                name: Avatar.nymName(pk),
-                suffix: Avatar.suffix(pk),
-                colour: Avatar.colorClass(pk),
-                avatar: Avatar.identicon(pk)
-            };
+            const anon = !!(this.conv && this.conv.anon && Anon.ready() && Anon.sender());
+            const pk = anon ? Anon.sender().pubkey : Identity.pubkey;
+            if (anon) {
+                return {
+                    pubkey: pk,
+                    name: Avatar.nymName(pk),
+                    suffix: Avatar.suffix(pk),
+                    colour: Avatar.colorClass(pk),
+                    avatar: Avatar.identicon(pk),
+                    nip05: ''
+                };
+            }
+            return Profile.for(pk);
         },
 
         renderMessages() {
@@ -401,15 +427,18 @@
                 if (m.role === 'bot') {
                     who.appendChild(document.createTextNode(C.botName.toLowerCase()));
                     who.appendChild(el('span', 'nym-suffix', '#' + BOT_SUFFIX));
-                    const tick = el('span', 'verified-tick', '✓');
+                    const tick = el('span', 'verified-tick');
                     tick.title = t('Verified');
+                    tick.appendChild(Icons.node('verified', { size: 12 }));
                     who.appendChild(tick);
                     if (m.model) who.appendChild(el('span', 'author-model', m.model));
                 } else {
                     const me = this.selfIdentity();
                     who.classList.add(me.colour);
                     who.appendChild(document.createTextNode(me.name));
-                    who.appendChild(el('span', 'nym-suffix', '#' + me.suffix));
+                    // The suffix is what tells two generated nyms apart. A
+                    // published name is already unique enough to stand alone.
+                    if (!me.hasProfile) who.appendChild(el('span', 'nym-suffix', '#' + me.suffix));
                     if (m.edited) who.appendChild(el('span', 'author-model', t('edited')));
                 }
                 node.appendChild(who);
@@ -438,8 +467,10 @@
             }
 
             if (m.thinking) {
-                const chip = el('button', 'reasoning-chip', '💭 ' + t('Reasoning'));
+                const chip = el('button', 'reasoning-chip');
                 chip.type = 'button';
+                chip.appendChild(Icons.node('thought', { size: 11 }));
+                chip.appendChild(el('span', null, t('Reasoning')));
                 const panel = el('div', 'reasoning-body', m.thinking);
                 panel.hidden = !this.settings.showReasoningByDefault;
                 chip.addEventListener('click', () => { panel.hidden = !panel.hidden; });
@@ -470,7 +501,9 @@
             }
 
             if (m.cost) {
-                const cost = el('span', 'cost-chip', '⚡ ' + m.cost);
+                const cost = el('span', 'cost-chip');
+                cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
+                cost.appendChild(el('span', null, String(m.cost)));
                 text.appendChild(cost);
             }
 
@@ -482,41 +515,46 @@
 
         actionsFor(m) {
             const row = el('div', 'msg-actions');
-            const add = (label, title, act, extra) => {
-                const b = el('button', 'msg-action' + (extra && extra.cls ? ' ' + extra.cls : ''), label);
+            const add = (icon, title, act, extra) => {
+                const b = el('button', 'msg-action' + (extra && extra.cls ? ' ' + extra.cls : ''));
                 b.type = 'button';
                 b.title = title;
+                b.setAttribute('aria-label', title);
                 b.dataset.act = act;
                 b.dataset.id = m.id;
+                b.appendChild(Icons.node(icon, { size: 14, filled: !!(extra && extra.filled) }));
                 row.appendChild(b);
                 return b;
             };
 
             if (m.role === 'bot' || m.role === 'self') {
-                add('⧉', t('Copy'), 'msg-copy');
+                add('copy', t('Copy'), 'msg-copy');
             }
             if (m.role === 'bot') {
-                add('↻', t('Ask again'), 'msg-regenerate');
-                if (Speech.canSpeak()) add('🔊', t('Read aloud'), 'msg-speak');
-                add('⑂', t('Branch from here'), 'msg-fork');
-                add('❝', t('Quote'), 'msg-quote');
-                const up = add('▲', t('Good reply'), 'msg-up');
+                add('refresh', t('Ask again'), 'msg-regenerate');
+                if (Speech.canSpeak()) {
+                    add(Speech.speakingId === m.id ? 'mute' : 'speaker', t('Read aloud'), 'msg-speak');
+                }
+                add('branch', t('Branch from here'), 'msg-fork');
+                add('quote', t('Quote'), 'msg-quote');
+                const up = add('thumbUp', t('Good reply'), 'msg-up', { filled: m.rating === 1 });
                 if (m.rating === 1) up.classList.add('is-on');
-                const down = add('▼', t('Poor reply'), 'msg-down', { cls: 'is-down' });
+                const down = add('thumbDown', t('Poor reply'), 'msg-down',
+                    { cls: 'is-down', filled: m.rating === -1 });
                 if (m.rating === -1) down.classList.add('is-on');
             }
             if (m.role === 'self') {
-                add('✎', t('Edit and resend'), 'msg-edit');
-                add('⧉↻', t('Send again'), 'msg-resend');
+                add('pencil', t('Edit and resend'), 'msg-edit');
+                add('sendAgain', t('Send again'), 'msg-resend');
             }
             if (m.role === 'bot' || m.role === 'self') {
-                const pin = add('★', t('Save this message'), 'msg-pin');
+                const pin = add('star', t('Save this message'), 'msg-pin', { filled: !!m.pinned });
                 if (m.pinned) pin.classList.add('is-on');
             }
             if (m.role === 'error') {
                 add(t('Try again'), t('Try again'), 'msg-retry');
             }
-            add('✕', t('Delete'), 'msg-delete');
+            add('close', t('Delete'), 'msg-delete');
             return row;
         },
 
@@ -598,7 +636,12 @@
                     if (stick) $('messages').scrollTop = $('messages').scrollHeight;
                     if (at >= target.length) {
                         caret.remove();
-                        if (message.cost) text.appendChild(el('span', 'cost-chip', '⚡ ' + message.cost));
+                        if (message.cost) {
+                            const chip = el('span', 'cost-chip');
+                            chip.appendChild(Icons.node('bolt', { size: 10 }));
+                            chip.appendChild(el('span', null, String(message.cost)));
+                            text.appendChild(chip);
+                        }
                         resolve();
                         return;
                     }
@@ -698,9 +741,15 @@
                     this.renderBalance();
                 }
                 if (res.lowBalance) {
-                    this.note(res.pro
-                        ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance })
-                        : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance }));
+                    // In an anonymous chat a low balance is usually the
+                    // throwaway key running dry rather than the nym, and that
+                    // is exactly what the automatic transfer is for.
+                    const topped = this.conv.anon ? await this.runAutoTopUp() : null;
+                    if (!topped) {
+                        this.note(res.pro
+                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance })
+                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance }));
+                    }
                 }
             } catch (e) {
                 pending.remove();
@@ -709,8 +758,15 @@
                 } else if (e && e.noCredits) {
                     this.balance[e.pro ? 'pro' : 'standard'] = e.balance;
                     this.renderBalance();
-                    this.note(e.message);
-                    if (this.conv.anon) this.openAnon(); else this.openCredits();
+                    const topped = this.conv.anon
+                        ? await this.runAutoTopUp({ force: true })
+                        : null;
+                    if (topped) {
+                        this.note(t('Topped the throwaway key up. Send that again when you are ready.'));
+                    } else {
+                        this.note(e.message);
+                        if (this.conv.anon) this.openAnon(); else this.openCredits();
+                    }
                 } else {
                     const err = {
                         id: Store.uid(),
@@ -1063,7 +1119,7 @@
                 if (!repos.length) { this.note(t('No repositories connected yet.')); return true; }
                 const on = new Set(this.conv.repoIds || []);
                 this.note(repos.map(r =>
-                    `${on.has(r.id) ? '●' : '○'} ${r.repo}${r.branch ? '@' + r.branch : ''}${r.allowWrites ? ' (writes)' : ''}`
+                    `${on.has(r.id) ? '[x]' : '[ ]'} ${r.repo}${r.branch ? '@' + r.branch : ''}${r.allowWrites ? ' (writes)' : ''}`
                 ).join('\n'));
                 return true;
             }
@@ -1251,7 +1307,21 @@
 
         renderIdentity() {
             const pk = Identity.pubkey || '';
-            $('whoNym').textContent = pk ? Avatar.nymName(pk) + '#' + Avatar.suffix(pk) : '';
+            const who = $('whoNym');
+            who.innerHTML = '';
+            if (!pk) return;
+            const me = Profile.for(pk);
+            const img = $('whoAvatar');
+            img.src = me.avatar;
+            img.hidden = false;
+            who.appendChild(document.createTextNode(me.name));
+            if (!me.hasProfile) who.appendChild(el('span', 'nym-suffix', '#' + me.suffix));
+            else if (me.nip05) {
+                const tick = el('span', 'who-nip05');
+                tick.title = me.nip05;
+                tick.appendChild(Icons.node('verified', { size: 11 }));
+                who.appendChild(tick);
+            }
         },
 
         // --- toolbar ----------------------------------------------------------
@@ -1286,7 +1356,11 @@
                 : hasSystem ? t('Custom') : t('Persona');
             const badge = $('chatPersona');
             badge.hidden = !persona;
-            if (persona) badge.textContent = (persona.emoji ? persona.emoji + ' ' : '') + persona.name;
+            if (persona) {
+                badge.innerHTML = '';
+                badge.appendChild(Icons.node(persona.icon || 'robot', { size: 11 }));
+                badge.appendChild(el('span', null, persona.name));
+            }
 
             const webChip = $('chipWeb');
             webChip.classList.toggle('is-active', !!this.settings.webSearch);
@@ -1313,8 +1387,14 @@
                 chip.type = 'button';
                 chip.title = t('Remove from this chat');
                 chip.appendChild(document.createTextNode(
-                    (r.label || r.repo) + (r.branch ? '@' + r.branch : '') + (r.allowWrites ? ' ✎' : '')));
-                chip.appendChild(el('span', 'x', '×'));
+                    (r.label || r.repo) + (r.branch ? '@' + r.branch : '')));
+                if (r.allowWrites) {
+                    const w = el('span', 'chip-writes');
+                    w.title = t('Writes are on');
+                    w.appendChild(Icons.node('pencil', { size: 10 }));
+                    chip.appendChild(w);
+                }
+                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
                 chip.addEventListener('click', () => {
                     this.conv = Store.updateConversation(this.conv.id, {
                         repoIds: (this.conv.repoIds || []).filter(id => id !== r.id)
@@ -1326,8 +1406,9 @@
             if (persona) {
                 const chip = el('button', 'context-chip is-persona');
                 chip.type = 'button';
-                chip.appendChild(document.createTextNode((persona.emoji || '') + ' ' + persona.name));
-                chip.appendChild(el('span', 'x', '×'));
+                chip.appendChild(Icons.node(persona.icon || 'robot', { size: 11 }));
+                chip.appendChild(document.createTextNode(persona.name));
+                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
                 chip.addEventListener('click', () => {
                     this.conv = Store.updateConversation(this.conv.id, { personaId: null });
                     this.refreshToolbar();
@@ -1345,7 +1426,7 @@
                 const chip = el('button', 'context-chip');
                 chip.type = 'button';
                 chip.appendChild(document.createTextNode(t('Web search')));
-                chip.appendChild(el('span', 'x', '×'));
+                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
                 chip.addEventListener('click', () => {
                     this.saveSettings({ webSearch: false });
                     this.refreshToolbar();
@@ -1416,7 +1497,9 @@
                     const row = el('button', 'model-row'
                         + (current && current.key === m.key ? ' is-active' : ''));
                     row.type = 'button';
-                    const star = el('span', 'model-star' + (this.favourites.includes(m.key) ? ' is-on' : ''), '★');
+                    const on = this.favourites.includes(m.key);
+                    const star = el('span', 'model-star' + (on ? ' is-on' : ''));
+                    star.appendChild(Icons.node('star', { size: 13, filled: on }));
                     star.title = t('Star this model');
                     star.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -1591,7 +1674,9 @@
             const active = this.conv ? this.conv.personaId : null;
             for (const p of Store.personas()) {
                 const row = el('div', 'persona-row' + (p.id === active ? ' is-on' : ''));
-                row.appendChild(el('span', 'persona-emoji', p.emoji || '🤖'));
+                const mark = el('span', 'persona-emoji');
+                mark.appendChild(Icons.node(p.icon || 'robot', { size: 17 }));
+                row.appendChild(mark);
                 const main = el('div', 'persona-main');
                 main.appendChild(el('span', 'persona-name', p.name));
                 main.appendChild(el('span', 'persona-sub', (p.instructions || '').slice(0, 110)));
@@ -1618,7 +1703,8 @@
                 dup.type = 'button';
                 dup.addEventListener('click', () => {
                     this.personaEditing = null;
-                    $('personaEmoji').value = p.emoji || '';
+                    this.personaIcon = p.icon || 'robot';
+                    this.renderPersonaIcons();
                     $('personaName').value = p.name + ' ' + t('(copy)');
                     $('personaBody').value = p.instructions || '';
                     $('personaFormTitle').textContent = t('New persona');
@@ -1631,7 +1717,8 @@
                     edit.type = 'button';
                     edit.addEventListener('click', () => {
                         this.personaEditing = p.id;
-                        $('personaEmoji').value = p.emoji || '';
+                        this.personaIcon = p.icon || 'robot';
+                        this.renderPersonaIcons();
                         $('personaName').value = p.name;
                         $('personaBody').value = p.instructions || '';
                         $('personaFormTitle').textContent = t('Edit persona');
@@ -1654,9 +1741,28 @@
             }
         },
 
+        renderPersonaIcons() {
+            const box = $('personaIcons');
+            box.innerHTML = '';
+            for (const name of Icons.PERSONA_ICONS) {
+                const b = el('button', 'icon-choice' + (name === this.personaIcon ? ' is-active' : ''));
+                b.type = 'button';
+                b.title = name;
+                b.setAttribute('role', 'radio');
+                b.setAttribute('aria-checked', String(name === this.personaIcon));
+                b.appendChild(Icons.node(name, { size: 17 }));
+                b.addEventListener('click', () => {
+                    this.personaIcon = name;
+                    this.renderPersonaIcons();
+                });
+                box.appendChild(b);
+            }
+        },
+
         resetPersonaForm() {
             this.personaEditing = null;
-            $('personaEmoji').value = '';
+            this.personaIcon = 'robot';
+            this.renderPersonaIcons();
             $('personaName').value = '';
             $('personaBody').value = '';
             $('personaFormTitle').textContent = t('New persona');
@@ -1674,7 +1780,7 @@
             }
             Store.savePersona({
                 id: this.personaEditing || undefined,
-                emoji: $('personaEmoji').value.trim() || '🤖',
+                icon: this.personaIcon || 'robot',
                 name,
                 instructions
             });
@@ -1797,7 +1903,7 @@
             list.innerHTML = '';
             const rows = Store.pinnedMessages();
             if (!rows.length) {
-                list.appendChild(el('p', 'hint', t('Nothing saved yet. Use the ★ under any message.')));
+                list.appendChild(el('p', 'hint', t('Nothing saved yet. Use the star under any message.')));
             }
             for (const { conv, message } of rows) {
                 const row = el('div', 'pinned-row');
@@ -2109,7 +2215,14 @@
         // --- anonymous mode ------------------------------------------------------
 
         openAnon() {
+            const s = this.settings;
             $('anonToggle').checked = Anon.enabled();
+            $('anonAutoTop').checked = !!s.anonAutoTop;
+            $('anonAutoFloor').value = String(s.anonAutoTopFloor ?? 10);
+            $('anonAutoAmount').value = String(s.anonAutoTopAmount ?? 25);
+            $('anonAutoTier').value = s.anonAutoTopTier || 'both';
+            $('anonAutoFields').hidden = !s.anonAutoTop;
+            $('anonAutoTier').hidden = !s.anonAutoTop;
             $('anonStatus').textContent = '';
             $('anonBalances').textContent = t('Checking balances…');
             this.openModal('modalAnon');
@@ -2121,6 +2234,24 @@
                 box.appendChild(el('div', null, t('Throwaway key: {standard} standard · {pro} Pro',
                     { standard: b.anon ?? '–', pro: b.anonPro ?? '–' })));
             }).catch(() => { $('anonBalances').textContent = t('Could not read the balances.'); });
+        },
+
+        /// Tops the throwaway key up when it is running low, so anonymous mode
+        /// does not mean funding a key by hand before every chat.
+        async runAutoTopUp(options) {
+            const opts = options || {};
+            if (!this.settings.anonAutoTop || !Anon.enabled()) return null;
+            const moved = await Anon.autoTopUp(opts).catch(() => null);
+            if (!moved) return null;
+            const parts = [];
+            if (moved.standard) parts.push(t('{n} standard', { n: moved.standard }));
+            if (moved.pro) parts.push(t('{n} Pro', { n: moved.pro }));
+            const text = t('Moved {what} onto the throwaway key.', { what: parts.join(', ') });
+            if (opts.announce) this.toast(text);
+            else if (this.conv) this.note(text);
+            this.refreshBalance();
+            if (!$('modalAnon').hidden) this.openAnon();
+            return moved;
         },
 
         async moveCredits() {
@@ -3011,6 +3142,25 @@
             $('anonToggle').addEventListener('change', (e) => {
                 Anon.setEnabled(e.target.checked);
                 this.refreshToolbar();
+                if (e.target.checked) this.runAutoTopUp({ announce: true });
+            });
+            $('anonAutoTop').addEventListener('change', (e) => {
+                this.saveSettings({ anonAutoTop: e.target.checked });
+                $('anonAutoFields').hidden = !e.target.checked;
+                $('anonAutoTier').hidden = !e.target.checked;
+                if (e.target.checked) this.runAutoTopUp({ announce: true });
+            });
+            for (const [id, key] of [['anonAutoFloor', 'anonAutoTopFloor'],
+                ['anonAutoAmount', 'anonAutoTopAmount']]) {
+                $(id).addEventListener('change', (e) => {
+                    const n = Math.max(key === 'anonAutoTopAmount' ? 1 : 0,
+                        parseInt(e.target.value, 10) || 0);
+                    e.target.value = String(n);
+                    this.saveSettings({ [key]: n });
+                });
+            }
+            $('anonAutoTier').addEventListener('change', (e) => {
+                this.saveSettings({ anonAutoTopTier: e.target.value });
             });
             $('gateNsec').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') this.gateImport();

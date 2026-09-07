@@ -30,6 +30,8 @@ never fetch and open, so the list is not a preference.
 | `js/anon.js` | Anonymous mode: the throwaway key and the blind vouchers. |
 | `js/chat.js` | One turn, end to end. Also where a conversation's title comes from, and where the preamble that carries a persona, several repositories and a branch's transcript is built. |
 | `js/avatar.js` | The identicon and the `adjective_noun#suffix` handle, generated the same way here, in the Flutter app and on the landing page, so one key reads as one person everywhere. |
+| `js/profile.js` | The account's published kind-0 profile, when it has one: the name and picture it already tells the world, cached on the device. |
+| `js/icons.js` | Every icon the app draws, including the app's own mark. No emoji anywhere in the chrome. |
 | `js/highlight.js` | A small tokeniser for the languages a reply actually comes back in. |
 | `js/markdown.js` | Reply rendering: tables, task lists, callouts, code blocks with copy/wrap/save/preview, and images. |
 | `js/attach.js` | Files off the device: text and code inlined into the wire body, images shrunk and carried beside it. |
@@ -58,6 +60,13 @@ The chat surface, beyond sending a message:
   are shrunk and travel beside it. Drag, paste or pick them.
 - **Voice** in both directions, where the browser has it: dictation into the
   composer, and any reply read back out.
+- **Your Nostr profile**, when the key you signed in with has published one:
+  the kind-0 name, picture and nip-05 replace the generated nym in the sidebar
+  and on your own messages. An anonymous chat never shows it — the throwaway
+  key keeps its own generated identity, which is the whole point of the mode.
+- **A throwaway key that funds itself.** Anonymous mode can move credits across
+  on its own when the key runs low, at a floor and an amount you set, so the
+  mode does not mean topping a key up by hand before every chat.
 - **A command palette** on `⌘K`, search across every message on `⌘⇧F`, find
   within a chat on `⌘F`, and a shortcut for everything else — `?shortcuts`.
 - **Conversation management**: pin, archive, tag, file in folders, duplicate,

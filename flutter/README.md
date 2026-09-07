@@ -42,6 +42,8 @@ new here is everything above them.
 | `lib/models/workspace.dart` | Repositories, personas, saved prompts, folders, attachments and the appearance settings. |
 | `lib/features/message_bubble.dart` | One message, drawn the way the landing page's phone mockup draws it. |
 | `lib/features/nym_avatar.dart` | The identicon and the `adjective_noun#suffix` handle, generated the same way here, in the web app and on the landing page. |
+| `lib/features/nym_icons.dart` | The persona icon set and the app's own mark, drawn rather than shipped as a bitmap. |
+| `lib/services/profiles.dart` | The account's published kind-0 profile, when it has one, cached on the device. |
 | `lib/features/code_highlight.dart` | A small tokeniser for the languages a reply actually comes back in. |
 | `lib/state/` | The identity, the on-device store, and the one controller the UI listens to. |
 | `lib/features/` | The gate, the chat, the AI toolbar and the sheets. |
@@ -66,6 +68,12 @@ The chat surface, beyond sending a message:
 - **Voice** in both directions: dictation into the composer, and any reply read
   back out. Both need the platform's own engines; without them the buttons
   never appear rather than failing when tapped.
+- **Your Nostr profile**, when the key you signed in with has published one:
+  the kind-0 name, picture and nip-05 replace the generated nym in the drawer
+  and on your own messages. An anonymous chat never shows it — the throwaway
+  key keeps its own generated identity, which is the whole point of the mode.
+- **A throwaway key that funds itself.** Anonymous mode can move credits across
+  on its own when the key runs low, at a floor and an amount you set.
 - **Search** across every message on the device, find within a chat, and saved
   messages pinned out of any conversation.
 - **Conversation management**: pin, archive, tag, file in folders, duplicate,

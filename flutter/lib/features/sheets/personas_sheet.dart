@@ -4,6 +4,7 @@ import '../../app.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
+import '../nym_icons.dart';
 
 Future<void> showPersonasSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
@@ -19,15 +20,14 @@ class _PersonasSheet extends StatefulWidget {
 }
 
 class _PersonasSheetState extends State<_PersonasSheet> {
-  final _emoji = TextEditingController();
   final _name = TextEditingController();
   final _body = TextEditingController();
   String? _editingId;
   String? _error;
+  String _icon = 'robot';
 
   @override
   void dispose() {
-    _emoji.dispose();
     _name.dispose();
     _body.dispose();
     super.dispose();
@@ -36,7 +36,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
   void _reset() => setState(() {
         _editingId = null;
         _error = null;
-        _emoji.clear();
+        _icon = 'robot';
         _name.clear();
         _body.clear();
       });
@@ -74,7 +74,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                     : null,
                 child: ListTile(
                   dense: true,
-                  leading: Text(p.emoji, style: const TextStyle(fontSize: 18)),
+                  leading: Icon(NymIcons.forPersona(p.icon), size: 20),
                   title: Text(p.name),
                   subtitle: Text(
                     p.instructions,
@@ -91,7 +91,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                         tooltip: t('Copy'),
                         onPressed: () => setState(() {
                           _editingId = null;
-                          _emoji.text = p.emoji;
+                          _icon = p.icon;
                           _name.text = '${p.name} ${t('(copy)')}';
                           _body.text = p.instructions;
                         }),
@@ -102,7 +102,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                           tooltip: t('Edit'),
                           onPressed: () => setState(() {
                             _editingId = p.id;
-                            _emoji.text = p.emoji;
+                            _icon = p.icon;
                             _name.text = p.name;
                             _body.text = p.instructions;
                           }),
@@ -128,24 +128,46 @@ class _PersonasSheetState extends State<_PersonasSheet> {
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 10),
-            Row(
+            TextField(
+              controller: _name,
+              decoration:
+                  InputDecoration(labelText: t('Name'), hintText: 'Staff engineer'),
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(t('Icon'),
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
               children: [
-                SizedBox(
-                  width: 80,
-                  child: TextField(
-                    controller: _emoji,
-                    maxLength: 4,
-                    decoration: InputDecoration(labelText: t('Icon'), counterText: ''),
+                for (final name in NymIcons.personaOrder)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => setState(() => _icon = name),
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: name == _icon
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).dividerColor,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        NymIcons.forPersona(name),
+                        size: 19,
+                        color: name == _icon
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).hintColor,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _name,
-                    decoration: InputDecoration(
-                        labelText: t('Name'), hintText: 'Staff engineer'),
-                  ),
-                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -174,7 +196,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                   id: _editingId ?? bytesToHex(randomBytes(8)),
                   name: _name.text.trim(),
                   instructions: _body.text.trim(),
-                  emoji: _emoji.text.trim().isEmpty ? '🤖' : _emoji.text.trim(),
+                  icon: _icon,
                 ));
                 _reset();
               },

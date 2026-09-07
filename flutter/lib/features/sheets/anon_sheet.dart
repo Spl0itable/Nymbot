@@ -135,6 +135,81 @@ class _AnonSheetState extends State<_AnonSheet> {
                 await _loadBalances();
               },
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: app.settings.anonAutoTop,
+              title: Text(t('Keep it topped up automatically'),
+                  style: const TextStyle(fontSize: 13)),
+              subtitle: Text(
+                t('When the throwaway key runs low, move credits across without '
+                    'asking. Same blind vouchers, same unlinkability — it just '
+                    'saves doing it by hand before every chat.'),
+                style: const TextStyle(fontSize: 11),
+              ),
+              onChanged: (v) async {
+                app.settings.anonAutoTop = v;
+                await app.saveSettings(app.settings);
+                if (v) {
+                  final messenger = ScaffoldMessenger.of(context);
+                  final moved = await app.autoTopUp();
+                  if (moved != null) {
+                    messenger.showSnackBar(
+                      SnackBar(content: Text(app.describeTopUp(moved))),
+                    );
+                  }
+                }
+                await _loadBalances();
+              },
+            ),
+            if (app.settings.anonAutoTop) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: '${app.settings.anonAutoTopFloor}',
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(labelText: t('Top up below')),
+                      onChanged: (v) {
+                        final n = int.tryParse(v) ?? 0;
+                        app.settings.anonAutoTopFloor = n < 0 ? 0 : n;
+                        app.saveSettings(app.settings);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: '${app.settings.anonAutoTopAmount}',
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(labelText: t('Move each time')),
+                      onChanged: (v) {
+                        final n = int.tryParse(v) ?? 1;
+                        app.settings.anonAutoTopAmount = n < 1 ? 1 : n;
+                        app.saveSettings(app.settings);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                // ignore: deprecated_member_use
+                value: app.settings.anonAutoTopTier,
+                decoration: InputDecoration(labelText: t('Which balance')),
+                items: [
+                  DropdownMenuItem(
+                      value: 'both', child: Text(t('Standard and Pro'))),
+                  DropdownMenuItem(
+                      value: 'standard', child: Text(t('Standard only'))),
+                  DropdownMenuItem(value: 'pro', child: Text(t('Pro only'))),
+                ],
+                onChanged: (v) async {
+                  app.settings.anonAutoTopTier = v ?? 'both';
+                  await app.saveSettings(app.settings);
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
             if (b != null) ...[
               Text(
                   t('Your nym: {standard} standard · {pro} Pro',
