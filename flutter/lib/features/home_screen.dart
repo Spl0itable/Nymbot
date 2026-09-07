@@ -1,15 +1,30 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../app.dart';
 import '../core/theme/theme.dart';
 import '../models/conversation.dart';
+import '../models/workspace.dart';
+import '../services/attachments.dart';
+import '../services/transcript.dart';
+import '../services/voice.dart';
 import '../state/app_controller.dart';
+import 'command_sheet.dart';
 import 'markdown_body.dart';
+import 'message_bubble.dart';
+import 'nym_avatar.dart';
 import 'sheets/anon_sheet.dart';
+import 'sheets/appearance_sheet.dart';
 import 'sheets/credits_sheet.dart';
-import 'sheets/git_sheet.dart';
 import 'sheets/identity_sheet.dart';
+import 'sheets/library_sheets.dart';
 import 'sheets/models_sheet.dart';
+import 'sheets/personas_sheet.dart';
+import 'sheets/prompts_sheet.dart';
+import 'sheets/repos_sheet.dart';
 import 'toolbar.dart';
 import 'i18n/i18n.dart';
 
@@ -23,39 +38,89 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  final _voice = Voice();
+  final _keys = <String, GlobalKey>{};
+
+  String _suggestTerm = '';
+  String? _highlighted;
+  bool _atBottom = true;
+  bool _voiceAvailable = false;
+  String? _findTerm;
+
+  AppController? _app;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(() {
+      if (!_scroll.hasClients) return;
+      final near = _scroll.position.maxScrollExtent - _scroll.offset < 140;
+      if (near != _atBottom) setState(() => _atBottom = near);
+    });
+    _voice.addListener(() => setState(() {}));
+    _voice.canListen().then((ok) {
+      if (mounted) setState(() => _voiceAvailable = ok);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final app = AppScope.read(context);
+      final conv = app.current;
+      if (conv != null) _input.text = app.store.draft(conv.id);
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _app = AppScope.of(context);
+  }
 
   @override
   void dispose() {
+    final app = _app;
+    final conv = app?.current;
+    if (app != null && conv != null) {
+      unawaited(app.store.setDraft(conv.id, _input.text));
+    }
     _input.dispose();
     _scroll.dispose();
+    _voice.dispose();
     super.dispose();
   }
 
-  void _toBottom() {
+  void _toBottom({bool animate = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
+      if (!_scroll.hasClients) return;
+      if (animate) {
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      } else {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
     });
   }
 
+  void _say(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+  }
+
   /// Commands handled here, free of charge, never sent anywhere.
   Future<bool> _localCommand(String text) async {
     final app = AppScope.read(context);
-    final m = RegExp(r'^\?(\w+)\s*(.*)$', dotAll: true).firstMatch(text);
+    final m = RegExp(r'^\?(\w+|8ball)\s*(.*)$', dotAll: true).firstMatch(text);
     if (m == null) return false;
     final cmd = m.group(1)!.toLowerCase();
     final arg = m.group(2)!.trim();
+    if (!BotCommands.isLocal(cmd)) return false;
 
     switch (cmd) {
       case 'help':
-      case 'commands':
-        await app.note(
-          'Free, on this device: ?help ?balance ?buy ?model ?git ?anon ?clear\n'
-          'Charged: ?ask ?image ?speak ?translate ?define ?news ?math ?units ?time ?btc\n'
-          'Games: ?trivia ?joke ?riddle ?wordplay ?flip ?8ball ?pick\n'
-          "Start a message with ! to send it without this chat's history.",
-        );
+        await app.note(BotCommands.helpText());
         return true;
       case 'balance':
         await app.refreshBalance(announce: true);
@@ -66,28 +131,130 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'model':
         if (RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
           await app.setProModel(null);
-          await app.note('Back to standard auto-routing.');
+          await app.note(t('Back to standard auto-routing.'));
           return true;
         }
         await showModelsSheet(context, filter: arg);
         return true;
       case 'git':
-        if (RegExp(r'^writes\s+(on|off)$', caseSensitive: false).hasMatch(arg)) {
-          final on = arg.toLowerCase().endsWith('on');
-          await app.setGit({...?app.git, 'allowWrites': on});
-          await app.note(
-              on ? t('Repository writes on.') : t('Repository writes off.'));
-          return true;
-        }
-        if (RegExp(r'^disconnect$', caseSensitive: false).hasMatch(arg)) {
-          await app.setGit(null);
-          await app.note('Repository disconnected.');
-          return true;
-        }
-        await showGitSheet(context);
-        return true;
+      case 'repo':
+        return _gitCommand(app, arg);
       case 'anon':
         await showAnonSheet(context);
+        return true;
+      case 'persona':
+        if (RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
+          await app.setPersona(null);
+          await app.note(t('Persona cleared.'));
+          return true;
+        }
+        if (arg.isNotEmpty) {
+          for (final p in app.personas) {
+            if (p.name.toLowerCase().contains(arg.toLowerCase())) {
+              await app.setPersona(p.id);
+              await app.note(t('Persona set to {name}.', {'name': p.name}));
+              return true;
+            }
+          }
+        }
+        await showPersonasSheet(context);
+        return true;
+      case 'system':
+        if (arg.isNotEmpty) {
+          await app.setSystemPrompt(arg);
+          await app.note(t('Custom instructions saved for this chat.'));
+          return true;
+        }
+        await showSystemPromptSheet(context);
+        return true;
+      case 'prompt':
+        final picked = await showPromptsSheet(context);
+        if (picked != null) {
+          _input.text = picked;
+          setState(() => _suggestTerm = '');
+        }
+        return true;
+      case 'save':
+        final body = _input.text.trim().isEmpty ? arg : _input.text.trim();
+        if (body.isEmpty) {
+          await app.note(t('There is nothing in the composer to save.'));
+          return true;
+        }
+        await app.savePrompt(SavedPrompt(
+          id: DateTime.now().millisecondsSinceEpoch.toRadixString(16),
+          title: arg.isEmpty ? body.split('\n').first : arg,
+          body: body,
+        ));
+        await app.note(t('Saved to the prompt library.'));
+        return true;
+      case 'search':
+        await _openSearch(term: arg);
+        return true;
+      case 'pin':
+        await app.togglePin();
+        await app.note(app.current!.pinned ? t('Pinned.') : t('Unpinned.'));
+        return true;
+      case 'archive':
+        await app.toggleArchive();
+        return true;
+      case 'tag':
+        if (arg.isNotEmpty) {
+          final tags = {
+            ...app.current!.tags,
+            ...arg.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty),
+          }.toList();
+          await app.setTagsAndFolder(tags, app.current!.folderId);
+          await app.note(t('Tagged.'));
+          return true;
+        }
+        await showTagsSheet(context);
+        return true;
+      case 'rename':
+        if (arg.isNotEmpty) {
+          await app.renameCurrent(arg);
+          return true;
+        }
+        await _rename();
+        return true;
+      case 'fork':
+        if (app.messages.isEmpty) {
+          await app.note(t('There is nothing to branch yet.'));
+          return true;
+        }
+        await app.forkAt(app.messages.last);
+        _say(t('Branched. The new chat carries what was said up to that point.'));
+        return true;
+      case 'export':
+        await _share(app);
+        return true;
+      case 'stats':
+        await showStatsSheet(context);
+        return true;
+      case 'theme':
+        if (RegExp(r'^(dark|light|system|terminal|midnight)$', caseSensitive: false)
+            .hasMatch(arg)) {
+          app.settings.theme = ChatTheme.values.firstWhere(
+            (x) => x.name == arg.toLowerCase(),
+            orElse: () => ChatTheme.system,
+          );
+          await app.saveSettings(app.settings);
+          await app.note(t('Theme set to {name}.', {'name': arg.toLowerCase()}));
+          return true;
+        }
+        await showAppearanceSheet(context);
+        return true;
+      case 'settings':
+        await showAppearanceSheet(context);
+        return true;
+      case 'voice':
+        if (!_voiceAvailable) {
+          await app.note(t('This device cannot listen.'));
+          return true;
+        }
+        await _voice.toggleListening((text) => _input.text = text);
+        return true;
+      case 'retry':
+        await app.retryLast();
         return true;
       case 'clear':
         await app.clearCurrent();
@@ -97,20 +264,194 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _send() async {
-    final text = _input.text.trim();
+  Future<bool> _gitCommand(AppController app, String arg) async {
+    if (RegExp(r'^(list|status)$', caseSensitive: false).hasMatch(arg)) {
+      if (app.repos.isEmpty) {
+        await app.note(t('No repositories connected yet.'));
+        return true;
+      }
+      final scoped = app.current?.repoIds ?? const <String>[];
+      await app.note(app.repos
+          .map((r) =>
+              '${scoped.contains(r.id) ? '●' : '○'} ${r.repo}'
+              '${r.branch.isEmpty ? '' : '@${r.branch}'}'
+              '${r.allowWrites ? ' (writes)' : ''}')
+          .join('\n'));
+      return true;
+    }
+    final writes = RegExp(r'^writes\s+(on|off)$', caseSensitive: false).firstMatch(arg);
+    if (writes != null) {
+      final on = writes.group(1)!.toLowerCase() == 'on';
+      for (final r in app.activeRepos) {
+        r.allowWrites = on;
+        await app.saveRepo(r, useHere: false);
+      }
+      await app.note(on ? t('Repository writes on.') : t('Repository writes off.'));
+      return true;
+    }
+    if (RegExp(r'^(disconnect|none)$', caseSensitive: false).hasMatch(arg)) {
+      await app.setReposHere(const []);
+      await app.note(t('No repository is in scope for this chat.'));
+      return true;
+    }
+    if (RegExp(r'^all$', caseSensitive: false).hasMatch(arg)) {
+      await app.setReposHere(app.repos.map((r) => r.id).toList());
+      await app.note(t('Every connected repository is in scope for this chat.'));
+      return true;
+    }
+    if (arg.isNotEmpty) {
+      final needle = arg.replaceFirst(RegExp(r'^use\s+'), '').toLowerCase();
+      for (final r in app.repos) {
+        if (r.repo.toLowerCase().contains(needle) ||
+            r.label.toLowerCase().contains(needle)) {
+          await app.toggleRepoHere(r.id);
+          final on = (app.current?.repoIds ?? const []).contains(r.id);
+          await app.note(on
+              ? t('{repo} is now in scope for this chat.', {'repo': r.repo})
+              : t('{repo} is no longer in scope for this chat.', {'repo': r.repo}));
+          return true;
+        }
+      }
+    }
+    await showReposSheet(context);
+    return true;
+  }
+
+  Future<void> _send([String? override]) async {
+    final text = override ?? _input.text.trim();
     if (text.isEmpty) return;
-    // Resolved before the awaits below, so nothing reaches for the context
-    // after the widget may have gone.
     final app = AppScope.read(context);
-    _input.clear();
-    if (await _localCommand(text)) {
+    if (override == null) {
+      _input.clear();
+      setState(() => _suggestTerm = '');
+      await app.store.setDraft(app.current!.id, '');
+    }
+    if (override == null && await _localCommand(text)) {
       _toBottom();
       return;
     }
     _toBottom();
     await app.send(text);
     _toBottom();
+    if (!mounted) return;
+    if (app.settings.hapticOnReply) unawaited(HapticFeedback.lightImpact());
+    if (app.settings.autoSpeak && app.messages.isNotEmpty) {
+      final last = app.messages.last;
+      if (last.role == ChatRole.bot) {
+        await _voice.speak(last.id, last.content, rate: app.settings.speechRate);
+      }
+    }
+  }
+
+  Future<void> _messageAction(MessageAction action, ChatMessage m) async {
+    final app = AppScope.read(context);
+    switch (action) {
+      case MessageAction.copy:
+        await Clipboard.setData(ClipboardData(text: m.content));
+        _say(t('Copied.'));
+      case MessageAction.speak:
+        await _voice.toggleSpeak(m.id, m.content, rate: app.settings.speechRate);
+      case MessageAction.regenerate:
+        await app.regenerate(m);
+        _toBottom();
+      case MessageAction.resend:
+        await _send(m.content);
+      case MessageAction.edit:
+        await _edit(m);
+      case MessageAction.quote:
+        app.setQuote(MarkdownBody.plain(m.content));
+      case MessageAction.fork:
+        await app.forkAt(m);
+        _say(t('Branched. The new chat carries what was said up to that point.'));
+      case MessageAction.rateUp:
+        await app.rate(m, 1);
+      case MessageAction.rateDown:
+        await app.rate(m, -1);
+      case MessageAction.pin:
+        await app.togglePinMessage(m);
+        _say(m.pinned ? t('Removed from saved messages.') : t('Saved.'));
+      case MessageAction.retry:
+        final again = m.retry;
+        await app.deleteMessage(m);
+        if (again != null) await _send(again);
+      case MessageAction.delete:
+        await app.deleteMessage(m);
+    }
+  }
+
+  Future<void> _edit(ChatMessage m) async {
+    final app = AppScope.read(context);
+    final controller = TextEditingController(text: m.content);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t('Edit and resend')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 3,
+          maxLines: 10,
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: Text(t('Send')),
+          ),
+        ],
+      ),
+    );
+    if (value == null || value.trim().isEmpty) return;
+    await app.truncateFrom(m);
+    await _send(value.trim());
+  }
+
+  Future<void> _attach() async {
+    final app = AppScope.read(context);
+    final picked = await Attachments.pick();
+    for (final a in picked.files) {
+      app.addAttachment(a);
+    }
+    if (picked.problems.isNotEmpty && mounted) {
+      _say(t('Could not attach: {names}', {'names': picked.problems.join(', ')}));
+    }
+  }
+
+  Future<void> _openSearch({String term = ''}) async {
+    final app = AppScope.read(context);
+    final jump = await showSearchSheet(context, term: term);
+    if (jump == null) return;
+    final conv = app.conversations.firstWhere(
+      (c) => c.id == jump.conversationId,
+      orElse: () => app.current!,
+    );
+    await app.open(conv);
+    if (jump.messageId != null) _scrollToMessage(jump.messageId!);
+  }
+
+  void _scrollToMessage(String id) {
+    setState(() => _highlighted = id);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final key = _keys[id];
+      final ctx = key?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 250), alignment: 0.4);
+      }
+    });
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _highlighted = null);
+    });
+  }
+
+  Future<void> _share(AppController app) async {
+    final conv = app.current!;
+    final body = Transcript.markdown(conv, app.messages, repos: app.activeRepos);
+    await Share.share(
+      body,
+      subject: conv.title.isEmpty ? 'Nymbot' : conv.title,
+    );
   }
 
   @override
@@ -118,134 +459,430 @@ class _HomeScreenState extends State<HomeScreen> {
     final app = AppScope.of(context);
     final conv = app.current;
 
+    final queued = app.pendingInput;
+    if (queued != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final text = app.takeInput();
+        if (text == null || !mounted) return;
+        _input.text = text;
+        _input.selection = TextSelection.collapsed(offset: text.length);
+        setState(() => _suggestTerm = '');
+      });
+    }
+
     return Scaffold(
       drawer: const _ChatDrawer(),
       appBar: AppBar(
-        title: Text(
-          conv == null || conv.title.isEmpty ? 'New chat' : conv.title,
-          overflow: TextOverflow.ellipsis,
+        title: GestureDetector(
+          onTap: _rename,
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  conv == null || conv.title.isEmpty ? t('New chat') : conv.title,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (conv?.pinned ?? false)
+                const Padding(
+                  padding: EdgeInsets.only(left: 6),
+                  child: Icon(Icons.star, size: 14, color: NymbotColors.lightning),
+                ),
+            ],
+          ),
         ),
         actions: [
           if (conv?.anon ?? false)
             Padding(
-              padding: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.only(right: 4),
               child: Chip(
                 label: const Text('anon', style: TextStyle(fontSize: 11)),
                 visualDensity: VisualDensity.compact,
                 side: BorderSide(color: Theme.of(context).colorScheme.secondary),
               ),
             ),
-          PopupMenuButton<String>(
-            onSelected: (value) async {
-              switch (value) {
-                case 'rename':
-                  await _rename();
-                case 'clear':
-                  await app.clearCurrent();
-                case 'delete':
-                  await _confirmDelete();
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(value: 'rename', child: Text(t('Rename'))),
-              PopupMenuItem(value: 'clear', child: Text(t('Clear this chat'))),
-              PopupMenuItem(value: 'delete', child: Text(t('Delete'))),
-            ],
+          IconButton(
+            icon: const Icon(Icons.search, size: 20),
+            tooltip: t('Search everything'),
+            onPressed: () => _openSearch(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.more_vert, size: 20),
+            tooltip: t('Chat options'),
+            onPressed: () => _menu(app),
           ),
         ],
       ),
       body: Column(
         children: [
           const NymbotToolbar(),
-          Expanded(
-            child: app.messages.isEmpty
-                ? _empty(context)
-                : ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                    itemCount: app.messages.length + (app.sending ? 1 : 0),
-                    itemBuilder: (context, i) {
-                      if (i >= app.messages.length) {
-                        return _Thinking(label: app.status ?? 'thinking');
-                      }
-                      return _MessageTile(app.messages[i]);
-                    },
-                  ),
-          ),
+          const ContextBar(),
+          if (_findTerm != null) _findBar(context, app),
+          Expanded(child: _messages(context, app)),
           _composer(context, app),
+        ],
+      ),
+      floatingActionButton: _atBottom || app.messages.isEmpty
+          ? null
+          : FloatingActionButton.small(
+              tooltip: t('Jump to the newest message'),
+              onPressed: () => _toBottom(),
+              child: const Icon(Icons.arrow_downward, size: 18),
+            ),
+    );
+  }
+
+  Widget _findBar(BuildContext context, AppController app) {
+    final hits = app.messages
+        .where((m) => m.content.toLowerCase().contains(_findTerm!.toLowerCase()))
+        .toList();
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              autofocus: true,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: t('Find in this chat'),
+              ),
+              onChanged: (v) => setState(() => _findTerm = v),
+              onSubmitted: (_) {
+                if (hits.isNotEmpty) _scrollToMessage(hits.first.id);
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Text(
+              _findTerm!.trim().isEmpty
+                  ? ''
+                  : t('{n} found', {'n': hits.length}),
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: () => setState(() => _findTerm = null),
+          ),
         ],
       ),
     );
   }
 
-  Widget _empty(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(t('Ask Nymbot anything'),
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text(
-                t('End-to-end encrypted, paid a reply at a time. Type ? for '
+  Widget _messages(BuildContext context, AppController app) {
+    if (app.messages.isEmpty && !app.sending) return _empty(context, app);
+    final selfPubkey = (app.current?.anon ?? false) && app.anon.ready
+        ? app.anon.pubkey ?? app.identity.pubkey
+        : app.identity.pubkey;
+
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+      itemCount: app.messages.length + (app.sending ? 1 : 0),
+      itemBuilder: (context, i) {
+        if (i >= app.messages.length) {
+          return TypingIndicator(
+            label: app.status ??
+                (app.activeRepos.isNotEmpty && app.activeModel != null
+                    ? t('Nymbot is reading your repositories')
+                    : t('Nymbot is thinking')),
+            showAvatar: app.settings.avatars,
+          );
+        }
+        final m = app.messages[i];
+        final previous = i == 0 ? null : app.messages[i - 1];
+        final grouped = previous != null &&
+            previous.role == m.role &&
+            (m.role == ChatRole.self || m.role == ChatRole.bot) &&
+            m.at.difference(previous.at).inMinutes.abs() < 10;
+        final key = _keys.putIfAbsent(m.id, () => GlobalKey());
+        return KeyedSubtree(
+          key: key,
+          child: MessageBubble(
+            message: m,
+            selfPubkey: selfPubkey,
+            settings: app.settings,
+            grouped: grouped,
+            speaking: _voice.speakingId == m.id,
+            highlighted: _highlighted == m.id,
+            onAction: _messageAction,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _empty(BuildContext context, AppController app) {
+    final starters = <(String, String)>[
+      (
+        t('Explain something'),
+        t('Explain ML-KEM in three sentences, then tell me what it does not protect.')
+      ),
+      (
+        t('Work in a repo'),
+        t('Read the repositories I connected and tell me where the retry logic gives up too early.')
+      ),
+      (
+        t('Write code'),
+        t('Write a small, dependency-free function that debounces an async call and cancels the pending one.')
+      ),
+      (
+        t('Draft something'),
+        t('Draft a short, plain-spoken release note for a change that made the app twice as fast to start.')
+      ),
+      (
+        t('Compare options'),
+        t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.')
+      ),
+      (t('Generate a picture'), '?image a lighthouse at dusk, long exposure, muted palette'),
+    ];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 20),
+          const NymAvatar(seed: 'nymbot', size: 52, bot: true),
+          const SizedBox(height: 12),
+          Text(t('Ask Nymbot anything'),
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            t('End-to-end encrypted, paid a reply at a time. Type ? for '
                 'commands, or start with one of these.'),
-                textAlign: TextAlign.center,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          for (final s in starters)
+            Card(
+              margin: const EdgeInsets.only(bottom: 6),
+              child: ListTile(
+                dense: true,
+                title: Text(s.$1, style: const TextStyle(fontSize: 14)),
+                subtitle: Text(s.$2, style: const TextStyle(fontSize: 12)),
+                onTap: () {
+                  _input.text = s.$2;
+                  setState(() {});
+                },
               ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                alignment: WrapAlignment.center,
-                children: [
-                  for (final tip in const [
-                    '?help',
-                    '?balance',
-                    'Explain ML-KEM in three sentences',
-                    '?image a lighthouse at dusk',
-                  ])
-                    ActionChip(
-                      label: Text(tip),
-                      onPressed: () => setState(() => _input.text = tip),
-                    ),
-                ],
-              ),
+            ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            alignment: WrapAlignment.center,
+            children: [
+              for (final tip in const ['?help', '?balance', '?model', '?git', '?prompt', '?anon'])
+                ActionChip(
+                  label: Text(tip, style: const TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    _input.text = tip;
+                    setState(() => _suggestTerm = tip);
+                  },
+                ),
             ],
           ),
-        ),
-      );
+        ],
+      ),
+    );
+  }
 
-  Widget _composer(BuildContext context, AppController app) => SafeArea(
-        top: false,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-          ),
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _input,
-                  minLines: 1,
-                  maxLines: 6,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  decoration: InputDecoration(
-                    hintText: t('Message Nymbot, or ? for commands'),
-                  ),
+  Widget _composer(BuildContext context, AppController app) {
+    final estimate = app.estimate(_input.text);
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_suggestTerm.startsWith('?') && !_suggestTerm.contains(' '))
+              CommandSuggestions(
+                term: _suggestTerm,
+                onPick: (c) {
+                  _input.text = '?${c.name}${c.args.isEmpty ? '' : ' '}';
+                  _input.selection =
+                      TextSelection.collapsed(offset: _input.text.length);
+                  setState(() => _suggestTerm = c.args.isEmpty ? '' : '?${c.name} ');
+                  if (c.args.isEmpty) _send();
+                },
+              ),
+            if (app.attachments.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final a in app.attachments)
+                      InputChip(
+                        avatar: Icon(
+                          a.kind == AttachmentKind.image
+                              ? Icons.image_outlined
+                              : Icons.description_outlined,
+                          size: 15,
+                        ),
+                        label: Text('${a.name} · ${a.humanSize}',
+                            style: const TextStyle(fontSize: 11)),
+                        onDeleted: () => app.removeAttachment(a.id),
+                      ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              IconButton.filledTonal(
-                onPressed: app.sending ? null : _send,
-                icon: const Icon(Icons.send, size: 20),
+            if (app.quote != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.fromLTRB(8, 4, 4, 4),
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(
+                        color: Theme.of(context).colorScheme.secondary, width: 2),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        app.quote!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12, color: Theme.of(context).hintColor),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 15),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => app.setQuote(null),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
+            if (app.status != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(app.status!,
+                    style:
+                        TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
+              ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.attach_file, size: 20),
+                  tooltip: t('Attach a file'),
+                  onPressed: _attach,
+                ),
+                if (_voiceAvailable)
+                  IconButton(
+                    icon: Icon(_voice.listening ? Icons.mic : Icons.mic_none, size: 20),
+                    color: _voice.listening ? NymbotColors.danger : null,
+                    tooltip: t('Dictate'),
+                    onPressed: () => _voice.toggleListening((text) {
+                      _input.text = text;
+                      _input.selection =
+                          TextSelection.collapsed(offset: text.length);
+                    }),
+                  ),
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: app.settings.sendOnEnter
+                        ? TextInputAction.send
+                        : TextInputAction.newline,
+                    onChanged: (v) {
+                      final conv = app.current;
+                      if (conv != null) app.store.setDraft(conv.id, v);
+                      final next = v.startsWith('?') ? v : '';
+                      if (next != _suggestTerm) setState(() => _suggestTerm = next);
+                    },
+                    onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
+                    decoration: InputDecoration(
+                      hintText: t('Message Nymbot, or ? for commands'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                if (app.sending)
+                  IconButton.filledTonal(
+                    onPressed: app.stop,
+                    tooltip: t('Stop'),
+                    icon: const Icon(Icons.stop, size: 20),
+                  )
+                else
+                  IconButton.filledTonal(
+                    onPressed: () => _send(),
+                    tooltip: t('Send'),
+                    icon: const Icon(Icons.send, size: 20),
+                  ),
+              ],
+            ),
+            if (app.settings.showCostEstimate && _input.text.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  estimate.tier == 'pro'
+                      ? (estimate.low == estimate.high
+                          ? t('About {n} Pro credits', {'n': estimate.low})
+                          : t('About {low}–{high} Pro credits',
+                              {'low': estimate.low, 'high': estimate.high}))
+                      : t('1 standard credit'),
+                  style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                ),
+              ),
+          ],
         ),
-      );
+      ),
+    );
+  }
+
+  Future<void> _menu(AppController app) async {
+    final conv = app.current;
+    if (conv == null) return;
+    final choice = await showChatMenu(context, conv);
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'find':
+        setState(() => _findTerm = '');
+      case 'rename':
+        await _rename();
+      case 'pin':
+        await app.togglePin();
+      case 'archive':
+        await app.toggleArchive();
+      case 'duplicate':
+        await app.duplicateCurrent();
+      case 'system':
+        await showSystemPromptSheet(context);
+      case 'tags':
+        await showTagsSheet(context);
+      case 'stats':
+        await showStatsSheet(context);
+      case 'share':
+        await _share(app);
+      case 'copy':
+        await Clipboard.setData(ClipboardData(
+            text: Transcript.markdown(conv, app.messages, repos: app.activeRepos)));
+        _say(t('Copied.'));
+      case 'clear':
+        await app.clearCurrent();
+      case 'delete':
+        await _confirmDelete();
+    }
+  }
 
   Future<void> _rename() async {
     final app = AppScope.read(context);
@@ -301,19 +938,76 @@ class _ChatDrawer extends StatefulWidget {
 }
 
 class _ChatDrawerState extends State<_ChatDrawer> {
-  String _term = '';
-
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final term = _term.toLowerCase().trim();
-    final list = app.conversations.where((c) {
-      if (term.isEmpty) return true;
-      if (c.title.toLowerCase().contains(term)) return true;
-      return app.store
-          .messages(c.id)
-          .any((m) => m.content.toLowerCase().contains(term));
-    }).toList();
+    final list = app.visibleConversations;
+    final folders = {for (final f in app.folders) f.id: f.name};
+
+    String groupOf(Conversation c) {
+      if (c.pinned) return t('Pinned');
+      switch (app.settings.grouping) {
+        case SidebarGrouping.flat:
+          return '';
+        case SidebarGrouping.folder:
+          return folders[c.folderId] ?? t('No folder');
+        case SidebarGrouping.date:
+          final age = DateTime.now().difference(c.updatedAt);
+          if (age.inDays < 1) return t('Today');
+          if (age.inDays < 2) return t('Yesterday');
+          if (age.inDays < 7) return t('This week');
+          if (age.inDays < 30) return t('This month');
+          return t('Older');
+      }
+    }
+
+    final rows = <Widget>[];
+    String? group;
+    for (final conv in list) {
+      final label = groupOf(conv);
+      if (label.isNotEmpty && label != group) {
+        group = label;
+        rows.add(Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              letterSpacing: 1.1,
+              color: Theme.of(context).hintColor,
+            ),
+          ),
+        ));
+      }
+      final repos = app.repos.where((r) => conv.repoIds.contains(r.id)).toList();
+      final bits = <String>[];
+      if (repos.isNotEmpty) bits.add(repos.map((r) => r.display).join(', '));
+      if (conv.tags.isNotEmpty) bits.add(conv.tags.map((x) => '#$x').join(' '));
+      rows.add(ListTile(
+        dense: true,
+        selected: conv.id == app.current?.id,
+        leading: conv.pinned
+            ? const Icon(Icons.star, size: 15, color: NymbotColors.lightning)
+            : null,
+        horizontalTitleGap: conv.pinned ? null : 0,
+        title: Text(
+          conv.title.isEmpty ? t('New chat') : conv.title,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: bits.isEmpty
+            ? null
+            : Text(bits.join(' · '),
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11)),
+        trailing: conv.anon
+            ? const Text('anon', style: TextStyle(fontSize: 11))
+            : null,
+        onTap: () async {
+          await app.open(conv);
+          if (context.mounted) Navigator.pop(context);
+        },
+      ));
+    }
 
     return Drawer(
       child: SafeArea(
@@ -334,32 +1028,68 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: TextField(
-                decoration: InputDecoration(hintText: t('Search chats')),
-                onChanged: (v) => setState(() => _term = v),
+                decoration: InputDecoration(
+                    isDense: true, hintText: t('Search chats')),
+                onChanged: app.setSearch,
+              ),
+            ),
+            SizedBox(
+              height: 42,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                children: [
+                  for (final filter in <(String, String)>[
+                    ('all', t('All')),
+                    ('pinned', t('Pinned')),
+                    ('repos', t('Repos')),
+                    ('anon', t('Anon')),
+                    ('archived', t('Archive')),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 5),
+                      child: ChoiceChip(
+                        label: Text(filter.$2, style: const TextStyle(fontSize: 11)),
+                        selected: app.convFilter == filter.$1,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => app.setFilter(filter.$1),
+                      ),
+                    ),
+                ],
               ),
             ),
             Expanded(
-              child: ListView.builder(
-                itemCount: list.length,
-                itemBuilder: (context, i) {
-                  final conv = list[i];
-                  return ListTile(
-                    selected: conv.id == app.current?.id,
-                    title: Text(
-                      conv.title.isEmpty ? 'New chat' : conv.title,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: conv.anon
-                        ? const Text('anon', style: TextStyle(fontSize: 11))
-                        : null,
-                    onTap: () async {
-                      await app.open(conv);
-                      if (context.mounted) Navigator.pop(context);
-                    },
-                  );
-                },
-              ),
+              child: rows.isEmpty
+                  ? Center(
+                      child: Text(t('Nothing here.'),
+                          style: TextStyle(color: Theme.of(context).hintColor)),
+                    )
+                  : ListView(children: rows),
             ),
+            const Divider(height: 1),
+            for (final entry in <(IconData, String, Future<void> Function())>[
+              (Icons.account_tree_outlined, t('Repositories'),
+                  () => showReposSheet(context)),
+              (Icons.chat_bubble_outline, t('Prompt library'), () async {
+                final picked = await showPromptsSheet(context);
+                if (picked != null) app.queueInput(picked);
+                if (picked != null && context.mounted) Navigator.pop(context);
+              }),
+              (Icons.person_outline, t('Personas'), () => showPersonasSheet(context)),
+              (Icons.star_border, t('Saved messages'), () async {
+                await showSavedMessagesSheet(context);
+              }),
+              (Icons.tune, t('Appearance'), () => showAppearanceSheet(context)),
+              (Icons.help_outline, t('Getting around'),
+                  () => showShortcutsSheet(context)),
+            ])
+              ListTile(
+                dense: true,
+                visualDensity: VisualDensity.compact,
+                leading: Icon(entry.$1, size: 18),
+                title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
+                onTap: entry.$3,
+              ),
             const Divider(height: 1),
             ListTile(
               leading: Icon(
@@ -370,8 +1100,11 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     : Theme.of(context).disabledColor,
               ),
               title: Text(
-                'nym#${app.identity.pubkey.isEmpty ? '' : app.identity.pubkey.substring(app.identity.pubkey.length - 4)}',
+                app.identity.pubkey.isEmpty
+                    ? ''
+                    : NymIdentity.handle(app.identity.pubkey),
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text(
                 app.standardBalance == null
@@ -386,124 +1119,6 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _MessageTile extends StatelessWidget {
-  const _MessageTile(this.message);
-
-  final ChatMessage message;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final self = message.role == ChatRole.self;
-    final note = message.role == ChatRole.note;
-    final error = message.role == ChatRole.error;
-
-    final background = self
-        ? theme.colorScheme.primary.withValues(alpha: 0.10)
-        : note || error
-            ? Colors.transparent
-            : theme.dividerColor;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!note && !error)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Text(
-                self ? 'you' : 'nymbot',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  color: self ? theme.colorScheme.primary : theme.colorScheme.secondary,
-                ),
-              ),
-            ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.circular(12),
-              border: note || error
-                  ? Border.all(
-                      color: error ? NymbotColors.danger : theme.dividerColor,
-                    )
-                  : null,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (message.thinking != null)
-                  Theme(
-                    data: theme.copyWith(dividerColor: Colors.transparent),
-                    child: ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      childrenPadding: const EdgeInsets.only(left: 8, bottom: 8),
-                      title: Text(t('💭 Reasoning'), style: TextStyle(fontSize: 12)),
-                      children: [
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(message.thinking!,
-                              style: const TextStyle(fontSize: 13)),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (message.role == ChatRole.bot)
-                  MarkdownBody(message.content)
-                else
-                  SelectableText(
-                    message.content,
-                    style: error ? const TextStyle(color: NymbotColors.danger) : null,
-                  ),
-              ],
-            ),
-          ),
-          if (message.cost > 0 || message.model != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Row(
-                children: [
-                  if (message.model != null)
-                    Text(message.model!, style: const TextStyle(fontSize: 11)),
-                  if (message.model != null) const SizedBox(width: 8),
-                  if (message.cost > 0)
-                    Text('⚡ ${message.cost}',
-                        style: const TextStyle(
-                            fontSize: 11, color: NymbotColors.lightning)),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Thinking extends StatelessWidget {
-  const _Thinking({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          const SizedBox(
-              width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-          const SizedBox(width: 10),
-          Text(label, style: const TextStyle(fontSize: 13)),
-        ],
       ),
     );
   }

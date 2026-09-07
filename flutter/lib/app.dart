@@ -4,6 +4,7 @@ import 'core/theme/theme.dart';
 import 'features/gate_screen.dart';
 import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
+import 'models/workspace.dart';
 import 'state/app_controller.dart';
 
 /// Hands the one controller down without a state-management package: every
@@ -33,12 +34,33 @@ class NymbotApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return AppScope(
       controller: controller,
-      child: MaterialApp(
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => _app(context),
+      ),
+    );
+  }
+
+  Widget _app(BuildContext context) {
+    final settings = controller.settings;
+    final palette = switch (settings.theme) {
+      ChatTheme.terminal => NymbotPalette.terminal,
+      ChatTheme.midnight => NymbotPalette.midnight,
+      _ => NymbotPalette.standard,
+    };
+    final mode = switch (settings.theme) {
+      ChatTheme.light => ThemeMode.light,
+      ChatTheme.dark || ChatTheme.terminal || ChatTheme.midnight => ThemeMode.dark,
+      ChatTheme.system => ThemeMode.system,
+    };
+
+    return MaterialApp(
         title: 'Nymbot',
         debugShowCheckedModeBanner: false,
-        theme: nymbotTheme(Brightness.light),
-        darkTheme: nymbotTheme(Brightness.dark),
-        themeMode: ThemeMode.system,
+        theme: nymbotTheme(Brightness.light, fontScale: settings.fontScale),
+        darkTheme: nymbotTheme(Brightness.dark,
+            palette: palette, fontScale: settings.fontScale),
+        themeMode: mode,
         // The packs are plain strings with no locale machinery behind them, so
         // the writing direction is set here rather than inferred from a Locale
         // the app never declares.
@@ -47,8 +69,7 @@ class NymbotApp extends StatelessWidget {
           child: child ?? const SizedBox.shrink(),
         ),
         home: const _Root(),
-      ),
-    );
+      );
   }
 }
 

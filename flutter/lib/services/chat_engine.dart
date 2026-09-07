@@ -4,7 +4,9 @@ import 'dart:typed_data';
 import '../config.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart';
+import '../models/conversation.dart';
 import '../models/nostr_event.dart';
+import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
 import 'nymbot_api.dart';
@@ -13,12 +15,17 @@ import 'relay_pool.dart';
 import '../features/i18n/i18n.dart';
 
 class ChatFailure implements Exception {
-  ChatFailure(this.message, {this.noCredits = false, this.pro = false, this.balance = 0});
+  ChatFailure(this.message,
+      {this.noCredits = false,
+      this.pro = false,
+      this.balance = 0,
+      this.cancelled = false});
 
   final String message;
   final bool noCredits;
   final bool pro;
   final int balance;
+  final bool cancelled;
 
   @override
   String toString() => message;
@@ -32,7 +39,11 @@ typedef TurnResult = ({
   bool pro,
   int modelCalls,
   bool lowBalance,
+  List<String> repos,
+  List<Map<String, dynamic>> sources,
 });
+
+typedef CostEstimate = ({String tier, int low, int high});
 
 /// One turn, end to end: seal, publish, ask the worker, open the reply.
 class ChatEngine {
@@ -52,12 +63,65 @@ class ChatEngine {
 
   void Function(String? status)? onStatus;
 
-  /// A reply can carry its chain of thought ahead of the answer.
+  bool _cancelled = false;
+  bool sending = false;
+
+  void abort() {
+    _cancelled = true;
+    sending = false;
+  }
+
   static ({String? thinking, String body}) splitThinking(String text) {
-    final m = RegExp(r'^\s*<think>([\s\S]*?)</think>\s*', caseSensitive: false)
-        .firstMatch(text);
-    if (m == null) return (thinking: null, body: text);
-    return (thinking: m.group(1)!.trim(), body: text.substring(m.end));
+    for (final tag in const ['think', 'thinking', 'reasoning']) {
+      final m = RegExp(r'^\s*<' '$tag' r'>([\s\S]*?)</' '$tag' r'>\s*',
+              caseSensitive: false)
+          .firstMatch(text);
+      if (m != null) {
+        return (thinking: m.group(1)!.trim(), body: text.substring(m.end));
+      }
+    }
+    return (thinking: null, body: text);
+  }
+
+  static CostEstimate estimate(String text, Map<String, dynamic>? model) {
+    if (model == null) return (tier: 'standard', low: 1, high: 1);
+    final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
+    final low = (model['credits'] as num?)?.toInt() ?? 1;
+    final max = (model['max'] as num?)?.toInt() ?? low;
+    final high = max + bump < low ? low : max + bump;
+    return (tier: 'pro', low: low, high: high);
+  }
+
+  static String preamble(
+    Conversation conv,
+    List<GitRepo> repos,
+    Persona? persona,
+  ) {
+    final parts = <String>[];
+    final instructions = [
+      persona?.instructions ?? '',
+      conv.systemPrompt,
+    ].where((x) => x.trim().isNotEmpty).join('\n\n').trim();
+    if (instructions.isNotEmpty) {
+      parts.add('[custom instructions]\n$instructions');
+    }
+    if (repos.length > 1) {
+      final lines = <String>[];
+      for (var i = 0; i < repos.length; i++) {
+        final r = repos[i];
+        final branch = r.branch.isEmpty ? '' : '@${r.branch}';
+        final access = r.allowWrites ? ', writable' : ', read-only';
+        final paths = r.paths.isEmpty ? '' : ' paths: ${r.paths}';
+        lines.add('${i + 1}. ${r.repo}$branch (${r.provider}$access)$paths');
+      }
+      parts.add('[repositories in scope]\n${lines.join('\n')}\n'
+          'Refer to a repository by its name when you cite a file.');
+    }
+    final seed = conv.seed;
+    if (seed != null && seed.isNotEmpty) {
+      parts.add('[earlier in this conversation]\n$seed');
+    }
+    return parts.isEmpty ? '' : '${parts.join('\n\n')}\n\n';
   }
 
   /// A conversation is named after the first thing you say in it. Done here, on
@@ -88,13 +152,21 @@ class ChatEngine {
 
   /// Publishes the message and collects the reply.
   Future<TurnResult> send({
-    required String rootId,
-    required bool anonymous,
+    required Conversation conv,
     required String text,
     Map<String, dynamic>? proModel,
-    Map<String, dynamic>? git,
+    List<GitRepo> repos = const [],
+    Persona? persona,
+    List<Attachment> attachments = const [],
+    String? quote,
+    bool webSearch = false,
+    bool firstTurn = true,
     required void Function(List<String> ids) onThreadIds,
   }) async {
+    final rootId = conv.rootId;
+    final anonymous = conv.anon;
+    _cancelled = false;
+    sending = true;
     if (pq.botKey == null) {
       try {
         await pq.resolveBot();
@@ -115,6 +187,14 @@ class ChatEngine {
         ? anon.kemOf(await anon.ensure())?.publicKey
         : identity.kemPublicKey;
 
+    final fresh = RegExp(r'^\s*!\s*\S').hasMatch(text);
+    final head = (firstTurn || fresh) ? preamble(conv, repos, persona) : '';
+    final quoted = (quote == null || quote.isEmpty)
+        ? ''
+        : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
+    final attached = attachments.map((a) => a.wireBlock).join();
+    final wireText = '$head$quoted$text$attached';
+
     final rumor = UnsignedEvent(
       pubkey: signer.pubkey,
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -125,7 +205,7 @@ class ChatEngine {
         ['ms', '${DateTime.now().millisecondsSinceEpoch}'],
         ['nymthread', rootId],
       ],
-      content: text,
+      content: wireText,
     );
 
     final botKem = pq.botKey?.pk;
@@ -148,18 +228,15 @@ class ChatEngine {
         useAnon ? await anon.announcement() : pq.selfAnnouncement;
     final extra = <String, dynamic>{
       'eventId': wrap.id,
-      'fresh': RegExp(r'^\s*!\s*\S').hasMatch(text),
+      'fresh': fresh,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
+      if (webSearch) 'web': true,
+      if (attachments.isNotEmpty)
+        'attachments': attachments.map((a) => a.toPayload()).toList(),
       if (proModel != null) 'proModel': proModel['key'],
-      if (proModel != null && git != null && git['token'] != null && git['repo'] != null)
-        'git': {
-          'provider': git['provider'] ?? 'github',
-          'host': git['host'] ?? '',
-          'token': git['token'],
-          'repo': git['repo'],
-          'branch': git['branch'] ?? '',
-          'allowWrites': git['allowWrites'] == true,
-        },
+      if (proModel != null && repos.isNotEmpty) 'git': repos.first.toPayload(),
+      if (proModel != null && repos.isNotEmpty)
+        'repos': repos.map((r) => r.toPayload()).toList(),
     };
 
     // `pending` means an earlier attempt at this same message is still
@@ -168,12 +245,14 @@ class ChatEngine {
     ApiResult res;
     var tries = 0;
     while (true) {
+      if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
       res = await api.call('pm', signer,
           extra: extra, timeout: NymbotConfig.pmTimeout);
       if (res.data['pending'] != true || tries++ >= 5) break;
-      onStatus?.call('Still working on that one…');
+      onStatus?.call(t('Still working on that one…'));
       await Future<void>.delayed(const Duration(seconds: 3));
     }
+    if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
     final data = res.data;
 
     if (data['pending'] == true) {
@@ -235,6 +314,9 @@ class ChatEngine {
       pro: data['pro'] == true,
       modelCalls: (data['modelCalls'] as num?)?.toInt() ?? 1,
       lowBalance: data['lowBalance'] == true,
+      repos: repos.map((r) => r.repo).toList(),
+      sources: (data['sources'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
+          const <Map<String, dynamic>>[],
     );
   }
 

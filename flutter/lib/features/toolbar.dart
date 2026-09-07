@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../core/theme/theme.dart';
+import 'i18n/i18n.dart';
 import 'sheets/anon_sheet.dart';
 import 'sheets/credits_sheet.dart';
-import 'sheets/git_sheet.dart';
 import 'sheets/models_sheet.dart';
+import 'sheets/personas_sheet.dart';
+import 'sheets/repos_sheet.dart';
 
 /// The AI toolbar: which balance this chat spends, which model answers, the
 /// connected repository, anonymous mode, and the credit balance.
@@ -16,8 +18,12 @@ class NymbotToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final theme = Theme.of(context);
-    final pro = app.proModel != null;
+    final model = app.activeModel;
+    final pro = model != null;
     final accent = pro ? theme.colorScheme.secondary : theme.colorScheme.primary;
+    final repos = app.activeRepos;
+    final persona = app.activePersona;
+    final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
 
     return Container(
       decoration: BoxDecoration(
@@ -32,34 +38,128 @@ class NymbotToolbar extends StatelessWidget {
             const SizedBox(width: 6),
             _Chip(
               icon: Icons.auto_awesome,
-              label: pro ? app.proModel!['label'] as String : 'Auto-routed',
+              label: pro ? model['label'] as String : t('Auto-routed'),
               active: pro,
               onTap: () => showModelsSheet(context),
             ),
             const SizedBox(width: 6),
             _Chip(
               icon: Icons.account_tree_outlined,
-              label: (app.git?['repo'] as String?) ?? 'Git',
-              active: app.git?['repo'] != null,
-              onTap: () => showGitSheet(context),
+              label: repos.isEmpty
+                  ? t('Git')
+                  : repos.length == 1
+                      ? repos.first.display
+                      : t('{n} repos', {'n': repos.length}),
+              active: repos.isNotEmpty,
+              onTap: () => showReposSheet(context),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: Icons.person_outline,
+              label: persona != null
+                  ? persona.name
+                  : hasSystem
+                      ? t('Custom')
+                      : t('Persona'),
+              active: persona != null || hasSystem,
+              onTap: () => showPersonasSheet(context),
+            ),
+            const SizedBox(width: 6),
+            _Chip(
+              icon: Icons.public,
+              label: t('Web'),
+              active: app.settings.webSearch,
+              onTap: () => app.setWebSearch(!app.settings.webSearch),
             ),
             const SizedBox(width: 6),
             _Chip(
               icon: Icons.visibility_off_outlined,
-              label: app.anon.enabled ? 'Anon on' : 'Anon',
+              label: app.anon.enabled ? t('Anon on') : t('Anon'),
               active: app.anon.enabled,
               onTap: () => showAnonSheet(context),
             ),
             const SizedBox(width: 6),
             _Chip(
               icon: Icons.bolt,
-              label: app.shownBalance?.toString() ?? 'Buy',
+              label: app.shownBalance?.toString() ?? t('Buy'),
               active: false,
               color: NymbotColors.lightning,
               onTap: () => showCreditsSheet(context),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class ContextBar extends StatelessWidget {
+  const ContextBar({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    final theme = Theme.of(context);
+    final repos = app.activeRepos;
+    final persona = app.activePersona;
+    final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
+
+    if (repos.isEmpty && persona == null && !hasSystem && !app.settings.webSearch) {
+      return const SizedBox.shrink();
+    }
+
+    Widget chip(String label, Color colour, VoidCallback? onClear,
+        {VoidCallback? onTap}) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap ?? onClear,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(8, 2, 6, 2),
+          decoration: BoxDecoration(
+            border: Border.all(color: colour.withValues(alpha: 0.45)),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label, style: TextStyle(fontSize: 11, color: colour)),
+              if (onClear != null) ...[
+                const SizedBox(width: 4),
+                Icon(Icons.close, size: 12, color: colour.withValues(alpha: 0.7)),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: theme.dividerColor)),
+      ),
+      child: Wrap(
+        spacing: 5,
+        runSpacing: 5,
+        children: [
+          for (final r in repos)
+            chip(
+              '${r.display}${r.branch.isEmpty ? '' : '@${r.branch}'}'
+              '${r.allowWrites ? ' ✎' : ''}',
+              NymbotColors.lightning,
+              () => app.toggleRepoHere(r.id),
+            ),
+          if (persona != null)
+            chip('${persona.emoji} ${persona.name}', theme.colorScheme.primary,
+                () => app.setPersona(null)),
+          if (hasSystem)
+            chip(t('Custom instructions'), theme.colorScheme.secondary, null,
+                onTap: () => showSystemPromptSheet(context)),
+          if (app.settings.webSearch)
+            chip(t('Web search'), theme.colorScheme.secondary,
+                () => app.setWebSearch(false)),
+        ],
       ),
     );
   }
@@ -74,9 +174,9 @@ class _TierSwitch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    Widget side(String label, bool active) => GestureDetector(
+    Widget side(String label, bool active, bool isPro) => GestureDetector(
           onTap: () async {
-            if (label == 'Pro') {
+            if (isPro) {
               await showModelsSheet(context);
             } else {
               await app.setProModel(null);
@@ -107,7 +207,10 @@ class _TierSwitch extends StatelessWidget {
         border: Border.all(color: Theme.of(context).dividerColor),
         borderRadius: BorderRadius.circular(NymbotColors.switchRadius),
       ),
-      child: Row(children: [side('Standard', !pro), side('Pro', pro)]),
+      child: Row(children: [
+        side(t('Standard'), !pro, false),
+        side(t('Pro'), pro, true),
+      ]),
     );
   }
 }

@@ -28,9 +28,43 @@ never fetch and open, so the list is not a preference.
 | `js/wire.js` | Building and opening NIP-59 gift wraps, for both logins. |
 | `js/api.js` | The worker client, and the per-action auth events. |
 | `js/anon.js` | Anonymous mode: the throwaway key and the blind vouchers. |
-| `js/chat.js` | One turn, end to end. Also where a conversation's title comes from. |
+| `js/chat.js` | One turn, end to end. Also where a conversation's title comes from, and where the preamble that carries a persona, several repositories and a branch's transcript is built. |
+| `js/avatar.js` | The identicon and the `adjective_noun#suffix` handle, generated the same way here, in the Flutter app and on the landing page, so one key reads as one person everywhere. |
+| `js/highlight.js` | A small tokeniser for the languages a reply actually comes back in. |
+| `js/markdown.js` | Reply rendering: tables, task lists, callouts, code blocks with copy/wrap/save/preview, and images. |
+| `js/attach.js` | Files off the device: text and code inlined into the wire body, images shrunk and carried beside it. |
+| `js/speech.js` | Dictation into the composer, and a reply read back out. |
+| `js/commands.js` | Every `?` command, and the matcher the composer and the palette share. |
+| `js/export.js` | A conversation as Markdown, plain text or JSON, and the backup that restores all of them. |
 | `js/qr.js` | A byte-mode QR encoder, so an invoice is rendered here rather than sent somewhere to be drawn. |
 | `js/ui.js` | The shell. |
+
+## What the app can do
+
+The chat surface, beyond sending a message:
+
+- **Messages** carry an avatar, a nym, the model that answered, the reasoning
+  behind it, what it cost and when it landed — the same shape the phone mockup
+  on the landing page shows. Each one can be copied, quoted, rated, saved,
+  read aloud, deleted, edited and resent, asked again, or branched into a new
+  chat that carries the transcript up to that point.
+- **Several repositories at once.** Repositories are connected once and ticked
+  per chat; a chat with more than one gets a preamble naming them, so a reply
+  can say which one it means. `?git list`, `?repo <name>`, `?git writes on`.
+- **Personas and custom instructions** are sent with the first message of a
+  chat and never repeated. Six are built in; your own are stored on the device.
+- **A prompt library** with `{{blanks}}` the app asks you to fill in.
+- **Attachments**: text and code go into the message as a fenced block, images
+  are shrunk and travel beside it. Drag, paste or pick them.
+- **Voice** in both directions, where the browser has it: dictation into the
+  composer, and any reply read back out.
+- **A command palette** on `⌘K`, search across every message on `⌘⇧F`, find
+  within a chat on `⌘F`, and a shortcut for everything else — `?shortcuts`.
+- **Conversation management**: pin, archive, tag, file in folders, duplicate,
+  branch, rename, export as Markdown / JSON / text, and import a backup.
+- **Appearance**: five themes, three densities, four text sizes, bubbles or
+  blocks, avatars, timestamps, monospace replies, line numbers, code wrapping,
+  reduced motion, and a typewriter reveal.
 
 ## How separate conversations work
 

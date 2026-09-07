@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'workspace.dart';
+
 /// One chat. [rootId] is the `nymthread` marker every rumor in it carries: the
 /// worker scopes a reply's context to the messages sharing it, which is what
 /// keeps two conversations from seeing each other's turns.
@@ -9,13 +11,40 @@ class Conversation {
     required this.rootId,
     this.title = '',
     this.anon = false,
+    this.pinned = false,
+    this.archived = false,
+    this.folderId,
+    List<String>? tags,
+    List<String>? repoIds,
+    this.personaId,
+    this.systemPrompt = '',
+    this.proModel,
+    this.seed,
+    this.messageCount = 0,
+    this.creditsSpent = 0,
+    DateTime? createdAt,
     DateTime? updatedAt,
-  }) : updatedAt = updatedAt ?? DateTime.now();
+  })  : tags = tags ?? [],
+        repoIds = repoIds ?? [],
+        createdAt = createdAt ?? DateTime.now(),
+        updatedAt = updatedAt ?? DateTime.now();
 
   final String id;
   String rootId;
   String title;
   bool anon;
+  bool pinned;
+  bool archived;
+  String? folderId;
+  List<String> tags;
+  List<String> repoIds;
+  String? personaId;
+  String systemPrompt;
+  Map<String, dynamic>? proModel;
+  String? seed;
+  int messageCount;
+  int creditsSpent;
+  DateTime createdAt;
   DateTime updatedAt;
 
   Map<String, dynamic> toJson() => {
@@ -23,6 +52,18 @@ class Conversation {
         'rootId': rootId,
         'title': title,
         'anon': anon,
+        'pinned': pinned,
+        'archived': archived,
+        'folderId': folderId,
+        'tags': tags,
+        'repoIds': repoIds,
+        'personaId': personaId,
+        'systemPrompt': systemPrompt,
+        'proModel': proModel,
+        'seed': seed,
+        'messageCount': messageCount,
+        'creditsSpent': creditsSpent,
+        'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
 
@@ -31,6 +72,19 @@ class Conversation {
         rootId: j['rootId'] as String? ?? '',
         title: j['title'] as String? ?? '',
         anon: j['anon'] as bool? ?? false,
+        pinned: j['pinned'] as bool? ?? false,
+        archived: j['archived'] as bool? ?? false,
+        folderId: j['folderId'] as String?,
+        tags: (j['tags'] as List?)?.map((e) => '$e').toList(),
+        repoIds: (j['repoIds'] as List?)?.map((e) => '$e').toList(),
+        personaId: j['personaId'] as String?,
+        systemPrompt: j['systemPrompt'] as String? ?? '',
+        proModel: j['proModel'] as Map<String, dynamic>?,
+        seed: j['seed'] as String?,
+        messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
+        creditsSpent: (j['creditsSpent'] as num?)?.toInt() ?? 0,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+            (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
             (j['updatedAt'] as num?)?.toInt() ?? 0),
       );
@@ -60,8 +114,19 @@ class ChatMessage {
     this.thinking,
     this.cost = 0,
     this.model,
+    this.rating = 0,
+    this.pinned = false,
+    this.edited = false,
+    this.retry,
+    this.quote,
+    List<Attachment>? attachments,
+    List<String>? repos,
+    List<Map<String, dynamic>>? sources,
     DateTime? at,
-  }) : at = at ?? DateTime.now();
+  })  : attachments = attachments ?? const [],
+        repos = repos ?? const [],
+        sources = sources ?? const [],
+        at = at ?? DateTime.now();
 
   final String id;
   final ChatRole role;
@@ -69,7 +134,33 @@ class ChatMessage {
   final String? thinking;
   final int cost;
   final String? model;
+  int rating;
+  bool pinned;
+  final bool edited;
+  final String? retry;
+  final String? quote;
+  final List<Attachment> attachments;
+  final List<String> repos;
+  final List<Map<String, dynamic>> sources;
   final DateTime at;
+
+  ChatMessage copyWith({int? rating, bool? pinned}) => ChatMessage(
+        id: id,
+        role: role,
+        content: content,
+        thinking: thinking,
+        cost: cost,
+        model: model,
+        rating: rating ?? this.rating,
+        pinned: pinned ?? this.pinned,
+        edited: edited,
+        retry: retry,
+        quote: quote,
+        attachments: attachments,
+        repos: repos,
+        sources: sources,
+        at: at,
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -78,6 +169,14 @@ class ChatMessage {
         'thinking': thinking,
         'cost': cost,
         'model': model,
+        'rating': rating,
+        'pinned': pinned,
+        'edited': edited,
+        'retry': retry,
+        'quote': quote,
+        'attachments': attachments.map((a) => a.toJson()).toList(),
+        'repos': repos,
+        'sources': sources,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -91,6 +190,17 @@ class ChatMessage {
         thinking: j['thinking'] as String?,
         cost: (j['cost'] as num?)?.toInt() ?? 0,
         model: j['model'] as String?,
+        rating: (j['rating'] as num?)?.toInt() ?? 0,
+        pinned: j['pinned'] == true,
+        edited: j['edited'] == true,
+        retry: j['retry'] as String?,
+        quote: j['quote'] as String?,
+        attachments: (j['attachments'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(Attachment.fromJson)
+            .toList(),
+        repos: (j['repos'] as List?)?.map((e) => '$e').toList(),
+        sources: (j['sources'] as List?)?.whereType<Map<String, dynamic>>().toList(),
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
 

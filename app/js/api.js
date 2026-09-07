@@ -53,7 +53,7 @@
             const body = Object.assign(
                 { action, pubkey: options.signer ? options.signer.pubkey : Identity.pubkey, auth },
                 extra || {});
-            const controller = new AbortController();
+            const controller = options.controller || new AbortController();
             const timer = setTimeout(() => controller.abort(), options.timeout || 30000);
             try {
                 const resp = await fetch(url(), {

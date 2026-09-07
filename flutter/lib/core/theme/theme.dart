@@ -26,20 +26,49 @@ class NymbotColors {
   static const switchRadius = 10.0;
   static const switchTabRadius = 7.0;
 
+  static const bgTerminal = Color(0xFF000600);
+  static const raisedTerminal = Color(0xFF04120A);
+  static const sunkenTerminal = Color(0xFF010A04);
+  static const textTerminal = Color(0xFFC8FFCF);
+  static const secondaryTerminal = Color(0xFF7DFFB0);
+
+  static const bgMidnight = Color(0xFF0B1020);
+  static const raisedMidnight = Color(0xFF121A30);
+  static const sunkenMidnight = Color(0xFF090D1A);
+  static const primaryMidnight = Color(0xFF7AA2FF);
+  static const secondaryMidnight = Color(0xFFA78BFA);
+
   static const bgLight = Color(0xFFF2F4F7);
   static const raisedLight = Color(0xFFFFFFFF);
   static const sunkenLight = Color(0xFFE8EBEF);
   static const textLight = Color(0xFF10151C);
 }
 
-ThemeData nymbotTheme(Brightness brightness) {
+enum NymbotPalette { standard, terminal, midnight }
+
+ThemeData nymbotTheme(Brightness brightness,
+    {NymbotPalette palette = NymbotPalette.standard, double fontScale = 1}) {
   final dark = brightness == Brightness.dark;
-  final accent = dark ? NymbotColors.primary : NymbotColors.primaryLight;
-  final second = dark ? NymbotColors.secondary : NymbotColors.secondaryLight;
-  final bg = dark ? NymbotColors.bgDark : NymbotColors.bgLight;
-  final raised = dark ? NymbotColors.raisedDark : NymbotColors.raisedLight;
-  final sunken = dark ? NymbotColors.sunkenDark : NymbotColors.sunkenLight;
-  final text = dark ? NymbotColors.textDark : NymbotColors.textLight;
+  var accent = dark ? NymbotColors.primary : NymbotColors.primaryLight;
+  var second = dark ? NymbotColors.secondary : NymbotColors.secondaryLight;
+  var bg = dark ? NymbotColors.bgDark : NymbotColors.bgLight;
+  var raised = dark ? NymbotColors.raisedDark : NymbotColors.raisedLight;
+  var sunken = dark ? NymbotColors.sunkenDark : NymbotColors.sunkenLight;
+  var text = dark ? NymbotColors.textDark : NymbotColors.textLight;
+
+  if (dark && palette == NymbotPalette.terminal) {
+    bg = NymbotColors.bgTerminal;
+    raised = NymbotColors.raisedTerminal;
+    sunken = NymbotColors.sunkenTerminal;
+    text = NymbotColors.textTerminal;
+    second = NymbotColors.secondaryTerminal;
+  } else if (dark && palette == NymbotPalette.midnight) {
+    bg = NymbotColors.bgMidnight;
+    raised = NymbotColors.raisedMidnight;
+    sunken = NymbotColors.sunkenMidnight;
+    accent = NymbotColors.primaryMidnight;
+    second = NymbotColors.secondaryMidnight;
+  }
 
   return ThemeData(
     useMaterial3: true,
@@ -58,7 +87,7 @@ ThemeData nymbotTheme(Brightness brightness) {
     dividerColor: text.withValues(alpha: 0.10),
     textTheme: Typography.material2021(platform: TargetPlatform.android)
         .black
-        .apply(bodyColor: text, displayColor: text),
+        .apply(bodyColor: text, displayColor: text, fontSizeFactor: fontScale),
     appBarTheme: AppBarTheme(
       backgroundColor: bg,
       surfaceTintColor: Colors.transparent,

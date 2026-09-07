@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/conversation.dart';
+import '../models/workspace.dart';
 
 /// Everything the app keeps on the device.
 ///
@@ -17,6 +20,8 @@ class Store {
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
   );
+
+  static const _messageCap = 800;
 
   final SharedPreferences _prefs;
 
@@ -36,15 +41,75 @@ class Store {
   bool getBool(String key, {bool fallback = false}) =>
       _prefs.getBool(key) ?? fallback;
   Future<void> setBool(String key, bool value) => _prefs.setBool(key, value);
+  int getInt(String key, {int fallback = 0}) => _prefs.getInt(key) ?? fallback;
+  Future<void> setInt(String key, int value) => _prefs.setInt(key, value);
   Future<void> remove(String key) => _prefs.remove(key);
+
+  AppSettings settings() {
+    final raw = _prefs.getString('appSettings');
+    if (raw == null) return AppSettings();
+    try {
+      return AppSettings.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return AppSettings();
+    }
+  }
+
+  Future<void> saveSettings(AppSettings s) =>
+      _prefs.setString('appSettings', jsonEncode(s.toJson()));
+
+  Future<void> resetSettings() => _prefs.remove('appSettings');
+
+  Future<List<GitRepo>> repos() async =>
+      GitRepo.decodeList(await _secure.read(key: 'repos'));
+
+  Future<void> saveRepos(List<GitRepo> list) =>
+      _secure.write(key: 'repos', value: GitRepo.encodeList(list.take(40).toList()));
+
+  Future<GitRepo?> repo(String id) async {
+    for (final r in await repos()) {
+      if (r.id == id) return r;
+    }
+    return null;
+  }
+
+  List<Persona> customPersonas() =>
+      Persona.decodeList(_prefs.getString('personas'));
+
+  List<Persona> personas() => [...Persona.builtins, ...customPersonas()];
+
+  Persona? persona(String? id) {
+    if (id == null) return null;
+    for (final p in personas()) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  Future<void> savePersonas(List<Persona> list) =>
+      _prefs.setString('personas', Persona.encodeList(list.take(60).toList()));
+
+  List<SavedPrompt> prompts() {
+    final raw = _prefs.getString('prompts');
+    if (raw == null) return [...SavedPrompt.defaults];
+    return SavedPrompt.decodeList(raw);
+  }
+
+  Future<void> savePrompts(List<SavedPrompt> list) =>
+      _prefs.setString('prompts', SavedPrompt.encodeList(list.take(200).toList()));
+
+  List<ChatFolder> folders() => ChatFolder.decodeList(_prefs.getString('folders'));
+
+  Future<void> saveFolders(List<ChatFolder> list) =>
+      _prefs.setString('folders', ChatFolder.encodeList(list.take(100).toList()));
 
   // --- conversations ---------------------------------------------------------
 
   List<Conversation> conversations() =>
       Conversation.decodeList(_prefs.getString('conversations'));
 
-  Future<void> saveConversations(List<Conversation> list) =>
-      _prefs.setString('conversations', Conversation.encodeList(list.take(200).toList()));
+  Future<void> saveConversations(List<Conversation> list) => _prefs.setString(
+      'conversations', Conversation.encodeList(list.take(500).toList()));
 
   List<ChatMessage> messages(String convId) =>
       ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
@@ -52,7 +117,9 @@ class Store {
   Future<void> saveMessages(String convId, List<ChatMessage> list) {
     // Capped so one long conversation cannot fill the store and start failing
     // the writes it needs to make.
-    final kept = list.length > 400 ? list.sublist(list.length - 400) : list;
+    final kept = list.length > _messageCap
+        ? list.sublist(list.length - _messageCap)
+        : list;
     return _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
   }
 
@@ -65,9 +132,85 @@ class Store {
     return _prefs.setStringList('thread_$convId', kept);
   }
 
+  String draft(String convId) => _prefs.getString('draft_$convId') ?? '';
+
+  Future<void> setDraft(String convId, String text) => text.isEmpty
+      ? _prefs.remove('draft_$convId')
+      : _prefs.setString('draft_$convId', text);
+
   Future<void> dropConversation(String convId) async {
     await _prefs.remove('msgs_$convId');
     await _prefs.remove('thread_$convId');
+    await _prefs.remove('draft_$convId');
+  }
+
+  ({int credits, int replies}) usage() => (
+        credits: _prefs.getInt('usageCredits') ?? 0,
+        replies: _prefs.getInt('usageReplies') ?? 0,
+      );
+
+  Future<void> recordUsage(int cost) async {
+    final u = usage();
+    await _prefs.setInt('usageCredits', u.credits + cost);
+    await _prefs.setInt('usageReplies', u.replies + 1);
+  }
+
+  List<({Conversation conv, ChatMessage? message, String excerpt})> searchAll(
+    String term, {
+    bool includeArchived = false,
+  }) {
+    final needle = term.toLowerCase().trim();
+    if (needle.isEmpty) return const [];
+    final out = <({Conversation conv, ChatMessage? message, String excerpt})>[];
+    for (final conv in conversations()) {
+      if (!includeArchived && conv.archived) continue;
+      if (conv.title.toLowerCase().contains(needle)) {
+        out.add((conv: conv, message: null, excerpt: conv.title));
+      }
+      for (final m in messages(conv.id)) {
+        final at = m.content.toLowerCase().indexOf(needle);
+        if (at == -1) continue;
+        final from = at - 40 < 0 ? 0 : at - 40;
+        final to = at + needle.length + 80 > m.content.length
+            ? m.content.length
+            : at + needle.length + 80;
+        out.add((
+          conv: conv,
+          message: m,
+          excerpt: '${from > 0 ? '…' : ''}${m.content.substring(from, to).trim()}',
+        ));
+        if (out.length > 300) return out;
+      }
+    }
+    return out;
+  }
+
+  List<({Conversation conv, ChatMessage message})> pinnedMessages() {
+    final out = <({Conversation conv, ChatMessage message})>[];
+    for (final conv in conversations()) {
+      for (final m in messages(conv.id)) {
+        if (m.pinned) out.add((conv: conv, message: m));
+      }
+    }
+    out.sort((a, b) => b.message.at.compareTo(a.message.at));
+    return out;
+  }
+
+  Future<String> exportAll() async {
+    return jsonEncode({
+      'version': 2,
+      'exportedAt': DateTime.now().millisecondsSinceEpoch,
+      'settings': settings().toJson(),
+      'folders': folders().map((f) => f.toJson()).toList(),
+      'personas': customPersonas().map((p) => p.toJson()).toList(),
+      'prompts': prompts().map((p) => p.toJson()).toList(),
+      'conversations': conversations()
+          .map((c) => {
+                'conversation': c.toJson(),
+                'messages': messages(c.id).map((m) => m.toJson()).toList(),
+              })
+          .toList(),
+    });
   }
 
   /// Everything, gone. Not a logout: there is nothing on a server to log out

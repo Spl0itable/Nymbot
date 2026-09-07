@@ -13,7 +13,8 @@
     "i18n:list": "node i18n/sync.mjs --list",
     "test": "node i18n/test/run.mjs",
     "test:browser": "node i18n/test/browser.mjs",
-    "test:mobile": "node test/mobile.mjs"
+    "test:mobile": "node test/mobile.mjs",
+    "test:app": "node test/app-features.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

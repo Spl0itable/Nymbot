@@ -35,9 +35,57 @@ new here is everything above them.
 | `lib/services/pq_announce.dart` | Capability announcements: resolving Nymbot's ML-KEM key, and publishing our own. |
 | `lib/services/nymbot_api.dart` | The worker client, and the per-action auth events. |
 | `lib/services/anon.dart` | Anonymous mode: the throwaway key and the blind vouchers. |
-| `lib/services/chat_engine.dart` | One turn, end to end. Also where a conversation's title comes from. |
+| `lib/services/chat_engine.dart` | One turn, end to end. Also where a conversation's title comes from, and where the preamble that carries a persona, several repositories and a branch's transcript is built. |
+| `lib/services/attachments.dart` | Files off the device: text and code inlined into the wire body, images carried beside it. |
+| `lib/services/voice.dart` | Dictation into the composer, and a reply read back out. |
+| `lib/services/transcript.dart` | A conversation as Markdown or plain text, for sharing and for the clipboard. |
+| `lib/models/workspace.dart` | Repositories, personas, saved prompts, folders, attachments and the appearance settings. |
+| `lib/features/message_bubble.dart` | One message, drawn the way the landing page's phone mockup draws it. |
+| `lib/features/nym_avatar.dart` | The identicon and the `adjective_noun#suffix` handle, generated the same way here, in the web app and on the landing page. |
+| `lib/features/code_highlight.dart` | A small tokeniser for the languages a reply actually comes back in. |
 | `lib/state/` | The identity, the on-device store, and the one controller the UI listens to. |
 | `lib/features/` | The gate, the chat, the AI toolbar and the sheets. |
+
+## What the app can do
+
+The chat surface, beyond sending a message:
+
+- **Messages** carry an avatar, a nym, the model that answered, the reasoning
+  behind it, what it cost and when it landed — the same shape the phone mockup
+  on the landing page shows. Each one can be copied, quoted, rated, saved,
+  read aloud, deleted, edited and resent, asked again, or branched into a new
+  chat that carries the transcript up to that point.
+- **Several repositories at once.** Repositories are connected once and ticked
+  per chat; a chat with more than one gets a preamble naming them, so a reply
+  can say which one it means. `?git list`, `?repo <name>`, `?git writes on`.
+- **Personas and custom instructions** are sent with the first message of a
+  chat and never repeated. Six are built in; your own are stored on the device.
+- **A prompt library** with `{{blanks}}` the app asks you to fill in.
+- **Attachments**: text and code go into the message as a fenced block, images
+  travel beside it.
+- **Voice** in both directions: dictation into the composer, and any reply read
+  back out. Both need the platform's own engines; without them the buttons
+  never appear rather than failing when tapped.
+- **Search** across every message on the device, find within a chat, and saved
+  messages pinned out of any conversation.
+- **Conversation management**: pin, archive, tag, file in folders, duplicate,
+  branch, rename, share the transcript, and export a full backup.
+- **Appearance**: five themes, three densities, four text sizes, bubbles or
+  blocks, avatars, timestamps, monospace replies, and reduced motion.
+
+## Permissions
+
+Two, both optional and both only asked for when the feature is used:
+
+- `RECORD_AUDIO` / `NSMicrophoneUsageDescription` and
+  `NSSpeechRecognitionUsageDescription` for dictation. The recognition runs in
+  the platform's own engine; the app only ever sees the text.
+- `NSPhotoLibraryUsageDescription` for attaching a picture, which is encrypted
+  with the rest of the message before it leaves the device.
+
+The Android manifest also declares `<queries>` for the speech and text-to-speech
+services. Without them Android 11 and later hides both from the app even when
+they are installed, and each reports itself unavailable rather than missing.
 
 ## How separate conversations work
 

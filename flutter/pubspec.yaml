@@ -34,6 +34,14 @@ dependencies:
   qr_flutter: ^4.1.0
   url_launcher: any
 
+  # The chat surface: attachments off the device, dictation into the composer,
+  # a reply read back out, and a transcript handed to whatever the platform
+  # shares with.
+  file_picker: ^8.1.0
+  speech_to_text: ^7.0.0
+  flutter_tts: ^4.2.0
+  share_plus: ^10.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
