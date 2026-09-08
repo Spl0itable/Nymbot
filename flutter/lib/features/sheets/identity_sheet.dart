@@ -22,6 +22,10 @@ class _IdentitySheet extends StatefulWidget {
 class _IdentitySheetState extends State<_IdentitySheet> {
   final _link = TextEditingController();
   bool _showNsec = false;
+  // The recovery code derives the post-quantum key, so it grants the account
+  // the same way the nsec does and is covered the same way — a shoulder or a
+  // screen share reads one as easily as the other.
+  bool _showRoot = false;
   String? _status;
   bool _warn = false;
 
@@ -95,6 +99,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
               actions: [
                 IconButton(
                   icon: Icon(_showNsec ? Icons.visibility_off : Icons.visibility, size: 18),
+                  tooltip: _showNsec ? t('Hide') : t('Show'),
                   onPressed: () => setState(() => _showNsec = !_showNsec),
                 ),
                 IconButton(
@@ -106,8 +111,14 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             const SizedBox(height: 12),
             _row(
               t('Post-quantum recovery code'),
-              identity.rootCode,
+              _showRoot ? identity.rootCode : '•' * 24,
               actions: [
+                IconButton(
+                  icon: Icon(_showRoot ? Icons.visibility_off : Icons.visibility,
+                      size: 18),
+                  tooltip: _showRoot ? t('Hide') : t('Show'),
+                  onPressed: () => setState(() => _showRoot = !_showRoot),
+                ),
                 IconButton(
                   icon: const Icon(Icons.copy, size: 18),
                   onPressed: () => _copy(identity.rootCode),

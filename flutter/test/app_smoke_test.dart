@@ -5,6 +5,9 @@ import 'package:nymbot/app.dart';
 import 'package:nymbot/features/citation_cards.dart';
 import 'package:nymbot/features/sheets/cost_sheet.dart';
 import 'package:nymbot/features/command_sheet.dart';
+import 'package:nymbot/features/compose_controller.dart';
+import 'package:nymbot/services/free_tier.dart';
+import 'package:nymbot/services/wire_limits.dart';
 import 'package:nymbot/features/diff_view.dart';
 import 'package:nymbot/features/progress_lines.dart';
 import 'package:nymbot/features/gate_screen.dart';
@@ -108,6 +111,140 @@ void main() {
     expect(find.text('•'), findsNWidgets(2));
     expect(find.textContaining('```', findRichText: true), findsNothing);
     expect(find.textContaining('**bold**', findRichText: true), findsNothing);
+  });
+
+  test('the device keeps its own count of the free allowance', () async {
+    // The worker counts per key, and making another key is a tap in this app's
+    // own gate — so the device keeps a count of its own. A speed bump, not a
+    // control: clearing the app's data walks past it, and it is never reported
+    // to the worker, because a device counter the server could see would link
+    // a person's keys to each other.
+    SharedPreferences.setMockInitialValues({});
+    final free = FreeTier(await SharedPreferences.getInstance());
+
+    expect(free.leftOf(3), 3, reason: 'a fresh device has the whole day');
+    expect(free.allows(3, 0), isTrue, reason: 'so a message goes');
+
+    await free.spent();
+    await free.spent();
+    expect(free.leftOf(3), 1, reason: 'each free reply takes one off it');
+    expect(free.allows(3, 0), isTrue);
+
+    await free.spent();
+    expect(free.leftOf(3), 0, reason: 'the day runs out');
+    expect(free.allows(3, 0), isFalse,
+        reason: 'and then it stops offering free replies');
+    expect(free.allows(3, 12), isTrue,
+        reason: 'a balance is never gated by the device count');
+
+    // The worker is the authority on the key's count, but only upwards —
+    // believing a lower one is what would let a fresh key reset the device.
+    await free.observe(1);
+    expect(free.used, 3, reason: 'a lower count does not reset the device');
+    await free.observe(9);
+    expect(free.used, 9, reason: 'a higher one is believed');
+
+    await free.forget();
+    expect(free.used, 0,
+        reason: 'and it can be cleared, which is the point of a speed bump');
+
+    final allowance = FreeAllowance.fromJson(
+        {'used': 2, 'limit': 20, 'left': 18, 'resetsAt': 123});
+    expect(allowance?.left, 18, reason: 'what the worker said survives the trip');
+    expect(FreeAllowance.fromJson({'limit': 0}), isNull,
+        reason: 'and no allowance is no allowance, not a zero one');
+    expect(FreeAllowance.fromJson(null), isNull);
+  });
+
+  test('a question too long for one wrap is cut up, not refused', () {
+    // NIP-44 refuses a plaintext over 65535 bytes and a gift wrap nests two of
+    // them, so a long message used to fail inside the crypto with a byte count
+    // and no way to act on it.
+    const line = 'the quick brown fox jumps over the lazy dog\n';
+    final long = line * 2000;
+
+    expect(WireLimits.bodyCost('hello'), 5,
+        reason: 'plain text costs what it looks like');
+    expect(WireLimits.bodyCost('"'), 2,
+        reason: 'a quote costs what escaping it costs');
+    expect(WireLimits.bodyCost('\n'), 2, reason: 'and so does a newline');
+    expect(WireLimits.bodyCost('\u{1f600}'), 4,
+        reason: 'an emoji is four bytes on the wire, not one character');
+
+    final parts = WireLimits.split(long);
+    expect(parts.length, greaterThan(1), reason: 'a long message is cut up');
+    expect(parts.join(), long,
+        reason: 'and the pieces put back together are the message again');
+    expect(parts.every(WireLimits.fits), isTrue,
+        reason: 'every piece fits in one wrap');
+    expect(parts.take(parts.length - 1).every((p) => p.endsWith('\n')), isTrue,
+        reason: 'the cut lands between lines, not mid-sentence');
+
+    expect(WireLimits.split('short').length, 1);
+    expect(WireLimits.split('short').first, 'short',
+        reason: 'a message that fits is left exactly as it was');
+
+    // A single line with nowhere to break still has to be cut somewhere.
+    final unbroken = WireLimits.split('x' * (WireLimits.bodyMax * 3));
+    expect(unbroken.length, greaterThan(1));
+    expect(unbroken.every(WireLimits.fits), isTrue);
+    expect(unbroken.join(), 'x' * (WireLimits.bodyMax * 3));
+
+    expect(WireLimits.partSurcharge('short'), 0,
+        reason: 'a message that fits costs nothing extra');
+    expect(WireLimits.partSurcharge(long), parts.length - 1,
+        reason: 'and one that does not is charged for each extra wrap');
+
+    final split = ChatEngine.estimate('ask', null, wireText: long);
+    expect(split.low, 1 + parts.length - 1,
+        reason: 'the estimate says the price before it is spent');
+    expect(ChatEngine.estimate('ask', null).low, 1,
+        reason: 'an ordinary reply is still one credit');
+  });
+
+  testWidgets('the composer styles the markdown you write, keeping every character',
+      (tester) async {
+    // Flutter draws the caret and the selection at offsets into the field's
+    // text, so the spans have to spell that text out exactly — nothing may be
+    // dropped in the styling, only dressed.
+    const source = '## Title\n'
+        'a **loud** and *quiet* and `code` and [text](http://x.test)\n'
+        '- item\n'
+        '> quoted\n'
+        '```js\n'
+        'const x = **not bold**;\n'
+        '```';
+    final controller = MarkdownEditingController(text: source);
+    late TextSpan built;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(builder: (context) {
+          built = controller.buildTextSpan(
+              context: context, style: const TextStyle(), withComposing: false);
+          return const SizedBox();
+        }),
+      ),
+    ));
+
+    expect(built.toPlainText(), source,
+        reason: 'the styled spans read back as the text that was typed');
+
+    final styles = <TextStyle>[];
+    built.visitChildren((span) {
+      if (span is TextSpan && span.style != null) styles.add(span.style!);
+      return true;
+    });
+    expect(styles.where((s) => s.fontWeight == FontWeight.w700), isNotEmpty,
+        reason: 'bold you typed is drawn bold');
+    expect(styles.where((s) => s.fontStyle == FontStyle.italic), isNotEmpty,
+        reason: 'and italic italic');
+    expect(styles.where((s) => s.fontFamily == 'monospace'), isNotEmpty,
+        reason: 'and code as code');
+
+    // A wall of source that happens to look like markdown inside a fence is
+    // code, not formatting.
+    controller.text = '```\n**stays flat**\n```';
+    await tester.pump();
   });
 
   testWidgets('a code block carries its language and a way to copy it',

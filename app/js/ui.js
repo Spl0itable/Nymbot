@@ -21,6 +21,7 @@
     const Profile = window.NymbotProfile;
     const Artifacts = window.NymbotArtifacts;
     const GitApi = window.NymbotGitApi;
+    const Free = window.NymbotFree;
     const NT = () => window.NostrTools;
 
     const $ = (id) => document.getElementById(id);
@@ -115,7 +116,7 @@
             this.favourites = Store.read('favouriteModels', []) || [];
             const brand = $('brand');
             brand.appendChild(Icons.wordmark({ size: 26 }));
-            brand.appendChild(el('span', 'brand-name', 'nymbot'));
+            brand.appendChild(el('span', 'brand-name', 'Nymbot'));
             this.applyAppearance();
             this.bind();
             Anon.load();
@@ -1018,6 +1019,42 @@
 
             const attachments = this.attachments.slice();
             const quote = this.quote;
+
+            // One gift wrap carries about 23 KB once the standing context and
+            // the attachments are counted. Checked before the message joins
+            // the transcript, so an over-long one is still in the composer to
+            // shorten rather than stranded in the chat having failed.
+            // The free allowance, as this device sees it. The worker counts
+            // per key, and making another key is a keystroke in this app's own
+            // gate — so the device keeps a count of its own and stops offering
+            // free replies once it is spent, whichever key is signed in.
+            //
+            // It is a speed bump, not a control: clearing site data walks past
+            // it. What it must never do is reach the worker, because a device
+            // counter the server could see would link a person's keys to each
+            // other, which is the one thing this app is built not to do.
+            if (!this.freeAllows()) {
+                this.offerUpgrade();
+                if (override == null) {
+                    $('input').value = text;
+                    this.autoGrow();
+                    this.updateHints();
+                }
+                return;
+            }
+
+            const cost = Chat.wireCost(this.conv, text, { attachments, quote });
+            if (cost.over > 0) {
+                if (override == null) {
+                    $('input').value = text;
+                    this.autoGrow();
+                    this.updateHints();
+                }
+                this.toast(Chat.overLimitMessage(
+                    Chat.wireTextFor(this.conv, text, { attachments, quote })));
+                return;
+            }
+
             this.attachments = [];
             this.quote = null;
             this.renderAttachments();
@@ -1094,6 +1131,13 @@
                 this.renderList();
                 this.notifyReply(reply);
 
+                if (res.free) {
+                    // Counted on this device as well as on the key, so a fresh
+                    // key does not start the day over.
+                    this.free = res.free;
+                    Free.spent();
+                    Free.observe(res.free.used);
+                }
                 if (res.balance != null) {
                     this.balance[res.pro ? 'pro' : 'standard'] = res.balance;
                     this.renderBalance();
@@ -1117,7 +1161,18 @@
                     this.note(t('Stopped. That reply was not charged for unless it had already finished.'));
                 } else if (e && e.noCredits) {
                     this.balance[e.pro ? 'pro' : 'standard'] = e.balance;
+                    // The worker says the day is spent. Believe it over the
+                    // device's own count, which can only ever be behind.
+                    if (e.free) {
+                        this.free = e.free;
+                        Free.observe(e.free.used);
+                    }
                     this.renderBalance();
+                    if (e.free && !e.pro) {
+                        this.offerUpgrade();
+                        this.openCredits();
+                        return;
+                    }
                     const topped = this.conv.anon
                         ? await this.runAutoTopUp({ force: true })
                         : null;
@@ -1727,18 +1782,28 @@
             const input = $('input');
             const text = input.value;
             const hint = $('costHint');
+            const opts = { attachments: this.attachments, quote: this.quote };
             if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
-                const est = Chat.estimateCredits(text, this.settings, this.conv);
+                const est = Chat.estimateCredits(text, this.settings, this.conv, opts);
                 hint.textContent = est.tier === 'pro'
                     ? (est.low === est.high
                         ? t('About {n} Pro credits', { n: est.low })
                         : t('About {low}–{high} Pro credits', { low: est.low, high: est.high }))
-                    : t('1 standard credit');
+                    : (est.low === 1
+                        ? t('1 standard credit')
+                        : t('{n} standard credits', { n: est.low }));
             } else {
                 hint.textContent = '';
             }
+            // What a message too long for one wrap will cost, said before it is
+            // sent rather than on the receipt.
             const len = $('lenHint');
-            len.textContent = text.length > 600 ? t('{n} characters', { n: text.length }) : '';
+            const parts = text.trim() ? Chat.partSurcharge(this.conv, text, opts) : 0;
+            if (parts > 0) {
+                len.textContent = t('Sent in {n} parts, +{extra} credits', { n: parts + 1, extra: parts });
+            } else {
+                len.textContent = text.length > 600 ? t('{n} characters', { n: text.length }) : '';
+            }
         },
 
         async addFiles(files) {
@@ -1800,6 +1865,11 @@
                 return;
             }
             this.balance = { standard: data.balance || 0, pro: data.proBalance || 0 };
+            // The worker is the authority on what this key has used; the
+            // device keeps its own count so signing in with a fresh key does
+            // not start the day over.
+            this.free = data.free || this.free || null;
+            if (this.free) Free.observe(this.free.used);
             this.renderBalance();
             if (announce) {
                 const anon = this.conv && this.conv.anon;
@@ -1816,10 +1886,47 @@
             const model = (this.conv && this.conv.proModel) || this.settings.proModel;
             const tier = model ? 'pro' : 'standard';
             const value = this.balance[tier];
-            $('chipBuyLabel').textContent = value == null ? t('Buy') : String(value);
+            // With nothing to spend, the chip counts what the day has left
+            // rather than showing a zero — which is a wall, where the free
+            // tier is a thing that is still working.
+            const free = this.freeLeft();
+            $('chipBuyLabel').textContent = (!model && !this.balance.standard && free != null)
+                ? t('{n} free', { n: free })
+                : (value == null ? t('Buy') : String(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
                 : t('{standard} standard · {pro} Pro',
                     { standard: this.balance.standard, pro: this.balance.pro });
+        },
+
+        /// Whether a message may go at all. Only ever false on the free tier
+        /// with the day spent — a balance is never gated by the device count,
+        /// because someone who has paid is not on the free tier and must never
+        /// be told they are.
+        freeAllows() {
+            const model = (this.conv && this.conv.proModel) || this.settings.proModel;
+            if (model) return true;
+            if (this.balance.standard > 0) return true;
+            if (!this.free || !this.free.limit) return true;
+            return Free.allows(this.free.limit, this.balance.standard || 0);
+        },
+
+        /// The day is spent. Said as a time and a price rather than as a wall.
+        offerUpgrade() {
+            const when = this.free && this.free.resetsAt
+                ? new Date(this.free.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                : null;
+            this.note(when
+                ? t('That is today\'s free replies used. They come back at {time} — or tap Buy for credits, which also unlock the sharper models, repositories, images and web search.', { time: when })
+                : t('That is today\'s free replies used. Tap Buy for credits, which also unlock the sharper models, repositories, images and web search.'));
+        },
+
+        /// How many free replies are actually available: the lower of what the
+        /// worker says this key has left and what this device has left. Null
+        /// when the free tier is not in play.
+        freeLeft() {
+            if (!this.free || !this.free.limit) return null;
+            const here = Free.state(this.free.limit);
+            return Math.min(this.free.left == null ? here.left : this.free.left, here.left);
         },
 
         renderIdentity() {
@@ -3199,7 +3306,13 @@
             const made = Artifacts.all(this.conv.id);
             const chip = $('chipArtifacts');
             chip.hidden = made.length === 0;
-            chip.classList.toggle('is-active', !!this.artifact);
+            // Files this chat has made are a thing this chat carries, the same
+            // way a persona or a repository is, so the chip groups with the
+            // rest of what is on. It used to mark the canvas being open
+            // instead — which is view state, not a setting in force, and it
+            // left the chip sorting to the far end of the rail behind every
+            // switch that was off.
+            chip.classList.toggle('is-active', made.length > 0);
             chip.querySelector('.chip-label').textContent = made.length === 1
                 ? t('1 artifact')
                 : t('{n} artifacts', { n: made.length });
@@ -4737,6 +4850,10 @@
                 nsecRow.hidden = true;
             }
             $('setRoot').value = Identity.rootCode() || '';
+            // Covered again every time the sheet opens, so showing it once
+            // does not leave it on screen for the next person to open it.
+            $('setRoot').type = 'password';
+            this.coverSecrets();
             $('rootHint').textContent = Identity.rootLocked
                 ? t('This account already advertises another device\'s key. Paste that device\'s code below to link this one; until then replies come back without the post-quantum layer.')
                 : t('Paste this into another device — or into Nymchat — so both hold the same post-quantum key.');
@@ -4745,6 +4862,17 @@
                 { replies: usage.replies, credits: usage.credits });
             $('settingsStatus').textContent = '';
             this.openModal('modalSettings');
+        },
+
+        /// Puts every revealed secret back behind its dots and its button back
+        /// to "Show", so a sheet reopened later does not carry the last
+        /// visit's decision.
+        coverSecrets() {
+            for (const btn of document.querySelectorAll('[data-act="toggle-secret"]')) {
+                const f = $(btn.dataset.target);
+                if (f) f.type = 'password';
+                btn.textContent = t('Show');
+            }
         },
 
         /// The languages with a published pack, plus English. A build that
@@ -5221,8 +5349,12 @@
 
         autoGrow() {
             const input = $('input');
+            // Measured with the height released, otherwise the last height
+            // read is the one that gets measured again and the field never
+            // shrinks back after a long draft is cleared.
             input.style.height = 'auto';
-            input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px';
+            const room = Math.max(120, window.innerHeight * 0.4);
+            input.style.height = Math.min(input.scrollHeight, room) + 'px';
         },
 
         writeClipboard(text) {
@@ -5409,8 +5541,13 @@
                     this.creditSats();
                 },
                 'credit-buy': () => this.buyCredits(),
-                'toggle-nsec': (target) => {
-                    const f = $('setNsec');
+                // Anything that grants the account is covered until it is
+                // asked for. The recovery code is one of those: it derives the
+                // post-quantum key, so a shoulder or a screen share reads it
+                // the same way it would read the nsec.
+                'toggle-secret': (target) => {
+                    const f = $(target.dataset.target);
+                    if (!f) return;
                     f.type = f.type === 'password' ? 'text' : 'password';
                     target.textContent = f.type === 'password' ? t('Show') : t('Hide');
                 },
@@ -5518,6 +5655,10 @@
             });
 
             const input = $('input');
+            // The composer is an editable surface, not a textarea: it renders
+            // the markdown you write as you write it, and hands back the same
+            // `value` and selection the rest of this file already asks for.
+            if (window.NymbotCompose) window.NymbotCompose.attach(input);
             input.addEventListener('input', () => {
                 this.autoGrow();
                 this.updateSuggest();
@@ -5593,12 +5734,66 @@
 
             const drop = document.querySelector('.main');
             if (drop) {
-                drop.addEventListener('dragover', (e) => { e.preventDefault(); });
-                drop.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    if (e.dataTransfer && e.dataTransfer.files.length) {
-                        this.addFiles(Array.from(e.dataTransfer.files));
+                // Dropping already worked and said nothing about it, which is
+                // the same as not working: with no target drawn there is
+                // nothing to tell you the drop will land. dragenter/dragleave
+                // fire for every child element, so the depth is counted rather
+                // than toggled — otherwise crossing a child clears the target
+                // while the file is still over the window.
+                let depth = 0;
+                const carriesFiles = (e) => {
+                    const dt = e.dataTransfer;
+                    if (!dt) return false;
+                    if (dt.types && dt.types.length) {
+                        return Array.prototype.indexOf.call(dt.types, 'Files') !== -1
+                            || Array.prototype.indexOf.call(dt.types, 'text/plain') !== -1;
                     }
+                    return true;
+                };
+                const showDrop = (on) => {
+                    depth = on ? depth : 0;
+                    drop.classList.toggle('is-dropping', on);
+                };
+                drop.addEventListener('dragenter', (e) => {
+                    if (!carriesFiles(e)) return;
+                    e.preventDefault();
+                    depth++;
+                    drop.classList.add('is-dropping');
+                });
+                drop.addEventListener('dragover', (e) => {
+                    if (!carriesFiles(e)) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                });
+                drop.addEventListener('dragleave', () => {
+                    depth = Math.max(0, depth - 1);
+                    if (!depth) drop.classList.remove('is-dropping');
+                });
+                drop.addEventListener('drop', async (e) => {
+                    e.preventDefault();
+                    showDrop(false);
+                    const dt = e.dataTransfer;
+                    if (!dt) return;
+                    if (dt.files && dt.files.length) {
+                        await this.addFiles(Array.from(dt.files));
+                        this.updateHints();
+                        return;
+                    }
+                    // Text dragged in from another window is a document too,
+                    // and goes in the way a long paste does.
+                    const text = dt.getData('text/plain') || '';
+                    if (!text.trim()) return;
+                    if (Attach.pasteIsLong(text)) {
+                        this.attachments = this.attachments.concat([Attach.fromText(text)]);
+                        this.renderAttachments();
+                    } else {
+                        const input = $('input');
+                        const join = input.value && !/\s$/.test(input.value) ? ' ' : '';
+                        input.value = input.value + join + text;
+                        this.autoGrow();
+                        input.focus();
+                    }
+                    this.updateHints();
                 });
             }
 

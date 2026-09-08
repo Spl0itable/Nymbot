@@ -177,7 +177,14 @@ class NymbotToolbar extends StatelessWidget {
           const SizedBox(width: 6),
           _Chip(
             icon: Icons.bolt,
-            label: app.shownBalance?.toString() ?? t('Buy'),
+            // With nothing to spend, the chip counts what the day has left
+            // rather than showing a zero — which is a wall, where the free
+            // tier is a thing that is still working.
+            label: (app.activeModel == null &&
+                    (app.standardBalance ?? 0) == 0 &&
+                    app.freeLeft != null)
+                ? t('{n} free', {'n': app.freeLeft})
+                : (app.shownBalance?.toString() ?? t('Buy')),
             active: false,
             color: NymbotColors.lightning,
             onTap: () => showCreditsSheet(context),

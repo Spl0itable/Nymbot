@@ -147,7 +147,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     final bot = m.role == ChatRole.bot;
     final published = widget.selfName;
     final name = bot
-        ? 'nymbot'
+        ? 'Nymbot'
         : (published != null && published.isNotEmpty)
             ? published
             : NymIdentity.name(widget.selfPubkey);

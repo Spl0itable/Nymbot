@@ -1526,6 +1526,73 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .composer-row { display: flex; gap: 0.4rem; align-items: flex-end; }
 .composer textarea { resize: none; max-height: 40vh; }
 
+/* The composer is editable rather than a textarea, so what you write in
+   markdown is drawn as what it means while you write it. It borrows the field
+   styling above, which only ever reached real form controls. */
+.composer-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    outline: none;
+    max-height: 40vh;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-user-modify: read-write-plaintext-only;
+    position: relative;
+}
+.composer-input:focus { border-color: var(--line-strong); }
+
+/* The placeholder sits over the first line rather than in front of it: an
+   empty field still holds a line to put the caret in, and text flowing after
+   the hint would push that line down. */
+.composer-input.is-empty::before {
+    content: attr(placeholder);
+    position: absolute;
+    left: 0.75rem;
+    top: 0.55rem;
+    color: var(--text-faint);
+    pointer-events: none;
+}
+.composer-input .ce-line { min-height: 1.4em; }
+
+/* The marks stay where you typed them so the text you are editing is still
+   the text you wrote; they are only dimmed out of the way. */
+.ce-mark { color: var(--text-faint); font-weight: 400; font-style: normal; }
+.composer-input strong { font-weight: 700; }
+.composer-input em { font-style: italic; }
+.composer-input s { text-decoration: line-through; }
+.ce-heading { font-weight: 700; }
+.ce-quote { color: var(--text-dim); font-style: italic; }
+.ce-link { color: var(--primary); }
+.ce-url { color: var(--text-faint); font-family: var(--mono); font-size: 0.9em; }
+.ce-fence, .ce-incode { font-family: var(--mono); font-size: 0.9em; }
+.ce-fence { color: var(--text-faint); }
+.ce-code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--bg-raised);
+    border-radius: 4px;
+    padding: 0 0.15em;
+}
+
+/* A block is tinted across the line rather than around the words, so it reads
+   as one run of code and not as a string of inline spans. */
+.composer-input .ce-line:has(.ce-fence),
+.composer-input .ce-line.is-code {
+    background: var(--bg-raised);
+    margin: 0 -0.25rem;
+    padding: 0 0.25rem;
+}
+
+@media (pointer: coarse) {
+    .composer-input { font-size: 16px; }
+}
+
 .composer-btn {
     flex: 0 0 auto;
     width: 36px;
@@ -1818,6 +1885,32 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     overflow-wrap: anywhere;
 }
 .checkpoint-note { font-size: 0.72rem; color: var(--text-faint); }
+
+/* Where a dropped file will land. Drawn only while something is over the
+   window: dropping already worked and said nothing about it, which from the
+   outside is the same as not working. */
+.drop-target {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    pointer-events: none;
+}
+.main.is-dropping .drop-target { display: flex; }
+.drop-target-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 1rem 1.4rem;
+    border: 2px dashed var(--primary);
+    border-radius: 14px;
+    background: var(--bg-raised);
+    color: var(--text);
+    font-size: 0.95rem;
+}
 
 /* What you typed while it was still writing. Held rather than dropped, and
    shown so the queue is never a surprise. */

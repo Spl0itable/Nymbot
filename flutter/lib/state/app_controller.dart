@@ -17,6 +17,7 @@ import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../services/anon.dart';
 import '../services/chat_engine.dart';
+import '../services/free_tier.dart';
 import '../services/memory_keeper.dart';
 import '../services/nymbot_api.dart';
 import '../services/pq_announce.dart';
@@ -81,6 +82,10 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? proModel;
   int? standardBalance;
   int? proBalance;
+
+  /// What the day's free allowance has left on the key that is signed in, as
+  /// the worker last reported it.
+  FreeAllowance? free;
 
   String convFilter = 'all';
   String convSearch = '';
@@ -1420,6 +1425,15 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    // The free allowance, as this device sees it. The worker counts per key,
+    // and making another key is a tap in this app's own gate — so the device
+    // keeps a count of its own and stops offering free replies once it is
+    // spent, whichever key is signed in. A speed bump, never reported to the
+    // worker: see AppController.freeAllows.
+    if (!freeAllows) {
+      await note(freeSpentMessage());
+      return false;
+    }
     _stopped = false;
     continuedSpend = 0;
     final body = text.trim();
@@ -1494,6 +1508,13 @@ class AppController extends ChangeNotifier {
       _touch(conv);
       await store.saveConversations(conversations);
       await store.recordUsage(res.cost);
+      if (res.free != null) {
+        // Counted on this device as well as on the key, so a fresh key does
+        // not start the day over.
+        free = res.free;
+        await store.freeTier.spent();
+        await store.freeTier.observe(res.free!.used);
+      }
       if (res.balance != null) {
         if (res.pro) {
           proBalance = res.balance;
@@ -1530,12 +1551,24 @@ class AppController extends ChangeNotifier {
         } else {
           standardBalance = e.balance;
         }
-        final topped = conv.anon ? await autoTopUp(force: true) : null;
-        if (topped != null) {
-          await note('${describeTopUp(topped)} '
-              '${t('Send that again when you are ready.')}');
+        // The worker says the day is spent. Believe it over the device's own
+        // count, which can only ever be behind.
+        if (e.free != null) {
+          free = e.free;
+          await store.freeTier.observe(e.free!.used);
+        }
+        if (e.free != null && !e.pro) {
+          // The allowance ran out, not a balance: that is a time, not a wall,
+          // and there is nothing to top up from.
+          await note(freeSpentMessage());
         } else {
-          await note(e.message);
+          final topped = conv.anon ? await autoTopUp(force: true) : null;
+          if (topped != null) {
+            await note('${describeTopUp(topped)} '
+                '${t('Send that again when you are ready.')}');
+          } else {
+            await note(e.message);
+          }
         }
       } else {
         await _add(ChatMessage(
@@ -1685,6 +1718,13 @@ class AppController extends ChangeNotifier {
     }
     standardBalance = (res.data['balance'] as num?)?.toInt() ?? 0;
     proBalance = (res.data['proBalance'] as num?)?.toInt() ?? 0;
+    // The worker is the authority on what this key has used; the device keeps
+    // its own count so signing in with a fresh key does not start the day over.
+    final seen = FreeAllowance.fromJson(res.data['free']);
+    if (seen != null) {
+      free = seen;
+      await store.freeTier.observe(seen.used);
+    }
     notifyListeners();
     if (announce) {
       final vars = {'standard': standardBalance, 'pro': proBalance};
@@ -1697,13 +1737,71 @@ class AppController extends ChangeNotifier {
 
   int? get shownBalance => activeModel != null ? proBalance : standardBalance;
 
+  /// How many free replies are actually available: the lower of what the worker
+  /// says this key has left and what this device has left. Null when the free
+  /// tier is not in play.
+  int? get freeLeft {
+    final held = free;
+    if (held == null || held.limit <= 0) return null;
+    final here = store.freeTier.leftOf(held.limit);
+    return held.left < here ? held.left : here;
+  }
+
+  /// Whether a message may go at all. Only ever false on the free tier with the
+  /// day spent — a balance is never gated by the device count, because someone
+  /// who has paid is not on the free tier and must never be told they are.
+  ///
+  /// The device's count is a speed bump, not a control: clearing the app's data
+  /// walks past it. What it must never do is reach the worker, because a device
+  /// counter the server could see would link a person's keys to each other,
+  /// which is the one thing this app is built not to do.
+  bool get freeAllows {
+    if (activeModel != null) return true;
+    if ((standardBalance ?? 0) > 0) return true;
+    final held = free;
+    if (held == null || held.limit <= 0) return true;
+    return store.freeTier.allows(held.limit, standardBalance ?? 0);
+  }
+
+  /// The day is spent. Said as a time and a price rather than as a wall.
+  String freeSpentMessage() {
+    final at = free?.resetsAt ?? 0;
+    if (at <= 0) {
+      return t("That is today's free replies used. Tap Buy for credits, which "
+          'also unlock the sharper models, repositories, images and web search.');
+    }
+    final when = DateTime.fromMillisecondsSinceEpoch(at);
+    final clock = '${when.hour.toString().padLeft(2, '0')}'
+        ':${when.minute.toString().padLeft(2, '0')}';
+    return t(
+        "That is today's free replies used. They come back at {time} — or tap "
+        'Buy for credits, which also unlock the sharper models, repositories, '
+        'images and web search.',
+        {'time': clock});
+  }
+
   String get satsLabel => activeModel != null ? 'Pro' : 'Standard';
 
   int satsFor(int credits, String tier) =>
       credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
 
   CostEstimate estimate(String text) => ChatEngine.estimate(text, activeModel,
-      conv: current, hasRepos: activeRepos.isNotEmpty);
+      conv: current,
+      hasRepos: activeRepos.isNotEmpty,
+      // Priced against what will actually go on the wire — the standing
+      // context and the attachments included — because that is what decides
+      // whether the question needs more than one wrap, and each extra one is a
+      // credit.
+      wireText: _wireTextNow(text));
+
+  String _wireTextNow(String text) {
+    final conv = current;
+    if (conv == null) return text;
+    final head = ChatEngine.preamble(conv, activeRepos, activePersona,
+        activeWorkspace, activeBot, text, store.memories());
+    final attached = attachments.map((a) => a.wireBlock).join();
+    return '$head$text$attached';
+  }
 
   /// Normal, careful, deep and back. Each step is another model call the reply
   /// takes and the balance pays for, so the toolbar's estimate moves with it.

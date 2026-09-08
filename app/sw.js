@@ -28,11 +28,13 @@ const SHELL = [
     '/app/js/chat.js',
     '/app/js/highlight.js',
     '/app/js/markdown.js',
+    '/app/js/compose.js',
     '/app/js/artifacts.js',
     '/app/js/export.js',
     '/app/js/bots.js',
     '/app/js/gitapi.js',
     '/app/js/memory.js',
+    '/app/js/free.js',
     '/app/js/qr.js',
     '/app/js/ui.js'
 ];

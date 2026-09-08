@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/free_tier.dart';
+
 import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/conversation.dart';
@@ -30,6 +32,11 @@ class Store {
   final SharedPreferences _prefs;
 
   static Future<Store> open() async => Store(await SharedPreferences.getInstance());
+
+  /// The free allowance this device has spent today, whichever key was signed
+  /// in. Handed the same preferences the rest of the store uses, so signing
+  /// out does not clear it — which is the whole point of it.
+  FreeTier get freeTier => FreeTier(_prefs);
 
   // --- secrets ---------------------------------------------------------------
 

@@ -16,7 +16,9 @@ import 'memory_keeper.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
 import 'pq_announce.dart';
+import 'free_tier.dart';
 import 'relay_pool.dart';
+import 'wire_limits.dart';
 import '../features/i18n/i18n.dart';
 
 class ChatFailure implements Exception {
@@ -24,13 +26,18 @@ class ChatFailure implements Exception {
       {this.noCredits = false,
       this.pro = false,
       this.balance = 0,
-      this.cancelled = false});
+      this.cancelled = false,
+      this.free});
 
   final String message;
   final bool noCredits;
   final bool pro;
   final int balance;
   final bool cancelled;
+
+  /// Present when it was the day's free allowance that ran out rather than a
+  /// balance, which is a time rather than a wall.
+  final FreeAllowance? free;
 
   @override
   String toString() => message;
@@ -46,6 +53,9 @@ typedef TurnResult = ({
   bool lowBalance,
   List<String> repos,
   List<Map<String, dynamic>> sources,
+  /// What the day's free allowance has left, when this reply came out of it
+  /// rather than out of a balance.
+  FreeAllowance? free,
   // Set when the run stopped at its tool-call cap with work left. The token
   // buys one more leg; the caller decides whether to spend it.
   bool truncated,
@@ -108,14 +118,22 @@ class ChatEngine {
   }
 
   static CostEstimate estimate(String text, Map<String, dynamic>? model,
-      {Conversation? conv, bool hasRepos = false}) {
-    if (model == null) return (tier: 'standard', low: 1, high: 1);
+      {Conversation? conv, bool hasRepos = false, String wireText = ''}) {
+    // A question too long for one wrap travels as several, and each extra one
+    // is a credit. Splitting is a transport detail, but the input it carries is
+    // real and the published price has never charged for input.
+    final extra =
+        WireLimits.partSurcharge(wireText.isEmpty ? text : wireText);
+    if (model == null) {
+      return (tier: 'standard', low: 1 + extra, high: 1 + extra);
+    }
     final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
     // A repo task loops on a budget of its own and ignores the effort level.
     final calls = hasRepos ? 1 : effortCalls(conv);
-    final low = ((model['credits'] as num?)?.toInt() ?? 1) * calls;
+    final low = ((model['credits'] as num?)?.toInt() ?? 1) * calls + extra;
     final max = (model['max'] as num?)?.toInt() ?? 1;
-    final high = (max + bump) * calls < low ? low : (max + bump) * calls;
+    final scaled = (max + bump) * calls + extra;
+    final high = scaled < low ? low : scaled;
     return (tier: 'pro', low: low, high: high);
   }
 
@@ -501,40 +519,55 @@ class ChatEngine {
     final attached = attachments.map((a) => a.wireBlock).join();
     final wireText = '$head$quoted$text$attached';
 
-    final rumor = UnsignedEvent(
-      pubkey: signer.pubkey,
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      kind: 14,
-      tags: [
-        ['p', NymbotConfig.botPubkey],
-        ['x', _sharedId()],
-        ['ms', '${DateTime.now().millisecondsSinceEpoch}'],
-        ['nymthread', rootId],
-      ],
-      content: wireText,
-    );
-
-    final botKem = pq.botKey?.pk;
-    final wrap = await _wrap(rumor, senderSk, NymbotConfig.botPubkey, botKem);
-    final accepted = await relays.publish(wrap, timeout: const Duration(seconds: 5));
-    if (accepted == 0) {
-      throw ChatFailure(
-          t('No relay accepted your message. Check your connection and try again.'));
+    // NIP-44 refuses a plaintext over 65535 bytes, and a gift wrap nests two
+    // of them, so a long question does not fit in one event. It travels as
+    // several instead — each saying where it sits, all sharing one message id
+    // — and the worker puts them back together. What stays capped is how many.
+    final bodies = WireLimits.split(wireText);
+    if (bodies.length > WireLimits.partsMax) {
+      throw ChatFailure(WireLimits.overLimitMessage(wireText));
     }
+    final msgId = _sharedId();
 
     // A ghost chat publishes nothing it does not have to. The wrap to the bot
     // is how the message gets there at all; the archive copy and the reply's
     // re-publish are for restoring a conversation later, which is exactly what
     // a ghost chat is refusing.
     final ghost = conv.ephemeral;
+    final botKem = pq.botKey?.pk;
+    final partIds = <String>[];
+    NostrEvent? wrap;
+    for (var i = 0; i < bodies.length; i++) {
+      final rumor = UnsignedEvent(
+        pubkey: signer.pubkey,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: 14,
+        tags: [
+          ['p', NymbotConfig.botPubkey],
+          ['x', msgId],
+          ['ms', '${DateTime.now().millisecondsSinceEpoch}'],
+          if (bodies.length > 1) ['part', '${i + 1}', '${bodies.length}'],
+          ['nymthread', rootId],
+        ],
+        content: bodies[i],
+      );
+      wrap = await _wrap(rumor, senderSk, NymbotConfig.botPubkey, botKem);
+      final accepted =
+          await relays.publish(wrap, timeout: const Duration(seconds: 5));
+      if (accepted == 0) {
+        throw ChatFailure(
+            t('No relay accepted your message. Check your connection and try again.'));
+      }
+      partIds.add(wrap.id);
 
-    // Our own copy, so the conversation restores on another device.
-    if (!ghost) {
-      try {
-        final selfWrap = await _wrap(rumor, senderSk, signer.pubkey, selfKem);
-        unawaited(relays.publish(selfWrap, timeout: const Duration(seconds: 3)));
-      } catch (_) {
-        // The archive copy is best effort.
+      // Our own copy, so the conversation restores on another device.
+      if (!ghost) {
+        try {
+          final selfWrap = await _wrap(rumor, senderSk, signer.pubkey, selfKem);
+          unawaited(relays.publish(selfWrap, timeout: const Duration(seconds: 3)));
+        } catch (_) {
+          // The archive copy is best effort.
+        }
       }
     }
 
@@ -542,15 +575,18 @@ class ChatEngine {
     // the answer comes back.
     if (onTurn != null) {
       try {
-        onTurn(wrap.id);
+        onTurn(wrap!.id);
       } catch (_) {}
     }
 
     final announcement =
         useAnon ? await anon.announcement() : pq.selfAnnouncement;
     final extra = <String, dynamic>{
-      'eventId': wrap.id,
+      'eventId': wrap!.id,
       'fresh': fresh,
+      // Every event the question was split across, in order. The last is
+      // `eventId`, which is what a message that fits has always sent.
+      if (partIds.length > 1) 'parts': partIds,
       if (resume != null && resume.isNotEmpty) 'resume': resume,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (webSearch) 'web': true,
@@ -595,6 +631,7 @@ class ChatEngine {
         noCredits: true,
         pro: data['pro'] == true,
         balance: (data['balance'] as num?)?.toInt() ?? 0,
+        free: FreeAllowance.fromJson(data['free']),
       );
     }
     if (res.status >= 400 || data['error'] != null) {
@@ -650,6 +687,7 @@ class ChatEngine {
       pro: data['pro'] == true,
       modelCalls: (data['modelCalls'] as num?)?.toInt() ?? 1,
       lowBalance: data['lowBalance'] == true,
+      free: FreeAllowance.fromJson(data['free']),
       repos: repos.map((r) => r.repo).toList(),
       sources: (data['sources'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
           const <Map<String, dynamic>>[],

@@ -16,6 +16,75 @@
         return window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)));
     }
 
+    // What one gift wrap can carry.
+    //
+    // NIP-44 v2 refuses a plaintext over 65535 bytes, and the wrap's plaintext
+    // is the serialized seal — which holds the base64 of the sealed rumor. So
+    // a message pays for base64 expansion (4/3), NIP-44's padding (up to 1/8)
+    // and the envelope's own fields, twice over. The post-quantum layer adds
+    // an ML-KEM ciphertext to each of those two encryptions, which is the
+    // other fifth.
+    //
+    // Measured rather than guessed: the largest message that wraps is 40,537
+    // bytes over NIP-44 alone and 32,345 with pq2, falling to 26,460 when
+    // every character needs a JSON escape. The cap below is that worst case
+    // with room left, and it is applied to the escaped UTF-8 length so a
+    // message of quotes and newlines is measured as what it will really cost.
+    const BODY_MAX = 24000;
+
+    /// What `text` costs on the wire: its JSON-escaped length in UTF-8 bytes.
+    /// A quote or a newline is two bytes there, not one, and an emoji is four
+    /// bytes rather than one character.
+    function bodyCost(text) {
+        const json = JSON.stringify(String(text == null ? '' : text));
+        return new TextEncoder().encode(json).length - 2;
+    }
+
+    function fits(text) {
+        return bodyCost(text) <= BODY_MAX;
+    }
+
+    // How many wraps one question may be split across. A message past this is
+    // not a message, and eight of them is roughly 180 KB — well past anything
+    // a model would read in one turn anyway.
+    const PARTS_MAX = 8;
+
+    /// Cuts `text` into pieces each of which fits in one wrap.
+    ///
+    /// The cut is taken at the last line break inside the budget rather than
+    /// at the byte, so a split lands between lines and a fenced block or a
+    /// sentence is not sawn in half. A single line longer than a whole wrap
+    /// has nowhere better to go and is cut where it must be.
+    ///
+    /// Budget is spent in escaped UTF-8 bytes, which is what the wire charges,
+    /// so the walk is a binary search on the character count rather than a
+    /// count of characters — a line of quotes costs twice what its length
+    /// suggests, and an emoji four times.
+    function split(text) {
+        const whole = String(text == null ? '' : text);
+        if (bodyCost(whole) <= BODY_MAX) return [whole];
+        const parts = [];
+        let rest = whole;
+        while (rest) {
+            if (bodyCost(rest) <= BODY_MAX) { parts.push(rest); break; }
+            // The largest prefix that still fits.
+            let lo = 1;
+            let hi = rest.length;
+            while (lo < hi) {
+                const mid = Math.ceil((lo + hi) / 2);
+                if (bodyCost(rest.slice(0, mid)) <= BODY_MAX) lo = mid; else hi = mid - 1;
+            }
+            let cut = lo;
+            // Back up to a line break, but not so far that a part is mostly
+            // empty — a long unbroken run has to be cut somewhere.
+            const nl = rest.lastIndexOf('\n', cut - 1);
+            if (nl > cut * 0.5) cut = nl + 1;
+            parts.push(rest.slice(0, cut));
+            rest = rest.slice(cut);
+        }
+        return parts;
+    }
+
     function tagValue(evt, name) {
         const t = (evt.tags || []).find(x => Array.isArray(x) && x[0] === name);
         return t ? t[1] : null;
@@ -24,11 +93,16 @@
     const Wire = {
         sharedId,
         tagValue,
+        BODY_MAX,
+        PARTS_MAX,
+        bodyCost,
+        fits,
+        split,
 
         /// The kind-14 rumor. `threadRoot` is the conversation this message
         /// belongs to: the worker scopes the model's context to the messages
         /// carrying the same marker, which is what keeps chats separate.
-        rumor(content, recipientPubkey, threadRoot, msgId, senderPubkey) {
+        rumor(content, recipientPubkey, threadRoot, msgId, senderPubkey, part) {
             const nowMs = Date.now();
             return {
                 kind: 14,
@@ -37,6 +111,11 @@
                     ['p', recipientPubkey],
                     ['x', msgId || sharedId()],
                     ['ms', String(nowMs)],
+                    // One question too long for a single wrap travels as
+                    // several, each saying where it sits so the worker can put
+                    // them back in order rather than trusting the relays to
+                    // deliver them in one.
+                    ...(part ? [['part', String(part.index), String(part.of)]] : []),
                     ...(threadRoot ? [['nymthread', threadRoot]] : [])
                 ],
                 content,

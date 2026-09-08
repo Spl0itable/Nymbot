@@ -16,6 +16,7 @@ import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
 import 'artifact_screen.dart';
+import 'compose_controller.dart';
 import 'sheets/bots_sheet.dart';
 import 'sheets/compare_sheet.dart';
 import 'progress_lines.dart';
@@ -48,7 +49,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _input = TextEditingController();
+  // Styles the markdown you write while you write it, so what is in the
+  // field looks like what will be sent.
+  final _input = MarkdownEditingController();
   final _scroll = ScrollController();
   final _voice = Voice();
   final _keys = <String, GlobalKey>{};
@@ -1172,7 +1175,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? t('About {n} Pro credits', {'n': estimate.low})
                           : t('About {low}–{high} Pro credits',
                               {'low': estimate.low, 'high': estimate.high}))
-                      : t('1 standard credit'),
+                      : (estimate.low == 1
+                          ? t('1 standard credit')
+                          : t('{n} standard credits', {'n': estimate.low})),
                   style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                 ),
               ),
@@ -1415,7 +1420,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   Transform.translate(
                     offset: const Offset(0, 1.5),
                     child: Text(
-                      'nymbot',
+                      'Nymbot',
                       style: TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 16,

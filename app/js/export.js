@@ -74,7 +74,7 @@
     function toText(conv, messages) {
         const out = [`${conv.title || 'New chat'}`, ''];
         for (const m of messages) {
-            const who = m.role === 'self' ? 'you' : m.role === 'bot' ? 'nymbot' : m.role;
+            const who = m.role === 'self' ? 'you' : m.role === 'bot' ? 'Nymbot' : m.role;
             out.push(`[${who}] ${m.content || ''}`);
             out.push('');
         }

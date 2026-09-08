@@ -269,6 +269,26 @@
         return parts;
     }
 
+    function wireTextFor(conv, text, opts) {
+        const repos = reposFor(conv);
+        const attachments = opts.attachments || [];
+        const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
+        const preamble = preambleFor(conv, repos, text);
+        const quoted = opts.quote
+            ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
+            : '';
+        return preamble + quoted + text + attachText;
+    }
+
+    /// Says what is too big and by how much, rather than the byte count the
+    /// crypto would have thrown. A file is named as the thing to move,
+    /// because a workspace holds a document the wire cannot.
+    function overLimitMessage(wireText) {
+        const kb = Math.round(Wire.bodyCost(wireText) / 1024);
+        const max = Math.round((Wire.BODY_MAX * Wire.PARTS_MAX) / 1024);
+        return t('This message is {n} KB, and the most one question can carry is about {max} KB. Put a long file in a workspace instead, where the whole of it is searched rather than sent.', { n: kb, max: max });
+    }
+
     function preambleFor(conv, repos, query) {
         const standing = standingContext(conv, repos, query);
         const parts = standing.length
@@ -296,16 +316,27 @@
 
     function effortCalls(conv) { return EFFORT[effortOf(conv)] || 1; }
 
-    function estimateCredits(text, settings, conv) {
+    /// A question too long for one wrap travels as several, and the worker
+    /// charges a credit for each extra one. Splitting is a transport detail,
+    /// but the input it carries is real and the published price has never
+    /// charged for input — so the surcharge is counted here too, against the
+    /// same text, and quoted before it is spent rather than after.
+    function partSurcharge(conv, text, options) {
+        const parts = Wire.split(wireTextFor(conv || {}, text || '', options || {})).length;
+        return Math.max(0, parts - 1);
+    }
+
+    function estimateCredits(text, settings, conv, options) {
+        const extra = partSurcharge(conv, text, options);
         const model = (conv && conv.proModel) || settings.proModel;
-        if (!model) return { tier: 'standard', low: 1, high: 1 };
+        if (!model) return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
         const size = String(text || '').length;
         const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
         // A repo task loops on its own budget and ignores the effort level.
         const calls = reposFor(conv || {}).length ? 1 : effortCalls(conv);
-        const low = (model.credits || 1) * calls;
-        const high = Math.max(low, ((model.max || model.credits || 1) + bump) * calls);
-        return { tier: 'pro', low, high, calls };
+        const low = (model.credits || 1) * calls + extra;
+        const high = Math.max(low, ((model.max || model.credits || 1) + bump) * calls + extra);
+        return { tier: 'pro', low, high, calls, parts: extra + 1 };
     }
 
     const Chat = {
@@ -323,6 +354,24 @@
             return false;
         },
 
+        /// Exactly what `send` will put on the wire: the standing context, the
+        /// quoted line, the message and the attachments, assembled the same
+        /// way. Split out so the composer can price a message before it is
+        /// committed to the transcript rather than after.
+        wireTextFor(conv, text, options) {
+            return wireTextFor(conv, text, options || {});
+        },
+
+        /// What the message would cost on the wire, and what is left.
+        wireCost(conv, text, options) {
+            const used = Wire.bodyCost(wireTextFor(conv, text, options || {}));
+            const max = Wire.BODY_MAX * Wire.PARTS_MAX;
+            return { used, max, over: Math.max(0, used - max) };
+        },
+
+        overLimitMessage,
+        partSurcharge,
+
         async send(conv, text, settings, options) {
             const opts = options || {};
             if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
@@ -338,38 +387,46 @@
                 : Identity.kemPk;
 
             const repos = reposFor(conv);
-            const attachments = opts.attachments || [];
-            const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
             const isFresh = /^\s*!\s*\S/.test(text);
-            const preamble = preambleFor(conv, repos, text);
-            const quoted = opts.quote
-                ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
-                : '';
-            const wireText = preamble + quoted + text + attachText;
+            const wireText = wireTextFor(conv, text, opts);
+            // NIP-44 caps one plaintext, and a gift wrap holds two of them
+            // nested, so a long message does not fit in one event. Rather than
+            // refuse it, it travels as several — each tagged with where it
+            // sits, all sharing one message id, joined back into one question
+            // by the worker. What stays capped is how many: past that it is
+            // not a message.
+            const bodies = Wire.split(wireText);
+            if (bodies.length > Wire.PARTS_MAX) {
+                throw new Error(overLimitMessage(wireText));
+            }
 
             const botKem = PQ.botKey ? PQ.botKey.pk : null;
             // A continued leg is a new message on the wire, so it needs an id
             // of its own — reusing the first leg's would land it in the
             // de-duplicator and replay the answer we are trying to move past.
             const msgId = Wire.sharedId();
-            const rumor = Wire.rumor(wireText, C.botPubkey, conv.rootId, msgId, senderPubkey);
-
-            const wrap = await Wire.wrap(rumor, C.botPubkey, botKem, sender);
-            const accepted = await Relays.publish(wrap, 5000);
-            if (accepted === 0) {
-                throw new Error(t('No relay accepted your message. Check your connection and try again.'));
-            }
-
             // A ghost chat publishes nothing it does not have to. The wrap to
             // the bot is how the message gets there at all; the archive copy
             // and the reply's re-publish are for restoring a conversation
             // later, which is exactly what a ghost chat is refusing.
             const ghost = !!conv.ephemeral;
-            if (!ghost) {
-                try {
-                    const selfWrap = await Wire.wrap(rumor, senderPubkey, selfKemPk, sender);
-                    Relays.publish(selfWrap, 3000);
-                } catch (_) { }
+            const partIds = [];
+            let wrap = null;
+            for (let i = 0; i < bodies.length; i++) {
+                const rumor = Wire.rumor(bodies[i], C.botPubkey, conv.rootId, msgId, senderPubkey,
+                    bodies.length > 1 ? { index: i + 1, of: bodies.length } : null);
+                wrap = await Wire.wrap(rumor, C.botPubkey, botKem, sender);
+                const accepted = await Relays.publish(wrap, 5000);
+                if (accepted === 0) {
+                    throw new Error(t('No relay accepted your message. Check your connection and try again.'));
+                }
+                partIds.push(wrap.id);
+                if (!ghost) {
+                    try {
+                        const selfWrap = await Wire.wrap(rumor, senderPubkey, selfKemPk, sender);
+                        Relays.publish(selfWrap, 3000);
+                    } catch (_) { }
+                }
             }
 
             const model = conv.proModel || settings.proModel;
@@ -383,6 +440,10 @@
                 eventId: wrap.id,
                 fresh: isFresh
             };
+            // Every event the question was split across, in order. The last is
+            // `eventId`, which is what a single-event message has always sent
+            // and what an older worker will still answer from.
+            if (partIds.length > 1) extra.parts = partIds;
             // Continuing a run that stopped at its tool-call cap. The token is
             // single-use and the worker only redeems it for the key that made
             // it, so nothing here is worth intercepting.
@@ -438,6 +499,9 @@
                 err.noCredits = true;
                 err.pro = !!data.pro;
                 err.balance = data.balance || 0;
+                // Present when it was the day's free allowance that ran out
+                // rather than a balance, which is a time rather than a wall.
+                err.free = data.free || null;
                 throw err;
             }
             if (status >= 400 || !data || data.error) {
@@ -486,6 +550,9 @@
                 nextReserve: data.nextReserve || 0,
                 taskType: data.taskType || null,
                 sources: Array.isArray(data.sources) ? data.sources : null,
+                // What the day's free allowance has left, when this reply came
+                // out of it rather than out of a balance.
+                free: data.free || null,
                 repos: repos.map(r => r.repo),
                 eventId: wrap.id
             };

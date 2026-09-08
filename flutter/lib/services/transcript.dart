@@ -78,7 +78,7 @@ class Transcript {
     for (final m in messages) {
       final who = switch (m.role) {
         ChatRole.self => 'you',
-        ChatRole.bot => 'nymbot',
+        ChatRole.bot => 'Nymbot',
         ChatRole.error => 'error',
         ChatRole.note => 'note',
       };

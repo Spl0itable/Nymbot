@@ -1,6 +1,11 @@
 (function () {
     'use strict';
 
+// A file travels inside the message rather than beside it, and a long message
+// is split across several wraps — so the cap is about what a model will
+// usefully read in one turn, not about what one event can hold. A document
+// past this belongs in a workspace, which searches the whole of it rather
+// than sending it.
     const MAX_TEXT_BYTES = 96 * 1024;
     const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
     const MAX_IMAGE_EDGE = 1280;
@@ -85,7 +90,7 @@
             };
         }
         if (!looksTextual(file)) throw new Error(t('Only text, code and image files can be attached.'));
-        if (file.size > MAX_TEXT_BYTES) throw new Error(t('That file is too large — 96 KB is the limit for text.'));
+        if (file.size > MAX_TEXT_BYTES) throw new Error(t('That file is too large to send in a message — 96 KB is the limit. Add it to a workspace instead, where the whole file is searched.'));
         const text = await readAsText(file);
         return {
             id: window.NymbotStore.uid(),
