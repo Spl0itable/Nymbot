@@ -387,6 +387,7 @@
                 : Identity.kemPk;
 
             const repos = reposFor(conv);
+            const attachments = opts.attachments || [];
             const isFresh = /^\s*!\s*\S/.test(text);
             const wireText = wireTextFor(conv, text, opts);
             // NIP-44 caps one plaintext, and a gift wrap holds two of them

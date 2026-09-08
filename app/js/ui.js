@@ -502,7 +502,7 @@
             if (m.role === 'self' || m.role === 'bot') {
                 const who = el('span', 'message-author' + (m.role === 'bot' ? ' bot-author' : ''));
                 if (m.role === 'bot') {
-                    who.appendChild(document.createTextNode(C.botName.toLowerCase()));
+                    who.appendChild(document.createTextNode(C.botName));
                     who.appendChild(el('span', 'nym-suffix', '#' + BOT_SUFFIX));
                     const tick = el('span', 'verified-tick');
                     tick.title = t('Verified');
