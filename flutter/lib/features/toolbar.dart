@@ -277,21 +277,13 @@ class ContextBar extends StatelessWidget {
     final repos = app.activeRepos;
     final persona = app.activePersona;
     final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
-    final media = app.activeMediaModel;
 
-    if (repos.isEmpty &&
-        persona == null &&
-        !hasSystem &&
-        media == null &&
-        !app.settings.webSearch) {
+    if (repos.isEmpty && !(hasSystem && persona != null)) {
       return const SizedBox.shrink();
     }
 
     Widget chip(String label, Color colour, VoidCallback? onClear,
-        {VoidCallback? onTap,
-        IconData? leading,
-        IconData? badge,
-        String? brand}) {
+        {VoidCallback? onTap, IconData? leading, IconData? badge}) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap ?? onClear,
@@ -304,10 +296,7 @@ class ContextBar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (brand != null) ...[
-                BrandTile(slug: brand, size: 13),
-                const SizedBox(width: 4),
-              ] else if (leading != null) ...[
+              if (leading != null) ...[
                 Icon(leading, size: 12, color: colour),
                 const SizedBox(width: 4),
               ],
@@ -343,27 +332,9 @@ class ContextBar extends StatelessWidget {
               () => app.toggleRepoHere(r.id),
               badge: r.allowWrites ? Icons.edit_outlined : null,
             ),
-          if (persona != null)
-            chip(persona.name, theme.colorScheme.primary,
-                () => app.setPersona(null),
-                leading: NymIcons.forPersona(persona.icon)),
-          if (hasSystem)
+          if (hasSystem && persona != null)
             chip(t('Custom instructions'), theme.colorScheme.secondary, null,
                 onTap: () => showSystemPromptSheet(context)),
-          if (media != null)
-            chip(
-              media['label'] as String? ?? '',
-              theme.colorScheme.secondary,
-              () => app.setMediaModel(null,
-                  forChat: app.current?.mediaModel != null),
-              brand: media['slug'] as String?,
-              leading: media['kind'] == 'video'
-                  ? Icons.movie_outlined
-                  : Icons.image_outlined,
-            ),
-          if (app.settings.webSearch)
-            chip(t('Web search'), theme.colorScheme.secondary,
-                () => app.setWebSearch(false)),
         ],
       ),
     );

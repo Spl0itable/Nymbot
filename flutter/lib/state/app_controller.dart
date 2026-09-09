@@ -187,9 +187,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  static final RegExp _namesGenerator = RegExp(r'^\?\w+\s+\S');
+
   static bool mediaNeedsPro(Map<String, dynamic>? media) {
-    final command = media?['command'] as String?;
-    return command != null && command.contains('--model');
+    if (media == null) return false;
+    if (media['kind'] == 'video') return true;
+    return _namesGenerator.hasMatch(media['command'] as String? ?? '');
   }
 
   Future<void> dropProMedia() async {

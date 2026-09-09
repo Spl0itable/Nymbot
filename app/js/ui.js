@@ -2212,7 +2212,7 @@
             $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
 
             this.groupChips();
-            this.renderContextBar(repos, persona, hasSystem, space);
+            this.renderContextBar(repos, persona, hasSystem);
             this.renderBalance();
             this.updateHints();
         },
@@ -2269,7 +2269,7 @@
             rail.scrollLeft = left;
         },
 
-        renderContextBar(repos, persona, hasSystem, space) {
+        renderContextBar(repos, persona, hasSystem) {
             const bar = $('contextBar');
             bar.innerHTML = '';
             const chips = [];
@@ -2301,58 +2301,11 @@
                 }
                 chips.push(chip);
             }
-            if (persona) {
-                const chip = el('button', 'context-chip is-persona');
-                chip.type = 'button';
-                chip.appendChild(Icons.node(persona.icon || 'robot', { size: 11 }));
-                chip.appendChild(document.createTextNode(persona.name));
-                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
-                chip.addEventListener('click', () => {
-                    this.conv = Store.updateConversation(this.conv.id, { personaId: null });
-                    this.refreshToolbar();
-                });
-                chips.push(chip);
-            }
-            if (space) {
-                const chip = el('button', 'context-chip');
-                chip.type = 'button';
-                chip.appendChild(document.createTextNode(space.name));
-                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
-                chip.addEventListener('click', () => this.useWorkspace(null));
-                chips.push(chip);
-            }
-            if (hasSystem) {
+            if (hasSystem && persona) {
                 const chip = el('button', 'context-chip');
                 chip.type = 'button';
                 chip.textContent = t('Custom instructions');
                 chip.addEventListener('click', () => this.openSystem());
-                chips.push(chip);
-            }
-            const media = this.mediaModel();
-            if (media) {
-                const chip = el('button', 'context-chip is-media');
-                chip.type = 'button';
-                chip.title = t('Stop generating and answer in words');
-                chip.appendChild(media.slug
-                    ? Icons.brand(media.slug, { size: 13 })
-                    : Icons.node(media.kind === 'video' ? 'film' : 'picture', { size: 11 }));
-                chip.appendChild(document.createTextNode(media.label));
-                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
-                chip.addEventListener('click', () => {
-                    this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
-                    this.toast(t('Back to answering in words.'));
-                });
-                chips.push(chip);
-            }
-            if (this.settings.webSearch) {
-                const chip = el('button', 'context-chip');
-                chip.type = 'button';
-                chip.appendChild(document.createTextNode(t('Web search')));
-                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
-                chip.addEventListener('click', () => {
-                    this.saveSettings({ webSearch: false });
-                    this.refreshToolbar();
-                });
                 chips.push(chip);
             }
             for (const c of chips) bar.appendChild(c);
@@ -2376,7 +2329,9 @@
         },
 
         mediaNeedsPro(media) {
-            return !!(media && /--model/.test(media.command || ''));
+            if (!media) return false;
+            if (media.kind === 'video') return true;
+            return /^\?\w+\s+\S/.test(String(media.command || ''));
         },
 
         dropProMedia() {
@@ -3926,7 +3881,7 @@
                 },
                 {
                     title: t('Pictures and video'),
-                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Picking a generator in the model picker pins it, so every message after that is a generation until you clear it from the context bar or send ?image off. Nothing is charged if a generation fails.')
+                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Picking a generator in the model picker pins it, so every message after that is a generation: it takes over the model chip until you pick it again, switch back to standard, or send ?image off. Nothing is charged if a generation fails.')
                 },
                 {
                     title: t('Workspaces'),
