@@ -55,6 +55,46 @@ class NymbotApi {
     return signed;
   }
 
+  /// Deletes this account's Nymbot rows on the server, on the way out of a
+  /// wipe. Signed while the key is still here; the worker verifies the
+  /// signature, so nobody can purge a pubkey they do not hold.
+  Future<bool> purgeAccount(EventSigner signer, {Duration? timeout}) async {
+    try {
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final auth = await signer.sign(UnsignedEvent(
+        pubkey: signer.pubkey,
+        createdAt: nowSec,
+        kind: 27235,
+        tags: [
+          const ['domain', 'nymbot-sync'],
+          const ['method', 'POST'],
+          ['u', NymbotConfig.storageUrl],
+          const ['action', 'account-purge'],
+        ],
+        content: 'nymbot-sync-auth',
+      ));
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.storageUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({
+              'action': 'account-purge',
+              'app': 'nymbot',
+              'pubkey': signer.pubkey,
+              'auth': auth.toJson(),
+            }),
+          )
+          .timeout(timeout ?? const Duration(seconds: 5));
+      final decoded = jsonDecode(resp.body);
+      return decoded is Map && decoded['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<ApiResult> call(
     String action,
     EventSigner signer, {

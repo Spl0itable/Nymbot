@@ -74,7 +74,7 @@ await docsPage({
   file: 'pages/docs/anonymous.html',
   slug: 'docs/anonymous',
   title: 'Anonymous mode - Nymbot Knowledge Base',
-  description: 'Chat with Nymbot from a throwaway key, and move credits across as blind vouchers the server signs without seeing.',
+  description: 'How anonymous AI chat works in Nymbot: a throwaway key the service cannot link to you, and credits moved across as blind vouchers it signs without seeing.',
   body: `            <h1>Anonymous mode</h1>
             <p class="docs-lede">Encryption was never the gap. Attribution was. Anonymous mode makes the
                 server able to charge a message without being able to learn whose credits it is

@@ -224,7 +224,17 @@
             branch: repo.branch || '',
             allowWrites: !!repo.allowWrites,
             paths: repo.paths || '',
-            label: repo.label || repo.repo
+            label: repo.label || repo.repo,
+            // Where it was announced, when it was.
+            ...(repo.ngit ? {
+                ngit: {
+                    naddr: repo.ngit.naddr || '',
+                    repoId: repo.ngit.repoId || '',
+                    name: repo.ngit.name || '',
+                    web: repo.ngit.web || '',
+                    maintainers: (repo.ngit.maintainers || []).slice(0, 8)
+                }
+            } : {})
         };
     }
 
@@ -388,7 +398,8 @@
 
             const repos = reposFor(conv);
             const attachments = opts.attachments || [];
-            const isFresh = /^\s*!\s*\S/.test(text);
+            // A '!' question is answered outside the conversation.
+            const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
             const wireText = wireTextFor(conv, text, opts);
             // NIP-44 caps one plaintext, and a gift wrap holds two of them
             // nested, so a long message does not fit in one event. Rather than
@@ -581,7 +592,12 @@
             try {
                 settled = await Promise.allSettled(runs.map(r => this.send(
                     r.scratch, text, settings,
-                    { attachments: opts.attachments || [], quote: opts.quote, controller }
+                    {
+                        attachments: opts.attachments || [], quote: opts.quote, controller,
+                        // Neither run touches the conversation's stored thread:
+                        // the seed carries what was said, and the real chat is
+                        fresh: true
+                    }
                 )));
             } finally {
                 this.controller = null;

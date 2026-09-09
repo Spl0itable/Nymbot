@@ -4,16 +4,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Images and speech - Nymbot Knowledge Base</title>
-    <meta name="description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <title>Images, video and speech - Nymbot Knowledge Base</title>
+    <meta name="description" content="Generating pictures, video clips and voice with Nymbot, choosing a generator, and what each costs.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
     <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
 
     <!-- Open Graph Meta Tags -->
-    <meta property="og:title" content="Images and speech - Nymbot Knowledge Base">
-    <meta property="og:description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <meta property="og:title" content="Images, video and speech - Nymbot Knowledge Base">
+    <meta property="og:description" content="Generating pictures, video clips and voice with Nymbot, choosing a generator, and what each costs.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/media/">
     <meta property="og:type" content="website">
@@ -24,8 +24,8 @@
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
-    <meta name="twitter:title" content="Images and speech - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="Generating pictures and voice clips with Nymbot, choosing a generator, and what each costs.">
+    <meta name="twitter:title" content="Images, video and speech - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Generating pictures, video clips and voice with Nymbot, choosing a generator, and what each costs.">
     <link rel="canonical" href="https://nymbot.ai/docs/media/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -46,8 +46,8 @@
         <!--DOCS-NAV-->
         <main id="docs-main" class="docs-main">
         <!--DOCS-CRUMBS-->
-            <h1>Images and speech</h1>
-            <p class="docs-lede">Two commands that produce a file rather than a paragraph. Both are charged
+            <h1>Images, video and speech</h1>
+            <p class="docs-lede">Three commands that produce a file rather than a paragraph. All are charged
                 per generation rather than by length, and a failed generation costs nothing.</p>
             <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
 
@@ -68,6 +68,19 @@
                 image, photographic realism, illustration, and how literally each takes a long prompt. If
                 one misreads a description, another usually will not.</p>
 
+            <h2 id="video">Video</h2>
+            <p><code>?video a lighthouse beam sweeping across a storm</code> returns a short clip. It is a
+                <a href="/docs/models/#pro">Pro</a> command: every video model available is
+                provider-hosted, so unlike <code>?image</code> there is no standard-tier generator to fall
+                back on. Select a Pro model first.</p>
+            <p><code>?video models</code> lists the generators with their prices and costs nothing.
+                <code>?video --model &lt;name&gt; &lt;description&gt;</code> picks one: Veo 3.1, Seedance 2.5,
+                Hailuo 2.3, Wan 3.0, Grok Imagine Video, Pixverse v6, LTX-2.5, Vidu Q3, FLUX 3 Video and
+                Runway Gen-4.5, among others.</p>
+            <p>Send a picture in the same message and the generators that take a reference frame will
+                animate it rather than starting from nothing. A clip takes longer than a picture &mdash; a
+                render still going after a couple of minutes is given up on, and nothing is charged.</p>
+
             <h2 id="speech">Speech</h2>
             <p><code>?speak &lt;text&gt;</code> returns a spoken clip of up to 800 characters. Longer text is
                 refused rather than truncated, so you never pay for half a sentence.</p>
@@ -80,8 +93,9 @@
                     </thead>
                     <tbody>
                         <tr><td><code>?image</code></td><td>5 standard credits</td><td>2&ndash;3 Pro credits, depending on the generator</td></tr>
+                        <tr><td><code>?video</code></td><td>Not available</td><td>10&ndash;30 Pro credits, depending on the generator</td></tr>
                         <tr><td><code>?speak</code></td><td>3 standard credits</td><td>1 Pro credit</td></tr>
-                        <tr><td><code>?image models</code></td><td colspan="2">Free</td></tr>
+                        <tr><td><code>?image models</code>, <code>?video models</code></td><td colspan="2">Free</td></tr>
                     </tbody>
                 </table>
             </div>

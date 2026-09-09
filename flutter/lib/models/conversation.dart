@@ -138,6 +138,7 @@ class ChatMessage {
     this.thinking,
     this.cost = 0,
     this.model,
+    this.pro,
     this.calls = 1,
     this.task,
     this.checkpoint,
@@ -161,6 +162,9 @@ class ChatMessage {
   final String? thinking;
   final int cost;
   final String? model;
+
+  /// Which tier answered.
+  final bool? pro;
 
   /// What the worker said it did to earn the charge, kept so the cost
   /// breakdown reports it rather than re-deriving a guess after the fact.
@@ -189,6 +193,7 @@ class ChatMessage {
         thinking: thinking,
         cost: cost,
         model: model,
+        pro: pro,
         calls: calls,
         task: task,
         checkpoint: checkpoint ?? this.checkpoint,
@@ -210,6 +215,7 @@ class ChatMessage {
         'thinking': thinking,
         'cost': cost,
         'model': model,
+        if (pro != null) 'pro': pro,
         'calls': calls,
         if (checkpoint != null) 'checkpoint': checkpoint,
         'task': task,
@@ -234,6 +240,7 @@ class ChatMessage {
         thinking: j['thinking'] as String?,
         cost: (j['cost'] as num?)?.toInt() ?? 0,
         model: j['model'] as String?,
+        pro: j['pro'] as bool?,
         calls: (j['calls'] as num?)?.toInt() ?? 1,
         checkpoint: j['checkpoint'] as Map<String, dynamic>?,
         task: j['task'] as String?,

@@ -149,12 +149,17 @@
         return out;
     }
 
+    /// What an attachment looks like inside the message.
     function wireBlock(attachment) {
         if (!attachment) return '';
         if (attachment.kind === 'text') {
             return `\n\n--- attached file: ${attachment.name} ---\n\`\`\`${attachment.lang || ''}\n${attachment.text}\n\`\`\``;
         }
-        return `\n\n--- attached image: ${attachment.name} (${Math.round((attachment.size || 0) / 1024)} KB) ---`;
+        if (attachment.url) {
+            return `\n\n--- attached image: ${attachment.name} ---\n${attachment.url}`;
+        }
+        // Not uploaded, so say so rather than implying the model can see it.
+        return `\n\n--- attached image: ${attachment.name} (${Math.round((attachment.size || 0) / 1024)} KB, could not be uploaded — you cannot see this one) ---`;
     }
 
     function humanSize(bytes) {

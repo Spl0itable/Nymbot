@@ -75,6 +75,9 @@ typedef TurnStep = ({
   String tool,
   int call,
   int of,
+  /// The one yes/no a step carries — today, whether a picture is what sent the
+  /// message somewhere other than the route the question picked.
+  bool flag,
 });
 
 typedef CostEstimate = ({String tier, int low, int high});
@@ -484,6 +487,8 @@ class ChatEngine {
     String? quote,
     bool webSearch = false,
     bool firstTurn = true,
+    /// Answers the message outside the conversation, the way a '!' question is answered.
+    bool fresh = false,
     required void Function(List<String> ids) onThreadIds,
   }) async {
     final rootId = conv.rootId;
@@ -510,7 +515,7 @@ class ChatEngine {
         ? anon.kemOf(await anon.ensure())?.publicKey
         : identity.kemPublicKey;
 
-    final fresh = RegExp(r'^\s*!\s*\S').hasMatch(text);
+    final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
     final head =
         preamble(conv, repos, persona, workspace, bot, text, memories);
     final quoted = (quote == null || quote.isEmpty)
@@ -583,7 +588,7 @@ class ChatEngine {
         useAnon ? await anon.announcement() : pq.selfAnnouncement;
     final extra = <String, dynamic>{
       'eventId': wrap!.id,
-      'fresh': fresh,
+      'fresh': freshTurn,
       // Every event the question was split across, in order. The last is
       // `eventId`, which is what a message that fits has always sent.
       if (partIds.length > 1) 'parts': partIds,
@@ -674,7 +679,7 @@ class ChatEngine {
     // A '!' question is answered without the conversation and stays out of it,
     // on this side as on the worker's: it was asked that way so it would not
     // become context. The chat still shows it.
-    if (!fresh) {
+    if (!freshTurn) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
     }
 
@@ -720,11 +725,22 @@ class ChatEngine {
             // One field for "the thing this step is about", whichever name the
             // worker gave it — the tool's own name stays separate so a tool
             // step can say both what it did and what it touched.
-            text: (s['text'] ?? s['query'] ?? s['target'] ?? s['model'] ?? '')
+            text: (s['text'] ??
+                    s['query'] ??
+                    s['target'] ??
+                    s['model'] ??
+                    s['url'] ??
+                    s['stage'] ??
+                    s['task'] ??
+                    '')
                 .toString(),
             tool: s['tool'] as String? ?? '',
-            call: (s['call'] as num?)?.toInt() ?? 0,
+            call: (s['call'] as num?)?.toInt() ??
+                (s['images'] as num?)?.toInt() ??
+                (s['turns'] as num?)?.toInt() ??
+                0,
             of: (s['of'] as num?)?.toInt() ?? 0,
+            flag: s['seeing'] == true,
           )).toList();
     } catch (_) {
       return const [];

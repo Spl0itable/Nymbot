@@ -259,6 +259,7 @@ html[data-motion="reduce"] *::after {
 .gate-lede { color: var(--text-dim); margin-bottom: 1.25rem; }
 .gate-foot { color: var(--text-faint); font-size: 0.8rem; margin-top: 1.25rem; }
 .gate-error { color: var(--danger); margin-top: 0.75rem; }
+.gate-busy { color: var(--text-dim); margin-top: 0.75rem; font-size: 0.85rem; }
 
 .gate-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
 .gate-import { margin-top: 1.25rem; }
@@ -798,6 +799,19 @@ html[data-avatars="off"] .message-group { gap: 0; }
 .message-author .nym-suffix { opacity: 0.7; font-weight: 100; }
 .bot-author { color: var(--primary); }
 .verified-tick { margin-left: 0.2rem; color: var(--secondary); display: inline-flex; align-items: center; }
+.tier-badge {
+    margin-left: 0.3rem;
+    padding: 0 0.28rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1.5;
+    color: var(--text-faint);
+    vertical-align: 1px;
+}
+.tier-badge.is-pro { border-color: var(--secondary); color: var(--secondary); }
 .author-model { color: var(--text-faint); font-weight: 400; font-size: 0.92em; margin-left: 0.3rem; }
 
 .message-content {
@@ -1117,13 +1131,18 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .msg-action.is-on { color: var(--primary); }
 .msg-action.is-down.is-on { color: var(--danger); }
 
-/* What Nymbot is doing, under the spinner rather than instead of it. */
-.bot-thinking-head { display: flex; align-items: center; gap: 0.3rem; }
-.bot-progress { display: grid; gap: 0.1rem; margin-top: 0.3rem; }
+/* What Nymbot is doing, under the spinner rather than instead of it. Centred:
+   it is a status, not a message, and the lines under it change length every
+   couple of seconds — ragged against a left edge that keeps moving reads as
+   flicker, where a centred column stays still. */
+.bot-thinking-head { display: flex; align-items: center; justify-content: center; gap: 0.3rem; }
+.bot-progress { display: grid; gap: 0.1rem; margin-top: 0.3rem; justify-items: center; }
 .progress-step {
     font-size: 0.72rem;
     color: var(--text-faint);
     font-family: var(--mono);
+    text-align: center;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1147,8 +1166,9 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     max-width: min(30rem, 88%);
     width: fit-content;
     background: var(--bubble-bot);
+    /* Every corner the same. The tail belongs to a bubble somebody said
+       something in; nothing has been said yet. */
     border-radius: var(--bubble-radius);
-    border-top-left-radius: var(--bubble-tail);
 }
 .bot-thinking > .avatar-bubble { grid-row: 1 / span 2; align-self: start; }
 .bot-thinking > .bot-thinking-head,
@@ -1607,6 +1627,12 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .composer-btn:hover { border-color: var(--line-strong); color: var(--text); }
 .composer-btn.is-on { border-color: var(--danger); color: var(--danger); }
+/* Recording pulses; the live service does not, because that one is already
+   writing into the composer as you speak. */
+.composer-btn.is-recording { animation: mic-pulse 1.4s ease-in-out infinite; }
+.composer-btn.is-busy { opacity: 0.55; pointer-events: none; }
+@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { .composer-btn.is-recording { animation: none; } }
 
 .composer-foot { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
 .composer-hint { font-size: 0.72rem; color: var(--text-faint); }
@@ -1625,6 +1651,10 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .attach-item img { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
 .attach-item button { border: 0; background: transparent; color: var(--text-faint); cursor: pointer; }
+.attach-item.is-busy { opacity: 0.7; }
+.attach-item.is-busy img { animation: attach-pulse 1.2s ease-in-out infinite; }
+.attach-item.is-error { border-color: var(--danger); color: var(--danger); }
+@keyframes attach-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .reply-strip {
     display: flex;
@@ -1763,6 +1793,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .repo-browse-row.is-known { opacity: 0.55; cursor: default; }
 .repo-browse-row input { width: 16px; height: 16px; flex: 0 0 auto; }
 .repo-writes { font-size: 0.68rem; color: var(--lightning); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; }
+.repo-ngit { font-size: 0.68rem; color: var(--primary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; }
 .persona-emoji { flex: 0 0 auto; display: inline-flex; color: var(--text-dim); }
 .persona-row.is-on .persona-emoji { color: var(--primary); }
 

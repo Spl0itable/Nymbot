@@ -43,6 +43,7 @@
     const REMOTE = [
         { name: 'ask', args: '<question>', group: 'charged', hint: () => t('One question, no history') },
         { name: 'image', args: '<prompt>', group: 'charged', hint: () => t('Generate an image') },
+        { name: 'video', args: '<prompt>', group: 'charged', hint: () => t('Generate a short video (Pro)') },
         { name: 'speak', args: '<text>', group: 'charged', hint: () => t('Read something aloud') },
         { name: 'translate', args: '<text>', group: 'charged', hint: () => t('Translate') },
         { name: 'define', args: '<word>', group: 'charged', hint: () => t('Define a word') },

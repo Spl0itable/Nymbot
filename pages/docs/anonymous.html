@@ -105,8 +105,10 @@
             <h2 id="limits">What it does not hide</h2>
             <p>Being honest about the edges is the only way the rest of it is worth anything.</p>
             <ul>
-                <li><strong>The relays see one connection publishing both identities' events.</strong> If
-                    that is in your threat model, use Tor or a VPN.</li>
+                <li><strong>One connection publishes both identities' events.</strong> The app reaches
+                    relays through the worker, so the relays see the worker's address rather than yours
+                    &mdash; but the worker sees the connection, and if it cannot be reached the app
+                    connects to the relays itself. If that is in your threat model, use Tor or a VPN.</li>
                 <li><strong>Rotating the key and carrying the balance over</strong> shows the server one
                     anonymous key paying another.</li>
                 <li><strong>A conversation is a conversation.</strong> Every message under one throwaway key

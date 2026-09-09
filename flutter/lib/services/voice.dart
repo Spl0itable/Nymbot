@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -12,6 +14,20 @@ class Voice extends ChangeNotifier {
   bool _sttChecked = false;
   bool listening = false;
   String? speakingId;
+
+  /// The platform recognisers stream the audio to a service — Google's on
+  /// Android, Apple's on iOS — and answer "network" wherever that service cannot
+  bool _preferOnDevice = false;
+
+  /// Set while a network failure is being retried on-device, so the retry is not
+  /// reported to the user as a failure of its own.
+  bool _retrying = false;
+
+  /// What the last attempt was handed, so a retry can pick it back up.
+  void Function(String text)? _onText;
+
+  /// True when dictation is running on the device's own recogniser.
+  bool get onDevice => _preferOnDevice;
 
   /// Why dictation stopped, when it stopped for a reason worth saying. Every
   /// one of these used to end as a button that turned itself off again with
@@ -29,8 +45,10 @@ class Voice extends ChangeNotifier {
         return 'No microphone was found.';
       case 'error_network':
       case 'error_network_timeout':
-        return 'Dictation could not reach the speech service. It needs a '
-            'connection.';
+        return 'Dictation could not reach the speech service, and this device '
+            'has no offline recogniser to fall back on. Check the connection, '
+            'or install your language for offline speech in the system '
+            'settings.';
       case 'error_no_match':
       case 'error_speech_timeout':
         return 'Nothing was heard.';
@@ -50,11 +68,22 @@ class Voice extends ChangeNotifier {
     try {
       _sttReady = await _stt.initialize(onStatus: (s) {
         if (s == 'done' || s == 'notListening') {
+          if (_retrying) return;
           listening = false;
           notifyListeners();
         }
       }, onError: (e) {
-        lastError = reasonFor(e.errorMsg);
+        final code = e.errorMsg;
+        // A service that cannot be reached will not be reached by trying again the same way.
+        if (!_preferOnDevice &&
+            (code == 'error_network' || code == 'error_network_timeout')) {
+          _preferOnDevice = true;
+          _retrying = true;
+          unawaited(_relisten());
+          return;
+        }
+        _retrying = false;
+        lastError = reasonFor(code);
         listening = false;
         notifyListeners();
       });
@@ -71,22 +100,55 @@ class Voice extends ChangeNotifier {
   Future<void> startListening(void Function(String text) onText) async {
     lastError = null;
     if (!await canListen() || listening) return;
+    _onText = onText;
     listening = true;
     notifyListeners();
+    await _listen();
+  }
+
+  Future<void> _listen() async {
+    final onText = _onText;
+    if (onText == null) return;
     try {
       await _stt.listen(
         onResult: (r) => onText(r.recognizedWords),
-        listenOptions: SpeechListenOptions(partialResults: true),
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          onDevice: _preferOnDevice,
+        ),
       );
     } catch (_) {
+      _retrying = false;
       lastError = reasonFor('error_busy');
       listening = false;
       notifyListeners();
     }
   }
 
+  /// Starts again on the device's own recogniser after the service one failed.
+  Future<void> _relisten() async {
+    try {
+      await _stt.cancel();
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!listening) {
+      _retrying = false;
+      return;
+    }
+    await _listen();
+    _retrying = false;
+    // The device's recogniser would not start either: say what is wrong rather
+    // than leaving a button that turned itself off.
+    if (!listening && lastError == null) {
+      lastError = reasonFor('error_network');
+      notifyListeners();
+    }
+  }
+
   Future<void> stopListening() async {
     if (!listening) return;
+    _retrying = false;
+    _onText = null;
     listening = false;
     notifyListeners();
     try {

@@ -59,6 +59,7 @@ class BotCommands {
   static List<BotCommand> remote() => [
         BotCommand(name: 'ask', args: '<question>', group: 'charged', hint: () => t('One question, no history')),
         BotCommand(name: 'image', args: '<prompt>', group: 'charged', hint: () => t('Generate an image')),
+        BotCommand(name: 'video', args: '<prompt>', group: 'charged', hint: () => t('Generate a short video (Pro)')),
         BotCommand(name: 'speak', args: '<text>', group: 'charged', hint: () => t('Read something aloud')),
         BotCommand(name: 'translate', args: '<text>', group: 'charged', hint: () => t('Translate')),
         BotCommand(name: 'define', args: '<word>', group: 'charged', hint: () => t('Define a word')),

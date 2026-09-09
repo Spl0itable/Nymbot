@@ -16,6 +16,7 @@ import '../models/schedule.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../services/anon.dart';
+import '../services/blossom.dart';
 import '../services/chat_engine.dart';
 import '../services/free_tier.dart';
 import '../services/memory_keeper.dart';
@@ -55,6 +56,8 @@ class AppController extends ChangeNotifier {
   final NymbotApi api;
   final AnonMode anon;
   late final Profiles profiles;
+
+  late final Blossom blossom = Blossom();
 
   late final ChatEngine chat = ChatEngine(
     identity: identity,
@@ -1251,11 +1254,45 @@ class AppController extends ChangeNotifier {
   void addAttachment(Attachment a) {
     attachments = [...attachments, a];
     notifyListeners();
+    unawaited(uploadAttachment(a));
   }
 
   void removeAttachment(String id) {
     attachments = attachments.where((a) => a.id != id).toList();
     notifyListeners();
+  }
+
+  /// A picture has to be somewhere the worker can fetch it before the model can
+  /// be handed the image rather than the file's name.
+  Future<void> uploadAttachment(Attachment a) async {
+    if (a.kind != AttachmentKind.image) return;
+    if (a.url != null || a.uploading) return;
+    final raw = a.bytesBase64;
+    if (raw == null || raw.isEmpty) return;
+    a.uploading = true;
+    a.uploadError = null;
+    notifyListeners();
+    try {
+      // An anonymous chat uploads under its throwaway key, so the blob is no more
+      // linkable to the account than the message carrying it.
+      final signer = (current?.anon ?? false) && anon.ready
+          ? await anon.signer()
+          : identity.signer;
+      a.url = await blossom.put(base64Decode(raw), a.mime, signer);
+    } catch (e) {
+      a.uploadError = e is BlossomFailure ? e.message : e.toString();
+    } finally {
+      a.uploading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Everything still on its way up, finished before the message goes.
+  Future<List<Attachment>> settleAttachments(List<Attachment> list) async {
+    await Future.wait(list.map(uploadAttachment));
+    return list
+        .where((a) => a.kind == AttachmentKind.image && a.url == null)
+        .toList();
   }
 
   // --- sending -------------------------------------------------------------------
@@ -1333,6 +1370,9 @@ class AppController extends ChangeNotifier {
           memories: store.memories(),
           webSearch: settings.webSearch,
           firstTurn: true,
+          // Neither run touches the conversation's stored thread: the seed
+          // carries what was said, and the real chat is untouched until one of
+          fresh: true,
           onThreadIds: (_) {},
         );
         return CompareRun(
@@ -1378,6 +1418,7 @@ class AppController extends ChangeNotifier {
       content: run.reply,
       thinking: run.thinking,
       cost: run.cost,
+      pro: true,
       model: run.label,
       sources: run.sources,
     );
@@ -1439,6 +1480,20 @@ class AppController extends ChangeNotifier {
     final body = text.trim();
     final sent = [...attachments];
     final quoted = quote;
+
+    // A picture has to be uploaded before the message goes, since it is the link
+    // that travels and the link the model is handed.
+    if (sent.any((a) => a.kind == AttachmentKind.image && a.url == null)) {
+      final stranded = await settleAttachments(sent);
+      if (stranded.isNotEmpty) {
+        await note(stranded.length == 1
+            ? t('{name} could not be uploaded, so Nymbot will not be able to see it.',
+                {'name': stranded.first.name})
+            : t('{names} could not be uploaded, so Nymbot will not be able to see them.',
+                {'names': stranded.map((a) => a.name).join(', ')}));
+      }
+    }
+
     attachments = [];
     quote = null;
 
@@ -1492,6 +1547,7 @@ class AppController extends ChangeNotifier {
         content: res.reply,
         thinking: res.thinking,
         cost: res.cost,
+        pro: res.pro,
         model: res.pro ? (activeModel?['label'] as String?) : null,
         calls: res.modelCalls,
         // What it changed in a repository, and where the branch stood before
@@ -1665,6 +1721,7 @@ class AppController extends ChangeNotifier {
         content: next.reply,
         thinking: next.thinking,
         cost: next.cost,
+        pro: next.pro,
         model: next.pro ? (activeModel?['label'] as String?) : null,
         calls: next.modelCalls,
         sources: next.sources,
@@ -1766,18 +1823,28 @@ class AppController extends ChangeNotifier {
   /// The day is spent. Said as a time and a price rather than as a wall.
   String freeSpentMessage() {
     final at = free?.resetsAt ?? 0;
+    // Whose allowance ran out matters.
+    final byNetwork = free?.netSpent ?? false;
     if (at <= 0) {
-      return t("That is today's free replies used. Tap Buy for credits, which "
-          'also unlock the sharper models, repositories, images and web search.');
+      return byNetwork
+          ? t("This network has used today's free replies — a new key does not "
+              'get more, because they are counted per connection too. Tap Buy '
+              'for credits.')
+          : t("That is today's free replies used. Tap Buy for credits, which "
+              'also unlock the sharper models, repositories, images and web search.');
     }
     final when = DateTime.fromMillisecondsSinceEpoch(at);
     final clock = '${when.hour.toString().padLeft(2, '0')}'
         ':${when.minute.toString().padLeft(2, '0')}';
-    return t(
-        "That is today's free replies used. They come back at {time} — or tap "
-        'Buy for credits, which also unlock the sharper models, repositories, '
-        'images and web search.',
-        {'time': clock});
+    return byNetwork
+        ? t("This network has used today's free replies — a new key does not "
+            'get more, because they are counted per connection too. They come '
+            'back at {time}, or tap Buy for credits.', {'time': clock})
+        : t(
+            "That is today's free replies used. They come back at {time} — or tap "
+            'Buy for credits, which also unlock the sharper models, repositories, '
+            'images and web search.',
+            {'time': clock});
   }
 
   String get satsLabel => activeModel != null ? 'Pro' : 'Standard';
@@ -1836,6 +1903,14 @@ class AppController extends ChangeNotifier {
 
   Future<void> wipe() async {
     _bootWork?.cancel();
+    // Signed while the key is still here; bounded so a signer that never
+    // answers cannot hold the wipe up.
+    if (signedIn) {
+      await api.purgeAccount(identity.signer).timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => false,
+          );
+    }
     await store.wipe();
     identity.forget();
     relays.close();

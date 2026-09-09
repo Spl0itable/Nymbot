@@ -176,14 +176,8 @@ class _MessageBubbleState extends State<MessageBubble> {
                     .withValues(alpha: 0.7),
               ),
             ),
-          if (bot)
-            Padding(
-              padding: const EdgeInsets.only(left: 3),
-              // The seal outline is illegible at this size; a ringed tick is
-              // the same claim and survives it.
-              child: Icon(Icons.check_circle_outline,
-                  size: 12, color: theme.colorScheme.secondary),
-            ),
+          // Which tier wrote this.
+          if (bot) _tierBadge(theme, m),
           if (bot && m.model != null)
             Flexible(
               child: Padding(
@@ -200,6 +194,37 @@ class _MessageBubbleState extends State<MessageBubble> {
                   style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
             ),
         ],
+      ),
+    );
+  }
+
+  /// PRO or STD, from what the worker said answered the message.
+  Widget _tierBadge(ThemeData theme, ChatMessage m) {
+    final isPro = m.pro ?? (m.model != null);
+    final colour = isPro ? theme.colorScheme.secondary : theme.hintColor;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Tooltip(
+        message: isPro
+            ? t('A frontier model you picked wrote this, charged to your Pro balance.')
+            : t('Nymbot routed this to the model that suited it, charged to your standard balance.'),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
+          decoration: BoxDecoration(
+            border: Border.all(color: colour.withValues(alpha: 0.6)),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Text(
+            isPro ? t('PRO') : t('STD'),
+            style: TextStyle(
+              fontSize: 8,
+              height: 1.4,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+              color: colour,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -669,22 +694,22 @@ class TypingIndicator extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
                 color: theme.dividerColor.withValues(alpha: 0.9),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(4),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(16),
-                ),
+                // Every corner the same.
+                borderRadius: BorderRadius.circular(16),
               ),
+              // Centred: this is a status, not a message, and the lines under it
+              // change length every couple of seconds — ragged against a left
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
                     mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Flexible(
                         child: Text(label,
+                            textAlign: TextAlign.center,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                                 fontSize: 12.5, color: theme.hintColor)),
@@ -701,6 +726,7 @@ class TypingIndicator extends StatelessWidget {
                       child: Text(
                         step,
                         maxLines: 2,
+                        textAlign: TextAlign.center,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 11,

@@ -16,15 +16,28 @@
         } catch (_) { return fallback; }
     }
 
+    // Anything that wants to know when this device changed something.
+    const QUIET = /^(?:draft_|thread_|sync_|free_)/;
+    const watchers = [];
+
+    function announce(key) {
+        if (QUIET.test(key)) return;
+        for (const fn of watchers) {
+            try { fn(key); } catch (_) { }
+        }
+    }
+
     function write(key, value) {
         try {
             localStorage.setItem(P + key, JSON.stringify(value));
+            announce(key);
             return true;
         } catch (_) { return false; }
     }
 
     function drop(key) {
         try { localStorage.removeItem(P + key); } catch (_) { }
+        announce(key);
     }
 
     function uid() {
@@ -50,6 +63,9 @@
         // -1 is whatever the balance holds.
         autoContinue: 0,
         showProgress: true,
+        // Your settings, library and conversations, sealed to your own key and
+        // kept where every device you sign in on can read them back.
+        sync: true,
         theme: 'system',
         density: 'comfortable',
         fontScale: 1,
@@ -139,6 +155,16 @@
         read,
         write,
         drop,
+
+        /// Called with the storage key whenever this device changes something worth keeping.
+        watch(fn) {
+            watchers.push(fn);
+            return () => {
+                const at = watchers.indexOf(fn);
+                if (at !== -1) watchers.splice(at, 1);
+            };
+        },
+
         DEFAULT_SETTINGS,
         DEFAULT_PERSONAS,
 
@@ -199,6 +225,7 @@
         },
 
         deleteRepo(id) {
+            this.bury(id);
             this.saveRepos(this.repos().filter(r => r.id !== id));
             for (const conv of this.conversations()) {
                 if (Array.isArray(conv.repoIds) && conv.repoIds.includes(id)) {
@@ -232,6 +259,7 @@
         },
 
         deletePersona(id) {
+            this.bury(id);
             write('personas', this.customPersonas().filter(p => p.id !== id));
             for (const conv of this.conversations()) {
                 if (conv.personaId === id) this.updateConversation(conv.id, { personaId: null });
@@ -255,6 +283,7 @@
         },
 
         deletePrompt(id) {
+            this.bury(id);
             write('prompts', this.prompts().filter(p => p.id !== id));
         },
 
@@ -273,6 +302,7 @@
         },
 
         deleteFolder(id) {
+            this.bury(id);
             write('folders', this.folders().filter(f => f.id !== id));
             for (const conv of this.conversations()) {
                 if (conv.folderId === id) this.updateConversation(conv.id, { folderId: null });
@@ -301,6 +331,7 @@
         },
 
         deleteSchedule(id) {
+            this.bury(id);
             write('schedules', this.schedules().filter(s => s.id !== id));
         },
 
@@ -339,6 +370,7 @@
         },
 
         deleteMemory(id) {
+            this.bury(id);
             write('memories', this.memories().filter(m => m.id !== id));
         },
 
@@ -372,6 +404,7 @@
         },
 
         deleteWorkspace(id) {
+            this.bury(id);
             write('workspaces', this.workspaces().filter(w => w.id !== id));
             for (const conv of this.conversations()) {
                 if (conv.workspaceId === id) {
@@ -435,6 +468,7 @@
         },
 
         deleteConversation(id) {
+            this.bury(id);
             this._ghosts.delete(id);
             if (window.NymbotArtifacts) window.NymbotArtifacts._ghosts.delete(id);
             this.saveConversations(this.conversations().filter(c => c.id !== id));
@@ -469,10 +503,19 @@
         /// does, which is the whole promise.
         _ghosts: new Map(),
 
+        /// A record this device deleted, remembered for long enough that every
+        /// other device has been online since.
+        bury(id) {
+            if (!id) return;
+            const Sync = window.NymbotSync;
+            if (Sync && typeof Sync.bury === 'function') Sync.bury(id);
+        },
+
+        /// Either signal is enough.
         isGhost(convId) {
+            if (this._ghosts.has(convId)) return true;
             const conv = this.conversations().find(c => c.id === convId);
-            if (conv) return !!conv.ephemeral;
-            return this._ghosts.has(convId);
+            return !!(conv && conv.ephemeral);
         },
 
         messages(convId) {

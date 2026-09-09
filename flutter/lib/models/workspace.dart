@@ -12,6 +12,7 @@ class GitRepo {
     this.label = '',
     this.allowWrites = false,
     this.enabled = true,
+    this.ngit,
   });
 
   final String id;
@@ -25,13 +26,19 @@ class GitRepo {
   bool allowWrites;
   bool enabled;
 
-  String get display => label.isNotEmpty ? label : repo;
+  /// Where this repository announced itself, when it did (NIP-34).
+  NgitOrigin? ngit;
+
+  String get display => label.isNotEmpty ? label : (ngit?.name.isNotEmpty == true ? ngit!.name : repo);
 
   String get subtitle {
     final bits = <String>[provider];
     if (host.isNotEmpty) bits.add(host);
     if (branch.isNotEmpty) bits.add(branch);
     if (paths.isNotEmpty) bits.add(paths);
+    // Announced on Nostr rather than typed in: worth saying, since it is the
+    // announcement that decided where this points.
+    if (ngit != null) bits.add('ngit');
     return bits.join(' · ');
   }
 
@@ -46,6 +53,7 @@ class GitRepo {
         'label': label,
         'allowWrites': allowWrites,
         'enabled': enabled,
+        if (ngit != null) 'ngit': ngit!.toJson(),
       };
 
   Map<String, dynamic> toPayload() => {
@@ -57,6 +65,7 @@ class GitRepo {
         'allowWrites': allowWrites,
         'paths': paths,
         'label': display,
+        if (ngit != null) 'ngit': ngit!.toJson(),
       };
 
   static GitRepo fromJson(Map<String, dynamic> j) => GitRepo(
@@ -70,6 +79,7 @@ class GitRepo {
         label: j['label'] as String? ?? '',
         allowWrites: j['allowWrites'] == true,
         enabled: j['enabled'] != false,
+        ngit: NgitOrigin.fromJson(j['ngit']),
       );
 
   static String encodeList(List<GitRepo> list) =>
@@ -84,6 +94,53 @@ class GitRepo {
     } catch (_) {
       return [];
     }
+  }
+}
+
+/// The NIP-34 announcement a repository was added from.
+class NgitOrigin {
+  const NgitOrigin({
+    this.naddr = '',
+    this.repoId = '',
+    this.name = '',
+    this.web = '',
+    this.relays = const [],
+    this.maintainers = const [],
+    this.euc = '',
+  });
+
+  final String naddr;
+  final String repoId;
+  final String name;
+  final String web;
+  final List<String> relays;
+  final List<String> maintainers;
+
+  /// The earliest unique commit, which is what tells a repository from a fork of
+  /// it and groups the copies hosted in different places.
+  final String euc;
+
+  Map<String, dynamic> toJson() => {
+        'naddr': naddr,
+        'repoId': repoId,
+        'name': name,
+        if (web.isNotEmpty) 'web': web,
+        if (relays.isNotEmpty) 'relays': relays,
+        if (maintainers.isNotEmpty) 'maintainers': maintainers,
+        if (euc.isNotEmpty) 'euc': euc,
+      };
+
+  static NgitOrigin? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    return NgitOrigin(
+      naddr: raw['naddr'] as String? ?? '',
+      repoId: raw['repoId'] as String? ?? '',
+      name: raw['name'] as String? ?? '',
+      web: raw['web'] as String? ?? '',
+      relays: (raw['relays'] as List?)?.map((e) => '\$e').toList() ?? const [],
+      maintainers: (raw['maintainers'] as List?)?.map((e) => '\$e').toList() ?? const [],
+      euc: raw['euc'] as String? ?? '',
+    );
   }
 }
 
@@ -433,6 +490,9 @@ class Attachment {
     this.text,
     this.bytesBase64,
     this.lines = 0,
+    this.url,
+    this.uploadError,
+    this.uploading = false,
   });
 
   final String id;
@@ -443,6 +503,15 @@ class Attachment {
   final String lang;
   final String? text;
   final String? bytesBase64;
+
+  /// Where a picture was uploaded to, once it has been.
+  String? url;
+
+  /// Why it never got there, if it did not.
+  String? uploadError;
+
+  /// True while it is on its way up, so the chip can say so.
+  bool uploading;
 
   /// Set when this came from a paste rather than a file. Lines say more about
   /// a wall of pasted text than bytes do.
@@ -457,11 +526,18 @@ class Attachment {
     return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
+  /// What an attachment looks like inside the message.
   String get wireBlock {
     if (kind == AttachmentKind.text) {
       return '\n\n--- attached file: $name ---\n```$lang\n${text ?? ''}\n```';
     }
-    return '\n\n--- attached image: $name (${(size / 1024).round()} KB) ---';
+    final at = url;
+    if (at != null && at.isNotEmpty) {
+      return '\n\n--- attached image: $name ---\n$at';
+    }
+    // Not uploaded, so say so rather than implying the model can see it.
+    return '\n\n--- attached image: $name (${(size / 1024).round()} KB, '
+        'could not be uploaded — you cannot see this one) ---';
   }
 
   Map<String, dynamic> toJson() => {
@@ -474,6 +550,7 @@ class Attachment {
         if (lines > 0) 'lines': lines,
         if (text != null) 'text': text,
         if (bytesBase64 != null) 'bytesBase64': bytesBase64,
+        if (url != null) 'url': url,
       };
 
   Map<String, dynamic> toPayload() => {
@@ -481,6 +558,7 @@ class Attachment {
         'name': name,
         'mime': mime,
         'size': size,
+        if (kind == AttachmentKind.image && url != null) 'url': url,
         if (kind == AttachmentKind.image && bytesBase64 != null)
           'dataUrl': 'data:$mime;base64,$bytesBase64',
       };
@@ -495,6 +573,7 @@ class Attachment {
         text: j['text'] as String?,
         bytesBase64: j['bytesBase64'] as String?,
         lines: (j['lines'] as num?)?.toInt() ?? 0,
+        url: j['url'] as String?,
       );
 }
 

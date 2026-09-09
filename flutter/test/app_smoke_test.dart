@@ -15,7 +15,9 @@ import 'package:nymbot/features/markdown_body.dart';
 import 'package:nymbot/features/message_bubble.dart';
 import 'package:nymbot/features/nym_avatar.dart';
 import 'package:nymbot/features/nym_icons.dart';
+import 'package:nymbot/config.dart';
 import 'package:nymbot/services/profiles.dart';
+import 'package:nymbot/services/relay_pool.dart';
 import 'package:nymbot/core/crypto/bech32_codec.dart';
 import 'package:nymbot/models/artifact.dart';
 import 'package:nymbot/models/bot.dart';
@@ -25,6 +27,7 @@ import 'package:nymbot/models/conversation.dart';
 import 'package:nymbot/models/memory.dart';
 import 'package:nymbot/models/workspace.dart';
 import 'package:nymbot/services/attachments.dart';
+import 'package:nymbot/services/ngit.dart';
 import 'package:nymbot/services/chat_engine.dart';
 import 'package:nymbot/services/git_forge.dart';
 import 'package:nymbot/services/memory_keeper.dart';
@@ -1247,6 +1250,9 @@ ls -la
         reason: 'a refused microphone says what to do about it');
     expect(Voice.reasonFor('error_audio'), contains('No microphone'));
     expect(Voice.reasonFor('error_network'), contains('connection'));
+    expect(Voice.reasonFor('error_network'), contains('offline'),
+        reason: 'a service that cannot be reached is retried on the device '
+            'first, so this is what is said when that failed too');
     expect(Voice.reasonFor('error_no_match'), contains('Nothing was heard'));
     expect(Voice.reasonFor('error_busy'), contains('still busy'));
     expect(Voice.reasonFor('error_client'), isNull,
@@ -1543,29 +1549,192 @@ diff --git a/two.txt b/two.txt
 
   test('a progress step reads as words, and an unknown one says nothing', () {
     expect(
-      progressLine((n: 1, kind: 'routing', text: 'Claude Opus 5', tool: '', call: 0, of: 0)),
+      progressLine((n: 1, kind: 'routing', text: 'Claude Opus 5', tool: '', call: 0, of: 0, flag: false)),
       contains('Claude Opus 5'),
     );
     expect(
-      progressLine((n: 2, kind: 'search', text: 'ml-kem', tool: '', call: 0, of: 0)),
+      progressLine((n: 2, kind: 'search', text: 'ml-kem', tool: '', call: 0, of: 0, flag: false)),
       contains('ml-kem'),
     );
-    final call = progressLine((n: 3, kind: 'model', text: '', tool: '', call: 2, of: 6));
+    final call = progressLine((n: 3, kind: 'model', text: '', tool: '', call: 2, of: 6, flag: false));
     expect(call, contains('2'));
     expect(call, contains('6'));
     final tool = progressLine(
-        (n: 4, kind: 'tool', text: 'app/js/ui.js', tool: 'read_file', call: 0, of: 0));
+        (n: 4, kind: 'tool', text: 'app/js/ui.js', tool: 'read_file', call: 0, of: 0, flag: false));
     expect(tool, contains('Reading'));
     expect(tool, contains('app/js/ui.js'), reason: 'both what and on what');
     expect(
-      progressLine((n: 5, kind: 'thinking', text: 'weighing it up', tool: '', call: 0, of: 0)),
+      progressLine((n: 5, kind: 'thinking', text: 'weighing it up', tool: '', call: 0, of: 0, flag: false)),
       'weighing it up',
     );
     expect(
-      progressLine((n: 6, kind: 'who-knows', text: 'x', tool: '', call: 0, of: 0)),
+      progressLine((n: 6, kind: 'who-knows', text: 'x', tool: '', call: 0, of: 0, flag: false)),
       isEmpty,
       reason: 'a step it does not know is silent, not garbage',
     );
+  });
+
+  test('a repository announced on Nostr is read off its announcement', () {
+    const pk = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    final naddr = encodeNaddr(
+        identifier: 'ngit', pubkey: pk, kind: 30617, relays: ['wss://relay.ngit.dev']);
+    final npub = encodeNpub(pk);
+
+    expect(Ngit.parseAddress(naddr)?.identifier, 'ngit',
+        reason: 'an naddr is a repository address');
+    expect(Ngit.parseAddress('nostr://$naddr')?.identifier, 'ngit',
+        reason: 'so is one wearing a nostr:// URL');
+    expect(Ngit.parseAddress('nostr://$npub/ngit')?.pubkey, pk,
+        reason: 'so is an npub and an identifier');
+    expect(Ngit.parseAddress('nostr://$npub/relay.ngit.dev/ngit')?.relays.first,
+        'wss://relay.ngit.dev',
+        reason: 'a relay hint is read and given its scheme');
+    expect(Ngit.parseAddress('nostr://$npub/my%20repo')?.identifier, 'my repo',
+        reason: 'and the identifier is percent-decoded');
+    expect(Ngit.parseAddress('nostr://danconwaydev.com/relay.ngit.dev/ngit'), isNull,
+        reason: 'a NIP-05 owner is refused rather than guessed at');
+    expect(Ngit.parseAddress('not an address'), isNull);
+
+    // Nostr carries the announcement; a git server carries the code.
+    expect(Ngit.forgeFor('https://github.com/Spl0itable/nym-staging.git')?.repo,
+        'Spl0itable/nym-staging');
+    expect(Ngit.forgeFor('https://gitlab.com/a/b/c/d.git')?.repo, 'a/b/c/d',
+        reason: 'a nested GitLab group survives');
+    expect(Ngit.forgeFor('https://codeberg.org/me/repo')?.provider, 'gitea');
+    final self = Ngit.forgeFor('https://git.example.org/me/repo.git');
+    expect(self?.guessed, isTrue,
+        reason: 'a self-hosted forge is a guess, and says so');
+    expect(Ngit.forgeFor('git@github.com:me/repo.git'), isNull,
+        reason: 'an ssh clone URL has no API to read files through');
+    expect(Ngit.forgeFor('git://example.org/me/repo'), isNull);
+    expect(Ngit.forgeFor('https://github.com/onlyowner'), isNull,
+        reason: 'and a URL naming no repository names no repository');
+  });
+
+  test('where a repository was announced travels with it', () {
+    final repo = GitRepo(
+      id: 'r1',
+      repo: 'DanConwayDev/ngit-cli',
+      token: 'ghp_x',
+      provider: 'github',
+      host: 'github.com',
+      branch: 'master',
+      ngit: const NgitOrigin(
+        naddr: 'naddr1abc',
+        repoId: 'ngit',
+        name: 'ngit',
+        web: 'https://gitworkshop.dev/repo/ngit',
+        euc: 'abc123',
+      ),
+    );
+    expect(repo.display, 'ngit',
+        reason: 'a reply calls it by the name it announces');
+    expect(repo.subtitle, contains('ngit'),
+        reason: 'and the list says where it came from');
+    expect(repo.toPayload()['ngit'], isNotNull,
+        reason: 'the worker is told, so the model can name it too');
+    final back = GitRepo.fromJson(repo.toJson());
+    expect(back.ngit?.naddr, 'naddr1abc', reason: 'and it survives a round trip');
+    expect(back.ngit?.euc, 'abc123',
+        reason: 'including the commit that tells it from a fork');
+    expect(GitRepo.fromJson({'id': 'r2', 'repo': 'a/b'}).ngit, isNull,
+        reason: 'a repository typed in by hand has no announcement');
+  });
+
+  test('a picture travels as the link the model can be handed', () {
+    final pending = Attachment(
+      id: 'i1',
+      kind: AttachmentKind.image,
+      name: 'cat.png',
+      mime: 'image/png',
+      size: 2048,
+      bytesBase64: 'AAAA',
+    );
+    expect(pending.wireBlock, contains('could not be uploaded'),
+        reason: 'a picture nothing can fetch says so rather than pretending');
+    pending.url = 'https://blossom.band/abc.png';
+    expect(pending.wireBlock, contains('https://blossom.band/abc.png'),
+        reason: 'once uploaded the message carries the link, not the filename');
+    expect(pending.wireBlock, isNot(contains('KB')),
+        reason: 'a size is what you say when you have nothing better');
+    expect(pending.toPayload()['url'], 'https://blossom.band/abc.png');
+    expect(Attachment.fromJson(pending.toJson()).url, 'https://blossom.band/abc.png',
+        reason: 'and it survives a round trip, so a resend does not re-upload');
+    expect(
+      Attachment(id: 't1', kind: AttachmentKind.text, name: 'a.md', lang: 'markdown', text: 'hi')
+          .wireBlock,
+      contains('```markdown'),
+      reason: 'a text file still travels as its text',
+    );
+  });
+
+  test('a reply says which tier wrote it', () {
+    final pro = ChatMessage(
+        id: '1', role: ChatRole.bot, content: 'x', pro: true, model: 'Claude Opus 5');
+    final std = ChatMessage(id: '2', role: ChatRole.bot, content: 'x', pro: false);
+    expect(pro.pro, isTrue);
+    expect(std.pro, isFalse);
+    expect(ChatMessage.fromJson(pro.toJson()).pro, isTrue,
+        reason: 'and it survives being read back');
+    expect(ChatMessage.fromJson(std.toJson()).pro, isFalse);
+    // Replies stored before the flag existed fall back to the model name, which
+    // is only ever recorded for a frontier model.
+    final old = ChatMessage.fromJson({
+      'id': '3', 'role': 'bot', 'content': 'x', 'model': 'Claude Opus 5', 'at': 0,
+    });
+    expect(old.pro, isNull);
+    expect(old.model, isNotNull);
+  });
+
+  test('the newer progress steps read as words too', () {
+    String line(String kind,
+            {String text = '', int call = 0, int of = 0, bool flag = false}) =>
+        progressLine((n: 1, kind: kind, text: text, tool: '', call: call, of: of, flag: flag));
+
+    expect(line('stage', text: 'reading'), contains('relays'),
+        reason: 'the slowest part of a turn is not silent');
+    expect(line('page', text: 'https://example.com/a'), contains('https://example.com/a'),
+        reason: 'a link being read says which');
+    expect(line('vision', call: 2), contains('2'));
+    expect(line('vision', call: 1), contains('picture'));
+    expect(line('route', text: 'coding'), contains('coding'),
+        reason: 'standard routing says which route it took');
+    expect(line('route', flag: true), contains('can see'),
+        reason: 'or that a picture sent it somewhere else');
+    expect(line('effort', text: 'planning'), contains('Planning'));
+    expect(line('stage', text: 'something-else'), isEmpty,
+        reason: 'a stage it does not know is silent, not garbage');
+  });
+
+  test('one model call is not named twice', () {
+    TurnStep step(String kind, String text, {int of = 0}) =>
+        (n: 1, kind: kind, text: text, tool: '', call: 1, of: of, flag: false);
+
+    final trimmed = trimProgress([
+      step('routing', 'Claude Fable 5.1'),
+      step('model', 'Claude Fable 5.1'),
+      step('thinking', 'weighing it up'),
+    ]);
+    expect(trimmed.map((s) => s.kind).toList(), ['routing', 'thinking'],
+        reason: 'routing already said which model; asking it says nothing new');
+    expect(
+      trimProgress([
+        step('routing', 'Claude Fable 5.1'),
+        step('model', 'Claude Fable 5.1', of: 3),
+      ]).length,
+      2,
+      reason: 'but a call out of several still counts itself',
+    );
+  });
+
+  test('relays are reached through the worker before they are reached directly',
+      () {
+    expect(RelayPool.poolUrl, 'wss://${NymbotConfig.apiHost}/api/relay-pool');
+    final pool = RelayPool();
+    expect(pool.pooled, isFalse,
+        reason: 'nothing is proxied until the proxy answers');
+    expect(pool.connected, 0);
+    pool.close();
   });
 
   test('the long-task settings survive a round trip and default off', () {

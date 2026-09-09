@@ -13,6 +13,9 @@
     const QR = window.NymbotQR;
     const Avatar = window.NymbotAvatar;
     const Attach = window.NymbotAttach;
+    const Blossom = window.NymbotBlossom;
+    const Sync = window.NymbotSync;
+    const Ngit = window.NymbotNgit;
     const Bots = window.NymbotBots;
     const Commands = window.NymbotCommands;
     const Speech = window.NymbotSpeech;
@@ -31,6 +34,9 @@
         if (text != null) n.textContent = text;
         return n;
     };
+
+    // How far to look for the epoch an account's announced key sits at.
+    const PQ_EPOCH_SCAN = 12;
 
     const BOT_SUFFIX = C.botPubkey.slice(-4);
     const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
@@ -62,7 +68,8 @@
         { title: t('Write code'), body: t('Write a small, dependency-free function that debounces an async call and cancels the pending one.') },
         { title: t('Draft something'), body: t('Draft a short, plain-spoken release note for a change that made the app twice as fast to start.') },
         { title: t('Compare options'), body: t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.') },
-        { title: t('Generate a picture'), body: '?image a lighthouse at dusk, long exposure, muted palette' }
+        { title: t('Generate a picture'), body: '?image a lighthouse at dusk, long exposure, muted palette' },
+        { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk' }
     ];
 
     const UI = {
@@ -165,14 +172,25 @@
             if (Speech.canListen()) $('micBtn').hidden = false;
             Speech.onListenChange = (on) => {
                 $('micBtn').classList.toggle('is-on', on);
+                if (!on) $('micBtn').classList.remove('is-recording');
                 // Dictation adds to what is already in the composer rather than
                 // replacing it: it used to overwrite whatever you had typed,
                 // and a second dictation overwrote the first.
                 if (on) this._dictationFrom = $('input').value;
                 this.status(on ? t('Listening…') : null);
             };
+            // Recording says so, because the two ways dictation can work feel
+            // different: the live service fills the composer as you speak, a
+            Speech.onListenMode = (mode) => {
+                const btn = $('micBtn');
+                btn.classList.toggle('is-recording', mode === 'recording');
+                btn.classList.toggle('is-busy', mode === 'transcribing');
+                if (mode === 'recording') this.status(t('Recording — tap the microphone again when you are done.'));
+                else if (mode === 'transcribing') this.status(t('Writing that down…'));
+            };
             Speech.onListenError = (why, code) => {
                 this.status(null);
+                $('micBtn').classList.remove('is-recording', 'is-busy');
                 if (!why) return;
                 // Hearing nothing is a moment, not a problem worth keeping in
                 // the transcript. Anything that needs you to go and change a
@@ -214,6 +232,47 @@
             this.watchScrolling();
             this.startScheduler();
             setTimeout(() => this.runDueSchedules().catch(() => { }), 4000);
+            this.startSync();
+        },
+
+        // --- the same app on every device --------------------------------------
+
+        /// Pulls what this account has on the server and folds it in, then keeps it up to date.
+        startSync() {
+            if (!Sync.enabled()) return;
+            Sync.onChange = (touched) => this.afterSync(touched);
+            Sync.follow();
+            setTimeout(() => {
+                Sync.run().then((res) => {
+                    if (res && res.blocked) {
+                        this.note(t('This account has settings and conversations saved from another device, and this one is holding a key that cannot open them. Open Identity and link the recovery code to read them.'));
+                    }
+                }).catch(() => { });
+            }, 1200);
+            // A device left open for a day should still pick up what another one did.
+            if (this._syncTimer) clearInterval(this._syncTimer);
+            this._syncTimer = setInterval(() => Sync.run({ quiet: true }).catch(() => { }), 300000);
+            // And whenever the tab is looked at again, since that is exactly when
+            // somebody has been using the other device.
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) Sync.touch(1500);
+            });
+        },
+
+        /// Something arrived from another device.
+        afterSync(touched) {
+            const set = new Set(touched || []);
+            if (set.has('settings')) {
+                this.settings = Store.settings();
+                this.applyAppearance();
+            }
+            if (set.has('chats')) this.renderList();
+            if (this.conv && set.has('chat-' + this.conv.id)) {
+                const at = $('messages').scrollTop;
+                this.renderMessages();
+                $('messages').scrollTop = at;
+            }
+            this.refreshToolbar();
         },
 
         applyAppearance() {
@@ -489,6 +548,16 @@
             return { group, grouped: false };
         },
 
+        /// PRO or STD, from what the worker said answered the message.
+        tierBadge(m) {
+            const pro = m.pro != null ? !!m.pro : !!m.model;
+            const badge = el('span', 'tier-badge' + (pro ? ' is-pro' : ''), pro ? t('PRO') : t('STD'));
+            badge.title = pro
+                ? t('A frontier model you picked wrote this, charged to your Pro balance.')
+                : t('Nymbot routed this to the model that suited it, charged to your standard balance.');
+            return badge;
+        },
+
         messageNode(m, grouped) {
             const self = m.role === 'self';
             const node = el('div', 'chat-message'
@@ -504,10 +573,8 @@
                 if (m.role === 'bot') {
                     who.appendChild(document.createTextNode(C.botName));
                     who.appendChild(el('span', 'nym-suffix', '#' + BOT_SUFFIX));
-                    const tick = el('span', 'verified-tick');
-                    tick.title = t('Verified');
-                    tick.appendChild(Icons.node('verified', { size: 12 }));
-                    who.appendChild(tick);
+                    // Which tier wrote this.
+                    who.appendChild(this.tierBadge(m));
                     if (m.model) who.appendChild(el('span', 'author-model', m.model));
                 } else {
                     const me = this.selfIdentity();
@@ -796,6 +863,7 @@
                     content: next.reply,
                     thinking: next.thinking || null,
                     cost: next.cost || 0,
+                    pro: !!next.pro,
                     model: next.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
                     sources: next.sources || null,
                     calls: next.modelCalls || 1,
@@ -848,12 +916,30 @@
                         : (step.model && step.model !== 'auto'
                             ? t('Routing to {model}', { model: step.model })
                             : t('Routing this one'));
+                case 'stage':
+                    return step.stage === 'reading'
+                        ? t('Reading this conversation back off the relays')
+                        : '';
+                case 'route':
+                    return step.seeing
+                        ? t('Sending the picture to a model that can see it')
+                        : t('Taking the {task} route', { task: this.routeLabel(step.task) });
                 case 'search':
                     return t('Searching the web for “{query}”', { query: step.query || '' });
+                case 'page':
+                    return t('Reading {url}', { url: step.url || '' });
+                case 'vision':
+                    return step.images > 1
+                        ? t('Looking at {n} pictures', { n: step.images })
+                        : t('Looking at the picture');
                 case 'model':
                     return step.of > 1
                         ? t('Model call {n} of {total}', { n: step.call, total: step.of })
                         : t('Asking {model}', { model: step.model || '' });
+                case 'effort':
+                    return step.stage === 'planning'
+                        ? t('Planning the answer before writing it')
+                        : t('Reading the answer back against the question');
                 case 'tool':
                     return step.target
                         ? t('{tool}: {target}', { tool: this.toolLabel(step.tool), target: step.target })
@@ -863,6 +949,30 @@
                 default:
                     return '';
             }
+        },
+
+        routeLabel(task) {
+            switch (task) {
+                case 'coding': return t('coding');
+                case 'reasoning': return t('reasoning');
+                case 'creative': return t('creative');
+                case 'translation': return t('translation');
+                default: return t('general');
+            }
+        },
+
+        /// Drops the steps that say what the line above already said.
+        trimProgress(steps) {
+            const out = [];
+            for (const step of steps) {
+                const before = out[out.length - 1];
+                if (step && step.kind === 'model' && !(step.of > 1) && before
+                    && before.kind === 'routing' && before.model === step.model) {
+                    continue;
+                }
+                out.push(step);
+            }
+            return out;
         },
 
         toolLabel(name) {
@@ -885,9 +995,11 @@
             if (!box) return;
             box.innerHTML = '';
             // The last few only: this sits under a spinner, not in a log view.
-            for (const step of steps.slice(-4)) {
+            let last = '';
+            for (const step of this.trimProgress(steps).slice(-4)) {
                 const line = this.progressLine(step);
-                if (!line) continue;
+                if (!line || line === last) continue;
+                last = line;
                 const row = el('div', 'progress-step'
                     + (step.kind === 'thinking' ? ' is-thought' : ''), line);
                 box.appendChild(row);
@@ -1043,6 +1155,33 @@
                 return;
             }
 
+            // A picture has to be uploaded before the message is priced, since it
+            // is the link that travels and the link that is charged for.
+            if (attachments.some(a => a.kind === 'image' && !a.url)) {
+                const stranded = await this.settleAttachments(attachments);
+                if (stranded.length) {
+                    const go = await this.ask({
+                        title: t('Send without the pictures?'),
+                        body: (stranded.length === 1
+                            ? t('{name} could not be uploaded, so Nymbot will not be able to see it. Send the message anyway?',
+                                { name: stranded[0].name })
+                            : t('{names} could not be uploaded, so Nymbot will not be able to see them. Send the message anyway?',
+                                { names: stranded.map(a => a.name).join(', ') })),
+                        confirm: t('Send anyway')
+                    });
+                    if (!go) {
+                        this.attachments = attachments;
+                        this.renderAttachments();
+                        if (override == null) {
+                            $('input').value = text;
+                            this.autoGrow();
+                            this.updateHints();
+                        }
+                        return;
+                    }
+                }
+            }
+
             const cost = Chat.wireCost(this.conv, text, { attachments, quote });
             if (cost.over > 0) {
                 if (override == null) {
@@ -1107,6 +1246,7 @@
                     content: res.reply,
                     thinking: res.thinking || null,
                     cost: res.cost || 0,
+                    pro: !!res.pro,
                     model: res.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
                     sources: res.sources || null,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
@@ -1638,6 +1778,7 @@
                     return true;
                 case 'voice':
                     if (!Speech.canListen()) { this.note(t('This browser cannot listen.')); return true; }
+                    Speech.signer = (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
                     Speech.toggleListening();
                     return true;
                 case 'retry': {
@@ -1807,15 +1948,47 @@
         },
 
         async addFiles(files) {
+            const added = [];
             for (const file of files) {
                 try {
                     const built = await Attach.fromFile(file);
-                    if (built) this.attachments.push(built);
+                    if (built) { this.attachments.push(built); added.push(built); }
                 } catch (e) {
                     this.toast(e.message || t('That file could not be attached.'));
                 }
             }
             this.renderAttachments();
+            for (const a of added) this.uploadAttachment(a);
+        },
+
+        /// A picture has to be somewhere the worker can fetch it before the model
+        /// can be handed the image rather than the file's name.
+        async uploadAttachment(attachment) {
+            if (!attachment || attachment.kind !== 'image' || attachment.url) return;
+            if (attachment.uploading) return attachment.uploading;
+            attachment.error = null;
+            attachment.uploading = Blossom.upload(attachment, { signer: this.uploadSigner() })
+                .then(() => { attachment.error = null; }, (e) => {
+                    attachment.error = (e && e.message) || t('Upload failed.');
+                })
+                .then(() => {
+                    attachment.uploading = null;
+                    if (this.attachments.includes(attachment)) this.renderAttachments();
+                });
+            this.renderAttachments();
+            return attachment.uploading;
+        },
+
+        /// An anonymous chat uploads under its throwaway key, so the blob is no
+        /// more linkable to the account than the message carrying it.
+        uploadSigner() {
+            return (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
+        },
+
+        /// Everything still on its way up, finished before the message goes.
+        async settleAttachments(list) {
+            await Promise.all(list.map(a => this.uploadAttachment(a)));
+            return list.filter(a => a.kind === 'image' && !a.url);
         },
 
         renderAttachments() {
@@ -1831,10 +2004,16 @@
                     item.appendChild(img);
                 }
                 // Lines say more about a pasted wall of text than bytes do.
-                const measure = a.lines
-                    ? t('{n} lines', { n: a.lines })
-                    : Attach.humanSize(a.size);
-                item.appendChild(el('span', null, `${a.name} · ${measure}`));
+                const measure = a.uploading
+                    ? t('uploading…')
+                    : (a.error
+                        ? t('not uploaded')
+                        : (a.lines ? t('{n} lines', { n: a.lines }) : Attach.humanSize(a.size)));
+                if (a.error) item.classList.add('is-error');
+                if (a.uploading) item.classList.add('is-busy');
+                const label = el('span', null, `${a.name} · ${measure}`);
+                if (a.error) label.title = a.error;
+                item.appendChild(label);
                 const x = el('button', null, '×');
                 x.type = 'button';
                 x.title = t('Remove');
@@ -1915,6 +2094,13 @@
             const when = this.free && this.free.resetsAt
                 ? new Date(this.free.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
                 : null;
+            // Whose allowance ran out matters.
+            if (this.free && this.free.netSpent) {
+                this.note(when
+                    ? t('This network has used today\'s free replies — a new key does not get more, because they are counted per connection too. They come back at {time}, or tap Buy for credits.', { time: when })
+                    : t('This network has used today\'s free replies — a new key does not get more, because they are counted per connection too. Tap Buy for credits.'));
+                return;
+            }
             this.note(when
                 ? t('That is today\'s free replies used. They come back at {time} — or tap Buy for credits, which also unlock the sharper models, repositories, images and web search.', { time: when })
                 : t('That is today\'s free replies used. Tap Buy for credits, which also unlock the sharper models, repositories, images and web search.'));
@@ -2296,6 +2482,15 @@
                 main.appendChild(el('span', 'repo-sub', bits.join(' · ')));
                 row.appendChild(main);
 
+                // Announced on Nostr rather than typed in: worth saying, since it
+                // is the announcement that decides where this points.
+                if (r.ngit) {
+                    const mark = el('span', 'repo-ngit', t('ngit'));
+                    mark.title = r.ngit.naddr
+                        ? t('Announced on Nostr as {id}', { id: r.ngit.repoId || r.ngit.name })
+                        : t('Announced on Nostr');
+                    row.appendChild(mark);
+                }
                 if (r.allowWrites) row.appendChild(el('span', 'repo-writes', t('writes')));
 
                 const actions = el('div', 'row-actions');
@@ -2327,6 +2522,8 @@
 
         editRepo(repo) {
             this.repoEditing = repo.id;
+            this.ngitFound = null;
+            $('ngitAddress').value = (repo.ngit && repo.ngit.naddr) || '';
             this.closeRepoBrowse();
             $('gitProvider').value = repo.provider || 'github';
             $('gitHost').value = repo.host || '';
@@ -2344,6 +2541,8 @@
 
         resetRepoForm() {
             this.repoEditing = null;
+            this.ngitFound = null;
+            $('ngitAddress').value = '';
             this.closeRepoBrowse();
             $('gitProvider').value = 'github';
             $('gitHost').value = '';
@@ -2487,6 +2686,48 @@
             this.browsedPicked = new Set();
         },
 
+        /// Reads a NIP-34 announcement and fills the form in from it.
+        async resolveNgit() {
+            const typed = ($('ngitAddress').value || '').trim();
+            if (!typed) {
+                this.modalStatus('gitStatus', t('Paste an naddr or a nostr:// address first.'), 'warn');
+                return;
+            }
+            const button = $('ngitResolveBtn');
+            button.disabled = true;
+            this.modalStatus('gitStatus', t('Looking that repository up on the relays…'));
+            let found;
+            try {
+                found = await Ngit.resolve(typed);
+            } catch (e) {
+                button.disabled = false;
+                this.modalStatus('gitStatus', (e && e.message) || t('That could not be looked up.'), 'warn');
+                return;
+            }
+            button.disabled = false;
+            this.ngitFound = found;
+            if (!found.forge) {
+                this.modalStatus('gitStatus', found.clone.length
+                    ? t('“{name}” is announced, but it is cloned from {where}, which has no API Nymbot can read files through.',
+                        { name: found.name, where: found.clone[0] })
+                    : t('“{name}” is announced but lists no clone URL, so there is nowhere to read it from.',
+                        { name: found.name }), 'warn');
+                return;
+            }
+            $('gitProvider').value = found.forge.provider;
+            $('gitHost').value = found.forge.host;
+            $('gitRepo').value = found.forge.repo;
+            if (found.head) $('gitBranch').value = found.head;
+            if (!$('gitLabel').value.trim()) $('gitLabel').value = found.name || '';
+            const parts = [t('Found “{name}”.', { name: found.name })];
+            if (found.head) parts.push(t('It says {branch} is current.', { branch: found.head }));
+            if (found.forge.guessed) {
+                parts.push(t('The host is self-hosted, so the provider is a guess — change it if that is wrong.'));
+            }
+            parts.push(t('Add a token for {host} to read it.', { host: found.forge.host }));
+            this.modalStatus('gitStatus', parts.join(' '), 'ok');
+        },
+
         saveRepo() {
             const cfg = {
                 provider: $('gitProvider').value,
@@ -2498,6 +2739,13 @@
                 label: $('gitLabel').value.trim(),
                 allowWrites: $('gitWrites').checked
             };
+            // Where it was announced, kept alongside the forge it actually lives
+            // on — so the app can say a repository came from Nostr, and point at
+            const found = this.ngitFound;
+            if (found && found.forge
+                && found.forge.repo === cfg.repo && found.forge.host === cfg.host) {
+                cfg.ngit = Ngit.repoFrom(found).ngit;
+            }
             if (!cfg.token || !cfg.repo) {
                 this.modalStatus('gitStatus', t('A token and a repository are both needed.'), 'warn');
                 return;
@@ -3124,6 +3372,7 @@
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
             $('setProgress').checked = s.showProgress !== false;
+            $('setSync').checked = s.sync !== false;
             this.renderVoices();
             this.renderLanguages();
             $('voiceFields').hidden = !Speech.canSpeak();
@@ -3172,8 +3421,12 @@
                 speechRate: Number($('setRate').value) || 1,
                 autoDeleteDays: Number($('setAutoDelete').value) || 0,
                 autoContinue: Number($('setAutoContinue').value) || 0,
-                showProgress: $('setProgress').checked
+                showProgress: $('setProgress').checked,
+                sync: $('setSync').checked
             });
+            // Turning it on mid-session starts it; turning it off stops writing,
+            // and leaves what is already there for another device.
+            if (this.settings.sync !== false) this.startSync();
             this.renderList();
             this.renderMessages();
             this.refreshToolbar();
@@ -3395,6 +3648,18 @@
             if ((mark.paths || []).length) {
                 card.appendChild(el('div', 'checkpoint-paths', mark.paths.join(', ')));
             }
+            // A run across several repositories reports one it can put back and
+            // names the rest, so nothing it changed goes unmentioned.
+            for (const other of mark.also || []) {
+                const line = [other.repo + (other.branch ? ' · ' + other.branch : '')];
+                if ((other.paths || []).length) line.push(other.paths.join(', '));
+                card.appendChild(el('div', 'checkpoint-paths', line.join(' — ')));
+            }
+            if ((mark.also || []).length) {
+                card.appendChild(el('div', 'checkpoint-note',
+                    t('Undoing puts back {repo} only. Ask to undo the others and it will.',
+                        { repo: mark.repo })));
+            }
 
             if (mark.undone) {
                 card.appendChild(el('div', 'checkpoint-note', t('Put back.')));
@@ -3542,6 +3807,18 @@
                 {
                     title: t('Comparing two models'),
                     body: t('Compare sends one prompt to two models at once, each on its own thread, so neither sees the other\'s answer. Keep the one you prefer and the chat carries on from it. Two replies means two charges.')
+                },
+                {
+                    title: t('Pictures, links and files'),
+                    body: t('Attach a picture and it is uploaded to the same public media hosts Nymchat uses, so the model is handed the image itself rather than the file\'s name — on Pro that needs a model that can see, and on standard routing a picture is routed to one automatically. Paste a link and the page is fetched and read before the reply is written. A text or code file travels as its text; anything long enough to be a document belongs in a workspace, which searches the whole of it.')
+                },
+                {
+                    title: t('Pictures and video'),
+                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Nothing is charged if a generation fails.')
+                },
+                {
+                    title: t('Dictation'),
+                    body: t('The microphone uses the browser\'s own speech service where it can reach one, filling the composer as you speak. Where it cannot — several browsers ship without one — it records instead and the clip is transcribed when you stop, so the button works either way.')
                 },
                 {
                     title: t('Workspaces'),
@@ -4435,10 +4712,18 @@
                 return;
             }
 
+            // Both answers come from frontier models, so both are charged to the Pro balance.
+            const price = (a.credits || 1) + (b.credits || 1);
+            if (this.balance.pro != null && this.balance.pro < price) {
+                this.modalStatus('compareStatus',
+                    t('Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
+                        { n: price, have: this.balance.pro }), 'warn');
+                return;
+            }
             const go = await this.ask({
                 title: t('Ask both?'),
-                body: t('{a} and {b} each answer once, so this costs two replies — about {n} credits.',
-                    { a: a.label, b: b.label, n: (a.credits || 1) + (b.credits || 1) }),
+                body: t('{a} and {b} each answer once, so this costs two replies — about {n} Pro credits.',
+                    { a: a.label, b: b.label, n: price }),
                 confirm: t('Ask both')
             });
             if (!go) return;
@@ -4531,6 +4816,7 @@
                 content: run.result.reply,
                 thinking: run.result.thinking || null,
                 cost: run.result.cost || 0,
+                pro: run.result.pro !== false,
                 model: run.model.label,
                 sources: run.result.sources || null,
                 calls: run.result.modelCalls || 1,
@@ -4854,9 +5140,11 @@
             // does not leave it on screen for the next person to open it.
             $('setRoot').type = 'password';
             this.coverSecrets();
+            // One code per account, not per app: Nymbot and Nymchat derive the
+            // same key from it and publish the same announcement, so whichever
             $('rootHint').textContent = Identity.rootLocked
-                ? t('This account already advertises another device\'s key. Paste that device\'s code below to link this one; until then replies come back without the post-quantum layer.')
-                : t('Paste this into another device — or into Nymchat — so both hold the same post-quantum key.');
+                ? t('This account already advertises a key this device cannot derive. Paste the code from the device that made it — Nymbot or Nymchat, it is the same code — to link this one. Until then replies come back without the post-quantum layer, and anything another device saved will not open.')
+                : t('One code for the account, not for the app. Paste it into another device — or into Nymchat — and both hold the same post-quantum key.');
             const usage = Store.usage();
             $('usageLine').textContent = t('{replies} replies, {credits} credits spent on this device.',
                 { replies: usage.replies, credits: usage.credits });
@@ -4933,6 +5221,12 @@
                 danger: true
             });
             if (!ok) return;
+            // Signed while the key is still here; bounded so a signer that
+            // never answers cannot hold the wipe up.
+            await Promise.race([
+                Sync.purge(),
+                new Promise((done) => setTimeout(done, 3000))
+            ]);
             Store.wipe();
             Identity.forget();
             location.reload();
@@ -5483,6 +5777,7 @@
                 'close-modal': () => this.closeModals(),
                 'model-off': () => { this.setModel(null); this.closeModals(); },
                 'repo-save': () => this.saveRepo(),
+                'ngit-resolve': () => this.resolveNgit(),
                 'repo-browse': () => this.browseRepos(),
                 'repo-link': () => this.linkBrowsedRepos(),
                 'repo-browse-close': () => this.closeRepoBrowse(),
@@ -5559,7 +5854,12 @@
                 'send': () => this.send(),
                 'stop': () => this.stop(),
                 'attach': () => $('filePicker').click(),
-                'mic': () => Speech.toggleListening(),
+                'mic': () => {
+                    // Transcription is a signed request, and an anonymous chat
+                    // signs it with the throwaway key like everything else.
+                    Speech.signer = (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
+                    Speech.toggleListening();
+                },
                 'cancel-quote': () => { this.quote = null; this.renderQuote(); },
                 'scroll-bottom': () => this.scrollToBottom(),
                 'find-in-chat': () => this.openFind(),
@@ -5904,6 +6204,7 @@
         gateGenerate() {
             try {
                 Identity.generate();
+                $('revealNsecRow').hidden = false;
                 $('revealNsec').value = NT().nip19.nsecEncode(Identity._sk);
                 $('revealRoot').value = Identity.rootCode() || '';
                 $('gate').hidden = true;
@@ -5913,11 +6214,17 @@
             }
         },
 
-        gateImport() {
+        async gateImport() {
             try {
-                Identity.importSecret($('gateNsec').value);
+                const sk = Identity.readSecret($('gateNsec').value);
+                const pubkey = NT().getPublicKey(sk);
+                const found = await this.rootForSignIn(pubkey);
+                if (found === false) return;
+                Identity.importSecret($('gateNsec').value,
+                    found && found.root !== undefined ? found.root : found,
+                    found && found.epoch);
                 $('gateNsec').value = '';
-                this.enter();
+                this.afterSignIn();
             } catch (e) {
                 this.gateError(e.message || t('That key could not be read.'));
             }
@@ -5925,11 +6232,104 @@
 
         async gateExtension() {
             try {
-                await Identity.useExtension();
-                this.enter();
+                const pubkey = await Identity.extensionPubkey();
+                const found = await this.rootForSignIn(pubkey);
+                if (found === false) return;
+                await Identity.useExtension(
+                    found && found.root !== undefined ? found.root : found,
+                    found && found.epoch);
+                this.afterSignIn();
             } catch (e) {
                 this.gateError(e.message || t('The extension refused.'));
             }
+        },
+
+        /// Which post-quantum root a key signing back in should get.
+        async rootForSignIn(pubkey) {
+            this.gateError('');
+            this.gateBusy(t('Checking whether this key already has a post-quantum root…'));
+            let announced = null;
+            try {
+                Relays.connect();
+                announced = await PQ.resolve(pubkey);
+            } catch (_) {
+                announced = null;
+            } finally {
+                this.gateBusy('');
+            }
+            // Nothing advertised: either a key that has never used Nymbot or
+            // Nymchat, or relays that could not be reached.
+            if (!announced || !announced.pk) return undefined;
+
+            const code = await this.ask({
+                title: t('This key already has a post-quantum root'),
+                body: t('Your settings and conversations are sealed to it, and so are your replies. Paste the recovery code from the device that made it — Identity → Post-quantum root, in Nymbot or Nymchat.\n\nWithout it this device can still chat, but it cannot open anything the other one saved.'),
+                prompt: true,
+                label: t('Recovery code'),
+                placeholder: 'nympq1…',
+                confirm: t('Link this device'),
+                cancel: t('Carry on without it')
+            });
+            if (code == null) return false;
+            const typed = String(code).trim();
+            if (!typed) return null;
+            if (!Identity.kemForCode(typed, 0)) {
+                this.gateError(t('That is not a recovery code. It starts with nympq1.'));
+                return false;
+            }
+            // The root is one thing; which epoch of it the account currently
+            // advertises is another.
+            const epoch = this.epochMatching(typed, announced.pk);
+            if (epoch == null) {
+                this.gateError(t('That code does not match the key this account advertises. Check you copied it from the right account.'));
+                return false;
+            }
+            return { root: window.NymCrypto.pqRootDecode(typed), epoch };
+        },
+
+        /// Which epoch of `code` produces the key the account advertises, or null
+        /// if none of them does.
+        epochMatching(code, announced) {
+            for (let epoch = 0; epoch <= PQ_EPOCH_SCAN; epoch++) {
+                const derived = Identity.kemForCode(code, epoch);
+                if (derived && this.sameKem(derived, announced)) return epoch;
+            }
+            return null;
+        },
+
+        sameKem(a, b) {
+            if (!a || !b || a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+            return true;
+        },
+
+        gateBusy(text) {
+            const node = $('gateBusy');
+            if (!node) return;
+            node.textContent = text || '';
+            node.hidden = !text;
+        },
+
+        /// A key that turned out to have no root gets one made now, and is shown
+        /// it — the same reveal a brand new key gets, because it is the same
+        afterSignIn() {
+            if (!Identity.rootLocked && Identity.kemPk) {
+                this.enter();
+                return;
+            }
+            if (Identity.rootLocked) {
+                // Signed in without the code.
+                this.enter();
+                this.toast(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
+                return;
+            }
+            const shown = Identity.mintRoot();
+            if (!shown) { this.enter(); return; }
+            $('revealNsec').value = Identity._sk ? NT().nip19.nsecEncode(Identity._sk) : '';
+            $('revealNsecRow').hidden = !Identity._sk;
+            $('revealRoot').value = shown;
+            $('gate').hidden = true;
+            $('reveal').hidden = false;
         },
 
         copy(id) {

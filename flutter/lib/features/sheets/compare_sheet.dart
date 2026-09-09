@@ -89,12 +89,20 @@ class _CompareSheetState extends State<_CompareSheet> {
 
     final price = ((a['credits'] as num?)?.toInt() ?? 1) +
         ((b['credits'] as num?)?.toInt() ?? 1);
+    // Both answers come from frontier models, so both are charged to the Pro balance.
+    final have = app.proBalance;
+    if (have != null && have < price) {
+      setState(() => _status = t(
+          'Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
+          {'n': price, 'have': have}));
+      return;
+    }
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(t('Ask both?')),
         content: Text(t(
-            '{a} and {b} each answer once, so this costs two replies — about {n} credits.',
+            '{a} and {b} each answer once, so this costs two replies — about {n} Pro credits.',
             {'a': a['label'], 'b': b['label'], 'n': price})),
         actions: [
           TextButton(

@@ -101,7 +101,8 @@
                 src: 'root',
                 alg: C.pqAlg,
                 nym: 1,
-                epoch: 0,
+                // Which epoch of the root this key came from.
+                epoch: Identity._epoch || 0,
                 // A local key can open either format; a signer login can only
                 // do the layered one, and says so by advertising pk2 alone.
                 ...(Identity.isLocal ? { pk: NC()._b64uEncode(mine) } : {}),

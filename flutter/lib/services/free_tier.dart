@@ -9,12 +9,16 @@ class FreeAllowance {
     required this.limit,
     required this.left,
     required this.resetsAt,
+    this.netSpent = false,
   });
 
   final int used;
   final int limit;
   final int left;
   final int resetsAt;
+
+  /// True when it is the network that has used today's replies rather than this key.
+  final bool netSpent;
 
   static FreeAllowance? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -25,6 +29,7 @@ class FreeAllowance {
       limit: limit,
       left: (raw['left'] as num?)?.toInt() ?? 0,
       resetsAt: (raw['resetsAt'] as num?)?.toInt() ?? 0,
+      netSpent: raw['netSpent'] == true,
     );
   }
 }

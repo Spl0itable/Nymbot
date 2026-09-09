@@ -72,6 +72,13 @@
         },
 
         balance(opts) { return this.call('balance', {}, opts); },
+
+        /// Dictation, when the browser's own speech service cannot be reached.
+        transcribe(audioBase64, opts) {
+            return this.call('transcribe', { audio: audioBase64 },
+                Object.assign({ timeout: 60000 }, opts || {}));
+        },
+
         clearHistory(opts) { return this.call('clear-history', {}, opts); },
 
         /// Public catalog data: it has to render before anyone has a balance,

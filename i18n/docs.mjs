@@ -114,10 +114,11 @@ export const OUTLINE = [
       },
       {
         slug: 'docs/media',
-        nav: 'Images and speech',
+        nav: 'Images, video and speech',
         sections: [
           { id: 'images', title: 'Generating images' },
           { id: 'generators', title: 'Choosing a generator' },
+          { id: 'video', title: 'Video' },
           { id: 'speech', title: 'Speech' },
           { id: 'pricing', title: 'What they cost' },
         ],
@@ -131,6 +132,7 @@ export const OUTLINE = [
         slug: 'docs/credits',
         nav: 'Credits and pricing',
         sections: [
+          { id: 'free', title: 'The free daily allowance' },
           { id: 'two-balances', title: 'Two balances' },
           { id: 'buying', title: 'Buying over Lightning' },
           { id: 'what-a-reply-costs', title: 'What a reply costs' },
@@ -154,6 +156,7 @@ export const OUTLINE = [
         nav: 'Working in a git repository',
         sections: [
           { id: 'connecting', title: 'Connecting a repository' },
+          { id: 'ngit', title: 'Repositories announced on Nostr' },
           { id: 'what-it-can-do', title: 'What it can do' },
           { id: 'writes', title: 'Turning writes on' },
           { id: 'undo', title: 'Undoing what a run changed' },

@@ -8,6 +8,7 @@ library;
 class NymbotConfig {
   static const String apiHost = 'web.nymchat.app';
   static String get botUrl => 'https://$apiHost/api/bot';
+  static String get storageUrl => 'https://$apiHost/api/storage';
 
   static const String botPubkey =
       'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2';

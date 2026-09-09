@@ -85,6 +85,7 @@
                 </div>
             </div>
 
+            <p class="gate-busy" id="gateBusy" hidden></p>
             <p class="gate-error" id="gateError" hidden></p>
             <p class="gate-foot">By continuing you agree to the <a href="/terms/">Terms</a> and
                 <a href="/privacy/">Privacy Policy</a>.</p>
@@ -98,10 +99,12 @@
             <p class="gate-lede">Nobody can reissue either of these &mdash; not even us. Without them, this
                 identity, its history and any credits on it are gone.</p>
 
-            <label class="reveal-label" for="revealNsec">Private key (nsec)</label>
-            <div class="reveal-row">
-                <input type="text" id="revealNsec" readonly spellcheck="false">
-                <button class="btn btn-small" type="button" data-act="copy" data-target="revealNsec">Copy</button>
+            <div id="revealNsecRow">
+                <label class="reveal-label" for="revealNsec">Private key (nsec)</label>
+                <div class="reveal-row">
+                    <input type="text" id="revealNsec" readonly spellcheck="false">
+                    <button class="btn btn-small" type="button" data-act="copy" data-target="revealNsec">Copy</button>
+                </div>
             </div>
 
             <label class="reveal-label" for="revealRoot">Post-quantum recovery code</label>
@@ -615,6 +618,14 @@
             <div class="repo-list" id="repoList"></div>
             <div class="repo-form" id="repoForm">
                 <h3 class="section-head" id="repoFormTitle">Add a repository</h3>
+                <label for="ngitAddress">Announced on Nostr (ngit)</label>
+                <div class="reveal-row">
+                    <input data-i18n-skip type="text" id="ngitAddress" placeholder="naddr1… or nostr://npub…/repo" autocomplete="off" spellcheck="false">
+                    <button class="btn btn-small" type="button" data-act="ngit-resolve" id="ngitResolveBtn">Look it up</button>
+                </div>
+                <p class="hint" id="ngitHint">A NIP-34 announcement says where a repository is cloned from and
+                    which branch is current. Paste one and the fields below fill in; the access token is still
+                    the git host&rsquo;s, because that is where the code is.</p>
                 <div class="field-grid">
                     <div>
                         <label for="gitProvider">Provider</label>
@@ -930,6 +941,12 @@
             <label class="check"><input type="checkbox" id="setProgress"> Show what Nymbot is doing while it works</label>
 
             <h3 class="section-head">Your data</h3>
+            <label class="check"><input type="checkbox" id="setSync"> Keep this account in step across my devices</label>
+            <p class="hint">Your settings, library and conversations are sealed to your own key and
+                kept where any device signing in with it can read them back. The server stores a blob
+                it cannot open, under a name that is a hash. Ghost chats are never included, and
+                neither are repository access tokens &mdash; those stay on the device you pasted
+                them into.</p>
             <label for="setAutoDelete">Delete chats after</label>
             <select id="setAutoDelete">
                 <option value="0">Never</option>
@@ -1133,6 +1150,7 @@
     <script src="/app/js/icons.js"></script>
     <script src="/app/js/avatar.js"></script>
     <script src="/app/js/profile.js"></script>
+    <script src="/app/js/blossom.js"></script>
     <script src="/app/js/attach.js"></script>
     <script src="/app/js/commands.js"></script>
     <script src="/app/js/speech.js"></script>
@@ -1144,8 +1162,10 @@
     <script src="/app/js/export.js"></script>
     <script src="/app/js/bots.js"></script>
     <script src="/app/js/gitapi.js"></script>
+    <script src="/app/js/ngit.js"></script>
     <script src="/app/js/memory.js"></script>
     <script src="/app/js/free.js"></script>
+    <script src="/app/js/sync.js"></script>
     <script src="/app/js/qr.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>

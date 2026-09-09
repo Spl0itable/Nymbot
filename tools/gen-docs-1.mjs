@@ -6,7 +6,7 @@ await docsPage({
   file: 'pages/docs.html',
   slug: 'docs',
   title: 'Nymbot Knowledge Base',
-  description: 'How Nymbot works: conversations, credits, models, the git integration, anonymous mode and the encryption underneath.',
+  description: 'How Nymbot works: an anonymous AI chat with no account \u2014 conversations, credits, models, the git integration, anonymous mode and the encryption underneath.',
   body: `            <h1>Nymbot knowledge base</h1>
             <p class="docs-lede">Nymbot is a private AI assistant. Every message is end-to-end encrypted,
                 every reply is paid for in Bitcoin, and there is no account to make &mdash; a key on your
@@ -80,7 +80,7 @@ ${NOTE}
             <p>The web app is at <a href="https://nymbot.ai/app">nymbot.ai/app</a>. It installs like a
                 native app if you want it to &mdash; "Add to Home Screen" on a phone, the install icon in the
                 address bar on a desktop &mdash; and works the same either way. There are also
-                <a href="/docs/apps/">Android and iOS builds</a>.</p>
+                <a href="/docs/apps/">Android and iOS builds</a>, though not yet in any store.</p>
             <p>The first time it opens it generates a keypair and asks you to pick a nym: a display name,
                 not a username. Nobody checks it and nobody reserves it, because it is not what identifies
                 you. Your public key is.</p>
@@ -158,12 +158,19 @@ ${NOTE}
                 first.</p>
 
             <h2 id="mobile">Android and iOS</h2>
-            <p>The mobile app is the same product built natively, so notifications, biometric unlock and the
-                share sheet behave the way the platform expects. It talks to exactly the same service, and a
+            <p>The mobile app is the same product built natively, so the keystore, the share sheet and the
+                system theme behave the way the platform expects. It talks to exactly the same service, and a
                 conversation started on a phone is readable on the web and the other way round.</p>
-            <p>Where the platform is more restrictive, the app is too: iOS has no way to hand you a
-                generated file except through the share sheet, and Android's background limits mean a long
-                Pro reply finishes when you come back to the app rather than while it is buried.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Not in the stores yet</span>
+                <p>The Android and iOS app is in the
+                    <a href="https://github.com/Spl0itable/nymbot">repository</a> and builds from source
+                    today; there is no App Store, Play or Zapstore listing to install it from. Until there
+                    is, the <a href="https://nymbot.ai/app">web app</a> installs to a home screen and is
+                    the same thing.</p>
+            </div>
+            <p>Where the platform is more restrictive, the app is too: Android's background limits mean a
+                long Pro reply finishes when you come back to the app rather than while it is buried.</p>
 
             <h2 id="one-account">One account everywhere</h2>
             <p>There is nothing to sync, because there is nothing per-device to sync. Your key is the

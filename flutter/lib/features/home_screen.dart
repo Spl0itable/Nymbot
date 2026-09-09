@@ -858,10 +858,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? t('Nymbot is reading your repositories')
                     : t('Nymbot is thinking')),
             showAvatar: app.settings.avatars,
-            steps: [
-              for (final s in app.progressSteps)
-                if (progressLine(s).isNotEmpty) progressLine(s),
-            ],
+            steps: _progressLines(app.progressSteps),
           );
         }
         final m = app.messages[i];
@@ -1010,16 +1007,40 @@ class _HomeScreenState extends State<HomeScreen> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
+                    // A picture is on its way to a media host the moment it is
+                    // attached, because the message carries the link rather than
                     for (final a in app.attachments)
                       InputChip(
-                        avatar: Icon(
-                          a.kind == AttachmentKind.image
-                              ? Icons.image_outlined
-                              : Icons.description_outlined,
-                          size: 15,
+                        avatar: a.uploading
+                            ? const SizedBox(
+                                width: 13,
+                                height: 13,
+                                child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(
+                                a.uploadError != null
+                                    ? Icons.error_outline
+                                    : (a.kind == AttachmentKind.image
+                                        ? Icons.image_outlined
+                                        : Icons.description_outlined),
+                                size: 15,
+                                color: a.uploadError != null
+                                    ? Theme.of(context).colorScheme.error
+                                    : null,
+                              ),
+                        tooltip: a.uploadError,
+                        label: Text(
+                          a.uploading
+                              ? '${a.name} · ${t('uploading…')}'
+                              : (a.uploadError != null
+                                  ? '${a.name} · ${t('not uploaded')}'
+                                  : '${a.name} · ${a.measure}'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: a.uploadError != null
+                                ? Theme.of(context).colorScheme.error
+                                : null,
+                          ),
                         ),
-                        label: Text('${a.name} · ${a.measure}',
-                            style: const TextStyle(fontSize: 11)),
                         onDeleted: () => app.removeAttachment(a.id),
                       ),
                   ],
@@ -1591,4 +1612,16 @@ class _ChatDrawerState extends State<_ChatDrawer> {
       ),
     );
   }
+}
+
+/// What the feed under the spinner reads as: the steps that still say something
+/// new, and never the same line twice in a row.
+List<String> _progressLines(List<TurnStep> steps) {
+  final out = <String>[];
+  for (final s in trimProgress(steps)) {
+    final line = progressLine(s);
+    if (line.isEmpty || (out.isNotEmpty && out.last == line)) continue;
+    out.add(line);
+  }
+  return out;
 }

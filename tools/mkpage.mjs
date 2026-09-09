@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const SITE = 'https://nymbot.ai';
 const OG = `${SITE}/images/og-banner.png`;
-const OG_ALT = 'The nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.';
+const OG_ALT = 'The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.';
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 

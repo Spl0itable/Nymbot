@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
+import '../../services/ngit.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../../services/git_forge.dart';
@@ -34,7 +35,10 @@ class _ReposSheetState extends State<_ReposSheet> {
   List<ForgeRepo>? _found;
   final _picked = <String>{};
   final _filter = TextEditingController();
+  final _ngit = TextEditingController();
   bool _asking = false;
+  bool _looking = false;
+  NgitRepo? _announced;
 
   @override
   void dispose() {
@@ -45,6 +49,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     _paths.dispose();
     _label.dispose();
     _filter.dispose();
+    _ngit.dispose();
     super.dispose();
   }
 
@@ -63,7 +68,82 @@ class _ReposSheetState extends State<_ReposSheet> {
       _found = null;
       _picked.clear();
       _filter.clear();
+      _ngit.clear();
+      _announced = null;
     });
+  }
+
+  /// Reads a NIP-34 announcement and fills the form in from it.
+  Future<void> _lookUp(AppController app) async {
+    final typed = _ngit.text.trim();
+    if (typed.isEmpty) {
+      setState(() =>
+          _error = t('Paste an naddr or a nostr:// address first.'));
+      return;
+    }
+    setState(() {
+      _looking = true;
+      _error = null;
+    });
+    NgitRepo found;
+    try {
+      found = await Ngit(app.relays).resolve(typed);
+    } on NgitFailure catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _looking = false;
+        _error = e.message;
+      });
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _looking = false;
+        _error = t('That could not be looked up.');
+      });
+      return;
+    }
+    if (!mounted) return;
+    final forge = found.forge;
+    if (forge == null) {
+      setState(() {
+        _looking = false;
+        _announced = null;
+        _error = found.clone.isEmpty
+            ? t('“{name}” is announced but lists no clone URL, so there is nowhere to read it from.',
+                {'name': found.name})
+            : t('“{name}” is announced, but it is cloned from {where}, which has no API Nymbot can read files through.',
+                {'name': found.name, 'where': found.clone.first});
+      });
+      return;
+    }
+    setState(() {
+      _looking = false;
+      _announced = found;
+      _provider = forge.provider;
+      _host.text = forge.host;
+      _repo.text = forge.repo;
+      if (found.head.isNotEmpty) _branch.text = found.head;
+      if (_label.text.trim().isEmpty) _label.text = found.name;
+      final parts = <String>[t('Found “{name}”.', {'name': found.name})];
+      if (found.head.isNotEmpty) {
+        parts.add(t('It says {branch} is current.', {'branch': found.head}));
+      }
+      if (forge.guessed) {
+        parts.add(t('The host is self-hosted, so the provider is a guess — change it if that is wrong.'));
+      }
+      parts.add(t('Add a token for {host} to read it.', {'host': forge.host}));
+      _error = parts.join(' ');
+    });
+  }
+
+  /// The announcement only rides along if the form still points at what it
+  /// resolved to — editing the host or repo by hand means it no longer does.
+  NgitOrigin? _originFor(String repo, String host) {
+    final found = _announced;
+    if (found == null || found.forge == null) return null;
+    if (found.forge!.repo != repo || found.forge!.host != host) return null;
+    return found.origin;
   }
 
   /// Asks the forge what the token in the form can reach, so a chat is wired
@@ -250,6 +330,8 @@ class _ReposSheetState extends State<_ReposSheet> {
       _branch.text = r.branch;
       _paths.text = r.paths;
       _label.text = r.label;
+      _ngit.text = r.ngit?.naddr ?? '';
+      _announced = null;
     });
   }
 
@@ -340,6 +422,29 @@ class _ReposSheetState extends State<_ReposSheet> {
             Text(
               _editingId == null ? t('Add a repository') : t('Edit repository'),
               style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 10),
+            // A repository announced on Nostr (NIP-34) fills the rest of this
+            // form in from its announcement: where it is cloned from, and which
+            TextField(
+              controller: _ngit,
+              decoration: InputDecoration(
+                labelText: t('Announced on Nostr (ngit)'),
+                hintText: 'naddr1… or nostr://npub…/repo',
+              ),
+              autocorrect: false,
+              onSubmitted: (_) => _lookUp(app),
+            ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              icon: _looking
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.travel_explore, size: 18),
+              label: Text(_looking ? t('Looking…') : t('Look it up')),
+              onPressed: _looking ? null : () => _lookUp(app),
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
@@ -436,6 +541,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                     paths: _paths.text.trim(),
                     label: _label.text.trim(),
                     allowWrites: _writes,
+                    ngit: _originFor(_repo.text.trim(), _host.text.trim()),
                   ),
                   useHere: _editingId == null,
                 );

@@ -54,7 +54,8 @@
             <h2 id="connecting">Connecting a repository</h2>
             <p><code>?git</code>, or the <strong>Git</strong> chip in the toolbar, connects a provider:
                 GitHub, GitLab, or Gitea/Forgejo &mdash; which covers Codeberg and self-hosted instances. It
-                takes a scoped personal access token, a repository and a branch.</p>
+                takes a scoped personal access token, a repository and a branch. A repository that
+                <a href="#ngit">announces itself on Nostr</a> can be pasted in as its address instead.</p>
             <p>You do not have to type the repository's name. Paste the token and choose
                 <strong>List what this token can reach</strong>: Nymbot asks the forge what that token can
                 see and shows the answer as a list you tick. Ticking connects each one with its default
@@ -67,6 +68,26 @@
             <p>Once connected, the chip shows the repository name, and messages sent with a
                 <a href="/docs/models/#pro">Pro model</a> selected run in that repository's context.
                 <code>?git disconnect</code> removes it.</p>
+
+            <h2 id="ngit">Repositories announced on Nostr</h2>
+            <p>Some repositories announce themselves on Nostr rather than only on a forge, using
+                <a href="https://github.com/nostr-protocol/nips/blob/master/34.md">NIP-34</a> &mdash; the
+                protocol behind <a href="https://ngit.dev">ngit</a> and gitworkshop. The announcement is a
+                Nostr event carrying the project&rsquo;s name, its maintainers, the relays that collect its
+                patches and issues, and the URLs it can be cloned from. A second event says where each
+                branch currently points.</p>
+            <p>Paste an <code>naddr</code> or a <code>nostr://</code> address into the repository form and
+                press <strong>Look it up</strong>. Nymbot reads the announcement off the relays and fills the
+                form in: the git host it is cloned from, the repository there, and the branch the project
+                itself says is current. You still add a token for that host, because Nostr carries the
+                announcement and the git server carries the code.</p>
+            <p>Which means the rule is simply where it is cloned from. A repository whose clone URL is on
+                GitHub, GitLab, Gitea or Forgejo &mdash; self-hosted included &mdash; is one Nymbot can read.
+                One cloned only over <code>git://</code> or ssh has no HTTP API to read files through, and
+                Nymbot says so rather than half-connecting. Where the host is self-hosted the provider is a
+                guess from its name, and you can correct it before saving.</p>
+            <p>A repository added this way is badged <strong>ngit</strong> in the list, and replies call it
+                by the name it announces rather than by its path on the mirror.</p>
 
             <h2 id="what-it-can-do">What it can do</h2>
             <p>A message in repo context runs as a small agent rather than a single completion. The model
