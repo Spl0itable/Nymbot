@@ -204,8 +204,14 @@
             return out;
         },
 
-        /// Folds what came back into what is here.
+        /// Folds what came back into what is here. Muted: what the server sent
+        /// is not a local change, and treating it as one made the sync chase
+        /// its own tail.
         apply(remote) {
+            return Store.quiet(() => this._apply(remote));
+        },
+
+        _apply(remote) {
             if (!remote || typeof remote !== 'object') return [];
             const touched = [];
             const graves = Object.assign({}, this.graves(), remote.graves || {});

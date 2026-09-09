@@ -113,6 +113,41 @@
         '<path d="M3.87 20.47H20.09"></path>'
     ].join('');
 
+    /// A vendor tile for the model picker: the initials on the house colour.
+    /// Deliberately a monogram rather than a traced trademark — it scans at
+    /// 22px, needs no network asset, and is nobody's logo but ours.
+    const BRANDS = {
+        anthropic: ['A', '#D97757'], openai: ['AI', '#10A37F'], google: ['G', '#4285F4'],
+        xai: ['X', '#111827'], moonshotai: ['K', '#6D28D9'], minimax: ['M', '#E11D48'],
+        alibaba: ['Q', '#F97316'], deepseek: ['DS', '#4D6BFE'], meta: ['M', '#0064E0'],
+        mistralai: ['M', '#FF7000'], 'black-forest-labs': ['BF', '#0EA5E9'],
+        bytedance: ['BD', '#325AB4'], recraft: ['R', '#7C3AED'], pixverse: ['P', '#DB2777'],
+        lightricks: ['LT', '#0891B2'], vidu: ['V', '#16A34A'], runwayml: ['RW', '#111827'],
+        cohere: ['C', '#39594D'], microsoft: ['MS', '#0078D4'], nvidia: ['N', '#76B900'],
+        stabilityai: ['S', '#7C3AED'], perplexity: ['P', '#20808D']
+    };
+
+    function brand(slug, options) {
+        const opts = options || {};
+        const size = opts.size || 22;
+        const key = String(slug || '').toLowerCase();
+        const hit = BRANDS[key];
+        const text = hit ? hit[0] : (key.replace(/[^a-z]/g, '').slice(0, 2).toUpperCase() || '?');
+        const fill = hit ? hit[1] : '#4B5563';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', String(size));
+        svg.setAttribute('height', String(size));
+        svg.setAttribute('class', 'brand-tile');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('focusable', 'false');
+        svg.innerHTML = '<rect x="0" y="0" width="24" height="24" rx="6" fill="' + fill + '"></rect>'
+            + '<text x="12" y="12" fill="#fff" font-size="' + (text.length > 1 ? 9 : 11) + '"'
+            + ' font-weight="700" font-family="system-ui, sans-serif"'
+            + ' text-anchor="middle" dominant-baseline="central">' + text + '</text>';
+        return svg;
+    }
+
     function wordmark(options) {
         const opts = options || {};
         const size = opts.size || 24;
@@ -134,5 +169,5 @@
         return svg;
     }
 
-    window.NymbotIcons = { markup, node, wordmark, MARK, PERSONA_ICONS, names: Object.keys(STROKE) };
+    window.NymbotIcons = { markup, node, brand, wordmark, MARK, PERSONA_ICONS, names: Object.keys(STROKE) };
 })();

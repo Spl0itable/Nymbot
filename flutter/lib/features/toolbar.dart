@@ -39,7 +39,10 @@ class NymbotToolbar extends StatelessWidget {
         icon: Icons.auto_awesome,
         label: pro ? model['label'] as String : t('Auto-routed'),
         active: pro,
-        onTap: () => showModelsSheet(context),
+        onTap: () => showModelsSheet(context).then((command) {
+          // A generator is a command, not a model to pin.
+          if (command != null) app.queueInput('$command ');
+        }),
       ),
       _ChipSpec(
         icon: Icons.account_tree_outlined,
@@ -354,7 +357,8 @@ class _TierSwitch extends StatelessWidget {
     Widget side(String label, bool active, bool isPro) => GestureDetector(
           onTap: () async {
             if (isPro) {
-              await showModelsSheet(context);
+              final command = await showModelsSheet(context);
+              if (command != null) app.queueInput('$command ');
             } else {
               await app.setProModel(null);
             }

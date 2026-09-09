@@ -66,7 +66,6 @@
         { title: t('Explain something'), body: t('Explain ML-KEM in three sentences, then tell me what it does not protect.') },
         { title: t('Work in a repo'), body: t('Read the repositories I connected and tell me where the retry logic gives up too early.') },
         { title: t('Write code'), body: t('Write a small, dependency-free function that debounces an async call and cancels the pending one.') },
-        { title: t('Draft something'), body: t('Draft a short, plain-spoken release note for a change that made the app twice as fast to start.') },
         { title: t('Compare options'), body: t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.') },
         { title: t('Generate a picture'), body: '?image a lighthouse at dusk, long exposure, muted palette' },
         { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk' }
@@ -2381,6 +2380,12 @@
 
         modelMatchesFilter(m) {
             const text = `${m.key} ${m.label} ${m.description || ''}`.toLowerCase();
+            const kind = m.kind || 'chat';
+            // The generators are not chat models, so they answer only to their
+            // own two filters rather than turning up wherever you look.
+            if (this.modelFilter === 'image') return kind === 'image';
+            if (this.modelFilter === 'video') return kind === 'video';
+            if (kind !== 'chat') return false;
             switch (this.modelFilter) {
                 case 'cheap': return (m.credits || 0) <= 2;
                 case 'reasoning': return /reason|think|o\d|r1|deep/.test(text);
@@ -2389,6 +2394,14 @@
                 case 'favourites': return this.favourites.includes(m.key);
                 default: return true;
             }
+        },
+
+        /// "3 credits", or "1–4 credits" where the reply's length moves it.
+        /// A bare number said nothing about what it counted.
+        modelPrice(m) {
+            const span = m.max && m.max !== m.credits;
+            const n = span ? `${m.credits}–${m.max}` : String(m.credits);
+            return (!span && m.credits === 1) ? t('{n} credit', { n }) : t('{n} credits', { n });
         },
 
         renderModels() {
@@ -2410,6 +2423,13 @@
                     const row = el('button', 'model-row'
                         + (current && current.key === m.key ? ' is-active' : ''));
                     row.type = 'button';
+                    // Who makes it, on the left, so the list scans by maker.
+                    row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
+                    const name = el('span', 'model-name');
+                    name.appendChild(document.createTextNode(m.label));
+                    if (m.description) name.appendChild(el('span', 'model-desc', m.description));
+                    row.appendChild(name);
+                    row.appendChild(el('span', 'model-cost', this.modelPrice(m)));
                     const on = this.favourites.includes(m.key);
                     const star = el('span', 'model-star' + (on ? ' is-on' : ''));
                     star.appendChild(Icons.node('star', { size: 13, filled: on }));
@@ -2423,13 +2443,19 @@
                         this.renderModels();
                     });
                     row.appendChild(star);
-                    const name = el('span', 'model-name');
-                    name.appendChild(document.createTextNode(m.label));
-                    if (m.description) name.appendChild(el('span', 'model-desc', m.description));
-                    row.appendChild(name);
-                    row.appendChild(el('span', 'model-cost',
-                        m.max && m.max !== m.credits ? `${m.credits}–${m.max}` : String(m.credits)));
                     row.addEventListener('click', () => {
+                        // A generator is a command, not a chat model: pinning it
+                        // would leave every ordinary message routed at a model
+                        // that only draws.
+                        if (m.command) {
+                            this.closeModals();
+                            const input = $('input');
+                            input.value = m.command + ' ';
+                            this.autoGrow();
+                            this.updateHints();
+                            input.focus();
+                            return;
+                        }
                         this.setModel({ key: m.key, label: m.label, credits: m.credits, max: m.max }, forChat);
                         this.closeModals();
                         this.toast(forChat

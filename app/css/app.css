@@ -1170,7 +1170,8 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
        something in; nothing has been said yet. */
     border-radius: var(--bubble-radius);
 }
-.bot-thinking > .avatar-bubble { grid-row: 1 / span 2; align-self: start; }
+/* Beside the label, not floated up the side of a growing progress column. */
+.bot-thinking > .avatar-bubble { grid-row: 1; align-self: center; }
 .bot-thinking > .bot-thinking-head,
 .bot-thinking > .bot-progress { grid-column: 2; min-width: 0; }
 .bot-thinking > .bot-progress:empty { display: none; }
@@ -1733,13 +1734,16 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 
 .model-list { max-height: 46vh; overflow-y: auto; margin-top: 0.6rem; }
 .model-group { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin: 0.85rem 0 0.35rem; }
-.model-row { display: flex; gap: 0.5rem; align-items: baseline; width: 100%; padding: 0.5rem 0.6rem; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+/* Maker, name, price, star — the mark and the star centred against the row,
+   the name free to wrap under it. */
+.model-row { display: flex; gap: 0.5rem; align-items: center; width: 100%; padding: 0.5rem 0.6rem; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+.model-row .brand-tile { flex: 0 0 auto; align-self: center; }
 .model-row:hover { background: var(--bubble-bot); }
 .model-row.is-active { background: var(--bubble-self); }
 .model-name { flex: 1; min-width: 0; }
 .model-desc { display: block; font-size: 0.78rem; color: var(--text-faint); }
 .model-cost { font-size: 0.78rem; color: var(--lightning); white-space: nowrap; }
-.model-star { border: 0; background: transparent; cursor: pointer; color: var(--text-faint); padding: 0 0.2rem; display: inline-flex; align-items: center; }
+.model-star { border: 0; background: transparent; cursor: pointer; color: var(--text-faint); padding: 0 0.2rem; display: inline-flex; align-items: center; flex: 0 0 auto; }
 .model-star.is-on { color: var(--lightning); }
 
 .repo-list, .persona-list, .prompt-list, .pinned-list, .search-list { display: grid; gap: 0.35rem; margin: 0.6rem 0; max-height: 38vh; overflow-y: auto; }

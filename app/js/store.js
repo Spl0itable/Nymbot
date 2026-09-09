@@ -20,8 +20,13 @@
     const QUIET = /^(?:draft_|thread_|sync_|free_)/;
     const watchers = [];
 
+    // Applying what the server just sent is not a local change. Without this
+    // the sync fed itself: every pulled value was written, every write woke the
+    // watcher, and the watcher scheduled the next pull.
+    let muted = 0;
+
     function announce(key) {
-        if (QUIET.test(key)) return;
+        if (muted || QUIET.test(key)) return;
         for (const fn of watchers) {
             try { fn(key); } catch (_) { }
         }
@@ -29,7 +34,10 @@
 
     function write(key, value) {
         try {
-            localStorage.setItem(P + key, JSON.stringify(value));
+            const next = JSON.stringify(value);
+            // A write that changes nothing is not news.
+            if (localStorage.getItem(P + key) === next) return true;
+            localStorage.setItem(P + key, next);
             announce(key);
             return true;
         } catch (_) { return false; }
@@ -157,6 +165,12 @@
         drop,
 
         /// Called with the storage key whenever this device changes something worth keeping.
+        /// Runs `fn` without waking the watchers. Nestable; never swallows.
+        quiet(fn) {
+            muted++;
+            try { return fn(); } finally { muted--; }
+        },
+
         watch(fn) {
             watchers.push(fn);
             return () => {

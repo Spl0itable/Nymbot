@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nymbot/app.dart';
+import 'package:nymbot/features/brand_tile.dart';
 import 'package:nymbot/features/citation_cards.dart';
 import 'package:nymbot/features/sheets/cost_sheet.dart';
 import 'package:nymbot/features/command_sheet.dart';
@@ -1735,6 +1736,24 @@ diff --git a/two.txt b/two.txt
         reason: 'nothing is proxied until the proxy answers');
     expect(pool.connected, 0);
     pool.close();
+  });
+
+  testWidgets('the maker of a model is drawn, and an unknown one still is',
+      (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: Row(children: [
+          BrandTile(slug: 'anthropic'),
+          BrandTile(slug: 'black-forest-labs'),
+          BrandTile(slug: 'someone-new'),
+        ]),
+      ),
+    ));
+    expect(find.text('A'), findsOneWidget);
+    expect(find.text('BF'), findsOneWidget,
+        reason: 'a two-word maker gets two letters');
+    expect(find.text('S'), findsOneWidget,
+        reason: 'a maker with no entry still gets a tile rather than a gap');
   });
 
   test('the long-task settings survive a round trip and default off', () {

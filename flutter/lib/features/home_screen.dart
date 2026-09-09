@@ -171,7 +171,9 @@ class _HomeScreenState extends State<HomeScreen> {
           await app.note(t('Back to standard auto-routing.'));
           return true;
         }
-        await showModelsSheet(context, filter: arg);
+        final command = await showModelsSheet(context, filter: arg);
+        // A generator was picked: it is a command, not a model to pin.
+        if (command != null) app.queueInput('$command ');
         return true;
       case 'compare':
         await showCompareSheet(context, prefill: arg);
@@ -908,10 +910,6 @@ class _HomeScreenState extends State<HomeScreen> {
       (
         t('Write code'),
         t('Write a small, dependency-free function that debounces an async call and cancels the pending one.')
-      ),
-      (
-        t('Draft something'),
-        t('Draft a short, plain-spoken release note for a change that made the app twice as fast to start.')
       ),
       (
         t('Compare options'),
