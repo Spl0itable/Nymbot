@@ -95,9 +95,9 @@ class _ModelsSheetState extends State<_ModelsSheet> {
     });
   }
 
-  Map<String, dynamic>? _cheapestChat(
+  String? _cheapestChatKey(
       List<Map<String, dynamic>> groups, Map<String, Map<String, dynamic>> byKey) {
-    Map<String, dynamic>? best;
+    String? best;
     var cheapest = 1 << 30;
     var ceiling = 1 << 30;
     for (final group in groups) {
@@ -111,13 +111,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
         if (credits > cheapest || (credits == cheapest && max >= ceiling)) continue;
         cheapest = credits;
         ceiling = max;
-        best = {
-          'key': m['key'],
-          'label': m['label'],
-          'credits': credits,
-          'slug': (m['authorSlug'] as String?) ??
-              (group['authorSlug'] as String? ?? ''),
-        };
+        best = m['key'] as String?;
       }
     }
     return best;
@@ -199,26 +193,21 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                       'kind': m['kind'] ?? 'image',
                       'credits': credits,
                       'max': max,
-                      'command': command,
+                      'command': AppController.generatorCommand(command),
                       'slug': slug,
                     };
-              Map<String, dynamic>? carrier;
-              if (AppController.mediaNeedsPro(media) && app.activeModel == null) {
-                carrier = _cheapestChat(groups, byKey);
-                if (carrier != null) await app.setProModel(carrier);
+              if (AppController.mediaNeedsPro(media)) {
+                media!['proKey'] = _cheapestChatKey(groups, byKey);
               }
               await app.setMediaModel(media);
               messenger.showSnackBar(SnackBar(
                 content: Text(pinned
                     ? t('Back to answering in words.')
-                    : carrier != null
-                        ? t('{name} pinned. It is charged as Pro work, so this chat is on Pro with {carrier} behind it.',
-                            {'name': m['label'], 'carrier': carrier['label']})
-                        : (m['kind'] == 'video'
-                            ? t('{name} pinned. Every message now makes a video.',
-                                {'name': m['label']})
-                            : t('{name} pinned. Every message now makes a picture.',
-                                {'name': m['label']}))),
+                    : (m['kind'] == 'video'
+                        ? t('{name} pinned. Every message now makes a video.',
+                            {'name': m['label']})
+                        : t('{name} pinned. Every message now makes a picture.',
+                            {'name': m['label']}))),
               ));
               if (context.mounted) Navigator.pop(context);
               return;

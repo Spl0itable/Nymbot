@@ -2113,13 +2113,13 @@
         refreshToolbar() {
             const conv = this.conv || {};
             const model = conv.proModel || this.settings.proModel;
-            const pro = !!model;
+            const media = this.mediaModel();
+            const pro = !!model || this.mediaNeedsPro(media);
             $('toolbar').classList.toggle('is-pro', pro);
             for (const b of document.querySelectorAll('#toolbar .tier-btn')) {
                 b.classList.toggle('is-active', (b.dataset.tier === 'pro') === pro);
             }
-            const media = this.mediaModel();
-            const shown = media || (pro ? model : null);
+            const shown = media || model || null;
             const modelChip = $('chipModel');
             modelChip.classList.toggle('is-active', !!shown);
             modelChip.querySelector('.chip-label').textContent = shown
@@ -2186,7 +2186,7 @@
             // Only a Pro reply outside a repo task can be asked to think
             // harder: standard replies are one routed call, and a repo task
             // already loops on a budget of its own.
-            const canEffort = !!model && !repos.length;
+            const canEffort = !!model && !media && !repos.length;
             effortChip.hidden = !canEffort;
             effortChip.classList.toggle('is-active', canEffort && effort !== 'normal');
             effortChip.querySelector('.chip-label').textContent = this.effortLabel(effort);
@@ -2329,9 +2329,13 @@
         },
 
         mediaNeedsPro(media) {
-            if (!media) return false;
-            if (media.kind === 'video') return true;
-            return /^\?\w+\s+\S/.test(String(media.command || ''));
+            return !!(media && (media.kind === 'image' || media.kind === 'video'));
+        },
+
+        generatorCommand(command) {
+            const raw = String(command || '').trim();
+            if (/(?:^|\s)(?:--model|-m)[\s=]/.test(raw)) return raw;
+            return raw.replace(/^(\?\w+)\s+(\S+)$/, '$1 --model $2');
         },
 
         dropProMedia() {
@@ -2339,7 +2343,7 @@
             this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
         },
 
-        cheapestChatModel() {
+        cheapestChatKey() {
             if (!this.models || !this.models.models) return null;
             const byKey = new Map(this.models.models.map(m => [m.key, m]));
             let best = null;
@@ -2350,17 +2354,11 @@
                     const cost = [m.credits || 0, m.max || m.credits || 0];
                     if (!best || cost[0] < best.cost[0]
                         || (cost[0] === best.cost[0] && cost[1] < best.cost[1])) {
-                        best = {
-                            cost,
-                            model: {
-                                key: m.key, label: m.label, credits: m.credits, max: m.max,
-                                slug: m.authorSlug || group.authorSlug || null
-                            }
-                        };
+                        best = { cost, key: m.key };
                     }
                 }
             }
-            return best && best.model;
+            return best && best.key;
         },
 
         setMediaModel(model, forChat) {
@@ -2471,26 +2469,18 @@
                             const off = pinned;
                             const media = off ? null : {
                                 key: m.key, label: m.label, kind: m.kind || 'image',
-                                credits: m.credits, max: m.max, command: m.command,
+                                credits: m.credits, max: m.max,
+                                command: this.generatorCommand(m.command),
                                 slug: m.authorSlug || group.authorSlug || null
                             };
-                            let carrier = null;
-                            if (this.mediaNeedsPro(media) && !current) {
-                                carrier = this.cheapestChatModel();
-                                if (carrier) this.setModel(carrier, forChat);
-                            }
+                            if (this.mediaNeedsPro(media)) media.proKey = this.cheapestChatKey();
                             this.setMediaModel(media, forChat);
                             this.closeModals();
-                            if (off) {
-                                this.toast(t('Back to answering in words.'));
-                            } else if (carrier) {
-                                this.note(t('{name} pinned. It is charged as Pro work, so this chat is on Pro with {carrier} behind it.',
-                                    { name: m.label, carrier: carrier.label }));
-                            } else {
-                                this.toast(m.kind === 'video'
+                            this.toast(off
+                                ? t('Back to answering in words.')
+                                : (m.kind === 'video'
                                     ? t('{name} pinned. Every message now makes a video.', { name: m.label })
-                                    : t('{name} pinned. Every message now makes a picture.', { name: m.label }));
-                            }
+                                    : t('{name} pinned. Every message now makes a picture.', { name: m.label })));
                             $('input').focus();
                             return;
                         }

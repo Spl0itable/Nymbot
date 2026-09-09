@@ -28,9 +28,9 @@ class NymbotToolbar extends StatelessWidget {
     final app = AppScope.of(context);
     final theme = Theme.of(context);
     final model = app.activeModel;
-    final pro = model != null;
     final media = app.activeMediaModel;
-    final shown = media ?? (pro ? model : null);
+    final pro = model != null || AppController.mediaNeedsPro(media);
+    final shown = media ?? model;
     final accent = pro ? theme.colorScheme.secondary : theme.colorScheme.primary;
     final repos = app.activeRepos;
     final persona = app.activePersona;

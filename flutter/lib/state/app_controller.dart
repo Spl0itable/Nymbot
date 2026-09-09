@@ -187,13 +187,32 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  static final RegExp _namesGenerator = RegExp(r'^\?\w+\s+\S');
+  static final RegExp _hasModelFlag = RegExp(r'(?:^|\s)(?:--model|-m)[\s=]');
+  static final RegExp _bareGenerator = RegExp(r'^(\?\w+)\s+(\S+)$');
 
-  static bool mediaNeedsPro(Map<String, dynamic>? media) {
-    if (media == null) return false;
-    if (media['kind'] == 'video') return true;
-    return _namesGenerator.hasMatch(media['command'] as String? ?? '');
+  /// The catalog names a generator positionally, but the worker reads it only
+  /// from --model — left as sent, the name lands in the prompt and the default
+  /// generator runs, and is charged, in place of the one that was picked.
+  static String generatorCommand(String? command) {
+    final raw = (command ?? '').trim();
+    if (_hasModelFlag.hasMatch(raw)) return raw;
+    return raw.replaceFirstMapped(
+        _bareGenerator, (m) => '${m[1]} --model ${m[2]}');
   }
+
+  /// The key that says the turn is Pro. A generator is named inside the
+  /// message, never in that field, so a Pro generator carries the key it
+  /// should be billed against rather than putting a chat model in the picker.
+  Map<String, dynamic>? get proModelForTurn {
+    final model = activeModel;
+    if (model != null) return model;
+    final media = activeMediaModel;
+    final key = media?['proKey'] as String?;
+    return (mediaNeedsPro(media) && key != null) ? {'key': key} : null;
+  }
+
+  static bool mediaNeedsPro(Map<String, dynamic>? media) =>
+      media != null && (media['kind'] == 'image' || media['kind'] == 'video');
 
   Future<void> dropProMedia() async {
     if (!mediaNeedsPro(activeMediaModel)) return;
@@ -1573,7 +1592,7 @@ class AppController extends ChangeNotifier {
       final res = await chat.send(
         conv: conv,
         text: body,
-        proModel: activeModel,
+        proModel: proModelForTurn,
         repos: scoped,
         persona: activePersona,
         workspace: activeWorkspace,

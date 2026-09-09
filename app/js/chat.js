@@ -442,6 +442,7 @@
             }
 
             const model = conv.proModel || settings.proModel;
+            const media = conv.mediaModel || settings.mediaModel;
             // The turn is now identifiable, so anything watching it can start
             // before the answer comes back.
             if (typeof opts.onTurn === 'function') {
@@ -469,6 +470,7 @@
                     ...(a.kind === 'image' ? { dataUrl: a.dataUrl } : {})
                 }));
             }
+            if (!model && media && media.proKey) extra.proModel = media.proKey;
             if (model) {
                 extra.proModel = model.key;
                 // How hard this chat asked the reply to think. Only meaningful
