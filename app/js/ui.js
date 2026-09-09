@@ -5070,6 +5070,7 @@
             $('invoiceOpen').href = 'lightning:' + invoice.pr;
             try { QR.draw($('invoiceQr'), invoice.pr.toUpperCase(), { width: 240 }); } catch (_) { }
             $('invoiceBox').hidden = false;
+            $('creditCheck').hidden = false;
             $('creditBuy').textContent = invoice.paid ? t('Add my credits') : t('New invoice');
         },
 
@@ -5081,7 +5082,36 @@
             const canvas = $('invoiceQr');
             const ctx = canvas.getContext ? canvas.getContext('2d') : null;
             if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+            $('creditCheck').hidden = true;
             $('creditBuy').textContent = t('Create invoice');
+        },
+
+        creditWorking(on) {
+            this.creditBusy = on;
+            $('creditBuy').disabled = on;
+            $('creditCheck').disabled = on;
+        },
+
+        async checkPaid() {
+            const invoice = this.invoice;
+            if (!invoice || this.creditBusy) return;
+            if (invoice.paid) { await this.claimInvoice(invoice); return; }
+            this.creditWorking(true);
+            this.modalStatus('creditStatus', t('Checking your payment…'));
+            let data;
+            try {
+                ({ data } = await Api.checkInvoice(invoice.id, invoice.opts));
+            } finally {
+                this.creditWorking(false);
+            }
+            if (this.invoice !== invoice) return;
+            if (data && data.paid) {
+                this.markPaid(invoice);
+                await this.claimInvoice(invoice);
+                return;
+            }
+            this.modalStatus('creditStatus', (data && data.error)
+                || t('Not paid yet. Finish paying in your wallet, then tap it again.'), 'warn');
         },
 
         creditSats() {
@@ -5109,8 +5139,7 @@
             const tier = this.creditTier;
 
             this.resetInvoice();
-            this.creditBusy = true;
-            $('creditBuy').disabled = true;
+            this.creditWorking(true);
             this.modalStatus('creditStatus', t('Creating an invoice…'));
 
             const opts = this.conv && this.conv.anon && Anon.ready() ? { signer: Anon.signer() } : {};
@@ -5118,8 +5147,7 @@
             try {
                 ({ data } = await Api.createInvoice(sats, tier, null, opts));
             } finally {
-                this.creditBusy = false;
-                $('creditBuy').disabled = false;
+                this.creditWorking(false);
             }
             if (!data || data.error || !data.pr) {
                 this.modalStatus('creditStatus', (data && data.error) || t('Could not create an invoice.'), 'warn');
@@ -5136,15 +5164,13 @@
 
         async claimInvoice(invoice) {
             if (this.creditBusy) return false;
-            this.creditBusy = true;
-            $('creditBuy').disabled = true;
+            this.creditWorking(true);
             this.modalStatus('creditStatus', t('Adding your credits…'));
             let data;
             try {
                 ({ data } = await Api.claimCredits(invoice.id, invoice.opts));
             } finally {
-                this.creditBusy = false;
-                $('creditBuy').disabled = false;
+                this.creditWorking(false);
             }
             if (this.invoice !== invoice) return true;
 
@@ -5192,9 +5218,8 @@
                     t('Your payment arrived but the credits are not added yet. Tap Add my credits to try again.'), 'warn');
                 return;
             }
-            this.resetInvoice();
             this.modalStatus('creditStatus',
-                t('This invoice expired before it was paid. Create a new one.'), 'warn');
+                t('Still waiting on this payment. If you have paid, tap I\u2019ve paid — otherwise create a new invoice.'), 'warn');
         },
 
         // --- identity ---------------------------------------------------------------
@@ -5922,6 +5947,7 @@
                     this.renderCreditBalances();
                 },
                 'credit-buy': () => this.buyCredits(),
+                'credit-check': () => this.checkPaid(),
                 // Anything that grants the account is covered until it is
                 // asked for. The recovery code is one of those: it derives the
                 // post-quantum key, so a shoulder or a screen share reads it

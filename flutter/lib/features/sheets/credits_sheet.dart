@@ -32,6 +32,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
   bool _warn = false;
   bool _busy = false;
   Timer? _poll;
+  EventSigner? _signer;
 
   @override
   void initState() {
@@ -81,9 +82,56 @@ class _CreditsSheetState extends State<_CreditsSheet> {
       _busy = false;
       _invoice = pr;
       _invoiceId = res.data['invoiceId'] as String?;
+      _signer = signer;
       _status = t('Pay {sats} sats. This updates the moment it settles.', {'sats': _sats});
     });
     _startPolling(signer);
+  }
+
+  Future<void> _claim(EventSigner signer, String id) async {
+    final app = AppScope.read(context);
+    final claim = await app.api.claimCredits(signer, id);
+    if (!mounted) return;
+    final error = claim.data['error'] as String?;
+    if (error == null) {
+      setState(() {
+        _status = t('Credited. Balance: {balance}.',
+            {'balance': claim.data['balance']});
+        _warn = false;
+        _invoice = null;
+      });
+      await app.refreshBalance();
+    } else {
+      setState(() {
+        _status = error;
+        _warn = !error.toLowerCase().contains('already claimed');
+      });
+    }
+  }
+
+  Future<void> _checkPaid() async {
+    final app = AppScope.read(context);
+    final id = _invoiceId;
+    final signer = _signer;
+    if (id == null || signer == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _status = t('Checking your payment…');
+      _warn = false;
+    });
+    final check = await app.api.checkInvoice(signer, id);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (check.data['paid'] == true) {
+      _poll?.cancel();
+      await _claim(signer, id);
+      return;
+    }
+    setState(() {
+      _status = (check.data['error'] as String?) ??
+          t('Not paid yet. Finish paying in your wallet, then tap it again.');
+      _warn = true;
+    });
   }
 
   void _startPolling(EventSigner signer) {
@@ -93,30 +141,24 @@ class _CreditsSheetState extends State<_CreditsSheet> {
     var ticks = 0;
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      if (!mounted || ++ticks > 60) {
+      if (!mounted) {
         timer.cancel();
         return;
       }
+      if (++ticks > 60) {
+        timer.cancel();
+        setState(() {
+          _status = t('Still waiting on this payment. If you have paid, tap '
+              'I\u2019ve paid — otherwise create a new invoice.');
+          _warn = true;
+        });
+        return;
+      }
+      if (_busy) return;
       final check = await app.api.checkInvoice(signer, id);
       if (check.data['paid'] != true) return;
       timer.cancel();
-      final claim = await app.api.claimCredits(signer, id);
-      if (!mounted) return;
-      final error = claim.data['error'] as String?;
-      if (error == null) {
-        setState(() {
-          _status = t('Credited. Balance: {balance}.',
-              {'balance': claim.data['balance']});
-          _warn = false;
-          _invoice = null;
-        });
-        await app.refreshBalance();
-      } else {
-        setState(() {
-          _status = error;
-          _warn = !error.toLowerCase().contains('already claimed');
-        });
-      }
+      await _claim(signer, id);
     });
   }
 
@@ -231,10 +273,29 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                 ),
               ),
             const SizedBox(height: 14),
-            FilledButton(
-              onPressed: _busy ? null : _buy,
-              child: Text(t('Create invoice')),
-            ),
+            if (_invoice == null)
+              FilledButton(
+                onPressed: _busy ? null : _buy,
+                child: Text(t('Create invoice')),
+              )
+            else
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _checkPaid,
+                      child: Text(t('I\u2019ve paid')),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _busy ? null : _buy,
+                      child: Text(t('New invoice')),
+                    ),
+                  ),
+                ],
+              ),
           ],
         ),
       ),
