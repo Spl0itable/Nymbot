@@ -29,6 +29,8 @@ class NymbotToolbar extends StatelessWidget {
     final theme = Theme.of(context);
     final model = app.activeModel;
     final pro = model != null;
+    final media = app.activeMediaModel;
+    final shown = media ?? (pro ? model : null);
     final accent = pro ? theme.colorScheme.secondary : theme.colorScheme.primary;
     final repos = app.activeRepos;
     final persona = app.activePersona;
@@ -38,9 +40,9 @@ class NymbotToolbar extends StatelessWidget {
     final chips = <_ChipSpec>[
       _ChipSpec(
         icon: Icons.auto_awesome,
-        label: pro ? model['label'] as String : t('Auto-routed'),
-        active: pro,
-        brand: pro ? model['slug'] as String? : null,
+        label: shown == null ? t('Auto-routed') : shown['label'] as String,
+        active: shown != null,
+        brand: shown == null ? null : shown['slug'] as String?,
         onTap: () => showModelsSheet(context),
       ),
       _ChipSpec(
@@ -382,6 +384,7 @@ class _TierSwitch extends StatelessWidget {
             if (isPro) {
               await showModelsSheet(context);
             } else {
+              await app.dropProMedia();
               await app.setProModel(null);
             }
           },

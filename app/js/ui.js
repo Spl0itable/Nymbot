@@ -2118,13 +2118,17 @@
             for (const b of document.querySelectorAll('#toolbar .tier-btn')) {
                 b.classList.toggle('is-active', (b.dataset.tier === 'pro') === pro);
             }
+            const media = this.mediaModel();
+            const shown = media || (pro ? model : null);
             const modelChip = $('chipModel');
-            modelChip.classList.toggle('is-active', pro);
-            modelChip.querySelector('.chip-label').textContent = pro ? model.label : t('Auto-routed');
+            modelChip.classList.toggle('is-active', !!shown);
+            modelChip.querySelector('.chip-label').textContent = shown
+                ? shown.label
+                : t('Auto-routed');
             if (!this._modelChipIcon) this._modelChipIcon = modelChip.firstElementChild.cloneNode(true);
             modelChip.replaceChild(
-                pro && model.slug
-                    ? Icons.brand(model.slug, { size: 15 })
+                shown && shown.slug
+                    ? Icons.brand(shown.slug, { size: 15 })
                     : this._modelChipIcon.cloneNode(true),
                 modelChip.firstElementChild);
 
@@ -2195,7 +2199,6 @@
             anonChip.classList.toggle('is-active', anonOn);
             anonChip.querySelector('.chip-label').textContent = anonOn ? t('Anon on') : t('Anon');
 
-            const media = this.mediaModel();
             const composer = $('input');
             if (composer) {
                 composer.setAttribute('placeholder', media
@@ -2372,6 +2375,39 @@
             return (this.conv && this.conv.mediaModel) || this.settings.mediaModel || null;
         },
 
+        mediaNeedsPro(media) {
+            return !!(media && /--model/.test(media.command || ''));
+        },
+
+        dropProMedia() {
+            if (!this.mediaNeedsPro(this.mediaModel())) return;
+            this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+        },
+
+        cheapestChatModel() {
+            if (!this.models || !this.models.models) return null;
+            const byKey = new Map(this.models.models.map(m => [m.key, m]));
+            let best = null;
+            for (const group of this.models.groups || []) {
+                for (const key of group.keys) {
+                    const m = byKey.get(key);
+                    if (!m || (m.kind && m.kind !== 'chat') || m.command) continue;
+                    const cost = [m.credits || 0, m.max || m.credits || 0];
+                    if (!best || cost[0] < best.cost[0]
+                        || (cost[0] === best.cost[0] && cost[1] < best.cost[1])) {
+                        best = {
+                            cost,
+                            model: {
+                                key: m.key, label: m.label, credits: m.credits, max: m.max,
+                                slug: m.authorSlug || group.authorSlug || null
+                            }
+                        };
+                    }
+                }
+            }
+            return best && best.model;
+        },
+
         setMediaModel(model, forChat) {
             if (forChat) {
                 this.conv = Store.updateConversation(this.conv.id, { mediaModel: model });
@@ -2478,17 +2514,23 @@
                     row.addEventListener('click', () => {
                         if (m.command) {
                             const off = pinned;
-                            this.setMediaModel(off ? null : {
+                            const media = off ? null : {
                                 key: m.key, label: m.label, kind: m.kind || 'image',
                                 credits: m.credits, max: m.max, command: m.command,
                                 slug: m.authorSlug || group.authorSlug || null
-                            }, forChat);
+                            };
+                            let carrier = null;
+                            if (this.mediaNeedsPro(media) && !current) {
+                                carrier = this.cheapestChatModel();
+                                if (carrier) this.setModel(carrier, forChat);
+                            }
+                            this.setMediaModel(media, forChat);
                             this.closeModals();
                             if (off) {
                                 this.toast(t('Back to answering in words.'));
-                            } else if (/--model/.test(m.command) && !current) {
-                                this.note(t('{name} is pinned, but it needs a Pro model selected before it will run.',
-                                    { name: m.label }));
+                            } else if (carrier) {
+                                this.note(t('{name} pinned. It is charged as Pro work, so this chat is on Pro with {carrier} behind it.',
+                                    { name: m.label, carrier: carrier.label }));
                             } else {
                                 this.toast(m.kind === 'video'
                                     ? t('{name} pinned. Every message now makes a video.', { name: m.label })
@@ -5786,8 +5828,9 @@
                     this.renderModels();
                 },
                 'tier': (target) => {
-                    if (target.dataset.tier === 'pro') this.openModels();
-                    else this.setModel(null);
+                    if (target.dataset.tier === 'pro') { this.openModels(); return; }
+                    this.dropProMedia();
+                    this.setModel(null);
                 },
                 'open-models': () => this.openModels(),
                 'open-help': () => this.openHelp(),
@@ -5842,8 +5885,8 @@
                 },
                 'close-modal': () => this.closeModals(),
                 'model-off': () => {
+                    this.dropProMedia();
                     this.setModel(null);
-                    if (this.mediaModel()) this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
                     this.closeModals();
                 },
                 'repo-save': () => this.saveRepo(),

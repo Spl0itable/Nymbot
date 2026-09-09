@@ -456,6 +456,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return run.isEmpty ? null : run;
   }
 
+  String _composerHint(Map<String, dynamic>? media) {
+    if (media == null) return t('Message Nymbot, or ? for commands');
+    return media['kind'] == 'video'
+        ? t('Describe the video to make')
+        : t('Describe the picture to make');
+  }
+
   Future<void> _send([String? override]) async {
     final text = override ?? _input.text.trim();
     if (text.isEmpty) return;
@@ -1137,11 +1144,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
                     decoration: InputDecoration(
-                      hintText: app.activeMediaModel == null
-                          ? t('Message Nymbot, or ? for commands')
-                          : (app.activeMediaModel?['kind'] == 'video'
-                              ? t('Describe the video to make')
-                              : t('Describe the picture to make')),
+                      hintText: _composerHint(app.activeMediaModel),
                     ),
                   ),
                 ),

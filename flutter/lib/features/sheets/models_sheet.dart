@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../core/theme/theme.dart';
+import '../../state/app_controller.dart';
 import '../brand_tile.dart';
 import '../i18n/i18n.dart';
 
@@ -94,6 +95,34 @@ class _ModelsSheetState extends State<_ModelsSheet> {
     });
   }
 
+  Map<String, dynamic>? _cheapestChat(
+      List<Map<String, dynamic>> groups, Map<String, Map<String, dynamic>> byKey) {
+    Map<String, dynamic>? best;
+    var cheapest = 1 << 30;
+    var ceiling = 1 << 30;
+    for (final group in groups) {
+      for (final key in (group['keys'] as List).cast<String>()) {
+        final m = byKey[key];
+        if (m == null) continue;
+        final kind = m['kind'] as String?;
+        if ((kind != null && kind != 'chat') || m['command'] != null) continue;
+        final credits = (m['credits'] as num?)?.toInt() ?? 0;
+        final max = (m['max'] as num?)?.toInt() ?? credits;
+        if (credits > cheapest || (credits == cheapest && max >= ceiling)) continue;
+        cheapest = credits;
+        ceiling = max;
+        best = {
+          'key': m['key'],
+          'label': m['label'],
+          'credits': credits,
+          'slug': (m['authorSlug'] as String?) ??
+              (group['authorSlug'] as String? ?? ''),
+        };
+      }
+    }
+    return best;
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -130,9 +159,8 @@ class _ModelsSheetState extends State<_ModelsSheet> {
         final command = m['command'] as String?;
         final slug = (m['authorSlug'] as String?) ??
             (group['authorSlug'] as String? ?? '');
-        final pinned = command != null
-            ? app.activeMediaModel?['key'] == key
-            : app.activeModel?['key'] == key;
+        final standing = command != null ? app.activeMediaModel : app.activeModel;
+        final pinned = standing != null && standing['key'] == key;
         rows.add(ListTile(
           dense: true,
           selected: pinned,
@@ -163,7 +191,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
           onTap: () async {
             final messenger = ScaffoldMessenger.of(context);
             if (command != null) {
-              await app.setMediaModel(pinned
+              final media = pinned
                   ? null
                   : {
                       'key': key,
@@ -173,15 +201,24 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                       'max': max,
                       'command': command,
                       'slug': slug,
-                    });
+                    };
+              Map<String, dynamic>? carrier;
+              if (AppController.mediaNeedsPro(media) && app.activeModel == null) {
+                carrier = _cheapestChat(groups, byKey);
+                if (carrier != null) await app.setProModel(carrier);
+              }
+              await app.setMediaModel(media);
               messenger.showSnackBar(SnackBar(
                 content: Text(pinned
                     ? t('Back to answering in words.')
-                    : (m['kind'] == 'video'
-                        ? t('{name} pinned. Every message now makes a video.',
-                            {'name': m['label']})
-                        : t('{name} pinned. Every message now makes a picture.',
-                            {'name': m['label']}))),
+                    : carrier != null
+                        ? t('{name} pinned. It is charged as Pro work, so this chat is on Pro with {carrier} behind it.',
+                            {'name': m['label'], 'carrier': carrier['label']})
+                        : (m['kind'] == 'video'
+                            ? t('{name} pinned. Every message now makes a video.',
+                                {'name': m['label']})
+                            : t('{name} pinned. Every message now makes a picture.',
+                                {'name': m['label']}))),
               ));
               if (context.mounted) Navigator.pop(context);
               return;
@@ -251,8 +288,8 @@ class _ModelsSheetState extends State<_ModelsSheet> {
             const SizedBox(height: 8),
             OutlinedButton(
               onPressed: () async {
+                await app.dropProMedia();
                 await app.setProModel(null);
-                await app.setMediaModel(null);
                 if (context.mounted) Navigator.pop(context);
               },
               child: Text(t('Auto-routed (standard)')),

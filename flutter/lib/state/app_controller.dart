@@ -187,6 +187,16 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  static bool mediaNeedsPro(Map<String, dynamic>? media) {
+    final command = media?['command'] as String?;
+    return command != null && command.contains('--model');
+  }
+
+  Future<void> dropProMedia() async {
+    if (!mediaNeedsPro(activeMediaModel)) return;
+    await setMediaModel(null, forChat: current?.mediaModel != null);
+  }
+
   String withMediaModel(String text) {
     final media = activeMediaModel;
     final command = media?['command'] as String?;
