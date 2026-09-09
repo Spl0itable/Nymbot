@@ -5,10 +5,8 @@ import '../../core/theme/theme.dart';
 import '../brand_tile.dart';
 import '../i18n/i18n.dart';
 
-/// Resolves with a command (`?image flux`) when a generator was picked, so the
-/// caller can write it into the composer; null for a chat model or a dismissal.
-Future<String?> showModelsSheet(BuildContext context, {String filter = ''}) =>
-    showModalBottomSheet<String>(
+Future<void> showModelsSheet(BuildContext context, {String filter = ''}) =>
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (_) => _ModelsSheet(initialFilter: filter),
@@ -44,9 +42,8 @@ class _ModelsSheetState extends State<_ModelsSheet> {
         ('favourites', t('Starred')),
       ];
 
-  /// The generators answer only to their own two filters: they are commands,
-  /// not chat models, so offering them anywhere else would pin a model that
-  /// only draws.
+  /// The generators answer only to their own two filters, so a picture model
+  /// never turns up where a chat model is wanted.
   bool _matches(Map<String, dynamic> m, List<String> favourites) {
     final kind = (m['kind'] as String?) ?? 'chat';
     if (_filter == 'image') return kind == 'image';
@@ -131,13 +128,16 @@ class _ModelsSheetState extends State<_ModelsSheet> {
         final key = m['key'] as String;
         final starred = app.favouriteModels.contains(key);
         final command = m['command'] as String?;
+        final slug = (m['authorSlug'] as String?) ??
+            (group['authorSlug'] as String? ?? '');
+        final pinned = command != null
+            ? app.activeMediaModel?['key'] == key
+            : app.activeModel?['key'] == key;
         rows.add(ListTile(
           dense: true,
-          selected: app.proModel?['key'] == key,
+          selected: pinned,
           // Who makes it, on the left, so the list scans by maker.
-          leading: BrandTile(
-              slug: (m['authorSlug'] as String?) ??
-                  (group['authorSlug'] as String? ?? '')),
+          leading: BrandTile(slug: slug),
           title: Text(m['label'] as String),
           subtitle: (m['description'] as String?)?.isNotEmpty == true
               ? Text(m['description'] as String,
@@ -161,15 +161,36 @@ class _ModelsSheetState extends State<_ModelsSheet> {
             ],
           ),
           onTap: () async {
-            // A generator is a command, not a chat model.
+            final messenger = ScaffoldMessenger.of(context);
             if (command != null) {
-              if (context.mounted) Navigator.pop(context, command);
+              await app.setMediaModel(pinned
+                  ? null
+                  : {
+                      'key': key,
+                      'label': m['label'],
+                      'kind': m['kind'] ?? 'image',
+                      'credits': credits,
+                      'max': max,
+                      'command': command,
+                      'slug': slug,
+                    });
+              messenger.showSnackBar(SnackBar(
+                content: Text(pinned
+                    ? t('Back to answering in words.')
+                    : (m['kind'] == 'video'
+                        ? t('{name} pinned. Every message now makes a video.',
+                            {'name': m['label']})
+                        : t('{name} pinned. Every message now makes a picture.',
+                            {'name': m['label']}))),
+              ));
+              if (context.mounted) Navigator.pop(context);
               return;
             }
             await app.setProModel({
               'key': key,
               'label': m['label'],
               'credits': credits,
+              'slug': slug,
             });
             if (context.mounted) Navigator.pop(context);
           },
@@ -231,6 +252,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
             OutlinedButton(
               onPressed: () async {
                 await app.setProModel(null);
+                await app.setMediaModel(null);
                 if (context.mounted) Navigator.pop(context);
               },
               child: Text(t('Auto-routed (standard)')),

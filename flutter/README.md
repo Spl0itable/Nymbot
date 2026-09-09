@@ -37,7 +37,7 @@ new here is everything above them.
 | `lib/services/anon.dart` | Anonymous mode: the throwaway key and the blind vouchers. |
 | `lib/services/chat_engine.dart` | One turn, end to end. Also where a conversation's title comes from, and where the preamble that carries a persona, several repositories and a branch's transcript is built. |
 | `lib/services/attachments.dart` | Files off the device: text and code inlined into the wire body, images carried beside it. |
-| `lib/services/voice.dart` | Dictation into the composer, and a reply read back out. |
+| `lib/services/voice.dart` | A reply read back out, through the platform's own text-to-speech engine. |
 | `lib/services/transcript.dart` | A conversation as Markdown or plain text, for sharing and for the clipboard. |
 | `lib/models/workspace.dart` | Repositories, personas, saved prompts, folders, attachments and the appearance settings. |
 | `lib/features/message_bubble.dart` | One message, drawn the way the landing page's phone mockup draws it. |
@@ -65,9 +65,8 @@ The chat surface, beyond sending a message:
 - **A prompt library** with `{{blanks}}` the app asks you to fill in.
 - **Attachments**: text and code go into the message as a fenced block, images
   travel beside it.
-- **Voice** in both directions: dictation into the composer, and any reply read
-  back out. Both need the platform's own engines; without them the buttons
-  never appear rather than failing when tapped.
+- **Read aloud**: any reply spoken back through the platform's own
+  text-to-speech engine.
 - **Your Nostr profile**, when the key you signed in with has published one:
   the kind-0 name, picture and nip-05 replace the generated nym in the drawer
   and on your own messages. An anonymous chat never shows it — the throwaway
@@ -83,17 +82,14 @@ The chat surface, beyond sending a message:
 
 ## Permissions
 
-Two, both optional and both only asked for when the feature is used:
+One, optional and only asked for when the feature is used:
 
-- `RECORD_AUDIO` / `NSMicrophoneUsageDescription` and
-  `NSSpeechRecognitionUsageDescription` for dictation. The recognition runs in
-  the platform's own engine; the app only ever sees the text.
 - `NSPhotoLibraryUsageDescription` for attaching a picture, which is encrypted
   with the rest of the message before it leaves the device.
 
-The Android manifest also declares `<queries>` for the speech and text-to-speech
-services. Without them Android 11 and later hides both from the app even when
-they are installed, and each reports itself unavailable rather than missing.
+The Android manifest also declares a `<queries>` entry for the text-to-speech
+service. Without it Android 11 and later hides the engine from the app even when
+it is installed, and it reports itself unavailable rather than missing.
 
 ## How separate conversations work
 

@@ -3,17 +3,10 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- Dictation into the composer. Nothing is recorded: the platform's own
-         recogniser turns speech into text and the app only sees the text. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-
-    <!-- Android 11 package visibility: without these the speech recogniser and
-         the text-to-speech engine are invisible to the app even when installed,
-         and both silently report themselves unavailable. -->
+    <!-- Android 11 package visibility: without this the text-to-speech engine
+         is invisible to the app even when installed, and silently reports
+         itself unavailable. -->
     <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionService"/>
-        </intent>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
         </intent>

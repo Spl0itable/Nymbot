@@ -4,6 +4,7 @@ import '../app.dart';
 import '../services/chat_engine.dart';
 import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
+import 'brand_tile.dart';
 import 'i18n/i18n.dart';
 import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
@@ -39,10 +40,8 @@ class NymbotToolbar extends StatelessWidget {
         icon: Icons.auto_awesome,
         label: pro ? model['label'] as String : t('Auto-routed'),
         active: pro,
-        onTap: () => showModelsSheet(context).then((command) {
-          // A generator is a command, not a model to pin.
-          if (command != null) app.queueInput('$command ');
-        }),
+        brand: pro ? model['slug'] as String? : null,
+        onTap: () => showModelsSheet(context),
       ),
       _ChipSpec(
         icon: Icons.account_tree_outlined,
@@ -206,15 +205,17 @@ class _ChipSpec {
     required this.label,
     required this.active,
     required this.onTap,
+    this.brand,
   });
 
   final IconData icon;
   final String label;
   final bool active;
   final VoidCallback onTap;
+  final String? brand;
 
-  Widget build(BuildContext context) =>
-      _Chip(icon: icon, label: label, active: active, onTap: onTap);
+  Widget build(BuildContext context) => _Chip(
+      icon: icon, label: label, active: active, onTap: onTap, brand: brand);
 }
 
 /// Each step is another model call the reply takes and the balance pays for,
@@ -274,13 +275,21 @@ class ContextBar extends StatelessWidget {
     final repos = app.activeRepos;
     final persona = app.activePersona;
     final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
+    final media = app.activeMediaModel;
 
-    if (repos.isEmpty && persona == null && !hasSystem && !app.settings.webSearch) {
+    if (repos.isEmpty &&
+        persona == null &&
+        !hasSystem &&
+        media == null &&
+        !app.settings.webSearch) {
       return const SizedBox.shrink();
     }
 
     Widget chip(String label, Color colour, VoidCallback? onClear,
-        {VoidCallback? onTap, IconData? leading, IconData? badge}) {
+        {VoidCallback? onTap,
+        IconData? leading,
+        IconData? badge,
+        String? brand}) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap ?? onClear,
@@ -293,7 +302,10 @@ class ContextBar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (leading != null) ...[
+              if (brand != null) ...[
+                BrandTile(slug: brand, size: 13),
+                const SizedBox(width: 4),
+              ] else if (leading != null) ...[
                 Icon(leading, size: 12, color: colour),
                 const SizedBox(width: 4),
               ],
@@ -336,6 +348,17 @@ class ContextBar extends StatelessWidget {
           if (hasSystem)
             chip(t('Custom instructions'), theme.colorScheme.secondary, null,
                 onTap: () => showSystemPromptSheet(context)),
+          if (media != null)
+            chip(
+              media['label'] as String? ?? '',
+              theme.colorScheme.secondary,
+              () => app.setMediaModel(null,
+                  forChat: app.current?.mediaModel != null),
+              brand: media['slug'] as String?,
+              leading: media['kind'] == 'video'
+                  ? Icons.movie_outlined
+                  : Icons.image_outlined,
+            ),
           if (app.settings.webSearch)
             chip(t('Web search'), theme.colorScheme.secondary,
                 () => app.setWebSearch(false)),
@@ -357,8 +380,7 @@ class _TierSwitch extends StatelessWidget {
     Widget side(String label, bool active, bool isPro) => GestureDetector(
           onTap: () async {
             if (isPro) {
-              final command = await showModelsSheet(context);
-              if (command != null) app.queueInput('$command ');
+              await showModelsSheet(context);
             } else {
               await app.setProModel(null);
             }
@@ -403,6 +425,7 @@ class _Chip extends StatelessWidget {
     required this.active,
     required this.onTap,
     this.color,
+    this.brand,
   });
 
   final IconData icon;
@@ -410,6 +433,7 @@ class _Chip extends StatelessWidget {
   final bool active;
   final VoidCallback onTap;
   final Color? color;
+  final String? brand;
 
   @override
   Widget build(BuildContext context) {
@@ -431,7 +455,10 @@ class _Chip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: tint),
+            if (brand != null)
+              BrandTile(slug: brand!, size: 15)
+            else
+              Icon(icon, size: 14, color: tint),
             const SizedBox(width: 5),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 150),

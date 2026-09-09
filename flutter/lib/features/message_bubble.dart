@@ -685,10 +685,6 @@ class TypingIndicator extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showAvatar) ...[
-            const NymAvatar(seed: 'nymbot', size: 30, bot: true),
-            const SizedBox(width: 7),
-          ],
           Flexible(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -707,6 +703,10 @@ class TypingIndicator extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      if (showAvatar) ...[
+                        const NymAvatar(seed: 'nymbot', size: 18, bot: true),
+                        const SizedBox(width: 6),
+                      ],
                       Flexible(
                         child: Text(label,
                             textAlign: TextAlign.center,

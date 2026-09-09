@@ -56,6 +56,7 @@
     const DEFAULT_SETTINGS = {
         tier: 'standard',
         proModel: null,
+        mediaModel: null,
         git: null,
         anon: false,
         anonAutoTop: true,
@@ -456,6 +457,7 @@
                 botId: null,
                 systemPrompt: '',
                 proModel: null,
+                mediaModel: null,
                 seed: null,
                 stats: { messages: 0, credits: 0 }
             }, patch || {});
@@ -507,6 +509,7 @@
                 botId: source.botId || null,
                 systemPrompt: source.systemPrompt,
                 proModel: source.proModel,
+                mediaModel: source.mediaModel || null,
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)))
             });
             this.saveMessages(copy.id, this.messages(id));

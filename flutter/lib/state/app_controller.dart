@@ -83,6 +83,7 @@ class AppController extends ChangeNotifier {
   AppSettings settings = AppSettings();
   List<GitRepo> repos = [];
   Map<String, dynamic>? proModel;
+  Map<String, dynamic>? mediaModel;
   int? standardBalance;
   int? proBalance;
 
@@ -118,6 +119,7 @@ class AppController extends ChangeNotifier {
       try {
         final j = jsonDecode(raw) as Map<String, dynamic>;
         proModel = j['proModel'] as Map<String, dynamic>?;
+        mediaModel = j['mediaModel'] as Map<String, dynamic>?;
       } catch (_) {}
     }
     favouriteModels =
@@ -126,8 +128,8 @@ class AppController extends ChangeNotifier {
             .toList();
   }
 
-  Future<void> _saveModel() =>
-      store.setString('settings', jsonEncode({'proModel': proModel}));
+  Future<void> _saveModel() => store.setString(
+      'settings', jsonEncode({'proModel': proModel, 'mediaModel': mediaModel}));
 
   Future<void> saveSettings(AppSettings next) async {
     settings = next;
@@ -161,6 +163,37 @@ class AppController extends ChangeNotifier {
   }
 
   Map<String, dynamic>? get activeModel => current?.proModel ?? proModel;
+
+  Map<String, dynamic>? get activeMediaModel =>
+      current?.mediaModel ?? mediaModel;
+
+  Future<void> setMediaModel(Map<String, dynamic>? model,
+      {bool forChat = false}) async {
+    if (forChat) {
+      final conv = current;
+      if (conv != null) {
+        conv.mediaModel = model;
+        await store.saveConversations(conversations);
+      }
+    } else {
+      mediaModel = model;
+      await _saveModel();
+      final conv = current;
+      if (conv != null && conv.mediaModel != null) {
+        conv.mediaModel = null;
+        await store.saveConversations(conversations);
+      }
+    }
+    notifyListeners();
+  }
+
+  String withMediaModel(String text) {
+    final media = activeMediaModel;
+    final command = media?['command'] as String?;
+    if (command == null || command.isEmpty) return text;
+    if (text.startsWith('?') || text.startsWith('!')) return text;
+    return '$command $text';
+  }
 
   Future<void> toggleFavouriteModel(String key) async {
     favouriteModels = favouriteModels.contains(key)
@@ -1087,6 +1120,7 @@ class AppController extends ChangeNotifier {
       personaId: conv.personaId,
       systemPrompt: conv.systemPrompt,
       proModel: conv.proModel,
+      mediaModel: conv.mediaModel,
     );
     conversations.insert(0, copy);
     await store.saveConversations(conversations);
@@ -1127,6 +1161,7 @@ class AppController extends ChangeNotifier {
       botId: conv.botId,
       systemPrompt: conv.systemPrompt,
       proModel: conv.proModel,
+      mediaModel: conv.mediaModel,
       seed: seed,
     );
     conversations.insert(0, copy);
@@ -1477,7 +1512,8 @@ class AppController extends ChangeNotifier {
     }
     _stopped = false;
     continuedSpend = 0;
-    final body = text.trim();
+    final typed = text.trim();
+    final body = withMediaModel(typed);
     final sent = [...attachments];
     final quoted = quote;
 
@@ -1506,7 +1542,7 @@ class AppController extends ChangeNotifier {
     ));
 
     if (conv.title.isEmpty) {
-      conv.title = ChatEngine.titleFor(body);
+      conv.title = ChatEngine.titleFor(typed);
       _touch(conv);
       await store.saveConversations(conversations);
     }

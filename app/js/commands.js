@@ -35,7 +35,6 @@
         { name: 'settings', args: '', group: 'local', hint: () => t('Open appearance and behaviour') },
         { name: 'shortcuts', args: '', group: 'local', hint: () => t('Keyboard shortcuts') },
         { name: 'guide', args: '[topic]', group: 'local', hint: () => t('Open the help guide') },
-        { name: 'voice', args: '', group: 'local', hint: () => t('Dictate a message') },
         { name: 'retry', args: '', group: 'local', hint: () => t('Ask the last question again') },
         { name: 'clear', args: '', group: 'local', hint: () => t('Clear this chat and reset the context') }
     ];
@@ -83,7 +82,7 @@
             .map(e => ({ entry: e, score: score(e, needle) }))
             .filter(x => x.score > 0)
             .sort((a, b) => b.score - a.score)
-            .slice(0, limit || 8)
+            .slice(0, limit || ALL.length)
             .map(x => x.entry);
     }
 

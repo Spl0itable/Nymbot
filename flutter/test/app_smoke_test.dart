@@ -32,7 +32,6 @@ import 'package:nymbot/services/ngit.dart';
 import 'package:nymbot/services/chat_engine.dart';
 import 'package:nymbot/services/git_forge.dart';
 import 'package:nymbot/services/memory_keeper.dart';
-import 'package:nymbot/services/voice.dart';
 import 'package:nymbot/state/app_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1246,20 +1245,11 @@ ls -la
     expect(file.measure, '2 KB');
   });
 
-  test('dictation says why it stopped, when there is a why worth saying', () {
-    expect(Voice.reasonFor('error_permission'), contains('permission'),
-        reason: 'a refused microphone says what to do about it');
-    expect(Voice.reasonFor('error_audio'), contains('No microphone'));
-    expect(Voice.reasonFor('error_network'), contains('connection'));
-    expect(Voice.reasonFor('error_network'), contains('offline'),
-        reason: 'a service that cannot be reached is retried on the device '
-            'first, so this is what is said when that failed too');
-    expect(Voice.reasonFor('error_no_match'), contains('Nothing was heard'));
-    expect(Voice.reasonFor('error_busy'), contains('still busy'));
-    expect(Voice.reasonFor('error_client'), isNull,
-        reason: 'stopping it yourself is not an error worth reporting');
-    expect(Voice.reasonFor('something-new'), isNotNull,
-        reason: 'and an error nobody has seen before still says something');
+  test('speech goes one way only', () {
+    expect(BotCommands.all().any((c) => c.name == 'voice'), isFalse,
+        reason: 'dictation is gone, so ?voice is not a command any more');
+    expect(BotCommands.remote().any((c) => c.name == 'speak'), isTrue,
+        reason: 'reading something aloud is untouched');
   });
 
   test('auto-delete is off unless it is asked for', () {
@@ -1749,11 +1739,32 @@ diff --git a/two.txt b/two.txt
         ]),
       ),
     ));
-    expect(find.text('A'), findsOneWidget);
-    expect(find.text('BF'), findsOneWidget,
-        reason: 'a two-word maker gets two letters');
-    expect(find.text('S'), findsOneWidget,
+    expect(BrandMarks.of('anthropic'), isNotNull,
+        reason: 'a known maker is drawn as its own mark, not initials');
+    expect(BrandMarks.of('black-forest-labs'), isNotNull);
+    expect(find.text('SO'), findsOneWidget,
         reason: 'a maker with no entry still gets a tile rather than a gap');
+  });
+
+  test('every maker mark parses to the geometry it declares', () {
+    expect(BrandMarks.marks, isNotEmpty);
+    for (final entry in BrandMarks.marks.entries) {
+      final paths = BrandMarks.geometry(entry.key);
+      expect(paths.length, entry.value.paths.length, reason: entry.key);
+      var bounds = paths.first.getBounds();
+      for (final path in paths.skip(1)) {
+        bounds = bounds.expandToInclude(path.getBounds());
+      }
+      final box = entry.value.box;
+      expect(bounds.isEmpty, isFalse, reason: entry.key);
+      expect(bounds.contains(box.center), isTrue, reason: entry.key);
+      expect(bounds.width, greaterThanOrEqualTo(box.width - 0.05), reason: entry.key);
+      expect(bounds.height, greaterThanOrEqualTo(box.height - 0.05), reason: entry.key);
+      expect(bounds.left, greaterThan(-2.0), reason: entry.key);
+      expect(bounds.top, greaterThan(-2.0), reason: entry.key);
+      expect(bounds.right, lessThan(26.0), reason: entry.key);
+      expect(bounds.bottom, lessThan(26.0), reason: entry.key);
+    }
   });
 
   test('the long-task settings survive a round trip and default off', () {

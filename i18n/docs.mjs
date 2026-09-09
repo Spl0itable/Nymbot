@@ -118,6 +118,7 @@ export const OUTLINE = [
         sections: [
           { id: 'images', title: 'Generating images' },
           { id: 'generators', title: 'Choosing a generator' },
+          { id: 'pinning', title: 'Pinning a generator' },
           { id: 'video', title: 'Video' },
           { id: 'speech', title: 'Speech' },
           { id: 'pricing', title: 'What they cost' },

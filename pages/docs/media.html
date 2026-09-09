@@ -68,6 +68,17 @@
                 image, photographic realism, illustration, and how literally each takes a long prompt. If
                 one misreads a description, another usually will not.</p>
 
+            <h2 id="pinning">Pinning a generator</h2>
+            <p>Picking a generator in the model picker <em>pins</em> it. From then on every ordinary
+                message you send is a generation with that model, so a run of pictures is a run of plain
+                descriptions rather than the same command typed over and over. The composer says what it
+                is about to make, and the pinned generator sits in the context bar above it.</p>
+            <p>Tick <strong>Only for this chat</strong> before picking to pin it to the conversation you
+                are in rather than everywhere. Clear it from the context bar, by picking the same
+                generator again, or with <code>?image off</code> and <code>?video off</code>. A message
+                that starts with <code>?</code> or <code>!</code> is always left alone, so the commands
+                still work while a generator is pinned.</p>
+
             <h2 id="video">Video</h2>
             <p><code>?video a lighthouse beam sweeping across a storm</code> returns a short clip. It is a
                 <a href="/docs/models/#pro">Pro</a> command: every video model available is

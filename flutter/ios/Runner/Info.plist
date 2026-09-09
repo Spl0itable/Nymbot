@@ -78,10 +78,6 @@
 	</array>
 	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
 	     so no annual self-classification export filing is required. -->
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Dictation turns what you say into a message. Nothing is recorded or uploaded — the text goes nowhere until you send it.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Speech recognition turns dictation into text on this device, so you can talk to Nymbot instead of typing.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Attaching a picture to a message reads it from your library. It is encrypted with the rest of the message before it leaves the device.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>

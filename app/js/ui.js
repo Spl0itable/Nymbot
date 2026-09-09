@@ -168,43 +168,6 @@
             this.renderIdentity();
             this.refreshToolbar();
 
-            if (Speech.canListen()) $('micBtn').hidden = false;
-            Speech.onListenChange = (on) => {
-                $('micBtn').classList.toggle('is-on', on);
-                if (!on) $('micBtn').classList.remove('is-recording');
-                // Dictation adds to what is already in the composer rather than
-                // replacing it: it used to overwrite whatever you had typed,
-                // and a second dictation overwrote the first.
-                if (on) this._dictationFrom = $('input').value;
-                this.status(on ? t('Listening…') : null);
-            };
-            // Recording says so, because the two ways dictation can work feel
-            // different: the live service fills the composer as you speak, a
-            Speech.onListenMode = (mode) => {
-                const btn = $('micBtn');
-                btn.classList.toggle('is-recording', mode === 'recording');
-                btn.classList.toggle('is-busy', mode === 'transcribing');
-                if (mode === 'recording') this.status(t('Recording — tap the microphone again when you are done.'));
-                else if (mode === 'transcribing') this.status(t('Writing that down…'));
-            };
-            Speech.onListenError = (why, code) => {
-                this.status(null);
-                $('micBtn').classList.remove('is-recording', 'is-busy');
-                if (!why) return;
-                // Hearing nothing is a moment, not a problem worth keeping in
-                // the transcript. Anything that needs you to go and change a
-                // setting stays where it can be read twice.
-                if (code === 'no-speech') this.toast(why);
-                else this.note(why);
-            };
-            Speech.onTranscript = (text) => {
-                const before = this._dictationFrom || '';
-                const join = before && !/\s$/.test(before) ? ' ' : '';
-                $('input').value = before + join + text;
-                this.autoGrow();
-                this.updateHints();
-            };
-
             // The announcement and the bot's key are what make a reply
             // post-quantum; neither blocks the first message.
             setTimeout(async () => {
@@ -783,12 +746,12 @@
         thinkingNode(label) {
             const node = el('div', 'bot-thinking');
             node.id = 'thinkingNode';
+            const head = el('div', 'bot-thinking-head');
             const img = document.createElement('img');
             img.className = 'avatar-bubble';
             img.src = C.botAvatar;
             img.alt = '';
-            node.appendChild(img);
-            const head = el('div', 'bot-thinking-head');
+            head.appendChild(img);
             head.appendChild(el('span', 'bot-thinking-label', label || t('Nymbot is thinking')));
             head.appendChild(el('span', 'typing-dot'));
             head.appendChild(el('span', 'typing-dot'));
@@ -1090,12 +1053,12 @@
 
         async send(override) {
             const input = $('input');
-            const text = override != null ? override : input.value.trim();
-            if (!text) return;
+            const typed = override != null ? override : input.value.trim();
+            if (!typed) return;
 
             // Commands run whatever else is happening: they are free, instant,
             // and one of them is how you stop the thing you are waiting on.
-            if (override == null && await this.handleCommand(text)) {
+            if (override == null && await this.handleCommand(typed)) {
                 input.value = '';
                 Store.setDraft(this.conv.id, '');
                 this.autoGrow();
@@ -1103,6 +1066,8 @@
                 this.hideSuggest();
                 return;
             }
+
+            const text = this.withMediaModel(typed);
 
             // Typing while it is still writing used to do nothing at all — the
             // message was dropped on the floor with no sign it had been. It
@@ -1147,7 +1112,7 @@
             if (!this.freeAllows()) {
                 this.offerUpgrade();
                 if (override == null) {
-                    $('input').value = text;
+                    $('input').value = typed;
                     this.autoGrow();
                     this.updateHints();
                 }
@@ -1172,7 +1137,7 @@
                         this.attachments = attachments;
                         this.renderAttachments();
                         if (override == null) {
-                            $('input').value = text;
+                            $('input').value = typed;
                             this.autoGrow();
                             this.updateHints();
                         }
@@ -1184,7 +1149,7 @@
             const cost = Chat.wireCost(this.conv, text, { attachments, quote });
             if (cost.over > 0) {
                 if (override == null) {
-                    $('input').value = text;
+                    $('input').value = typed;
                     this.autoGrow();
                     this.updateHints();
                 }
@@ -1213,10 +1178,10 @@
             this.appendMessage(mine);
             // Read for standing facts before the reply comes back, so what is
             // remembered is offered while the message is still on screen.
-            this.noticeMemories(text);
+            this.noticeMemories(typed);
 
             if (!this.conv.title) {
-                const title = Chat.titleFor(text);
+                const title = Chat.titleFor(typed);
                 this.conv = Store.updateConversation(this.conv.id, { title });
                 $('chatTitle').textContent = title;
                 this.renderList();
@@ -1576,6 +1541,7 @@
                 botId: this.conv.botId,
                 systemPrompt: this.conv.systemPrompt,
                 proModel: this.conv.proModel,
+                mediaModel: this.conv.mediaModel || null,
                 effort: this.conv.effort,
                 seed
             });
@@ -1601,6 +1567,11 @@
             if (!m) return false;
             const cmd = m[1].toLowerCase();
             const arg = m[2].trim();
+            if ((cmd === 'image' || cmd === 'video') && /^off$/i.test(arg)) {
+                this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+                this.note(t('Back to answering in words.'));
+                return true;
+            }
             if (!Commands.isLocal(cmd)) return false;
 
             switch (cmd) {
@@ -1775,11 +1746,6 @@
                 case 'shortcuts':
                     this.openShortcuts();
                     return true;
-                case 'voice':
-                    if (!Speech.canListen()) { this.note(t('This browser cannot listen.')); return true; }
-                    Speech.signer = (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
-                    Speech.toggleListening();
-                    return true;
                 case 'retry': {
                     const msgs = Store.messages(this.conv.id);
                     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -1875,7 +1841,7 @@
             const value = $('input').value;
             const m = /^\?(\w*)$/.exec(value);
             if (!m) { this.hideSuggest(); return; }
-            const rows = Commands.match(m[1], 8);
+            const rows = Commands.match(m[1]);
             if (!rows.length) { this.hideSuggest(); return; }
             this.suggestRows = rows;
             this.suggestAt = 0;
@@ -1891,6 +1857,7 @@
                 box.appendChild(b);
             });
             box.hidden = false;
+            box.scrollTop = 0;
         },
 
         hideSuggest() {
@@ -1903,6 +1870,8 @@
             this.suggestAt = (this.suggestAt + delta + this.suggestRows.length) % this.suggestRows.length;
             const rows = $('suggest').querySelectorAll('.suggest-row');
             rows.forEach((r, i) => r.classList.toggle('is-active', i === this.suggestAt));
+            const active = rows[this.suggestAt];
+            if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
             return true;
         },
 
@@ -1923,7 +1892,13 @@
             const text = input.value;
             const hint = $('costHint');
             const opts = { attachments: this.attachments, quote: this.quote };
-            if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
+            const media = this.mediaModel();
+            if (media && text.trim() && !/^[?!]/.test(text.trim())) {
+                hint.textContent = t('{name} · {price}', {
+                    name: media.label,
+                    price: this.modelPrice(media)
+                });
+            } else if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
                 const est = Chat.estimateCredits(text, this.settings, this.conv, opts);
                 hint.textContent = est.tier === 'pro'
                     ? (est.low === est.high
@@ -2146,6 +2121,12 @@
             const modelChip = $('chipModel');
             modelChip.classList.toggle('is-active', pro);
             modelChip.querySelector('.chip-label').textContent = pro ? model.label : t('Auto-routed');
+            if (!this._modelChipIcon) this._modelChipIcon = modelChip.firstElementChild.cloneNode(true);
+            modelChip.replaceChild(
+                pro && model.slug
+                    ? Icons.brand(model.slug, { size: 15 })
+                    : this._modelChipIcon.cloneNode(true),
+                modelChip.firstElementChild);
 
             const repos = Chat.reposFor(conv);
             const gitChip = $('chipGit');
@@ -2213,6 +2194,16 @@
             const anonOn = Anon.enabled();
             anonChip.classList.toggle('is-active', anonOn);
             anonChip.querySelector('.chip-label').textContent = anonOn ? t('Anon on') : t('Anon');
+
+            const media = this.mediaModel();
+            const composer = $('input');
+            if (composer) {
+                composer.setAttribute('placeholder', media
+                    ? (media.kind === 'video'
+                        ? t('Describe the video to make')
+                        : t('Describe the picture to make'))
+                    : t('Message Nymbot, or ? for commands'));
+            }
 
             $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
             $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
@@ -2334,6 +2325,22 @@
                 chip.addEventListener('click', () => this.openSystem());
                 chips.push(chip);
             }
+            const media = this.mediaModel();
+            if (media) {
+                const chip = el('button', 'context-chip is-media');
+                chip.type = 'button';
+                chip.title = t('Stop generating and answer in words');
+                chip.appendChild(media.slug
+                    ? Icons.brand(media.slug, { size: 13 })
+                    : Icons.node(media.kind === 'video' ? 'film' : 'picture', { size: 11 }));
+                chip.appendChild(document.createTextNode(media.label));
+                chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
+                chip.addEventListener('click', () => {
+                    this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+                    this.toast(t('Back to answering in words.'));
+                });
+                chips.push(chip);
+            }
             if (this.settings.webSearch) {
                 const chip = el('button', 'context-chip');
                 chip.type = 'button';
@@ -2359,6 +2366,28 @@
                 }
             }
             this.refreshToolbar();
+        },
+
+        mediaModel() {
+            return (this.conv && this.conv.mediaModel) || this.settings.mediaModel || null;
+        },
+
+        setMediaModel(model, forChat) {
+            if (forChat) {
+                this.conv = Store.updateConversation(this.conv.id, { mediaModel: model });
+            } else {
+                this.saveSettings({ mediaModel: model });
+                if (this.conv && this.conv.mediaModel) {
+                    this.conv = Store.updateConversation(this.conv.id, { mediaModel: null });
+                }
+            }
+            this.refreshToolbar();
+        },
+
+        withMediaModel(text) {
+            const media = this.mediaModel();
+            if (!media || !media.command || /^[?!]/.test(text)) return text;
+            return media.command + ' ' + text;
         },
 
         // --- models -----------------------------------------------------------
@@ -2409,6 +2438,7 @@
             const list = $('modelList');
             list.innerHTML = '';
             const current = (this.conv && this.conv.proModel) || this.settings.proModel;
+            const media = this.mediaModel();
             const forChat = $('modelForChat').checked;
             const byKey = new Map(this.models.models.map(m => [m.key, m]));
             for (const group of this.models.groups || []) {
@@ -2420,8 +2450,10 @@
                 if (!rows.length) continue;
                 list.appendChild(el('div', 'model-group', group.author));
                 for (const m of rows) {
-                    const row = el('button', 'model-row'
-                        + (current && current.key === m.key ? ' is-active' : ''));
+                    const pinned = m.command
+                        ? !!(media && media.key === m.key)
+                        : !!(current && current.key === m.key);
+                    const row = el('button', 'model-row' + (pinned ? ' is-active' : ''));
                     row.type = 'button';
                     // Who makes it, on the left, so the list scans by maker.
                     row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
@@ -2444,19 +2476,31 @@
                     });
                     row.appendChild(star);
                     row.addEventListener('click', () => {
-                        // A generator is a command, not a chat model: pinning it
-                        // would leave every ordinary message routed at a model
-                        // that only draws.
                         if (m.command) {
+                            const off = pinned;
+                            this.setMediaModel(off ? null : {
+                                key: m.key, label: m.label, kind: m.kind || 'image',
+                                credits: m.credits, max: m.max, command: m.command,
+                                slug: m.authorSlug || group.authorSlug || null
+                            }, forChat);
                             this.closeModals();
-                            const input = $('input');
-                            input.value = m.command + ' ';
-                            this.autoGrow();
-                            this.updateHints();
-                            input.focus();
+                            if (off) {
+                                this.toast(t('Back to answering in words.'));
+                            } else if (/--model/.test(m.command) && !current) {
+                                this.note(t('{name} is pinned, but it needs a Pro model selected before it will run.',
+                                    { name: m.label }));
+                            } else {
+                                this.toast(m.kind === 'video'
+                                    ? t('{name} pinned. Every message now makes a video.', { name: m.label })
+                                    : t('{name} pinned. Every message now makes a picture.', { name: m.label }));
+                            }
+                            $('input').focus();
                             return;
                         }
-                        this.setModel({ key: m.key, label: m.label, credits: m.credits, max: m.max }, forChat);
+                        this.setModel({
+                            key: m.key, label: m.label, credits: m.credits, max: m.max,
+                            slug: m.authorSlug || group.authorSlug || null
+                        }, forChat);
                         this.closeModals();
                         this.toast(forChat
                             ? t('{name} pinned to this chat.', { name: m.label })
@@ -3840,11 +3884,7 @@
                 },
                 {
                     title: t('Pictures and video'),
-                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Nothing is charged if a generation fails.')
-                },
-                {
-                    title: t('Dictation'),
-                    body: t('The microphone uses the browser\'s own speech service where it can reach one, filling the composer as you speak. Where it cannot — several browsers ship without one — it records instead and the clip is transcribed when you stop, so the button works either way.')
+                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Picking a generator in the model picker pins it, so every message after that is a generation until you clear it from the context bar or send ?image off. Nothing is charged if a generation fails.')
                 },
                 {
                     title: t('Workspaces'),
@@ -3911,8 +3951,8 @@
                     body: t('Your private key lives on this device. Your public key — npub or hex — is how somebody addresses you and is safe to share. The post-quantum recovery code is what lets a second device hold the same encryption key. Export everything from Settings; there is no account on a server to recover from.')
                 },
                 {
-                    title: t('Writing, pasting, dictating and exporting'),
-                    body: t('Write in markdown: fenced blocks, inline code and the rest render in your own messages the same way they do in the replies. Ctrl/Cmd+B, I and E format what you have selected, and Ctrl/Cmd+Shift+E opens a code block. Paste something long and it goes in as an attachment rather than filling the composer. Dictate with the microphone and have replies read aloud from Settings; if dictation stops it says why rather than going quiet. Attach text, code and images. Any conversation exports as Markdown, plain text or JSON.')
+                    title: t('Writing, pasting and exporting'),
+                    body: t('Write in markdown: fenced blocks, inline code and the rest render in your own messages the same way they do in the replies. Ctrl/Cmd+B, I and E format what you have selected, and Ctrl/Cmd+Shift+E opens a code block. Paste something long and it goes in as an attachment rather than filling the composer. Have replies read aloud from Settings. Attach text, code and images. Any conversation exports as Markdown, plain text or JSON.')
                 },
                 {
                     title: t('Keyboard'),
@@ -5801,7 +5841,11 @@
                     this.refreshToolbar();
                 },
                 'close-modal': () => this.closeModals(),
-                'model-off': () => { this.setModel(null); this.closeModals(); },
+                'model-off': () => {
+                    this.setModel(null);
+                    if (this.mediaModel()) this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+                    this.closeModals();
+                },
                 'repo-save': () => this.saveRepo(),
                 'ngit-resolve': () => this.resolveNgit(),
                 'repo-browse': () => this.browseRepos(),
@@ -5880,12 +5924,6 @@
                 'send': () => this.send(),
                 'stop': () => this.stop(),
                 'attach': () => $('filePicker').click(),
-                'mic': () => {
-                    // Transcription is a signed request, and an anonymous chat
-                    // signs it with the throwaway key like everything else.
-                    Speech.signer = (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
-                    Speech.toggleListening();
-                },
                 'cancel-quote': () => { this.quote = null; this.renderQuote(); },
                 'scroll-bottom': () => this.scrollToBottom(),
                 'find-in-chat': () => this.openFind(),
@@ -5924,7 +5962,8 @@
 
             document.addEventListener('keydown', (e) => {
                 const mod = e.metaKey || e.ctrlKey;
-                const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''));
+                const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''))
+                    || !!(e.target.closest && e.target.closest('[contenteditable="true"]'));
 
                 if (e.key === 'Escape') {
                     if (e.shiftKey && this.sending) { this.stop(); return; }

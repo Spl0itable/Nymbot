@@ -23,6 +23,7 @@ class Conversation {
     this.botId,
     this.systemPrompt = '',
     this.proModel,
+    this.mediaModel,
     this.seed,
     this.messageCount = 0,
     this.creditsSpent = 0,
@@ -57,6 +58,7 @@ class Conversation {
   String? botId;
   String systemPrompt;
   Map<String, dynamic>? proModel;
+  Map<String, dynamic>? mediaModel;
   String? seed;
   int messageCount;
   int creditsSpent;
@@ -80,6 +82,7 @@ class Conversation {
         'botId': botId,
         'systemPrompt': systemPrompt,
         'proModel': proModel,
+        'mediaModel': mediaModel,
         'seed': seed,
         'messageCount': messageCount,
         'creditsSpent': creditsSpent,
@@ -104,6 +107,7 @@ class Conversation {
         botId: j['botId'] as String?,
         systemPrompt: j['systemPrompt'] as String? ?? '',
         proModel: j['proModel'] as Map<String, dynamic>?,
+        mediaModel: j['mediaModel'] as Map<String, dynamic>?,
         seed: j['seed'] as String?,
         messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
         creditsSpent: (j['creditsSpent'] as num?)?.toInt() ?? 0,

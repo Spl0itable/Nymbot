@@ -377,7 +377,7 @@ class _ShortcutsSheet extends StatelessWidget {
       ('!', t('Send a message without this chat\'s history')),
       (t('Long press a message'), t('Copy, quote, branch, rate or save it')),
       (t('Swipe from the left'), t('Open the chat list')),
-      (t('Pull the composer'), t('Attach a file, or dictate')),
+      (t('Pull the composer'), t('Attach a file')),
     ];
     return Padding(
       padding: const EdgeInsets.all(16),

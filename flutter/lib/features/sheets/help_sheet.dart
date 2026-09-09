@@ -212,13 +212,12 @@ List<HelpTopic> helpTopics() => [
             'account on a server to recover from.'),
       ),
       HelpTopic(
-        t('Writing, pasting, dictating and exporting'),
+        t('Writing, pasting and exporting'),
         t('Write in markdown: fenced blocks, inline code and the rest render '
             'in your own messages the same way they do in the replies. Paste '
             'something long and it goes in as an attachment rather than '
-            'filling the composer. Dictate with the microphone and have '
-            'replies read aloud from Settings; if dictation stops it says why '
-            'rather than going quiet. Attach text, code and images. Any '
+            'filling the composer. Have replies read aloud from Settings. '
+            'Attach text, code and images. Any '
             'conversation exports as Markdown, plain text or JSON.'),
       ),
     ];

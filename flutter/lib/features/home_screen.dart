@@ -67,7 +67,6 @@ class _HomeScreenState extends State<HomeScreen> {
   /// not fill up with them.
   String? _openActions;
   bool _atBottom = true;
-  bool _voiceAvailable = false;
   String? _findTerm;
 
   AppController? _app;
@@ -81,9 +80,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (near != _atBottom) setState(() => _atBottom = near);
     });
     _voice.addListener(() => setState(() {}));
-    _voice.canListen().then((ok) {
-      if (mounted) setState(() => _voiceAvailable = ok);
-    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final app = AppScope.read(context);
       final conv = app.current;
@@ -153,6 +149,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (m == null) return false;
     final cmd = m.group(1)!.toLowerCase();
     final arg = m.group(2)!.trim();
+    if ((cmd == 'image' || cmd == 'video') &&
+        RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
+      await app.setMediaModel(null, forChat: app.current?.mediaModel != null);
+      await app.note(t('Back to answering in words.'));
+      return true;
+    }
     if (!BotCommands.isLocal(cmd)) return false;
 
     switch (cmd) {
@@ -171,9 +173,7 @@ class _HomeScreenState extends State<HomeScreen> {
           await app.note(t('Back to standard auto-routing.'));
           return true;
         }
-        final command = await showModelsSheet(context, filter: arg);
-        // A generator was picked: it is a command, not a model to pin.
-        if (command != null) app.queueInput('$command ');
+        await showModelsSheet(context, filter: arg);
         return true;
       case 'compare':
         await showCompareSheet(context, prefill: arg);
@@ -339,13 +339,6 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'guide':
         await showHelpSheet(context, prefill: arg);
         return true;
-      case 'voice':
-        if (!_voiceAvailable) {
-          await app.note(t('This device cannot listen.'));
-          return true;
-        }
-        await _voice.toggleListening((text) => _input.text = text);
-        return true;
       case 'retry':
         await app.retryLast();
         return true;
@@ -461,21 +454,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final run = after.substring(head, after.length - tail);
     return run.isEmpty ? null : run;
-  }
-
-  /// Dictation adds to what is already in the composer rather than replacing
-  /// it, and says why it stopped when it stops for a reason.
-  Future<void> _dictate() async {
-    final from = _input.text;
-    await _voice.toggleListening((text) {
-      final join = from.isEmpty || from.endsWith(' ') ? '' : ' ';
-      final joined = '$from$join$text';
-      _input.text = joined;
-      _input.selection = TextSelection.collapsed(offset: joined.length);
-      _lastInput = joined;
-    });
-    final why = _voice.lastError;
-    if (why != null && why.isNotEmpty && mounted) _say(why);
   }
 
   Future<void> _send([String? override]) async {
@@ -1125,13 +1103,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   tooltip: t('Attach a file'),
                   onPressed: _attach,
                 ),
-                if (_voiceAvailable)
-                  IconButton(
-                    icon: Icon(_voice.listening ? Icons.mic : Icons.mic_none, size: 20),
-                    color: _voice.listening ? NymbotColors.danger : null,
-                    tooltip: t('Dictate'),
-                    onPressed: _dictate,
-                  ),
                 Expanded(
                   child: TextField(
                     controller: _input,
@@ -1166,7 +1137,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
                     decoration: InputDecoration(
-                      hintText: t('Message Nymbot, or ? for commands'),
+                      hintText: app.activeMediaModel == null
+                          ? t('Message Nymbot, or ? for commands')
+                          : (app.activeMediaModel?['kind'] == 'video'
+                              ? t('Describe the video to make')
+                              : t('Describe the picture to make')),
                     ),
                   ),
                 ),

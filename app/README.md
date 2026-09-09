@@ -35,7 +35,7 @@ never fetch and open, so the list is not a preference.
 | `js/highlight.js` | A small tokeniser for the languages a reply actually comes back in. |
 | `js/markdown.js` | Reply rendering: tables, task lists, callouts, code blocks with copy/wrap/save/preview, and images. |
 | `js/attach.js` | Files off the device: text and code inlined into the wire body, images shrunk and carried beside it. |
-| `js/speech.js` | Dictation into the composer, and a reply read back out. |
+| `js/speech.js` | A reply read back out, through the browser's own voices. |
 | `js/commands.js` | Every `?` command, and the matcher the composer and the palette share. |
 | `js/export.js` | A conversation as Markdown, plain text or JSON, and the backup that restores all of them. |
 | `js/qr.js` | A byte-mode QR encoder, so an invoice is rendered here rather than sent somewhere to be drawn. |
@@ -58,8 +58,8 @@ The chat surface, beyond sending a message:
 - **A prompt library** with `{{blanks}}` the app asks you to fill in.
 - **Attachments**: text and code go into the message as a fenced block, images
   are shrunk and travel beside it. Drag, paste or pick them.
-- **Voice** in both directions, where the browser has it: dictation into the
-  composer, and any reply read back out.
+- **Read aloud**, where the browser has a voice for it: any reply spoken back,
+  and every reply spoken automatically if you ask for that.
 - **Your Nostr profile**, when the key you signed in with has published one:
   the kind-0 name, picture and nip-05 replace the generated nym in the sidebar
   and on your own messages. An anonymous chat never shows it — the throwaway

@@ -51,7 +51,6 @@ class BotCommands {
         BotCommand(name: 'theme', args: '[dark|light|system]', group: 'local', hint: () => t('Switch the theme')),
         BotCommand(name: 'settings', args: '', group: 'local', hint: () => t('Open appearance and behaviour')),
         BotCommand(name: 'guide', args: '[topic]', group: 'local', hint: () => t('Open the help guide')),
-        BotCommand(name: 'voice', args: '', group: 'local', hint: () => t('Dictate a message')),
         BotCommand(name: 'retry', args: '', group: 'local', hint: () => t('Ask the last question again')),
         BotCommand(name: 'clear', args: '', group: 'local', hint: () => t('Clear this chat and reset the context')),
       ];
@@ -85,7 +84,7 @@ class BotCommands {
   static bool isLocal(String name) =>
       local().any((c) => c.name == name.toLowerCase());
 
-  static List<BotCommand> match(String term, {int limit = 8}) {
+  static List<BotCommand> match(String term, {int? limit}) {
     final needle =
         term.toLowerCase().replaceFirst('?', '').trim().split(RegExp(r'\s+')).first;
     final scored = <(BotCommand, int)>[];
@@ -105,7 +104,7 @@ class BotCommands {
       if (score > 0) scored.add((c, score));
     }
     scored.sort((a, b) => b.$2.compareTo(a.$2));
-    return scored.take(limit).map((x) => x.$1).toList();
+    return scored.take(limit ?? scored.length).map((x) => x.$1).toList();
   }
 
   static String helpText() {
@@ -136,13 +135,14 @@ class CommandSuggestions extends StatelessWidget {
     final theme = Theme.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
-      constraints: const BoxConstraints(maxHeight: 210),
+      constraints: const BoxConstraints(maxHeight: 280),
       decoration: BoxDecoration(
         border: Border.all(color: theme.dividerColor),
         borderRadius: BorderRadius.circular(10),
       ),
       child: ListView.builder(
         shrinkWrap: true,
+        padding: EdgeInsets.zero,
         itemCount: rows.length,
         itemBuilder: (context, i) {
           final c = rows[i];

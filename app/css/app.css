@@ -690,6 +690,7 @@ kbd {
 }
 .context-chip.is-repo { border-color: rgba(247, 147, 26, 0.45); color: var(--lightning); }
 .context-chip.is-persona { border-color: var(--line-strong); color: var(--primary); }
+.context-chip.is-media { border-color: var(--line-strong); color: var(--secondary); }
 .context-chip .x { opacity: 0.6; }
 .chip-writes { display: inline-flex; opacity: 0.75; }
 .chat-badge { display: inline-flex; align-items: center; gap: 0.25rem; }
@@ -1158,9 +1159,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 
 .bot-thinking {
     display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: center;
-    gap: 0.45rem;
+    justify-items: center;
     padding: 8px 12px;
     margin-bottom: var(--msg-gap);
     max-width: min(30rem, 88%);
@@ -1170,12 +1169,10 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
        something in; nothing has been said yet. */
     border-radius: var(--bubble-radius);
 }
-/* Beside the label, not floated up the side of a growing progress column. */
-.bot-thinking > .avatar-bubble { grid-row: 1; align-self: center; }
 .bot-thinking > .bot-thinking-head,
-.bot-thinking > .bot-progress { grid-column: 2; min-width: 0; }
+.bot-thinking > .bot-progress { min-width: 0; max-width: 100%; }
 .bot-thinking > .bot-progress:empty { display: none; }
-.bot-thinking .avatar-bubble { width: 18px; height: 18px; }
+.bot-thinking .avatar-bubble { width: 18px; height: 18px; flex: 0 0 auto; margin-right: 0.15rem; }
 .bot-thinking-label { font-size: 0.8rem; color: var(--text-dim); }
 .typing-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-dim); animation: typingBounce 1s infinite; }
 .typing-dot:nth-of-type(2) { animation-delay: 0.15s; }
@@ -1628,12 +1625,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .composer-btn:hover { border-color: var(--line-strong); color: var(--text); }
 .composer-btn.is-on { border-color: var(--danger); color: var(--danger); }
-/* Recording pulses; the live service does not, because that one is already
-   writing into the composer as you speak. */
-.composer-btn.is-recording { animation: mic-pulse 1.4s ease-in-out infinite; }
-.composer-btn.is-busy { opacity: 0.55; pointer-events: none; }
-@keyframes mic-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-@media (prefers-reduced-motion: reduce) { .composer-btn.is-recording { animation: none; } }
 
 .composer-foot { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
 .composer-hint { font-size: 0.72rem; color: var(--text-faint); }
@@ -1674,8 +1665,10 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--bg-raised);
-    max-height: 40vh;
+    max-height: min(40vh, 320px);
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 }
 .suggest-row {
     display: flex;
@@ -1738,6 +1731,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
    the name free to wrap under it. */
 .model-row { display: flex; gap: 0.5rem; align-items: center; width: 100%; padding: 0.5rem 0.6rem; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
 .model-row .brand-tile { flex: 0 0 auto; align-self: center; }
+.chip .brand-tile, .context-chip .brand-tile { flex: 0 0 auto; align-self: center; }
 .model-row:hover { background: var(--bubble-bot); }
 .model-row.is-active { background: var(--bubble-self); }
 .model-name { flex: 1; min-width: 0; }
