@@ -2024,6 +2024,7 @@
             this.free = data.free || this.free || null;
             if (this.free) Free.observe(this.free.used);
             this.renderBalance();
+            if (!$('modalCredits').hidden) this.renderCreditBalances();
             if (announce) {
                 const anon = this.conv && this.conv.anon;
                 this.note((anon
@@ -2035,15 +2036,19 @@
             }
         },
 
+        proTier() {
+            return !!((this.conv && this.conv.proModel) || this.settings.proModel)
+                || this.mediaNeedsPro(this.mediaModel());
+        },
+
         renderBalance() {
-            const model = (this.conv && this.conv.proModel) || this.settings.proModel;
-            const tier = model ? 'pro' : 'standard';
-            const value = this.balance[tier];
+            const pro = this.proTier();
+            const value = this.balance[pro ? 'pro' : 'standard'];
             // With nothing to spend, the chip counts what the day has left
             // rather than showing a zero — which is a wall, where the free
             // tier is a thing that is still working.
             const free = this.freeLeft();
-            $('chipBuyLabel').textContent = (!model && !this.balance.standard && free != null)
+            $('chipBuyLabel').textContent = (!pro && !this.balance.standard && free != null)
                 ? t('{n} free', { n: free })
                 : (value == null ? t('Buy') : String(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
@@ -2056,8 +2061,7 @@
         /// because someone who has paid is not on the free tier and must never
         /// be told they are.
         freeAllows() {
-            const model = (this.conv && this.conv.proModel) || this.settings.proModel;
-            if (model) return true;
+            if (this.proTier()) return true;
             if (this.balance.standard > 0) return true;
             if (!this.free || !this.free.limit) return true;
             return Free.allows(this.free.limit, this.balance.standard || 0);
@@ -5011,8 +5015,7 @@
 
         openCredits() {
             const live = this.invoice;
-            const model = (this.conv && this.conv.proModel) || this.settings.proModel;
-            this.creditTier = live ? live.tier : (model ? 'pro' : 'standard');
+            this.creditTier = live ? live.tier : (this.proTier() ? 'pro' : 'standard');
             for (const b of document.querySelectorAll('#creditTier .tier-btn')) {
                 b.classList.toggle('is-active', b.dataset.tier === this.creditTier);
             }
@@ -5035,7 +5038,31 @@
                 $('creditStatus').textContent = '';
             }
             this.creditSats();
+            this.renderCreditBalances();
             this.openModal('modalCredits');
+        },
+
+        renderCreditBalances() {
+            const box = $('creditBalances');
+            if (!box) return;
+            box.innerHTML = '';
+            const free = this.freeLeft();
+            const rows = [
+                ['standard', t('Standard'), this.balance.standard],
+                ['pro', t('Pro'), this.balance.pro]
+            ];
+            for (const [tier, label, value] of rows) {
+                const cell = el('div', 'credit-balance'
+                    + (this.creditTier === tier ? ' is-active' : ''));
+                cell.appendChild(el('span', 'credit-balance-label', label));
+                cell.appendChild(el('span', 'credit-balance-value',
+                    value == null ? '—' : t('{n} credits', { n: value })));
+                if (tier === 'standard' && !value && free != null) {
+                    cell.appendChild(el('span', 'credit-balance-free',
+                        t('{n} free left today', { n: free })));
+                }
+                box.appendChild(cell);
+            }
         },
 
         showInvoice(invoice) {
@@ -5892,6 +5919,7 @@
                         b.classList.toggle('is-active', b === target);
                     }
                     this.creditSats();
+                    this.renderCreditBalances();
                 },
                 'credit-buy': () => this.buyCredits(),
                 // Anything that grants the account is covered until it is

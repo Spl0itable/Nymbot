@@ -2078,6 +2078,7 @@
   "{n} files changed": "파일 변경",
   "{n} found": "찾을 수 있는",
   "{n} free": "무료",
+  "{n} free left today": "Free left 오늘",
   "{n} lines": "라인",
   "{n} of {total}": "{total} 중 {n}",
   "{n} pull requests": "끌어내기 요청",

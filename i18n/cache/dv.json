@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} ފައިލްތަކެއް ބަދަލުވިއެވެ",
   "{n} found": "{n} ފެނުނު",
   "{n} free": "{n} މިނިވަން",
+  "{n} free left today": "މިއަދު {n} ފްރީ ބކިން އޮތެވެ",
   "{n} lines": "{n} ރޮޅިތައް",
   "{n} of {total}": "{total} އިން {n}",
   "{n} pull requests": "{n} pull requests",

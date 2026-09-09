@@ -2078,6 +2078,7 @@
   "{n} files changed": "Filerna har ändrats",
   "{n} found": "Hittade",
   "{n} free": "och fritt",
+  "{n} free left today": "Free left idag",
   "{n} lines": "och linjer",
   "{n} of {total}": "och totalt",
   "{n} pull requests": "{n} dra begäran",

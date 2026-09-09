@@ -36,7 +36,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
   @override
   void initState() {
     super.initState();
-    _tier = AppScope.read(context).proModel != null ? 'pro' : 'standard';
+    _tier = AppScope.read(context).proTier ? 'pro' : 'standard';
   }
 
   @override

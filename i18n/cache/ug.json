@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} fayl өزنگىدتلىغان",
   "{n} found": "{n} تېپىلدى",
   "{n} free": "{n} ئەگەرلىق تېخىنىشلىق",
+  "{n} free left today": "بۈگۈن {n} ئەقىچ ئالدىن قالدى",
   "{n} lines": "{n} قەتىر",
   "{n} of {total}": "{total} نىڭ {n} قىسمى",
   "{n} pull requests": "{n} تارتىش تەلەپتىار",

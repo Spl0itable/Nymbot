@@ -2078,6 +2078,7 @@
   "{n} files changed": "ການປ່ຽນແປງ File",
   "{n} found": "ທີ່ຢູ່",
   "{n} free": "ປະເພດ Free",
+  "{n} free left today": "{n} ຟຣີ left ໃນມື້ນີ້",
   "{n} lines": "ລະຫັດ QR",
   "{n} of {total}": "ລະຫັດ QR",
   "{n} pull requests": "ຊື່ຫຍໍ້ຂອງ : Pull Request",

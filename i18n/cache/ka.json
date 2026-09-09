@@ -2078,6 +2078,7 @@
   "{n} files changed": "ფაილი შეიცვალა",
   "{n} found": "შეხვდა",
   "{n} free": "უფასო",
+  "{n} free left today": "Free left დღეს",
   "{n} lines": "ხაზები",
   "{n} of {total}": "{n} {total}-დან",
   "{n} pull requests": "Pull მოთხოვნები",

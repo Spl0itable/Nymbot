@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} faýl üýtgedildi",
   "{n} found": "{n} tapyldy",
   "{n} free": "{n} mugt",
+  "{n} free left today": "şu gün {n} sany boş galdy",
   "{n} lines": "{n} setir",
   "{n} of {total}": "{total} içinden {n}",
   "{n} pull requests": "{n} pull request",

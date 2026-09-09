@@ -2078,6 +2078,7 @@
   "{n} files changed": "fayiloota {n} jijjiiramaniiru",
   "{n} found": "{n} argatame",
   "{n} free": "{n} bilisa",
+  "{n} free left today": "{n} bilisaan har'a hafe",
   "{n} lines": "{n} sadarkaa",
   "{n} of {total}": "{n} kan {total}",
   "{n} pull requests": "{n} pull requestiiwwan",

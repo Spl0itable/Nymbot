@@ -2078,6 +2078,7 @@
   "{n} files changed": "Failid on muutunud",
   "{n} found": "Leitud",
   "{n} free": "Vabadus",
+  "{n} free left today": "Vabalt lahkunud täna",
   "{n} lines": "Liinid",
   "{n} of {total}": "Üldiselt on",
   "{n} pull requests": "Võtke taotlusi",

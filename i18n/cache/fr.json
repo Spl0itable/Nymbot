@@ -2078,6 +2078,7 @@
   "{n} files changed": "Les fichiers ont changé",
   "{n} found": "Découverte",
   "{n} free": "et libre",
+  "{n} free left today": "Free left aujourd'hui",
   "{n} lines": "Les lignes",
   "{n} of {total}": "et du total",
   "{n} pull requests": "Poussez les demandes",

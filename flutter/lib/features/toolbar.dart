@@ -184,7 +184,7 @@ class NymbotToolbar extends StatelessWidget {
             // With nothing to spend, the chip counts what the day has left
             // rather than showing a zero — which is a wall, where the free
             // tier is a thing that is still working.
-            label: (app.activeModel == null &&
+            label: (!app.proTier &&
                     (app.standardBalance ?? 0) == 0 &&
                     app.freeLeft != null)
                 ? t('{n} free', {'n': app.freeLeft})

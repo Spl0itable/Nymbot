@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} cov ntawv tau hloov pauv",
   "{n} found": "{n} pom tau",
   "{n} free": "{n} dawb free",
+  "{n} free left today": "{n} tsis muaj dab tsi tshuav hnub no",
   "{n} lines": "{n} kab nplooj ntawv",
   "{n} of {total}": "{n} ntawm {total}",
   "{n} pull requests": "{n} kev thov hloov pauv (pull requests)",

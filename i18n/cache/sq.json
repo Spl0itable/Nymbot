@@ -2078,6 +2078,7 @@
   "{n} files changed": "Të dhënat ndryshojnë",
   "{n} found": "të gjetur",
   "{n} free": "të lirë",
+  "{n} free left today": "Të lirë left today",
   "{n} lines": "në linjë",
   "{n} of {total}": "Në tërësi",
   "{n} pull requests": "Kërkesa tërheqëse",

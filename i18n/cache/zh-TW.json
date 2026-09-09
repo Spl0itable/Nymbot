@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} 個檔案已變更",
   "{n} found": "發現 {n}",
   "{n} free": "{n} 個免費",
+  "{n} free left today": "今天還有 {n} 個免費名額",
   "{n} lines": "{n} 行",
   "{n} of {total}": "{total} 中的 {n}",
   "{n} pull requests": "{n} 個拉取請求",

@@ -2078,6 +2078,7 @@
   "{n} files changed": "Mafayilo {n} asinthidwa",
   "{n} found": "{n} wapezeka",
   "{n} free": "{n} kwaulere",
+  "{n} free left today": "{n} zotsalira zaulere lero",
   "{n} lines": "mauta {n}",
   "{n} of {total}": "{n} mwa {total}",
   "{n} pull requests": "{n} mapulani a pempho la kusintha (pull requests)",

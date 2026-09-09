@@ -2078,6 +2078,7 @@
   "{n} files changed": "Архивууд өөрчилсөн",
   "{n} found": "Эдүүлбэр",
   "{n} free": "Үнэгүй",
+  "{n} free left today": "Үнэгүй left Today",
   "{n} lines": "Түлхүүр үг",
   "{n} of {total}": "Бүтээгдэхүүний",
   "{n} pull requests": "Түлхүүр үг",

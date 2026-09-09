@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} fitxategi aldatu",
   "{n} found": "{n} aurkitu da",
   "{n} free": "{n} doan",
+  "{n} free left today": "{n} doako geratzen dira gaur",
   "{n} lines": "{n} lerro",
   "{n} of {total}": "{total}ren {n}a",
   "{n} pull requests": "{n} pull requests",

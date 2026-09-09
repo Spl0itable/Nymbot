@@ -36,20 +36,35 @@
     }
 
     function readAsText(file) {
-        return new Promise((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => resolve(String(r.result || ''));
-            r.onerror = () => reject(new Error('unreadable'));
-            r.readAsText(file);
-        });
+        if (file && typeof file.text === 'function') {
+            return file.text().then(t => String(t || ''));
+        }
+        return legacyRead(file, 'text');
     }
 
-    function readAsDataUrl(file) {
+    async function readAsDataUrl(file) {
+        if (file && typeof file.arrayBuffer === 'function') {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+            }
+            return 'data:' + (file.type || 'application/octet-stream')
+                + ';base64,' + btoa(binary);
+        }
+        return legacyRead(file, 'dataUrl');
+    }
+
+    function legacyRead(file, as) {
         return new Promise((resolve, reject) => {
+            if (typeof FileReader === 'undefined') {
+                reject(new Error('unreadable'));
+                return;
+            }
             const r = new FileReader();
             r.onload = () => resolve(String(r.result || ''));
             r.onerror = () => reject(new Error('unreadable'));
-            r.readAsDataURL(file);
+            if (as === 'text') r.readAsText(file); else r.readAsDataURL(file);
         });
     }
 

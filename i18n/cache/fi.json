@@ -2078,6 +2078,7 @@
   "{n} files changed": "Tiedostot ovat muuttuneet",
   "{n} found": "Löytyi",
   "{n} free": "Vapaa",
+  "{n} free left today": "Free left tänään",
   "{n} lines": "linjoja",
   "{n} of {total}": "ja kokonaisuudessaan",
   "{n} pull requests": "Pull pyynnöt",

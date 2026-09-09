@@ -2078,6 +2078,7 @@
   "{n} files changed": "De bestanden zijn veranderd",
   "{n} found": "gevonden",
   "{n} free": "Vrij",
+  "{n} free left today": "Vrij verloren vandaag",
   "{n} lines": "De lijnen",
   "{n} of {total}": "van het totaal",
   "{n} pull requests": "Pull verzoeken",

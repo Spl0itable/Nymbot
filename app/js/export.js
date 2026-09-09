@@ -127,16 +127,21 @@
             return toMarkdown(conv, Store.messages(conv.id));
         },
 
-        readFile(file) {
-            return new Promise((resolve, reject) => {
-                const r = new FileReader();
-                r.onload = () => {
-                    try { resolve(JSON.parse(String(r.result || ''))); }
-                    catch (_) { reject(new Error('unreadable')); }
-                };
-                r.onerror = () => reject(new Error('unreadable'));
-                r.readAsText(file);
-            });
+        async readFile(file) {
+            const text = (file && typeof file.text === 'function')
+                ? String(await file.text() || '')
+                : await new Promise((resolve, reject) => {
+                    if (typeof FileReader === 'undefined') {
+                        reject(new Error('unreadable'));
+                        return;
+                    }
+                    const r = new FileReader();
+                    r.onload = () => resolve(String(r.result || ''));
+                    r.onerror = () => reject(new Error('unreadable'));
+                    r.readAsText(file);
+                });
+            try { return JSON.parse(text); }
+            catch (_) { throw new Error('unreadable'); }
         },
 
         download

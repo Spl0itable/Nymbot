@@ -569,8 +569,9 @@ kbd {
     overflow-y: auto;
 }
 /* Opened from a row rather than the header, it is placed against that row and
-   so has to leave the header's coordinate system. */
-.menu.is-floating { position: fixed; top: 0; left: 0; right: auto; }
+   so has to leave the header's coordinate system — and on a phone that row is
+   inside the drawer, which is painted over the header it came from. */
+.menu.is-floating { position: fixed; top: 0; left: 0; right: auto; z-index: 58; }
 
 .menu button {
     display: block;
@@ -1701,6 +1702,25 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .send-btn.is-stop { border-color: var(--danger); color: var(--danger); }
 
 /* --- modals -------------------------------------------------------------- */
+
+.credit-balances {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+    margin-bottom: 0.6rem;
+}
+.credit-balance {
+    display: grid;
+    gap: 0.1rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg-sunken);
+}
+.credit-balance.is-active { border-color: var(--secondary); }
+.credit-balance-label { font-size: 0.72rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.credit-balance-value { font-size: 0.95rem; color: var(--text); }
+.credit-balance-free { font-size: 0.72rem; color: var(--text-dim); }
 
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 50; }
 

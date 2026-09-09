@@ -1860,7 +1860,9 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  int? get shownBalance => activeModel != null ? proBalance : standardBalance;
+  bool get proTier => activeModel != null || mediaNeedsPro(activeMediaModel);
+
+  int? get shownBalance => proTier ? proBalance : standardBalance;
 
   /// How many free replies are actually available: the lower of what the worker
   /// says this key has left and what this device has left. Null when the free
@@ -1881,7 +1883,7 @@ class AppController extends ChangeNotifier {
   /// counter the server could see would link a person's keys to each other,
   /// which is the one thing this app is built not to do.
   bool get freeAllows {
-    if (activeModel != null) return true;
+    if (proTier) return true;
     if ((standardBalance ?? 0) > 0) return true;
     final held = free;
     if (held == null || held.limit <= 0) return true;

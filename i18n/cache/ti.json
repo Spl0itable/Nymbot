@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} ፋይላት ተቐይሪዮም",
   "{n} found": "{n} ተረኺቡ",
   "{n} free": "{n} ነጻ",
+  "{n} free left today": "{n} ናይ ሓፈሻዊ ዕለት እዚጊ ተረፈ",
   "{n} lines": "{n} መስመራት",
   "{n} of {total}": "ካብ {total} እቲ {n}",
   "{n} pull requests": "{n} pull requests",

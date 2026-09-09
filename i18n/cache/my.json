@@ -2078,6 +2078,7 @@
   "{n} files changed": "အဆိုပါ file ကိုအပြောင်းအလဲ",
   "{n} found": "နေအိမ်",
   "{n} free": "အခမဲ့",
+  "{n} free left today": "ဒီဇင်ဘာလအတွင်းအခမဲ့",
   "{n} lines": "လိုင်းများ",
   "{n} of {total}": "နေအိမ် နေအိမ်",
   "{n} pull requests": "အဆိုပါ Pull Requests",

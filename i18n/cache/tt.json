@@ -2078,6 +2078,7 @@
   "{n} files changed": "{n} файл үзгәрде",
   "{n} found": "{n} табылды",
   "{n} free": "{n} free",
+  "{n} free left today": "бүген {n} б free калырга җитәр",
   "{n} lines": "{n} сатр",
   "{n} of {total}": "{total}ннән {n}",
   "{n} pull requests": "{n} pull requestлар",
