@@ -1580,7 +1580,7 @@ class AppController extends ChangeNotifier {
     await _add(ChatMessage(
       id: bytesToHex(randomBytes(8)),
       role: ChatRole.self,
-      content: body,
+      content: typed,
       attachments: sent,
       quote: quoted,
     ));
@@ -1711,7 +1711,7 @@ class AppController extends ChangeNotifier {
           id: bytesToHex(randomBytes(8)),
           role: ChatRole.error,
           content: e.message,
-          retry: body,
+          retry: typed,
         ));
       }
     } catch (e) {
@@ -1719,7 +1719,7 @@ class AppController extends ChangeNotifier {
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.error,
         content: t('Something went wrong sending that message.'),
-        retry: body,
+        retry: typed,
       ));
     } finally {
       _stopWatching();

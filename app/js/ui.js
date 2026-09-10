@@ -1075,7 +1075,7 @@
             // message was dropped on the floor with no sign it had been. It
             // waits its turn instead, and says that it is waiting.
             if (this.sending) {
-                this.queue.push(text);
+                this.queue.push(typed);
                 this.renderQueue();
                 if (override == null) {
                     input.value = '';
@@ -1168,7 +1168,7 @@
             const mine = {
                 id: Store.uid(),
                 role: 'self',
-                content: text,
+                content: typed,
                 ts: Date.now(),
                 attachments: attachments.map(a => ({
                     id: a.id, kind: a.kind, name: a.name, mime: a.mime, size: a.size,
@@ -1293,7 +1293,7 @@
                         id: Store.uid(),
                         role: 'error',
                         content: (e && e.message) || t('Something went wrong.'),
-                        retry: text,
+                        retry: typed,
                         ts: Date.now()
                     };
                     Store.addMessage(this.conv.id, err);
