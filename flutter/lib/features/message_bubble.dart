@@ -307,6 +307,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               MarkdownBody(
                 m.content,
                 monospace: settings.monospaceReplies,
+                media: m.task,
               )
             else
               SelectableText(

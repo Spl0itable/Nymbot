@@ -593,7 +593,8 @@
                 // showing the text was.
                 text.innerHTML = MD.render(m.content, {
                     wrap: this.settings.codeWrap,
-                    lineNumbers: this.settings.lineNumbers
+                    lineNumbers: this.settings.lineNumbers,
+                    media: m.task || null
                 });
             } else {
                 text.style.whiteSpace = 'pre-wrap';
@@ -1034,7 +1035,8 @@
                     const partial = target.slice(0, at);
                     text.innerHTML = MD.render(partial, {
                         wrap: this.settings.codeWrap,
-                        lineNumbers: this.settings.lineNumbers
+                        lineNumbers: this.settings.lineNumbers,
+                        media: message.task || null
                     });
                     text.appendChild(caret);
                     if (stick) $('messages').scrollTop = $('messages').scrollHeight;
@@ -1921,6 +1923,34 @@
             }
         },
 
+        mediaName(url, mime) {
+            const path = String(url || '').split(/[?#]/)[0];
+            const tail = path.slice(path.lastIndexOf('/') + 1) || 'nymbot';
+            if (/\.[a-z0-9]{2,5}$/i.test(tail)) return tail;
+            const ext = ({
+                'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
+                'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm',
+                'video/quicktime': 'mov', 'audio/mpeg': 'mp3', 'audio/wav': 'wav',
+                'audio/ogg': 'ogg', 'audio/mp4': 'm4a'
+            })[String(mime || '').split(';')[0].toLowerCase()];
+            return ext ? tail + '.' + ext : tail;
+        },
+
+        async saveMedia(url) {
+            if (!url) return;
+            this.toast(t('Saving…'));
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const blob = await res.blob();
+                Exporter.saveBlob(this.mediaName(url, blob.type), blob);
+                this.toast(t('Saved.'));
+            } catch (_) {
+                window.open(url, '_blank', 'noopener');
+                this.toast(t('Opened it in a new tab — save it from there.'));
+            }
+        },
+
         async addFiles(files) {
             const added = [];
             for (const file of files) {
@@ -2379,8 +2409,16 @@
 
         withMediaModel(text) {
             const media = this.mediaModel();
-            if (!media || !media.command || /^[?!]/.test(text)) return text;
-            return media.command + ' ' + text;
+            const command = media && media.command;
+            if (!command) return text;
+            const verb = (/^\?(\w+)/.exec(command) || [])[1] || '';
+            const head = /^\?(\w+)\s*([\s\S]*)$/.exec(text);
+            if (!head) return /^!/.test(text) ? text : command + ' ' + text;
+            const rest = head[2].trim();
+            if (head[1].toLowerCase() !== verb.toLowerCase()) return text;
+            if (!rest || /^models?$/i.test(rest)) return text;
+            if (/(?:^|\s)(?:--model|-m)[\s=]/.test(rest)) return text;
+            return command + ' ' + rest;
         },
 
         // --- models -----------------------------------------------------------
@@ -5966,6 +6004,7 @@
                 'send': () => this.send(),
                 'stop': () => this.stop(),
                 'attach': () => $('filePicker').click(),
+                'save-media': (target) => this.saveMedia(target.dataset.url),
                 'cancel-quote': () => { this.quote = null; this.renderQuote(); },
                 'scroll-bottom': () => this.scrollToBottom(),
                 'find-in-chat': () => this.openFind(),

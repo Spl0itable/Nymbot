@@ -903,6 +903,29 @@ html[data-timestamps="off"] .bubble-time-inner { display: none; }
 .message-content .md-math { font-family: var(--mono); font-style: italic; }
 .message-content .md-footnote { color: var(--secondary); }
 .msg-media { max-width: 100%; border-radius: 8px; display: block; }
+.msg-media-box { position: relative; margin: 0; width: fit-content; max-width: 100%; }
+.msg-media-save {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+.msg-media-box:hover .msg-media-save,
+.msg-media-save:focus-visible { opacity: 1; }
+@media (pointer: coarse) {
+    .msg-media-save { opacity: 1; }
+}
 
 .callout {
     border: 1px solid var(--line);

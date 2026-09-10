@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'code_highlight.dart';
@@ -13,9 +17,11 @@ class MarkdownBody extends StatelessWidget {
     super.key,
     this.wrapCode = false,
     this.monospace = false,
+    this.media,
   });
 
   final String source;
+  final String? media;
   final bool wrapCode;
   final bool monospace;
 
@@ -29,6 +35,9 @@ class MarkdownBody extends StatelessWidget {
   static final _divider = RegExp(r'^\s*\|?[\s:-]*-[\s|:-]*\|?\s*$');
   static final _imageUrl =
       RegExp(r'\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)', caseSensitive: false);
+  static final _clipUrl =
+      RegExp(r'\.(mp4|webm|mov|mp3|wav|ogg|m4a|opus|flac)(\?|$)', caseSensitive: false);
+  static final _anyExt = RegExp(r'\.[a-z0-9]{2,5}(\?|$)', caseSensitive: false);
   static final _bareUrl = RegExp(r'^https?://\S+$');
 
   static String plain(String source) => source
@@ -188,11 +197,14 @@ class MarkdownBody extends StatelessWidget {
       // Images and audio arrive as bare URLs the bot uploaded; showing them
       // beats making someone open a link to find out what was generated.
       final bare = text.trim();
-      if (_bareUrl.hasMatch(bare) && _imageUrl.hasMatch(bare)) {
-        blocks.add(ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.network(bare, errorBuilder: (c, e, s) => _inline(c, bare)),
-        ));
+      final linked = _bareUrl.hasMatch(bare);
+      final unlabelled = linked && !_anyExt.hasMatch(bare);
+      if (linked && (_imageUrl.hasMatch(bare) || (unlabelled && media == 'image'))) {
+        blocks.add(MediaBlock(url: bare, image: true));
+      } else if (linked &&
+          (_clipUrl.hasMatch(bare) ||
+              (unlabelled && (media == 'video' || media == 'speak')))) {
+        blocks.add(MediaBlock(url: bare, image: false));
       } else {
         blocks.add(_inline(context, text));
       }
@@ -574,4 +586,117 @@ class _CodeBlockState extends State<CodeBlock> {
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(minWidth: 30, minHeight: 28),
       );
+}
+
+class MediaBlock extends StatefulWidget {
+  const MediaBlock({super.key, required this.url, required this.image});
+
+  final String url;
+  final bool image;
+
+  @override
+  State<MediaBlock> createState() => _MediaBlockState();
+}
+
+class _MediaBlockState extends State<MediaBlock> {
+  bool _saving = false;
+
+  static String _name(String url, String? mime) {
+    final path = url.split(RegExp(r'[?#]')).first;
+    var tail = path.substring(path.lastIndexOf('/') + 1);
+    if (tail.isEmpty) tail = 'nymbot';
+    if (RegExp(r'\.[a-z0-9]{2,5}$', caseSensitive: false).hasMatch(tail)) return tail;
+    const byType = {
+      'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
+      'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm',
+      'video/quicktime': 'mov', 'audio/mpeg': 'mp3', 'audio/wav': 'wav',
+      'audio/ogg': 'ogg', 'audio/mp4': 'm4a',
+    };
+    final ext = byType[(mime ?? '').split(';').first.toLowerCase()];
+    return ext == null ? tail : '$tail.$ext';
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final res = await http.get(Uri.parse(widget.url));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('HTTP ${res.statusCode}');
+      }
+      final file = File(
+          '${Directory.systemTemp.path}/${_name(widget.url, res.headers['content-type'])}');
+      await file.writeAsBytes(res.bodyBytes);
+      await Share.shareXFiles([XFile(file.path)]);
+    } catch (_) {
+      await launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication);
+      messenger.showSnackBar(
+          SnackBar(content: Text(t('Opened it outside the app — save it from there.'))));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final save = Material(
+      color: Colors.black54,
+      borderRadius: BorderRadius.circular(8),
+      child: IconButton(
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        tooltip: t('Save this file'),
+        color: Colors.white,
+        icon: _saving
+            ? const SizedBox(
+                width: 16, height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+            : const Icon(Icons.download),
+        onPressed: _saving ? null : _save,
+      ),
+    );
+    if (!widget.image) {
+      return Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+        decoration: BoxDecoration(
+          border: Border.all(color: theme.dividerColor),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(children: [
+          Icon(Icons.movie_outlined, size: 18, color: theme.hintColor),
+          const SizedBox(width: 8),
+          Expanded(child: Text(t('Tap to save what this made'),
+              style: TextStyle(fontSize: 12, color: theme.hintColor))),
+          IconButton(
+            iconSize: 18,
+            tooltip: t('Open'),
+            icon: const Icon(Icons.open_in_new),
+            onPressed: () => launchUrl(Uri.parse(widget.url),
+                mode: LaunchMode.externalApplication),
+          ),
+          IconButton(
+            iconSize: 18,
+            tooltip: t('Save this file'),
+            icon: _saving
+                ? const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.download),
+            onPressed: _saving ? null : _save,
+          ),
+        ]),
+      );
+    }
+    return Stack(children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.network(widget.url,
+            errorBuilder: (c, e, s) => Text(widget.url,
+                style: TextStyle(fontSize: 12, color: theme.hintColor))),
+      ),
+      Positioned(top: 6, right: 6, child: save),
+    ]);
+  }
 }

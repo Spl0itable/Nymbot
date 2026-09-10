@@ -219,12 +219,24 @@ class AppController extends ChangeNotifier {
     await setMediaModel(null, forChat: current?.mediaModel != null);
   }
 
+  static final RegExp _commandVerb = RegExp(r'^\?(\w+)');
+  static final RegExp _commandHead = RegExp(r'^\?(\w+)\s*([\s\S]*)$');
+  static final RegExp _listsModels = RegExp(r'^models?$', caseSensitive: false);
+
   String withMediaModel(String text) {
     final media = activeMediaModel;
     final command = media?['command'] as String?;
     if (command == null || command.isEmpty) return text;
-    if (text.startsWith('?') || text.startsWith('!')) return text;
-    return '$command $text';
+    final verb = _commandVerb.firstMatch(command)?.group(1) ?? '';
+    final head = _commandHead.firstMatch(text);
+    if (head == null) {
+      return text.startsWith('!') ? text : '$command $text';
+    }
+    final rest = (head.group(2) ?? '').trim();
+    if (head.group(1)!.toLowerCase() != verb.toLowerCase()) return text;
+    if (rest.isEmpty || _listsModels.hasMatch(rest)) return text;
+    if (_hasModelFlag.hasMatch(rest)) return text;
+    return '$command $rest';
   }
 
   Future<void> toggleFavouriteModel(String key) async {

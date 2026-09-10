@@ -50,15 +50,28 @@
         return out;
     }
 
-    function mediaFor(url) {
-        if (/\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)/i.test(url)) {
-            return `<img class="msg-media" src="${esc(url)}" alt="" loading="lazy">`;
+    const SAVE_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"'
+        + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline>'
+        + '<path d="M4 20h16"></path></svg>';
+
+    function mediaBox(inner, url) {
+        return `<figure class="msg-media-box">${inner}`
+            + `<button class="msg-media-save" type="button" data-act="save-media"`
+            + ` data-url="${esc(url)}" title="${esc(t('Save this file'))}"`
+            + ` aria-label="${esc(t('Save this file'))}">${SAVE_ICON}</button></figure>`;
+    }
+
+    function mediaFor(url, kind) {
+        const bare = !/\.[a-z0-9]{2,5}(\?|$)/i.test(url);
+        if (/\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)/i.test(url) || (bare && kind === 'image')) {
+            return mediaBox(`<img class="msg-media" src="${esc(url)}" alt="" loading="lazy">`, url);
         }
-        if (/\.(mp3|wav|ogg|m4a|opus|flac)(\?|$)/i.test(url)) {
-            return `<audio class="msg-media" controls preload="none" src="${esc(url)}"></audio>`;
+        if (/\.(mp3|wav|ogg|m4a|opus|flac)(\?|$)/i.test(url) || (bare && kind === 'speak')) {
+            return mediaBox(`<audio class="msg-media" controls preload="none" src="${esc(url)}"></audio>`, url);
         }
-        if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) {
-            return `<video class="msg-media" controls preload="none" src="${esc(url)}"></video>`;
+        if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || (bare && kind === 'video')) {
+            return mediaBox(`<video class="msg-media" controls preload="none" src="${esc(url)}"></video>`, url);
         }
         return null;
     }
@@ -333,7 +346,8 @@
             }
             const text = para.join('\n');
             const bare = text.trim();
-            const media = /^https?:\/\/\S+$/.test(bare) ? mediaFor(bare) : null;
+            const media = /^https?:\/\/\S+$/.test(bare)
+                ? mediaFor(bare, opts.media) : null;
             out.push(media || `<p>${inline(text).replace(/\n/g, '<br>')}</p>`);
         }
 

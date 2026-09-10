@@ -90,7 +90,10 @@
     }
 
     function download(name, mime, body) {
-        const blob = new Blob([body], { type: mime + ';charset=utf-8' });
+        saveBlob(name, new Blob([body], { type: mime + ';charset=utf-8' }));
+    }
+
+    function saveBlob(name, blob) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -144,7 +147,8 @@
             catch (_) { throw new Error('unreadable'); }
         },
 
-        download
+        download,
+        saveBlob
     };
 
     window.NymbotExport = Export;
