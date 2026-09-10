@@ -2355,6 +2355,7 @@
                     this.conv = Store.updateConversation(this.conv.id, { proModel: null });
                 }
             }
+            this.clearMediaModel();
             this.refreshToolbar();
         },
 
@@ -2372,9 +2373,18 @@
             return raw.replace(/^(\?\w+)\s+(\S+)$/, '$1 --model $2');
         },
 
+        clearMediaModel() {
+            if (!this.mediaModel()) return;
+            if (this.conv && this.conv.mediaModel) {
+                this.conv = Store.updateConversation(this.conv.id, { mediaModel: null });
+            }
+            if (this.settings.mediaModel) this.saveSettings({ mediaModel: null });
+            this.refreshToolbar();
+        },
+
         dropProMedia() {
             if (!this.mediaNeedsPro(this.mediaModel())) return;
-            this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+            this.clearMediaModel();
         },
 
         cheapestChatKey() {

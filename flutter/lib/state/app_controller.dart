@@ -159,6 +159,7 @@ class AppController extends ChangeNotifier {
         await store.saveConversations(conversations);
       }
     }
+    await clearMediaModel();
     notifyListeners();
   }
 
@@ -214,9 +215,23 @@ class AppController extends ChangeNotifier {
   static bool mediaNeedsPro(Map<String, dynamic>? media) =>
       media != null && (media['kind'] == 'image' || media['kind'] == 'video');
 
+  Future<void> clearMediaModel() async {
+    if (activeMediaModel == null) return;
+    final conv = current;
+    if (conv != null && conv.mediaModel != null) {
+      conv.mediaModel = null;
+      await store.saveConversations(conversations);
+    }
+    if (mediaModel != null) {
+      mediaModel = null;
+      await _saveModel();
+    }
+    notifyListeners();
+  }
+
   Future<void> dropProMedia() async {
     if (!mediaNeedsPro(activeMediaModel)) return;
-    await setMediaModel(null, forChat: current?.mediaModel != null);
+    await clearMediaModel();
   }
 
   static final RegExp _commandVerb = RegExp(r'^\?(\w+)');
