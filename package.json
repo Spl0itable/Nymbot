@@ -11,6 +11,7 @@
     "build": "node build.mjs",
     "i18n": "node i18n/sync.mjs",
     "i18n:list": "node i18n/sync.mjs --list",
+    "i18n:export": "node i18n/export.mjs",
     "test": "node i18n/test/run.mjs",
     "test:browser": "node i18n/test/browser.mjs",
     "test:mobile": "node test/mobile.mjs",
