@@ -263,11 +263,12 @@
             if (data.insufficient) {
                 this.state.pending = null;
                 this.save();
+                const num = (v) => window.NymbotI18n.count(v);
                 const err = new Error(pending.tier === 'pro'
                     ? t('Not enough Pro credits on your nym — {balance} left, {required} needed.',
-                        { balance: data.balance, required: data.required })
+                        { balance: num(data.balance), required: num(data.required) })
                     : t('Not enough credits on your nym — {balance} left, {required} needed.',
-                        { balance: data.balance, required: data.required }));
+                        { balance: num(data.balance), required: num(data.required) }));
                 err.insufficient = true;
                 throw err;
             }

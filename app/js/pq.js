@@ -85,6 +85,9 @@
         /// would strand every message sealed to it.
         async announce() {
             if (!Identity.pubkey || !Identity.kemPk) return false;
+            // Already known to be the wrong root — from the account's own D1
+            // record, which the relays cannot contradict.
+            if (Identity.rootLocked) return false;
             const mine = Identity.kemPk;
             const existing = await this.resolve(Identity.pubkey);
             if (existing && !sameBytes(existing.pk, mine)) {

@@ -17,6 +17,12 @@
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
 
+    // The row that says which post-quantum root the ACCOUNT uses. Written by
+    // Nymchat under its own name, so the category is hashed the way Nymchat
+    // hashes it rather than the way this app hashes its own rows — one account,
+    // one root, whichever app reached it first.
+    const PQ_ROOT_D_TAG = 'nymchat-pq-root';
+
     const LIBRARY = [
         ['personas', () => Store.customPersonas(), (v) => Store.write('personas', v)],
         ['prompts', () => Store.read('prompts', null), (v) => Store.write('prompts', v)],
@@ -42,9 +48,19 @@
         return 'nymbot-' + (await sha256Hex(Identity.pubkey + '|d1:' + dTag)).slice(0, 48);
     }
 
+    /// The name Nymchat stores one of its rows under, for the account whose key
+    /// this is. Byte-for-byte its `_d1Category`, or the root row is invisible to
+    /// whichever app did not write it.
+    async function nymchatCategoryFor(pubkey, dTag) {
+        return 'nymchat-' + await sha256Hex(pubkey + ':d1:' + dTag);
+    }
+
     /// Sealing hybrid is only worth it if this device can also open it again: the
     /// KEM secret is derived from the root, which a signer login does not have.
+    /// A locked device holds a root that is not this account's, so sealing to it
+    /// would write rows the account's real devices could never read.
     function selfKem() {
+        if (Identity.rootLocked) return null;
         return (Identity._sk && Identity._kem) ? Identity.kemPk : null;
     }
 
@@ -80,7 +96,22 @@
         return window.nostr.nip44.decrypt(Identity.pubkey, blob);
     }
 
-    async function auth(action) {
+    /// Never hybrid, whatever this device can do. The root row is the one row
+    /// that may not be sealed to a root-derived key: it is what tells a device
+    /// which root to derive, so sealing it that way locks it behind itself.
+    async function sealClassical(plaintext) {
+        if (Identity._sk) {
+            const T = NT();
+            return T.nip44.encrypt(plaintext, T.nip44.getConversationKey(Identity._sk, Identity.pubkey));
+        }
+        return window.nostr.nip44.encrypt(Identity.pubkey, plaintext);
+    }
+
+    /// `account` stands in for the signed-in identity when there is not one
+    /// yet: the sign-in gate has to ask what the account already holds before it
+    /// decides what to give this device. It carries the pubkey, something that
+    /// signs, and something that opens a classical blob addressed to it.
+    async function auth(action, account) {
         const event = {
             kind: 27235,
             created_at: Math.floor(Date.now() / 1000),
@@ -92,12 +123,13 @@
             ],
             content: 'nymbot-sync-auth'
         };
-        return Identity.signEvent(event);
+        return account ? account.sign(event) : Identity.signEvent(event);
     }
 
-    async function call(action, extra) {
+    async function call(action, extra, account) {
+        const pubkey = account ? account.pubkey : Identity.pubkey;
         const body = Object.assign(
-            { action, pubkey: Identity.pubkey, auth: await auth(action) }, extra || {});
+            { action, pubkey, auth: await auth(action, account) }, extra || {});
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         try {
@@ -113,6 +145,91 @@
         } finally {
             clearTimeout(timer);
         }
+    }
+
+    /// A public batch read of the D1 profile mirror. No identity and no auth:
+    /// a kind 0 is public by definition, and this has to answer before the
+    /// relays are up. Returns the signed events by pubkey; unverified, since
+    /// the caller is the one that knows what it will do with them.
+    async function profileEventsFromD1(pubkeys) {
+        const wanted = (pubkeys || [])
+            .filter(pk => /^[0-9a-f]{64}$/i.test(pk || ''))
+            .map(pk => pk.toLowerCase())
+            .slice(0, 100);
+        if (!wanted.length) return {};
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        try {
+            const resp = await fetch(url(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'profile-get', pubkeys: wanted }),
+                signal: controller.signal
+            });
+            if (!resp.ok) return null;
+            const out = {};
+            for (const line of (await resp.text()).split('\n')) {
+                if (!line.trim()) continue;
+                let item;
+                try { item = JSON.parse(line); } catch (_) { continue; }
+                if (!Array.isArray(item) || item.length < 2) continue;
+                const rec = item[1];
+                if (rec && rec.event) out[item[0]] = rec.event;
+            }
+            return out;
+        } catch (_) {
+            return null;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /// What the account's root row says. Null when the read did not complete —
+    /// which is not the same answer as "there is no root", and the caller must
+    /// not treat it as one. `present` is the row's existence, decided without
+    /// decrypting: a row this device cannot open is still proof a root exists,
+    /// and minting a second one over it splits the account.
+    async function rootRecordFor(account) {
+        const pubkey = account ? account.pubkey : Identity.pubkey;
+        if (!pubkey) return null;
+        const data = await call('settings-get', {}, account);
+        if (!data || !data.categories || typeof data.categories !== 'object') return null;
+        const hashed = await nymchatCategoryFor(pubkey, PQ_ROOT_D_TAG);
+        let blob = null;
+        for (const name of [hashed, PQ_ROOT_D_TAG]) {
+            const entry = data.categories[name];
+            if (entry && typeof entry.blob === 'string' && entry.blob) { blob = entry.blob; break; }
+        }
+        if (!blob) return { present: false, record: null };
+        let record = null;
+        try {
+            const payload = JSON.parse(account ? await account.open(blob) : await open(blob));
+            if (payload && payload.v === 2 && typeof payload.fp === 'string' && payload.fp) {
+                record = payload;
+            }
+        } catch (_) { }
+        return { present: true, record };
+    }
+
+    /// Writes the row for the root this device holds. Without it every other
+    /// device reads "no root" and mints a rival one.
+    async function publishRootRecord() {
+        const fingerprint = Identity.rootFingerprint();
+        if (!Identity.pubkey || !fingerprint) return false;
+        const plain = JSON.stringify({
+            v: 2,
+            fp: fingerprint,
+            wraps: [],
+            ts: Math.floor(Date.now() / 1000),
+            __cat: PQ_ROOT_D_TAG
+        });
+        let blob;
+        try { blob = await sealClassical(plain); } catch (_) { return false; }
+        if (!blob) return false;
+        const category = await nymchatCategoryFor(Identity.pubkey, PQ_ROOT_D_TAG);
+        const hash = await sha256Hex(Identity.pubkey + '|c|' + plain);
+        const resp = await call('settings-set', { category, blob, contentHash: hash });
+        return !!(resp && !resp.error);
     }
 
     /// Newest wins, by whatever each record calls its clock.
@@ -145,6 +262,10 @@
         _again: false,
         _hashes: new Map(),
         onChange: null,
+
+        rootRecord(account) { return rootRecordFor(account); },
+        publishRootRecord() { return publishRootRecord(); },
+        profileEvents(pubkeys) { return profileEventsFromD1(pubkeys); },
 
         enabled() {
             return !!(Identity.pubkey && Store.settings().sync !== false);
@@ -295,6 +416,10 @@
                 if (!payload || typeof payload !== 'object') continue;
                 const name = typeof payload.__cat === 'string' ? payload.__cat : null;
                 if (!name) continue;
+                // Key material, not a settings payload. It has its own reader
+                // and its own writer, and letting it through here would put it
+                // in the sync's snapshot — and in what a remote wipe empties.
+                if (name === PQ_ROOT_D_TAG) continue;
                 delete payload.__cat;
                 out[name] = payload.v !== undefined ? payload.v : payload;
             }

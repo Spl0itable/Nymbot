@@ -27,6 +27,10 @@
     const Free = window.NymbotFree;
     const NT = () => window.NostrTools;
 
+    /// Credits and sats, with their thousands separated. Never abbreviated —
+    /// they are money, and every digit stays.
+    const num = (v) => window.NymbotI18n.count(v);
+
     const $ = (id) => document.getElementById(id);
     const el = (tag, cls, text) => {
         const n = document.createElement(tag);
@@ -172,6 +176,7 @@
             // post-quantum; neither blocks the first message.
             setTimeout(async () => {
                 try { await PQ.resolveBot(); } catch (_) { }
+                try { await this.settleRoot(); } catch (_) { }
                 try { await PQ.announce(); } catch (_) { }
                 if (Identity.rootLocked) this.toast(t('This account already uses another device\'s post-quantum key. Open Identity to link this one.'));
                 this.refreshBalance();
@@ -796,7 +801,7 @@
             }
             if (reserve && reserve > left) {
                 this.note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-                    { n: reserve - left }));
+                    { n: num(reserve - left) }));
                 return;
             }
 
@@ -852,17 +857,17 @@
 
                 if (token && reserve && reserve > left) {
                     this.note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-                        { n: reserve, left }));
+                        { n: num(reserve), left: num(left) }));
                     return;
                 }
                 if (token && left <= 0) {
                     this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-                        { n: spent }));
+                        { n: num(spent) }));
                     return;
                 }
             }
             if (this.conv._continued) {
-                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: this.conv._continued }));
+                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: num(this.conv._continued) }));
                 this.conv._continued = 0;
             }
         },
@@ -1255,8 +1260,8 @@
                     const topped = this.conv.anon ? await this.runAutoTopUp() : null;
                     if (!topped) {
                         this.note(res.pro
-                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance })
-                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: res.balance }));
+                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: num(res.balance) })
+                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: num(res.balance) }));
                     }
                 }
                 if (res.truncated) await this.continueRun(res, reply);
@@ -1904,11 +1909,11 @@
                 const est = Chat.estimateCredits(text, this.settings, this.conv, opts);
                 hint.textContent = est.tier === 'pro'
                     ? (est.low === est.high
-                        ? t('About {n} Pro credits', { n: est.low })
-                        : t('About {low}–{high} Pro credits', { low: est.low, high: est.high }))
+                        ? t('About {n} Pro credits', { n: num(est.low) })
+                        : t('About {low}–{high} Pro credits', { low: num(est.low), high: num(est.high) }))
                     : (est.low === 1
                         ? t('1 standard credit')
-                        : t('{n} standard credits', { n: est.low }));
+                        : t('{n} standard credits', { n: num(est.low) }));
             } else {
                 hint.textContent = '';
             }
@@ -1917,7 +1922,7 @@
             const len = $('lenHint');
             const parts = text.trim() ? Chat.partSurcharge(this.conv, text, opts) : 0;
             if (parts > 0) {
-                len.textContent = t('Sent in {n} parts, +{extra} credits', { n: parts + 1, extra: parts });
+                len.textContent = t('Sent in {n} parts, +{extra} credits', { n: parts + 1, extra: num(parts) });
             } else {
                 len.textContent = text.length > 600 ? t('{n} characters', { n: text.length }) : '';
             }
@@ -2059,10 +2064,10 @@
                 const anon = this.conv && this.conv.anon;
                 this.note((anon
                     ? t('This chat\'s anonymous balance: {standard} standard, {pro} Pro.',
-                        { standard: this.balance.standard, pro: this.balance.pro })
+                        { standard: num(this.balance.standard), pro: num(this.balance.pro) })
                         + ' ' + t('Tap Anon to move more across from your nym.')
                     : t('Your balance: {standard} standard, {pro} Pro.',
-                        { standard: this.balance.standard, pro: this.balance.pro })));
+                        { standard: num(this.balance.standard), pro: num(this.balance.pro) })));
             }
         },
 
@@ -2079,11 +2084,11 @@
             // tier is a thing that is still working.
             const free = this.freeLeft();
             $('chipBuyLabel').textContent = (!pro && !this.balance.standard && free != null)
-                ? t('{n} free', { n: free })
-                : (value == null ? t('Buy') : String(value));
+                ? t('{n} free', { n: num(free) })
+                : (value == null ? t('Buy') : num(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
                 : t('{standard} standard · {pro} Pro',
-                    { standard: this.balance.standard, pro: this.balance.pro });
+                    { standard: num(this.balance.standard), pro: num(this.balance.pro) });
         },
 
         /// Whether a message may go at all. Only ever false on the free tier
@@ -2167,6 +2172,9 @@
                 modelChip.firstElementChild);
 
             const repos = Chat.reposFor(conv);
+            if (model && repos.length && window.NymbotRepoMap) {
+                window.NymbotRepoMap.warm(repos);
+            }
             const gitChip = $('chipGit');
             gitChip.classList.toggle('is-active', repos.length > 0);
             gitChip.querySelector('.chip-label').textContent = repos.length === 0
@@ -2470,7 +2478,9 @@
         /// A bare number said nothing about what it counted.
         modelPrice(m) {
             const span = m.max && m.max !== m.credits;
-            const n = span ? `${m.credits}–${m.max}` : String(m.credits);
+            // Each side of a range is its own figure; the range is not one
+            // number to format.
+            const n = span ? `${num(m.credits)}–${num(m.max)}` : num(m.credits);
             return (!span && m.credits === 1) ? t('{n} credit', { n }) : t('{n} credits', { n });
         },
 
@@ -2617,6 +2627,7 @@
                         danger: true
                     });
                     if (!ok) return;
+                    if (window.NymbotRepoMap) window.NymbotRepoMap.forget(r);
                     Store.deleteRepo(r.id);
                     this.conv = Store.conversation(this.conv.id);
                     this.renderRepos();
@@ -2861,6 +2872,8 @@
             }
             let entry;
             if (this.repoEditing) {
+                const before = Store.repo(this.repoEditing);
+                if (before && window.NymbotRepoMap) window.NymbotRepoMap.forget(before);
                 entry = Store.updateRepo(this.repoEditing, cfg);
             } else {
                 entry = Store.addRepo(cfg);
@@ -3443,9 +3456,9 @@
             const cells = [
                 [String(mine), t('Messages sent')],
                 [String(theirs), t('Replies')],
-                [String(credits), t('Credits spent here')],
+                [num(credits), t('Credits spent here')],
                 [String(words), t('Words exchanged')],
-                [String(usage.credits), t('Credits spent overall')],
+                [num(usage.credits), t('Credits spent overall')],
                 [String(usage.replies), t('Replies overall')]
             ];
             for (const [value, label] of cells) {
@@ -3867,10 +3880,10 @@
             const pro = !!m.model;
             const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
             const rows = [
-                [t('Charged'), t('{n} credits', { n: m.cost })],
+                [t('Charged'), t('{n} credits', { n: num(m.cost) })],
                 [t('Tier'), pro ? t('Pro') : t('Standard')],
                 [t('Model'), m.model || t('Auto-routed')],
-                [t('At today\'s price'), t('{n} sats', { n: sats })]
+                [t('At today\'s price'), t('{n} sats', { n: num(sats) })]
             ];
             if (m.calls && m.calls > 1) {
                 rows.push([t('Model calls'), String(m.calls)]);
@@ -4271,7 +4284,7 @@
             for (const m of (this.models && this.models.models) || []) {
                 const opt = document.createElement('option');
                 opt.value = m.key;
-                opt.textContent = `${m.label} · ${m.credits || 1}`;
+                opt.textContent = `${m.label} · ${num(m.credits || 1)}`;
                 sel.appendChild(opt);
             }
             sel.dataset.filled = '1';
@@ -4782,7 +4795,7 @@
                 for (const m of rows) {
                     const opt = document.createElement('option');
                     opt.value = m.key;
-                    opt.textContent = `${m.label} · ${m.credits || 1}`;
+                    opt.textContent = `${m.label} · ${num(m.credits || 1)}`;
                     if (m.key === chosen) opt.selected = true;
                     sel.appendChild(opt);
                 }
@@ -4822,13 +4835,13 @@
             if (this.balance.pro != null && this.balance.pro < price) {
                 this.modalStatus('compareStatus',
                     t('Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
-                        { n: price, have: this.balance.pro }), 'warn');
+                        { n: num(price), have: num(this.balance.pro) }), 'warn');
                 return;
             }
             const go = await this.ask({
                 title: t('Ask both?'),
                 body: t('{a} and {b} each answer once, so this costs two replies — about {n} Pro credits.',
-                    { a: a.label, b: b.label, n: price }),
+                    { a: a.label, b: b.label, n: num(price) }),
                 confirm: t('Ask both')
             });
             if (!go) return;
@@ -4875,7 +4888,7 @@
                 head.appendChild(el('span', 'compare-name', run.model.label));
                 if (run.ok) {
                     head.appendChild(el('span', 'compare-cost',
-                        t('{n} credits', { n: (run.result.cost || 0) })));
+                        t('{n} credits', { n: num(run.result.cost || 0) })));
                 }
                 col.appendChild(head);
                 const body = el('div', 'compare-body' + (run.ok ? '' : ' is-error'));
@@ -5050,8 +5063,8 @@
             try {
                 const credited = await Anon.moveCredits(amount, tier);
                 this.modalStatus('anonStatus', tier === 'pro'
-                    ? t('Moved {n} Pro credits onto the throwaway key.', { n: credited })
-                    : t('Moved {n} credits onto the throwaway key.', { n: credited }), 'ok');
+                    ? t('Moved {n} Pro credits onto the throwaway key.', { n: num(credited) })
+                    : t('Moved {n} credits onto the throwaway key.', { n: num(credited) }), 'ok');
                 $('anonAmount').value = '';
                 this.openAnon();
             } catch (e) {
@@ -5080,7 +5093,7 @@
                 this.showInvoice(live);
                 this.modalStatus('creditStatus', live.paid
                     ? t('Your payment arrived. Tap Add my credits to finish.')
-                    : t('Pay {sats} sats. This updates the moment it settles.', { sats: live.sats }));
+                    : t('Pay {sats} sats. This updates the moment it settles.', { sats: num(live.sats) }));
             } else {
                 this.resetInvoice();
                 $('creditStatus').textContent = '';
@@ -5104,10 +5117,10 @@
                     + (this.creditTier === tier ? ' is-active' : ''));
                 cell.appendChild(el('span', 'credit-balance-label', label));
                 cell.appendChild(el('span', 'credit-balance-value',
-                    value == null ? '—' : t('{n} credits', { n: value })));
+                    value == null ? '—' : t('{n} credits', { n: num(value) })));
                 if (tier === 'standard' && !value && free != null) {
                     cell.appendChild(el('span', 'credit-balance-free',
-                        t('{n} free left today', { n: free })));
+                        t('{n} free left today', { n: num(free) })));
                 }
                 box.appendChild(cell);
             }
@@ -5173,8 +5186,8 @@
             }
             if (!credits) { $('creditSats').textContent = ''; return; }
             $('creditSats').textContent = this.creditTier === 'pro'
-                ? t('{credits} Pro credits = {sats} sats', { credits, sats })
-                : t('{credits} credits = {sats} sats', { credits, sats });
+                ? t('{credits} Pro credits = {sats} sats', { credits: num(credits), sats: num(sats) })
+                : t('{credits} credits = {sats} sats', { credits: num(credits), sats: num(sats) });
         },
 
         async buyCredits() {
@@ -5206,7 +5219,7 @@
             this.showInvoice(invoice);
             this.creditSats();
             if (this.invoice !== invoice) return;
-            this.modalStatus('creditStatus', t('Pay {sats} sats. This updates the moment it settles.', { sats }));
+            this.modalStatus('creditStatus', t('Pay {sats} sats. This updates the moment it settles.', { sats: num(sats) }));
             this.pollInvoice(invoice);
         },
 
@@ -5225,10 +5238,13 @@
             if (data && !data.error) {
                 this.balance[invoice.tier] = data.balance;
                 this.renderBalance();
+                // The modal is still open on top of all this, and its balances
+                // are what the buyer is looking at — the chip behind it is not.
+                this.renderCreditBalances();
                 this.resetInvoice();
                 this.modalStatus('creditStatus',
                     t('Credited. Balance: {balance}. Create a new invoice to buy more.',
-                        { balance: data.balance }), 'ok');
+                        { balance: num(data.balance) }), 'ok');
                 return true;
             }
             if (data && /already claimed/i.test(data.error || '')) {
@@ -5300,7 +5316,7 @@
                 : t('One code for the account, not for the app. Paste it into another device — or into Nymchat — and both hold the same post-quantum key.');
             const usage = Store.usage();
             $('usageLine').textContent = t('{replies} replies, {credits} credits spent on this device.',
-                { replies: usage.replies, credits: usage.credits });
+                { replies: num(usage.replies), credits: num(usage.credits) });
             $('settingsStatus').textContent = '';
             this.openModal('modalSettings');
         },
@@ -6360,6 +6376,11 @@
         gateGenerate() {
             try {
                 Identity.generate();
+                // A key nobody has seen before cannot already have a root, so
+                // there is nothing to ask D1 — only a row to write, so the next
+                // device to sign in finds it and asks for the code instead of
+                // minting a second one.
+                Sync.publishRootRecord().catch(() => { });
                 $('revealNsecRow').hidden = false;
                 $('revealNsec').value = NT().nip19.nsecEncode(Identity._sk);
                 $('revealRoot').value = Identity.rootCode() || '';
@@ -6374,13 +6395,11 @@
             try {
                 const sk = Identity.readSecret($('gateNsec').value);
                 const pubkey = NT().getPublicKey(sk);
-                const found = await this.rootForSignIn(pubkey);
-                if (found === false) return;
-                Identity.importSecret($('gateNsec').value,
-                    found && found.root !== undefined ? found.root : found,
-                    found && found.epoch);
+                const verdict = await this.rootForSignIn(this.signInAs(pubkey, sk));
+                if (!verdict) return;
+                Identity.importSecret($('gateNsec').value, verdict.root, verdict.epoch);
                 $('gateNsec').value = '';
-                this.afterSignIn();
+                this.afterSignIn(verdict);
             } catch (e) {
                 this.gateError(e.message || t('That key could not be read.'));
             }
@@ -6389,33 +6408,106 @@
         async gateExtension() {
             try {
                 const pubkey = await Identity.extensionPubkey();
-                const found = await this.rootForSignIn(pubkey);
-                if (found === false) return;
-                await Identity.useExtension(
-                    found && found.root !== undefined ? found.root : found,
-                    found && found.epoch);
-                this.afterSignIn();
+                const verdict = await this.rootForSignIn(this.signInAs(pubkey, null));
+                if (!verdict) return;
+                await Identity.useExtension(verdict.root, verdict.epoch);
+                this.afterSignIn(verdict);
             } catch (e) {
                 this.gateError(e.message || t('The extension refused.'));
             }
         },
 
+        /// The same question the gate asks, asked again on every launch of a
+        /// device that is already signed in. A launch that could not reach the
+        /// worker settles nothing, so it has to be re-asked rather than
+        /// answered once: the row may have appeared since, and a root of ours
+        /// that never got a row leaves every other device reading "no root".
+        async settleRoot() {
+            if (!Identity.pubkey) return;
+            let stored;
+            try {
+                stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk));
+            } catch (_) { return; }
+            if (!stored) return;
+            const fingerprint = Identity.rootFingerprint();
+            if (!stored.present) {
+                if (fingerprint) { await Sync.publishRootRecord(); return; }
+                // A sign-in that could not reach the worker left this device
+                // without a root rather than minting one blind. The account
+                // turns out to have none, so this is the moment to make it.
+                const shown = Identity.mintRoot();
+                if (!shown) return;
+                await Sync.publishRootRecord();
+                this.renderIdentity();
+                this.toast(t('Your post-quantum recovery code is ready. Open Identity to save it — nobody can reissue it.'));
+                return;
+            }
+            // A row we could not read is still proof a root exists; only a root
+            // whose fingerprint the record names is proof we hold THAT one.
+            if (fingerprint && (!stored.record || stored.record.fp === fingerprint)) return;
+            Identity.rootLocked = true;
+        },
+
+        /// Stands in for the identity while there is not one yet. The gate has
+        /// to ask the account what it already holds before it decides what to
+        /// give this device, and that question is signed by the key being
+        /// signed in with — whether this app holds it or an extension does.
+        signInAs(pubkey, sk) {
+            const T = NT();
+            return {
+                pubkey,
+                sign: (event) => sk
+                    ? T.finalizeEvent(Object.assign({}, event, { pubkey }), sk)
+                    : window.nostr.signEvent(Object.assign({}, event, { pubkey })),
+                open: (blob) => sk
+                    ? T.nip44.decrypt(blob, T.nip44.getConversationKey(sk, pubkey))
+                    : window.nostr.nip44.decrypt(pubkey, blob)
+            };
+        },
+
         /// Which post-quantum root a key signing back in should get.
-        async rootForSignIn(pubkey) {
+        ///
+        /// D1 answers this, not the relays: the root row is where an account
+        /// records that it HAS a root, it is written the moment one is minted,
+        /// and it survives an announcement expiring. The relay announcement is
+        /// the second opinion, for an account whose row predates this or whose
+        /// row could not be read.
+        ///
+        /// Returns null to stay on the gate, or the verdict: `link` with the
+        /// root to adopt, `locked` for an account whose root this device does
+        /// not have, `mint` for one that has none.
+        async rootForSignIn(account) {
             this.gateError('');
             this.gateBusy(t('Checking whether this key already has a post-quantum root…'));
+            let stored = null;
             let announced = null;
             try {
+                stored = await Sync.rootRecord(account);
+            } catch (_) {
+                stored = null;
+            }
+            try {
                 Relays.connect();
-                announced = await PQ.resolve(pubkey);
+                announced = await PQ.resolve(account.pubkey);
             } catch (_) {
                 announced = null;
             } finally {
                 this.gateBusy('');
             }
-            // Nothing advertised: either a key that has never used Nymbot or
-            // Nymchat, or relays that could not be reached.
-            if (!announced || !announced.pk) return undefined;
+            const record = (stored && stored.record) || null;
+            const rowPresent = !!(stored && stored.present);
+            const advertised = (announced && announced.pk) || null;
+            if (!rowPresent && !advertised) {
+                // D1 answered and holds nothing, and the relays advertise
+                // nothing: a key that has never used Nymbot or Nymchat.
+                if (stored) return { status: 'mint', root: null };
+                // Neither source answered. Minting waits — a second root
+                // published over the first strands every settings row, every
+                // synced conversation and every reply sealed to the one it
+                // replaced. Sign in without one; the first launch that reaches
+                // the worker settles it.
+                return { status: 'unknown', root: null };
+            }
 
             const code = await this.ask({
                 title: t('This key already has a post-quantum root'),
@@ -6426,21 +6518,34 @@
                 confirm: t('Link this device'),
                 cancel: t('Carry on without it')
             });
-            if (code == null) return false;
-            const typed = String(code).trim();
-            if (!typed) return null;
+            const typed = code == null ? '' : String(code).trim();
+            // Either way of saying "not now": sign in, do not mint, and leave
+            // the code to be pasted in Identity later.
+            if (!typed) return { status: 'locked', root: null, rowPresent };
             if (!Identity.kemForCode(typed, 0)) {
                 this.gateError(t('That is not a recovery code. It starts with nympq1.'));
-                return false;
+                return null;
+            }
+            const bytes = window.NymCrypto.pqRootDecode(typed);
+            // The record is the account's own statement of which root it uses:
+            // exact, and epoch-free.
+            if (record && record.fp
+                && window.NymCrypto.pqRootFingerprint(bytes) !== record.fp) {
+                this.gateError(t('That code does not match the root this account recorded. Check you copied it from the right account.'));
+                return null;
             }
             // The root is one thing; which epoch of it the account currently
             // advertises is another.
-            const epoch = this.epochMatching(typed, announced.pk);
-            if (epoch == null) {
-                this.gateError(t('That code does not match the key this account advertises. Check you copied it from the right account.'));
-                return false;
+            let epoch = 0;
+            if (advertised) {
+                const matched = this.epochMatching(typed, advertised);
+                if (matched == null && !(record && record.fp)) {
+                    this.gateError(t('That code does not match the key this account advertises. Check you copied it from the right account.'));
+                    return null;
+                }
+                if (matched != null) epoch = matched;
             }
-            return { root: window.NymCrypto.pqRootDecode(typed), epoch };
+            return { status: 'link', root: bytes, epoch, rowPresent };
         },
 
         /// Which epoch of `code` produces the key the account advertises, or null
@@ -6468,24 +6573,38 @@
 
         /// A key that turned out to have no root gets one made now, and is shown
         /// it — the same reveal a brand new key gets, because it is the same
-        afterSignIn() {
-            if (!Identity.rootLocked && Identity.kemPk) {
+        afterSignIn(verdict) {
+            const status = (verdict && verdict.status) || 'mint';
+            if (status === 'link' && Identity.kemPk) {
+                // Linked off an announcement the account never recorded a row
+                // for. Write it, so the next device asks for the code instead
+                // of minting a rival root.
+                if (!verdict.rowPresent) Sync.publishRootRecord().catch(() => { });
                 this.enter();
                 return;
             }
-            if (Identity.rootLocked) {
-                // Signed in without the code.
+            if (status === 'unknown') {
+                // Not locked — nothing says the account HAS a root, only that
+                // nobody could be asked. `settleRoot` picks it up.
+                Identity.rootLocked = false;
                 this.enter();
-                this.toast(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
+                this.toast(t('Could not check whether this key already has a post-quantum root. It will be settled the next time this device reaches the network.'));
                 return;
             }
-            const shown = Identity.mintRoot();
-            if (!shown) { this.enter(); return; }
-            $('revealNsec').value = Identity._sk ? NT().nip19.nsecEncode(Identity._sk) : '';
-            $('revealNsecRow').hidden = !Identity._sk;
-            $('revealRoot').value = shown;
-            $('gate').hidden = true;
-            $('reveal').hidden = false;
+            if (status === 'mint') {
+                const shown = Identity.mintRoot();
+                if (!shown) { this.enter(); return; }
+                Sync.publishRootRecord().catch(() => { });
+                $('revealNsec').value = Identity._sk ? NT().nip19.nsecEncode(Identity._sk) : '';
+                $('revealNsecRow').hidden = !Identity._sk;
+                $('revealRoot').value = shown;
+                $('gate').hidden = true;
+                $('reveal').hidden = false;
+                return;
+            }
+            // Signed in without the code.
+            this.enter();
+            this.toast(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
         },
 
         copy(id) {

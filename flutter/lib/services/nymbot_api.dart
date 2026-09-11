@@ -30,6 +30,28 @@ class NymbotApi {
   final http.Client _client;
   final Map<String, NostrEvent> _authCache = {};
 
+  static const _serial = {'pm'};
+
+  static const _busyStatus = {429, 503, 529};
+  static final _busyText = RegExp(
+      r'rate[- ]?limit|too many requests|overloaded|over capacity|no capacity'
+      r'|try again later|temporarily unavailable',
+      caseSensitive: false);
+
+  static bool busy(int status, Map<String, dynamic> data) {
+    if (_busyStatus.contains(status)) return true;
+    final text = data['error'] ?? data['message'];
+    return text is String && _busyText.hasMatch(text);
+  }
+
+  Future<void> _gate = Future<void>.value();
+
+  Future<ApiResult> _queued(Future<ApiResult> Function() run) {
+    final mine = _gate.then((_) => run(), onError: (_) => run());
+    _gate = mine.then((_) {}, onError: (_) {});
+    return mine;
+  }
+
   Future<NostrEvent> _auth(String action, EventSigner signer) async {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final key = '$action|${signer.pubkey}';
@@ -96,6 +118,17 @@ class NymbotApi {
   }
 
   Future<ApiResult> call(
+    String action,
+    EventSigner signer, {
+    Map<String, dynamic> extra = const {},
+    Duration? timeout,
+  }) {
+    Future<ApiResult> attempt() =>
+        _call(action, signer, extra: extra, timeout: timeout);
+    return _serial.contains(action) ? _queued(attempt) : attempt();
+  }
+
+  Future<ApiResult> _call(
     String action,
     EventSigner signer, {
     Map<String, dynamic> extra = const {},

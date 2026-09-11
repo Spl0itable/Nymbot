@@ -38,6 +38,8 @@ never fetch and open, so the list is not a preference.
 | `js/speech.js` | A reply read back out, through the browser's own voices. |
 | `js/commands.js` | Every `?` command, and the matcher the composer and the palette share. |
 | `js/export.js` | A conversation as Markdown, plain text or JSON, and the backup that restores all of them. |
+| `js/gitapi.js` | Asking a forge what a token can reach, and reading one repository's whole file list in a single call. |
+| `js/repomap.js` | That file list, pruned, capped, cached and rendered as the block every repo turn carries. |
 | `js/qr.js` | A byte-mode QR encoder, so an invoice is rendered here rather than sent somewhere to be drawn. |
 | `js/ui.js` | The shell. |
 
@@ -53,6 +55,9 @@ The chat surface, beyond sending a message:
 - **Several repositories at once.** Repositories are connected once and ticked
   per chat; a chat with more than one gets a preamble naming them, so a reply
   can say which one it means. `?git list`, `?repo <name>`, `?git writes on`.
+  Each one's file list is read by this device and sent with the question, so the
+  model reads the file it wants rather than spending a model call per directory
+  finding it — see "Why the file list travels with the question" below.
 - **Personas and custom instructions** are sent with the first message of a
   chat and never repeated. Six are built in; your own are stored on the device.
 - **A prompt library** with `{{blanks}}` the app asks you to fill in.
@@ -74,6 +79,43 @@ The chat surface, beyond sending a message:
 - **Appearance**: five themes, three densities, four text sizes, bubbles or
   blocks, avatars, timestamps, monospace replies, line numbers, code wrapping,
   reduced motion, and a typewriter reveal.
+
+## Why the file list travels with the question
+
+A repo task is an agentic loop on the worker, and every tool call in it is
+another model call: a listing of the root, a listing of each directory that
+looked promising, then the reads. With several repositories connected, that
+exploring is multiplied by however many there are — and all of it goes through
+one shared AI gateway, which rate-limits on requests rather than on tokens. The
+symptom is a reply that fails with "rate limit exceeded for this gateway", and
+the usual response to that — ask again — is the most expensive thing possible,
+because the whole loop runs from the start.
+
+So three things happen on the device instead:
+
+- **The file list is read here.** The device already holds the forge token, so
+  one request per repository gets the whole recursive tree, and a `[repository
+  files]` block rides every turn beside the rest of the standing context. Only
+  dependencies, build output and lockfiles are left out — pictures, video and
+  every other asset are named, because "what do the promotional screenshots
+  look like" is answered by which files exist, and a file name is readable even
+  when the file is not. A big directory is given as a count and a huge
+  repository is capped at 500 paths, shallowest first. What is left out is
+  always said so, and the block says the listing may be behind the branch — a
+  map that reads as complete when it is not would have the model call a file
+  missing that is really there. It is cached for two hours, keyed by repository
+  and branch, dropped when the repository is edited or removed, and dropped for
+  a repository the reply just committed to. It is held under a `map_` key, which
+  is one the settings sync deliberately never carries: it is a cache of what the
+  forge said, not something an account owns.
+- **One turn at a time.** A turn is a whole loop behind a single request, so two
+  of them at once is two bursts at the gateway. Turns queue; a progress poll,
+  which is not a model call, never waits behind one.
+- **A busy gateway is waited out, not re-asked.** "Rate limit", "too many
+  requests", "overloaded", a 429 or a 503 are read as the far end asking for a
+  slower rate: the same turn is collected again after 4, then 9, then 16
+  seconds, under the same event id the worker de-duplicates on, so nothing is
+  paid for twice and the loop does not start over.
 
 ## How separate conversations work
 

@@ -20,17 +20,31 @@ import '../services/blossom.dart';
 import '../services/chat_engine.dart';
 import '../services/free_tier.dart';
 import '../services/memory_keeper.dart';
+import '../services/nostr/event_signer.dart';
 import '../services/nymbot_api.dart';
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
 import '../services/relay_pool.dart';
+import '../services/repo_map.dart';
+import '../services/storage_sync.dart';
 import 'identity.dart';
 import 'store.dart';
+
+/// What the account already holds, as the sign-in gate needs to know it.
+/// [read] is false when neither D1 nor the relays could be reached — which is
+/// not the same answer as "there is no root".
+typedef AccountRoot = ({
+  bool read,
+  bool present,
+  String? fingerprint,
+  Uint8List? announced,
+});
 
 /// One object the whole app listens to: the identity, the conversations, the
 /// toolbar's state and the balances.
 class AppController extends ChangeNotifier {
-  AppController._(this.store, this.identity, this.relays, this.pq, this.api, this.anon);
+  AppController._(this.store, this.identity, this.relays, this.pq, this.api,
+      this.anon, this.storage);
 
   static Future<AppController> boot() async {
     final store = await Store.open();
@@ -39,8 +53,9 @@ class AppController extends ChangeNotifier {
     final pq = PqAnnounce(relays);
     final api = NymbotApi();
     final anon = AnonMode(store, api, pq);
-    final c = AppController._(store, identity, relays, pq, api, anon);
-    c.profiles = Profiles(store, relays);
+    final storage = StorageSync();
+    final c = AppController._(store, identity, relays, pq, api, anon, storage);
+    c.profiles = Profiles(store, relays, storage);
     c.profiles.addListener(c.notifyListeners);
     await anon.load();
     c.signedIn = await identity.restore();
@@ -55,9 +70,12 @@ class AppController extends ChangeNotifier {
   final PqAnnounce pq;
   final NymbotApi api;
   final AnonMode anon;
+  final StorageSync storage;
   late final Profiles profiles;
 
   late final Blossom blossom = Blossom();
+
+  late final RepoMap maps = RepoMap(store);
 
   late final ChatEngine chat = ChatEngine(
     identity: identity,
@@ -65,6 +83,7 @@ class AppController extends ChangeNotifier {
     pq: pq,
     api: api,
     anon: anon,
+    maps: maps,
   );
 
   bool signedIn = false;
@@ -160,6 +179,7 @@ class AppController extends ChangeNotifier {
       }
     }
     await clearMediaModel();
+    warmRepoMaps();
     notifyListeners();
   }
 
@@ -499,10 +519,14 @@ class AppController extends ChangeNotifier {
       ...activeWorkspace?.repoIds ?? const <String>[],
     ];
     final out = <GitRepo>[];
+    final seen = <String>{};
     for (final id in ids) {
       if (out.any((r) => r.id == id)) continue;
       for (final r in repos) {
-        if (r.id == id && r.enabled) out.add(r);
+        if (r.id != id || !r.enabled) continue;
+        final where = [r.provider, r.host, r.repo, r.branch].join('|');
+        if (!seen.add(where)) continue;
+        out.add(r);
       }
     }
     return out;
@@ -525,11 +549,17 @@ class AppController extends ChangeNotifier {
       conv.repoIds = [...conv.repoIds, repo.id];
       await store.saveConversations(conversations);
     }
+    await maps.forget(repo);
+    warmRepoMaps();
     notifyListeners();
     return repo;
   }
 
   Future<void> deleteRepo(String id) async {
+    final going = repos.where((r) => r.id == id).toList();
+    for (final r in going) {
+      await maps.forget(r);
+    }
     repos = repos.where((r) => r.id != id).toList();
     await store.saveRepos(repos);
     for (final c in conversations) {
@@ -539,6 +569,11 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void warmRepoMaps() {
+    if (proModel == null && current?.proModel == null) return;
+    maps.warm(activeRepos);
+  }
+
   Future<void> toggleRepoHere(String id) async {
     final conv = current;
     if (conv == null) return;
@@ -546,6 +581,7 @@ class AppController extends ChangeNotifier {
         ? conv.repoIds.where((x) => x != id).toList()
         : [...conv.repoIds, id];
     await store.saveConversations(conversations);
+    warmRepoMaps();
     notifyListeners();
   }
 
@@ -554,6 +590,7 @@ class AppController extends ChangeNotifier {
     if (conv == null) return;
     conv.repoIds = ids;
     await store.saveConversations(conversations);
+    warmRepoMaps();
     notifyListeners();
   }
 
@@ -908,6 +945,92 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// What the account already holds, asked before this device decides what
+  /// post-quantum root to give it.
+  ///
+  /// D1 answers this, not the relays: the root row is where an account records
+  /// that it HAS a root, it is written the moment one is minted, and it
+  /// survives an announcement expiring. The relay announcement is the second
+  /// opinion, for an account whose row predates this or whose row could not be
+  /// read. [read] is false when neither source could be reached, and the caller
+  /// must not read that as "there is no root".
+  Future<AccountRoot> probeAccountRoot(EventSigner signer) async {
+    PqRootLookup? row;
+    try {
+      row = await storage.pqRootRecord(signer);
+    } catch (_) {
+      row = null;
+    }
+    PqKey? announced;
+    try {
+      relays.connect();
+      announced = await pq.resolve(signer.pubkey);
+    } catch (_) {
+      announced = null;
+    }
+    return (
+      read: row != null,
+      present: row?.present ?? false,
+      fingerprint: row?.fingerprint,
+      announced: announced?.pk,
+    );
+  }
+
+  /// The same question, asked again on every launch of a device that is already
+  /// signed in. A launch that could not reach the worker settles nothing, so it
+  /// has to be re-asked rather than answered once: the row may have appeared
+  /// since, and a root of ours that never got a row leaves every other device
+  /// reading "no root".
+  Future<void> settleRoot() async {
+    if (!identity.present) return;
+    final signer = identity.signer;
+    PqRootLookup? row;
+    try {
+      row = await storage.pqRootRecord(signer);
+    } catch (_) {
+      return;
+    }
+    if (row == null) return;
+    final held = identity.rootFingerprint;
+    if (!row.present) {
+      final root = identity.root;
+      if (root != null) {
+        try {
+          await storage.publishPqRootRecord(signer, root);
+        } catch (_) {}
+        return;
+      }
+      // A sign-in that could not reach the worker left this device without a
+      // root rather than minting one blind. The account turns out to have none,
+      // so this is the moment to make it.
+      await mintAndRecordRoot();
+      await note(t('Your post-quantum recovery code is ready. Open Identity to '
+          'save it — nobody can reissue it.'));
+      return;
+    }
+    if (held.isEmpty) {
+      identity.rootLocked = true;
+      return;
+    }
+    // A row we could not read is still proof a root exists; only a root whose
+    // fingerprint the record names is proof we hold THAT one.
+    if (row.fingerprint == null || row.fingerprint == held) return;
+    identity.rootLocked = true;
+  }
+
+  /// Mints the root for an account that turns out not to have one, and records
+  /// it, so the next device asks for the code instead of minting a rival.
+  Future<String> mintAndRecordRoot() async {
+    final code = await identity.mintRoot();
+    final root = identity.root;
+    if (root != null) {
+      try {
+        await storage.publishPqRootRecord(identity.signer, root);
+      } catch (_) {}
+    }
+    return code;
+  }
+
   Future<void> enter() async {
     if (_entered) return;
     _entered = true;
@@ -936,13 +1059,26 @@ class AppController extends ChangeNotifier {
     // neither blocks the first message. Held so it can be cancelled: a wipe or
     // a disposed controller must not leave network work running behind it.
     _bootWork = Timer(const Duration(milliseconds: 400), () async {
+      // A published profile is what the account already tells the world;
+      // showing it costs no privacy and makes the app feel signed in. The
+      // mirror answers in one round trip and needs no relay, so the name and
+      // avatar are drawn before anything else waits on one.
+      await profiles.load(identity.pubkey, mirrorOnly: true);
+      notifyListeners();
       try {
         await pq.resolveBot();
       } catch (_) {}
+      try {
+        await settleRoot();
+      } catch (_) {}
       final kem = identity.kem;
-      if (kem != null) {
+      // A locked device holds a root that is not this account's — already
+      // settled against the account's own record, which the relays cannot
+      // contradict. Announcing over the real key would strand every device.
+      if (kem != null && !identity.rootLocked) {
         try {
-          identity.rootLocked = !await pq.announce(identity.signer, kem);
+          identity.rootLocked =
+              !await pq.announce(identity.signer, kem, epoch: identity.epoch);
         } catch (_) {}
       }
       await refreshBalance();
@@ -950,8 +1086,7 @@ class AppController extends ChangeNotifier {
       startScheduler();
       await runDueSchedules();
       await autoTopUp();
-      // A published profile is what the account already tells the world;
-      // showing it costs no privacy and makes the app feel signed in.
+      // Whatever the mirror did not have. A no-op when it did.
       await profiles.load(identity.pubkey);
       notifyListeners();
     });
@@ -991,6 +1126,7 @@ class AppController extends ChangeNotifier {
     // A queue belongs to the chat it was typed into, not to the app.
     queued = [];
     quote = null;
+    warmRepoMaps();
     notifyListeners();
   }
 
@@ -1961,8 +2097,12 @@ class AppController extends ChangeNotifier {
   String _wireTextNow(String text) {
     final conv = current;
     if (conv == null) return text;
-    final head = ChatEngine.preamble(conv, activeRepos, activePersona,
-        activeWorkspace, activeBot, text, store.memories());
+    final scoped = activeRepos;
+    final files = activeModel != null && scoped.isNotEmpty
+        ? maps.block(scoped, text)
+        : '';
+    final head = ChatEngine.preamble(conv, scoped, activePersona,
+        activeWorkspace, activeBot, text, store.memories(), files);
     final attached = attachments.map((a) => a.wireBlock).join();
     return '$head$text$attached';
   }

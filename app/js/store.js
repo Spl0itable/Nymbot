@@ -17,7 +17,7 @@
     }
 
     // Anything that wants to know when this device changed something.
-    const QUIET = /^(?:draft_|thread_|sync_|free_)/;
+    const QUIET = /^(?:draft_|thread_|sync_|free_|map_)/;
     const watchers = [];
 
     // Applying what the server just sent is not a local change. Without this

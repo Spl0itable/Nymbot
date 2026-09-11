@@ -106,3 +106,27 @@ class LanguageOption {
 
 /// The shorthand every call site uses, and the shape the extractor looks for.
 String t(String text, [Map<String, Object?>? vars]) => I18n.translate(text, vars);
+
+/// A figure with its thousands separated, and nothing else done to it.
+///
+/// Never abbreviated, however long it gets: these are balances and prices, and
+/// rounding 12,500 credits to "12.5k" throws away digits the reader is entitled
+/// to. Separators are all the legibility a figure needs when every one of them
+/// has to stay.
+///
+/// The grouping is written out rather than left to a locale formatter so it is
+/// deterministic: the same figure however the app has been translated, and
+/// whatever the device's own locale happens to be.
+String figure(Object? value) {
+  final n = value is int
+      ? value
+      : (value is num ? value.round() : (int.tryParse('$value') ?? 0));
+  final digits = n.abs().toString();
+  final buffer = StringBuffer(n < 0 ? '-' : '');
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
+    buffer.write(digits[i]);
+  }
+  return buffer.toString();
+}
+

@@ -1,5 +1,11 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nymbot/app.dart';
 import 'package:nymbot/features/brand_tile.dart';
@@ -15,10 +21,17 @@ import 'package:nymbot/features/gate_screen.dart';
 import 'package:nymbot/features/markdown_body.dart';
 import 'package:nymbot/features/message_bubble.dart';
 import 'package:nymbot/features/nym_avatar.dart';
+import 'package:nymbot/features/i18n/i18n.dart';
 import 'package:nymbot/features/nym_icons.dart';
+import 'package:nymbot/features/purchase_policy.dart';
 import 'package:nymbot/config.dart';
 import 'package:nymbot/services/profiles.dart';
+import 'package:nymbot/services/nostr/event_signer.dart';
 import 'package:nymbot/services/relay_pool.dart';
+import 'package:nymbot/services/storage_sync.dart';
+import 'package:nymbot/core/crypto/pq.dart' as pq;
+import 'package:nymbot/state/identity.dart';
+import 'package:nymbot/state/store.dart';
 import 'package:nymbot/core/crypto/bech32_codec.dart';
 import 'package:nymbot/models/artifact.dart';
 import 'package:nymbot/models/bot.dart';
@@ -32,6 +45,8 @@ import 'package:nymbot/services/ngit.dart';
 import 'package:nymbot/services/chat_engine.dart';
 import 'package:nymbot/services/git_forge.dart';
 import 'package:nymbot/services/memory_keeper.dart';
+import 'package:nymbot/services/nymbot_api.dart';
+import 'package:nymbot/services/repo_map.dart';
 import 'package:nymbot/state/app_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -948,6 +963,206 @@ ls -la
     expect(GitForge.needsHost('github'), isFalse);
   });
 
+  test('a whole repository is read in one call to the forge', () async {
+    final asked = <String>[];
+    final client = MockClient((request) async {
+      asked.add(request.url.toString());
+      return http.Response(
+        jsonEncode({
+          'truncated': false,
+          'tree': [
+            {'path': 'README.md', 'type': 'blob'},
+            {'path': 'app', 'type': 'tree'},
+            {'path': 'app/js/chat.js', 'type': 'blob'},
+            {'path': 'app/js/api.js', 'type': 'blob'},
+          ],
+        }),
+        200,
+      );
+    });
+    final read = await GitForge.tree(
+      provider: 'github',
+      token: 'tok',
+      repo: 'nym/mapped',
+      branch: 'main',
+      client: client,
+    );
+    expect(asked.length, 1, reason: 'one request, not one per directory');
+    expect(asked.single,
+        'https://api.github.com/repos/nym/mapped/git/trees/main?recursive=1');
+    expect(read.branch, 'main');
+    expect(read.paths, ['README.md', 'app/js/chat.js', 'app/js/api.js'],
+        reason: 'directories are not files');
+  });
+
+  test('a branch nobody named is asked for before the tree is', () async {
+    final asked = <String>[];
+    final client = MockClient((request) async {
+      asked.add(request.url.path);
+      if (request.url.path.contains('/git/trees/')) {
+        return http.Response(jsonEncode({'tree': <dynamic>[]}), 200);
+      }
+      return http.Response(jsonEncode({'default_branch': 'trunk'}), 200);
+    });
+    final read = await GitForge.tree(
+      provider: 'github', token: 'tok', repo: 'nym/mapped', client: client);
+    expect(read.branch, 'trunk');
+    expect(asked.first, '/repos/nym/mapped');
+  });
+
+  test('the map names every file, and leaves only build output out', () async {
+    final kept = RepoMap.usable([
+      'README.md',
+      'app/js/chat.js',
+      'app/js/api.js',
+      'app/icons/mark.png',
+      'media/promo.mp4',
+      'package-lock.json',
+      'node_modules/left-pad/index.js',
+      'dist/bundle.js',
+      'build/app/outputs/thing.txt',
+    ], null);
+    expect(
+        kept.paths,
+        [
+          'app/icons/mark.png',
+          'app/js/api.js',
+          'app/js/chat.js',
+          'media/promo.mp4',
+          'README.md',
+        ],
+        reason: 'a picture and a video are named too — asked what the promotional '
+            'screenshots look like, the answer is which files exist');
+    expect(kept.total, 5);
+    expect(kept.dropped, 0);
+
+    final scoped = RepoMap.usable(
+      ['app/js/ui.js', 'docs/one.md', 'tools/x.mjs'],
+      GitRepo(id: 'r', repo: 'a/b', token: 't', paths: 'app/, docs/one.md'),
+    );
+    expect(scoped.paths, ['app/js/ui.js', 'docs/one.md'],
+        reason: 'a repository restricted to some paths is mapped only there');
+  });
+
+  test('a huge repository is capped, and says how much it left out', () {
+    final paths = [
+      for (var i = 0; i < 2000; i++) 'src/mod$i/thing$i.ts',
+    ];
+    final kept = RepoMap.usable(paths, null);
+    expect(kept.paths.length, RepoMap.filesPerRepo);
+    expect(kept.dropped, 2000 - RepoMap.filesPerRepo);
+    final text = RepoMap.render(
+      'big/repo',
+      RepoMapEntry(
+        at: 0, usedAt: 0, branch: 'main',
+        paths: kept.paths, dropped: kept.dropped, total: kept.total,
+      ),
+      4000,
+      const <String>{},
+    );
+    expect(text.length, lessThan(5000), reason: 'inside the budget one repository gets');
+    expect(text, contains('further files are not named above'));
+    expect(RegExp(r'(\d+) further files').firstMatch(text)!.group(1), '1851',
+        reason: 'every file left out is counted, whether capped or over budget');
+  });
+
+  test('the file list rides the preamble, grouped by directory', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await Store.open();
+    final repo = GitRepo(id: 'r1', repo: 'nym/mapped', token: 'tok', branch: 'main');
+    final maps = RepoMap(store, client: MockClient((_) async => http.Response(
+          jsonEncode({
+            'tree': [
+              {'path': 'README.md', 'type': 'blob'},
+              {'path': 'app/js/chat.js', 'type': 'blob'},
+              {'path': 'app/js/api.js', 'type': 'blob'},
+            ],
+          }),
+          200,
+        )));
+    expect(maps.knows([repo]), isFalse);
+    await maps.refresh(repo);
+    expect(maps.knows([repo]), isTrue);
+    expect(maps.stale(repo), isFalse, reason: 'just read is not stale');
+
+    final block = maps.block([repo], 'where does chat.js send the turn?');
+    expect(block, contains('[repository files]'));
+    expect(block, contains('nym/mapped@main (3 files)'));
+    expect(block, contains('(root): README.md'));
+    expect(block, contains('app/js/: chat.js, api.js'),
+        reason: 'the file the question named comes first');
+    expect(block, contains('a little behind the branch'),
+        reason: 'a stale listing must never read as the whole truth');
+
+    final conv = Conversation(id: 'c1', rootId: 'r1');
+    final with_ = ChatEngine.preamble(
+        conv, [repo], null, null, null, 'chat.js', const [], block);
+    final without =
+        ChatEngine.preamble(conv, [repo], null, null, null, 'chat.js');
+    expect(with_, contains('[repository files]'));
+    expect(without, isNot(contains('[repository files]')),
+        reason: 'a turn that would not fit with the map sends without it');
+
+    await maps.forget(repo);
+    expect(maps.entry(repo), isNull);
+  });
+
+  test('a forge that refuses is remembered as nothing, not as an empty repo', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await Store.open();
+    final repo = GitRepo(id: 'r1', repo: 'nym/mapped', token: 'tok', branch: 'main');
+    final maps = RepoMap(store,
+        client: MockClient((_) async => http.Response('nope', 401)));
+    await maps.refresh(repo);
+    expect(maps.block([repo], 'anything'), isEmpty,
+        reason: 'nothing is claimed about a repository that could not be read');
+    await maps.ready([repo], within: const Duration(milliseconds: 50));
+  });
+
+  test('a busy gateway is read as busy, and a real error is not', () {
+    expect(
+        NymbotApi.busy(200, {
+          'error': 'Wholesale rate limit exceeded for this gateway. '
+              'Please reduce request rate or use BYOK.'
+        }),
+        isTrue);
+    expect(NymbotApi.busy(429, const {}), isTrue);
+    expect(NymbotApi.busy(200, const {'error': 'upstream model overloaded'}), isTrue);
+    expect(NymbotApi.busy(200, const {'error': 'You are out of Pro credits.'}), isFalse);
+    expect(NymbotApi.busy(200, const {'ok': true}), isFalse);
+  });
+
+  test('two turns from one device never reach the gateway together', () async {
+    final signer = LocalSigner(Uint8List.fromList(List<int>.filled(32, 7)));
+    var turns = 0;
+    var polls = 0;
+    var mostTurns = 0;
+    var mostPolls = 0;
+    final api = NymbotApi(client: MockClient((request) async {
+      final action = (jsonDecode(request.body) as Map)['action'];
+      if (action == 'pm') {
+        if (++turns > mostTurns) mostTurns = turns;
+      } else {
+        if (++polls > mostPolls) mostPolls = polls;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (action == 'pm') {
+        turns--;
+      } else {
+        polls--;
+      }
+      return http.Response(jsonEncode({'ok': true}), 200);
+    }));
+    await Future.wait<void>([
+      api.call('pm', signer, extra: const {'eventId': 'a'}),
+      api.call('pm', signer, extra: const {'eventId': 'b'}),
+      api.call('pm-progress', signer),
+      api.call('pm-progress', signer),
+    ]);
+    expect(mostTurns, 1, reason: 'a turn is a whole agentic run, so two at once is two bursts');
+    expect(mostPolls, 2, reason: 'a progress poll never waits behind a three-minute run');
+  });
+
   test('listing refuses before it asks when it has nothing to ask with', () async {
     await expectLater(
       GitForge.listRepos(provider: 'github', token: ''),
@@ -1777,5 +1992,197 @@ diff --git a/two.txt b/two.txt
         .toJson());
     expect(back.autoContinue, -1);
     expect(back.showProgress, isFalse);
+  });
+
+  // --- what the account already holds -----------------------------------------
+  //
+  // The root row is Nymchat's, written under the name Nymchat gives it. Both
+  // apps have to name it identically or each reads "no root" and mints one,
+  // which is the split the row exists to prevent.
+
+  test('the root row is named the way Nymchat names it', () {
+    const pubkey =
+        '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+    // Nymchat's `_d1Category`: 'nymchat-' + sha256hex(`${pubkey}:d1:${dTag}`).
+    final expected = 'nymchat-${crypto.sha256.convert(utf8.encode('$pubkey:d1:nymchat-pq-root')).toString()}';
+    expect(StorageSync.categoryFor(pubkey, StorageSync.pqRootDTag), expected);
+    // And what the worker will accept as a settings category.
+    expect(RegExp(r'^nym(?:chat|bot)-[a-z0-9-]{1,120}$').hasMatch(expected), isTrue);
+  });
+
+  test('a root row is read back as the root it names', () async {
+    final sk = Uint8List.fromList(List<int>.filled(32, 7));
+    final signer = LocalSigner(sk);
+    final root = pq.pqGenerateRoot();
+    final fingerprint = pq.pqRootFingerprint(root);
+
+    late String written;
+    late String blob;
+    final client = MockClient((request) async {
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      if (body['action'] == 'settings-set') {
+        written = body['category'] as String;
+        blob = body['blob'] as String;
+        return http.Response(jsonEncode({'ok': true}), 200);
+      }
+      // The row is echoed back under the name it was written with.
+      return http.Response(
+        jsonEncode({
+          'categories': {
+            written: {'blob': blob, 'updatedAt': 1},
+          },
+        }),
+        200,
+      );
+    });
+    final sync = StorageSync(client: client);
+    expect(await sync.publishPqRootRecord(signer, root), isTrue);
+    expect(written, StorageSync.categoryFor(signer.pubkey, StorageSync.pqRootDTag));
+
+    final read = await sync.pqRootRecord(signer);
+    expect(read, isNotNull);
+    expect(read!.present, isTrue);
+    expect(read.fingerprint, fingerprint);
+  });
+
+  test('a row nobody can open is still proof a root exists', () async {
+    final signer = LocalSigner(Uint8List.fromList(List<int>.filled(32, 9)));
+    final category =
+        StorageSync.categoryFor(signer.pubkey, StorageSync.pqRootDTag);
+    final sync = StorageSync(
+      client: MockClient((request) async => http.Response(
+            jsonEncode({
+              'categories': {
+                category: {'blob': 'not something this key can open', 'updatedAt': 1},
+              },
+            }),
+            200,
+          )),
+    );
+    final read = await sync.pqRootRecord(signer);
+    expect(read!.present, isTrue, reason: 'a row is a row');
+    expect(read.fingerprint, isNull, reason: 'but it names no root we can check');
+  });
+
+  test('a read that did not complete is not an answer', () async {
+    final signer = LocalSigner(Uint8List.fromList(List<int>.filled(32, 11)));
+    final sync = StorageSync(
+      client: MockClient((_) async => http.Response('nope', 503)),
+    );
+    expect(await sync.pqRootRecord(signer), isNull);
+  });
+
+  test('the profile mirror is read as the signed events it stores', () async {
+    const pubkey =
+        '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+    final event = {
+      'id': 'a' * 64,
+      'pubkey': pubkey,
+      'created_at': 1,
+      'kind': 0,
+      'tags': <List<String>>[],
+      'content': '{"name":"satoshi"}',
+      'sig': 'b' * 128,
+    };
+    final sync = StorageSync(
+      client: MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body['action'], 'profile-get');
+        expect(body.containsKey('auth'), isFalse, reason: 'a kind 0 is public');
+        return http.Response(
+          '${jsonEncode([pubkey, {'event': event, 'updatedAt': 2}])}\n'
+          '${jsonEncode(['c' * 64, null])}\n',
+          200,
+        );
+      }),
+    );
+    final got = await sync.profileEvents([pubkey, 'c' * 64]);
+    expect(got, isNotNull);
+    expect(got!.length, 1, reason: 'a key with no row is simply absent');
+    expect(got[pubkey]!.content, '{"name":"satoshi"}');
+  });
+
+  test('a code is checked against the root the account recorded', () {
+    final mine = pq.pqGenerateRoot();
+    final theirs = pq.pqGenerateRoot();
+    final code = encodeNymPq(mine);
+    expect(Identity.rootFromCode(code), isNotNull);
+    expect(Identity.rootFromCode('nsec1notacode'), isNull);
+    expect(Identity.fingerprintOfCode(code), pq.pqRootFingerprint(mine));
+    expect(Identity.fingerprintOfCode(code) == pq.pqRootFingerprint(theirs), isFalse);
+    // The epoch of the root is what decides the key, so the same code produces
+    // a different one at each.
+    final atZero = Identity.kemForCode(code, 0)!;
+    final atOne = Identity.kemForCode(code, 1)!;
+    expect(atZero.length, atOne.length);
+    expect(atZero, isNot(equals(atOne)));
+  });
+
+  test('a mirrored profile becomes the name and avatar the app draws', () async {
+    SharedPreferences.setMockInitialValues({});
+    const pubkey =
+        '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+    final store = await Store.open();
+    final relays = RelayPool();
+    var woken = 0;
+
+    // A mirror row that is not signed by the key it claims is not a profile.
+    final forged = {
+      'id': 'a' * 64,
+      'pubkey': pubkey,
+      'created_at': 1,
+      'kind': 0,
+      'tags': <List<String>>[],
+      'content': '{"name":"not satoshi","picture":"https://x/evil.png"}',
+      'sig': 'b' * 128,
+    };
+    final refused = Profiles(
+      store,
+      relays,
+      StorageSync(
+        client: MockClient((_) async => http.Response(
+              '${jsonEncode([pubkey, {'event': forged, 'updatedAt': 1}])}\n',
+              200,
+            )),
+      ),
+    );
+    await refused.load(pubkey, mirrorOnly: true);
+    expect(refused.of(pubkey).hasProfile, isFalse,
+        reason: 'a relay never gets to say what a profile is, nor the mirror');
+    expect(refused.of(pubkey).name, NymIdentity.name(pubkey),
+        reason: 'so the generated nym still stands');
+
+    // And a mirror that has nothing is not an answer yet: the relays have not
+    // been asked, so nothing is remembered that would suppress the question.
+    final empty = Profiles(
+      store,
+      relays,
+      StorageSync(client: MockClient((_) async => http.Response('', 200))),
+    );
+    empty.addListener(() => woken++);
+    await empty.load(pubkey, mirrorOnly: true);
+    expect(woken, 0, reason: 'nothing was learned, so nobody is woken');
+  });
+
+  // --- what a figure reads as ---------------------------------------------
+
+  test('a credit figure keeps every digit, however long it gets', () {
+    expect([0, 1, 999].map(figure).join(' '), '0 1 999',
+        reason: 'nothing to separate below a thousand');
+    expect([1000, 1250, 9999].map(figure).join(' '), '1,000 1,250 9,999');
+    // Money is never abbreviated: 12,500 credits is not "12.5k", because the
+    // 500 is somebody's.
+    expect([10000, 12500, 125000].map(figure).join(' '),
+        '10,000 12,500 125,000');
+    expect([1000000, 12345678].map(figure).join(' '), '1,000,000 12,345,678');
+    // The same figure the web app prints, so a balance reads the same in both.
+    expect(figure(50000), '50,000');
+  });
+
+  test('iOS does not sell credits, and every other platform does', () {
+    // The value is the platform's, not this test's; what is pinned is that the
+    // question is asked at all and that it answers off-iOS.
+    expect(creditPurchasesDisabled, isFalse,
+        reason: 'the test host is not iOS, so the sheet still sells');
   });
 }

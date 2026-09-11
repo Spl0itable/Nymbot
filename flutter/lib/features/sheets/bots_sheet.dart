@@ -264,7 +264,7 @@ class _BotsSheetState extends State<_BotsSheet> {
                   DropdownMenuItem(
                     value: m['key'] as String,
                     child: Text(
-                      '${m['label']} · ${(m['credits'] as num?)?.toInt() ?? 1}',
+                      '${m['label']} · ${figure((m['credits'] as num?)?.toInt() ?? 1)}',
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),

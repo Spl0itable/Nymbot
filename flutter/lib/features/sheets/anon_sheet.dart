@@ -81,10 +81,12 @@ class _AnonSheetState extends State<_AnonSheet> {
         _status = _tier == 'pro'
             ? (credited == 1
                 ? t('Moved 1 Pro credit onto the throwaway key.')
-                : t('Moved {n} Pro credits onto the throwaway key.', {'n': credited}))
+                : t('Moved {n} Pro credits onto the throwaway key.',
+                    {'n': figure(credited)}))
             : (credited == 1
                 ? t('Moved 1 credit onto the throwaway key.')
-                : t('Moved {n} credits onto the throwaway key.', {'n': credited}));
+                : t('Moved {n} credits onto the throwaway key.',
+                    {'n': figure(credited)}));
         _warn = false;
         _amount.clear();
       });

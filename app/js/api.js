@@ -15,6 +15,19 @@
         'clear-history', 'voucher-issue', 'voucher-redeem'
     ]);
 
+    const SERIAL = new Set(['pm']);
+
+    const BUSY_STATUS = new Set([429, 503, 529]);
+    const BUSY_TEXT = /rate[- ]?limit|too many requests|overloaded|over capacity|no capacity|try again later|temporarily unavailable/i;
+
+    let gate = Promise.resolve();
+
+    function queued(run) {
+        const mine = gate.then(run, run);
+        gate = mine.then(() => { }, () => { });
+        return mine;
+    }
+
     const url = () => `https://${C.apiHost}/api/bot`;
 
     const Api = {
@@ -54,21 +67,33 @@
                 { action, pubkey: options.signer ? options.signer.pubkey : Identity.pubkey, auth },
                 extra || {});
             const controller = options.controller || new AbortController();
-            const timer = setTimeout(() => controller.abort(), options.timeout || 30000);
-            try {
-                const resp = await fetch(url(), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                    signal: controller.signal
-                });
-                const data = await resp.json().catch(() => ({}));
-                return { status: resp.status, data: data || {} };
-            } catch (e) {
-                return { status: 0, data: { error: e.name === 'AbortError' ? t('timed out') : t('network error') } };
-            } finally {
-                clearTimeout(timer);
-            }
+            const attempt = async () => {
+                if (controller.signal.aborted) {
+                    return { status: 0, data: { error: t('timed out') } };
+                }
+                const timer = setTimeout(() => controller.abort(), options.timeout || 30000);
+                try {
+                    const resp = await fetch(url(), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                        signal: controller.signal
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    return { status: resp.status, data: data || {} };
+                } catch (e) {
+                    return { status: 0, data: { error: e.name === 'AbortError' ? t('timed out') : t('network error') } };
+                } finally {
+                    clearTimeout(timer);
+                }
+            };
+            return SERIAL.has(action) ? queued(attempt) : attempt();
+        },
+
+        busy(status, data) {
+            if (BUSY_STATUS.has(status)) return true;
+            const text = data && (data.error || data.message);
+            return typeof text === 'string' && BUSY_TEXT.test(text);
         },
 
         balance(opts) { return this.call('balance', {}, opts); },

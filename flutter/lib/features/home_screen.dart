@@ -1169,12 +1169,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Text(
                   estimate.tier == 'pro'
                       ? (estimate.low == estimate.high
-                          ? t('About {n} Pro credits', {'n': estimate.low})
+                          ? t('About {n} Pro credits', {'n': figure(estimate.low)})
                           : t('About {low}–{high} Pro credits',
                               {'low': estimate.low, 'high': estimate.high}))
                       : (estimate.low == 1
                           ? t('1 standard credit')
-                          : t('{n} standard credits', {'n': estimate.low})),
+                          : t('{n} standard credits',
+                              {'n': figure(estimate.low)})),
                   style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                 ),
               ),
@@ -1576,8 +1577,8 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 app.standardBalance == null
                     ? t('{n} relays', {'n': app.relaysUp})
                     : t('{standard} standard · {pro} Pro', {
-                        'standard': app.standardBalance,
-                        'pro': app.proBalance,
+                        'standard': figure(app.standardBalance),
+                        'pro': figure(app.proBalance),
                       }),
                 style: const TextStyle(fontSize: 11),
               ),

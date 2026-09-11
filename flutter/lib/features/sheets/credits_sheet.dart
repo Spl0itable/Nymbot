@@ -7,8 +7,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../app.dart';
 import '../../config.dart';
+import '../../core/theme/theme.dart';
 import '../../services/nostr/event_signer.dart';
+import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 
 Future<void> showCreditsSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
@@ -83,7 +86,8 @@ class _CreditsSheetState extends State<_CreditsSheet> {
       _invoice = pr;
       _invoiceId = res.data['invoiceId'] as String?;
       _signer = signer;
-      _status = t('Pay {sats} sats. This updates the moment it settles.', {'sats': _sats});
+      _status = t('Pay {sats} sats. This updates the moment it settles.',
+          {'sats': figure(_sats)});
     });
     _startPolling(signer);
   }
@@ -96,7 +100,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
     if (error == null) {
       setState(() {
         _status = t('Credited. Balance: {balance}.',
-            {'balance': claim.data['balance']});
+            {'balance': figure(claim.data['balance'])});
         _warn = false;
         _invoice = null;
       });
@@ -162,8 +166,112 @@ class _CreditsSheetState extends State<_CreditsSheet> {
     });
   }
 
+  /// What the account holds right now, read through [AppScope.of] so a purchase
+  /// that lands while this is open is reflected here rather than only behind
+  /// it. This is the section a buyer is looking at when the credits arrive.
+  Widget _balances(BuildContext context, AppController app) {
+    Widget cell(String label, int? value, bool active, {bool freeTier = false}) {
+      final free = app.freeLeft;
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: active
+                  ? NymbotColors.lightning
+                  : Theme.of(context).dividerColor,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 11, color: Theme.of(context).hintColor)),
+              const SizedBox(height: 2),
+              Text(
+                value == null
+                    ? '—'
+                    : t('{n} credits', {'n': figure(value)}),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              // With nothing to spend, the day's allowance is what is left —
+              // which is a thing still working, where a zero is a wall.
+              if (freeTier && (value ?? 0) == 0 && free != null)
+                Text(t('{n} free left today', {'n': figure(free)}),
+                    style: TextStyle(
+                        fontSize: 11, color: Theme.of(context).hintColor)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        cell(t('Standard'), app.standardBalance, _tier == 'standard',
+            freeTier: true),
+        const SizedBox(width: 8),
+        cell(t('Pro'), app.proBalance, _tier == 'pro'),
+      ],
+    );
+  }
+
+  /// Where credits are bought on a platform that cannot sell them here.
+  /// Deliberately a STATEMENT: no button, no tappable link, nothing that reads
+  /// as a call to action pointing at an outside purchase — see
+  /// purchase_policy.dart.
+  Widget _purchasesDisabledNote(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Text(
+        t('Nymbot credits cannot be purchased in this app. Credits are bought '
+            'from the Nymbot web app in your browser. Credits you already have '
+            'work here as usual.'),
+        style: TextStyle(fontSize: 12, height: 1.45, color: Theme.of(context).hintColor),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Subscribed, not read: the balances below have to follow a purchase that
+    // lands while this sheet is still open.
+    final app = AppScope.of(context);
+    if (creditPurchasesDisabled) {
+      return Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(t('Nymbot credits'),
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              _balances(context, app),
+              const SizedBox(height: 12),
+              _purchasesDisabledNote(context),
+            ],
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: EdgeInsets.only(
         left: 16,
@@ -177,6 +285,8 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(t('Buy credits'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            _balances(context, app),
             const SizedBox(height: 12),
             SegmentedButton<String>(
               segments: [
@@ -209,13 +319,13 @@ class _CreditsSheetState extends State<_CreditsSheet> {
               Text(
                 _tier == 'pro'
                     ? (_credits == 1
-                        ? t('1 Pro credit = {sats} sats', {'sats': _sats})
+                        ? t('1 Pro credit = {sats} sats', {'sats': figure(_sats)})
                         : t('{n} Pro credits = {sats} sats',
-                            {'n': _credits, 'sats': _sats}))
+                            {'n': figure(_credits), 'sats': figure(_sats)}))
                     : (_credits == 1
-                        ? t('1 credit = {sats} sats', {'sats': _sats})
+                        ? t('1 credit = {sats} sats', {'sats': figure(_sats)})
                         : t('{n} credits = {sats} sats',
-                            {'n': _credits, 'sats': _sats})),
+                            {'n': figure(_credits), 'sats': figure(_sats)})),
                 style: const TextStyle(fontSize: 12),
               ),
             if (_invoice != null) ...[

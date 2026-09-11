@@ -85,7 +85,8 @@ class PqAnnounce {
   }
 
   /// Builds a signed announcement for [kem], signed by [signer].
-  Future<NostrEvent> build(EventSigner signer, MlKemKeyPair kem) async {
+  Future<NostrEvent> build(EventSigner signer, MlKemKeyPair kem,
+      {int epoch = 0}) async {
     final nowSec = [
       DateTime.now().millisecondsSinceEpoch ~/ 1000,
       _lastTs + 1,
@@ -107,7 +108,7 @@ class PqAnnounce {
         'src': 'root',
         'alg': NymbotConfig.pqAlg,
         'nym': 1,
-        'epoch': 0,
+        'epoch': epoch,
         'pk': b64,
         'pk2': b64,
         'exp': exp,
@@ -123,12 +124,13 @@ class PqAnnounce {
   ///
   /// Returns false when it withheld, which the caller surfaces as a locked
   /// identity rather than a silent downgrade.
-  Future<bool> announce(EventSigner signer, MlKemKeyPair kem) async {
+  Future<bool> announce(EventSigner signer, MlKemKeyPair kem,
+      {int epoch = 0}) async {
     final existing = await resolve(signer.pubkey);
     if (existing != null && !_sameBytes(existing.pk, kem.publicKey)) {
       return false;
     }
-    final event = await build(signer, kem);
+    final event = await build(signer, kem, epoch: epoch);
     await relays.publish(event);
     selfAnnouncement = event;
     return true;

@@ -2,9 +2,12 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/crypto/schnorr.dart' as schnorr;
 import '../features/nym_avatar.dart';
+import '../models/nostr_event.dart';
 import '../state/store.dart';
 import 'relay_pool.dart';
+import 'storage_sync.dart';
 
 class NostrProfile {
   const NostrProfile({
@@ -65,13 +68,14 @@ class DisplayIdentity {
 }
 
 class Profiles extends ChangeNotifier {
-  Profiles(this._store, this._relays);
+  Profiles(this._store, this._relays, this._storage);
 
   static const _maxAge = Duration(hours: 6);
   static final _safeImage = RegExp(r'^https://[^\s"' "'" r'<>]+$');
 
   final Store _store;
   final RelayPool _relays;
+  final StorageSync _storage;
   final Map<String, NostrProfile> _cache = {};
   final Set<String> _inflight = {};
   bool _loaded = false;
@@ -108,9 +112,44 @@ class Profiles extends ChangeNotifier {
     );
   }
 
-  /// Reads kind 0 off the relays and caches it. A miss is remembered too, so a
-  /// key with no profile is not re-asked on every rebuild.
-  Future<void> load(String pubkey, {bool force = false}) async {
+  /// The mirror Nymchat writes on every profile edit. Asked first because it
+  /// answers in one round trip, before a relay socket is even open — the relays
+  /// are the fallback, not the other way round. A relay never gets to say what
+  /// a profile is, and neither does the mirror: the event is signed, so its own
+  /// hash and signature decide.
+  Future<NostrProfile?> _fromD1(String pubkey) async {
+    Map<String, NostrEvent>? events;
+    try {
+      events = await _storage.profileEvents([pubkey]);
+    } catch (_) {
+      return null;
+    }
+    final event = events?[pubkey];
+    if (event == null || event.kind != 0 || event.pubkey != pubkey) return null;
+    if (!schnorr.verifyEvent(event)) return null;
+    return _read(event.content);
+  }
+
+  /// Waits for the pool to have a socket. Only the relay half needs it: the
+  /// mirror is one request to a worker and answers whether or not a relay is
+  /// up, which is the whole reason it is asked first.
+  Future<void> _whenConnected() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 6));
+    while (_relays.connected == 0 && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
+  /// Reads kind 0 from the D1 mirror, falling back to the relays. A miss is
+  /// remembered too, so a key with no profile is not re-asked on every rebuild.
+  ///
+  /// [mirrorOnly] asks the mirror and stops there, for the boot path: it
+  /// answers in one round trip, so the name and avatar are drawn before
+  /// anything else waits on a relay. A miss is NOT remembered in that mode —
+  /// the relays have not been asked yet, and remembering it would suppress the
+  /// question for [_maxAge].
+  Future<void> load(String pubkey,
+      {bool force = false, bool mirrorOnly = false}) async {
     _hydrate();
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(pubkey)) return;
     final hit = _cache[pubkey];
@@ -120,13 +159,18 @@ class Profiles extends ChangeNotifier {
     _inflight.add(pubkey);
 
     try {
-      final events = await _relays.fetch(
-        {'kinds': [0], 'authors': [pubkey], 'limit': 4},
-        timeout: const Duration(seconds: 4),
-      );
-      final mine = events.where((e) => e.pubkey == pubkey).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      final parsed = mine.isEmpty ? null : _read(mine.first.content);
+      var parsed = await _fromD1(pubkey);
+      if (parsed == null) {
+        if (mirrorOnly) return;
+        await _whenConnected();
+        final events = await _relays.fetch(
+          {'kinds': [0], 'authors': [pubkey], 'limit': 4},
+          timeout: const Duration(seconds: 4),
+        );
+        final mine = events.where((e) => e.pubkey == pubkey).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        parsed = mine.isEmpty ? null : _read(mine.first.content);
+      }
       _cache[pubkey] = parsed ??
           NostrProfile(fetchedAt: DateTime.now().millisecondsSinceEpoch);
       await _persist();

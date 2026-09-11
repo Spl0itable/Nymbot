@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app.dart';
 import '../core/theme/theme.dart';
+import '../services/nostr/event_signer.dart';
 import '../state/app_controller.dart';
+import '../state/identity.dart';
 import 'i18n/i18n.dart';
 
 const String nymbotWordmark = r'''
@@ -28,9 +32,13 @@ class GateScreen extends StatefulWidget {
 }
 
 class _GateScreenState extends State<GateScreen> {
+  /// How far to look for the epoch an account's announced key sits at.
+  static const int _epochScan = 12;
+
   final _nsec = TextEditingController();
   bool _importing = false;
   bool _revealing = false;
+  bool _busy = false;
   String? _error;
 
   @override
@@ -43,22 +51,202 @@ class _GateScreenState extends State<GateScreen> {
     final app = AppScope.read(context);
     try {
       await app.identity.generate();
+      // A key nobody has seen before cannot already have a root, so there is
+      // nothing to ask D1 — only a row to write, so the next device to sign in
+      // finds it and asks for the code instead of minting a second one.
+      final root = app.identity.root;
+      if (root != null) {
+        unawaited(app.storage
+            .publishPqRootRecord(app.identity.signer, root)
+            .catchError((_) => false));
+      }
       setState(() => _revealing = true);
     } catch (e) {
       setState(() => _error = t('Could not create a key.'));
     }
   }
 
+  /// Signing in with a key that has been used before.
+  ///
+  /// The account is asked what it already holds BEFORE this device decides what
+  /// post-quantum root to give it: minting one unasked is wrong for a key that
+  /// has been used, since the announcement is replaceable and a second root
+  /// published over the first strands every settings row, every synced
+  /// conversation and every reply sealed to the one it replaced.
   Future<void> _import() async {
     final app = AppScope.read(context);
+    Uint8List sk;
     try {
-      await app.identity.import(_nsec.text);
-      app.signIn();
+      sk = app.identity.readSecret(_nsec.text);
     } catch (e) {
-      setState(() => _error = e is FormatException
-          ? e.message
-          : t('That key could not be read.'));
+      setState(() => _error =
+          e is FormatException ? e.message : t('That key could not be read.'));
+      return;
     }
+
+    setState(() {
+      _error = null;
+      _busy = true;
+    });
+    final AccountRoot probe;
+    try {
+      probe = await app.probeAccountRoot(LocalSigner(sk));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+
+    if (!probe.present && probe.announced == null) {
+      try {
+        await app.identity.import(_nsec.text);
+      } catch (e) {
+        setState(() => _error = t('That key could not be read.'));
+        return;
+      }
+      if (!mounted) return;
+      // Neither source answered. Minting waits — a second root published over
+      // the first strands every settings row, every synced conversation and
+      // every reply sealed to the one it replaced. Sign in without one; the
+      // first launch that reaches the worker settles it. Not locked either:
+      // nothing says the account HAS a root, only that nobody could be asked.
+      if (!probe.read) {
+        app.identity.rootLocked = false;
+        app.signIn();
+        return;
+      }
+      // D1 answered and holds nothing, and the relays advertise nothing: a key
+      // that has never used Nymbot or Nymchat. One is minted now and shown, the
+      // same reveal a brand new key gets, because it is the same thing to lose.
+      await app.mintAndRecordRoot();
+      if (!mounted) return;
+      setState(() => _revealing = true);
+      return;
+    }
+
+    final linked = await _askForCode(probe);
+    if (!mounted) return;
+    try {
+      await app.identity.import(
+        _nsec.text,
+        root: linked?.root,
+        epoch: linked?.epoch ?? 0,
+      );
+    } catch (e) {
+      setState(() => _error = t('That key could not be read.'));
+      return;
+    }
+    app.signIn();
+  }
+
+  /// The prompt: this account already has a root, and this device does not have
+  /// it. Null when the user carried on without it — signed in, nothing minted,
+  /// and the code can be pasted in Identity later.
+  Future<({Uint8List root, int epoch})?> _askForCode(AccountRoot probe) async {
+    final field = TextEditingController();
+    String? error;
+    final result = await showDialog<({Uint8List root, int epoch})?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) => AlertDialog(
+          title: Text(t('This key already has a post-quantum root')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(t('Your settings and conversations are sealed to it, and '
+                    'so are your replies. Paste the recovery code from the '
+                    'device that made it — Identity → Post-quantum root, in '
+                    'Nymbot or Nymchat.\n\nWithout it this device can still '
+                    'chat, but it cannot open anything the other one saved.')),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: field,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    labelText: t('Recovery code'),
+                    hintText: 'nympq1…',
+                    errorText: error,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: Text(t('Carry on without it')),
+            ),
+            FilledButton(
+              onPressed: () {
+                final typed = field.text.trim();
+                // Either way of saying "not now".
+                if (typed.isEmpty) {
+                  Navigator.of(context).pop(null);
+                  return;
+                }
+                final checked = _checkCode(typed, probe);
+                if (checked == null) {
+                  setSheet(() => error = _codeError(typed, probe));
+                  return;
+                }
+                Navigator.of(context).pop(checked);
+              },
+              child: Text(t('Link this device')),
+            ),
+          ],
+        ),
+      ),
+    );
+    field.dispose();
+    return result;
+  }
+
+  /// The root a pasted code carries, once it is the one this account uses, and
+  /// the epoch of it the account currently advertises.
+  ({Uint8List root, int epoch})? _checkCode(String typed, AccountRoot probe) {
+    final root = Identity.rootFromCode(typed);
+    if (root == null) return null;
+    // The record is the account's own statement of which root it uses: exact,
+    // and epoch-free.
+    final recorded = probe.fingerprint;
+    if (recorded != null && Identity.fingerprintOfCode(typed) != recorded) {
+      return null;
+    }
+    // The root is one thing; which epoch of it the account currently advertises
+    // is another.
+    final announced = probe.announced;
+    if (announced != null) {
+      for (var epoch = 0; epoch <= _epochScan; epoch++) {
+        final derived = Identity.kemForCode(typed, epoch);
+        if (derived != null && _sameBytes(derived, announced)) {
+          return (root: root, epoch: epoch);
+        }
+      }
+      if (recorded == null) return null;
+    }
+    return (root: root, epoch: 0);
+  }
+
+  String _codeError(String typed, AccountRoot probe) {
+    if (Identity.rootFromCode(typed) == null) {
+      return t('That is not a recovery code. It starts with nympq1.');
+    }
+    if (probe.fingerprint != null) {
+      return t('That code does not match the root this account recorded. '
+          'Check you copied it from the right account.');
+    }
+    return t('That code does not match the key this account advertises. '
+        'Check you copied it from the right account.');
+  }
+
+  static bool _sameBytes(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override
@@ -127,10 +315,20 @@ class _GateScreenState extends State<GateScreen> {
               style: TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
-            FilledButton(onPressed: _import, child: Text(t('Sign in'))),
+            FilledButton(
+              onPressed: _busy ? null : _import,
+              child: Text(t('Sign in')),
+            ),
             TextButton(
-              onPressed: () => setState(() => _importing = false),
+              onPressed: _busy ? null : () => setState(() => _importing = false),
               child: Text(t('Back')),
+            ),
+          ],
+          if (_busy) ...[
+            const SizedBox(height: 12),
+            Text(
+              t('Checking whether this key already has a post-quantum root…'),
+              style: const TextStyle(fontSize: 12),
             ),
           ],
           if (_error != null) ...[

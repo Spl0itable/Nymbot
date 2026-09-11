@@ -68,6 +68,21 @@
             this.translateDom(document.body);
         },
 
+        /// A figure with its thousands separated, and nothing else done to it.
+        ///
+        /// Never abbreviated, however long it gets: these are balances and
+        /// prices, and rounding 12,500 credits to "12.5k" throws away digits
+        /// the reader is entitled to. Separators are all the legibility a
+        /// figure needs when every one of them has to stay.
+        ///
+        /// The grouping is done here rather than by `toLocaleString` so it is
+        /// deterministic: the same figure however the app has been translated,
+        /// and whatever the browser's own locale happens to be.
+        count(value) {
+            return String(Math.round(Number(value) || 0))
+                .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        },
+
         /// One string, with `{name}` placeholders filled from [vars].
         ///
         /// Untranslated text is returned as it came in, so a pack missing an

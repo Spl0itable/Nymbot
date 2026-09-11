@@ -84,11 +84,21 @@
         const space = workspaceFor(conv);
         const ids = (Array.isArray(conv.repoIds) ? conv.repoIds : [])
             .concat(space && Array.isArray(space.repoIds) ? space.repoIds : []);
-        const seen = new Set();
-        return ids
-            .filter(id => !seen.has(id) && seen.add(id))
-            .map(id => Store.repo(id))
-            .filter(r => r && r.enabled !== false && r.token && r.repo);
+        const seenId = new Set();
+        const seenWhere = new Set();
+        const out = [];
+        for (const id of ids) {
+            if (seenId.has(id)) continue;
+            seenId.add(id);
+            const repo = Store.repo(id);
+            if (!repo || repo.enabled === false || !repo.token || !repo.repo) continue;
+            const where = [repo.provider || 'github', repo.host || '',
+                repo.repo, repo.branch || ''].join('|');
+            if (seenWhere.has(where)) continue;
+            seenWhere.add(where);
+            out.push(repo);
+        }
+        return out;
     }
 
     /// Splits one file into retrievable passages, on blank lines and headings,
@@ -247,7 +257,7 @@
     /// moment it became history — so instructions and project knowledge stopped
     /// applying after a single reply, silently. The worker strips these blocks
     /// from historical turns, so repeating them costs one copy, not twenty.
-    function standingContext(conv, repos, query) {
+    function standingContext(conv, repos, query, opts) {
         const parts = [];
         const space = workspaceFor(conv);
         const bot = botFor(conv);
@@ -267,6 +277,12 @@
                 `${i + 1}. ${r.repo}${r.branch ? '@' + r.branch : ''} (${r.provider || 'github'}${r.allowWrites ? ', writable' : ', read-only'})${r.paths ? ' paths: ' + r.paths : ''}`
             ).join('\n') + '\nRefer to a repository by its name when you cite a file.');
         }
+        const RepoMap = window.NymbotRepoMap;
+        const pinned = conv.proModel || (Store.settings() || {}).proModel;
+        if (RepoMap && pinned && repos.length && !(opts && opts.skipMap)) {
+            const files = RepoMap.block(repos, query);
+            if (files) parts.push(files);
+        }
         if (space) {
             const knowledge = knowledgeBlock(space, query);
             if (knowledge) parts.push(knowledge);
@@ -283,7 +299,7 @@
         const repos = reposFor(conv);
         const attachments = opts.attachments || [];
         const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
-        const preamble = preambleFor(conv, repos, text);
+        const preamble = preambleFor(conv, repos, text, opts);
         const quoted = opts.quote
             ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
             : '';
@@ -299,8 +315,8 @@
         return t('This message is {n} KB, and the most one question can carry is about {max} KB. Put a long file in a workspace instead, where the whole of it is searched rather than sent.', { n: kb, max: max });
     }
 
-    function preambleFor(conv, repos, query) {
-        const standing = standingContext(conv, repos, query);
+    function preambleFor(conv, repos, query, opts) {
+        const standing = standingContext(conv, repos, query, opts);
         const parts = standing.length
             ? [standing.join('\n\n') + '\n\n' + STANDING_END]
             : [];
@@ -318,6 +334,21 @@
     // back against the question before sending it. Both are charged as what
     // they are — more model calls — so the price says what the work was.
     const EFFORT = { normal: 1, careful: 2, deep: 3 };
+
+    const BUSY_WAITS = [4000, 9000, 16000];
+
+    function pause(ms, signal) {
+        return new Promise(resolve => {
+            let timer = 0;
+            const done = () => {
+                clearTimeout(timer);
+                if (signal) signal.removeEventListener('abort', done);
+                resolve();
+            };
+            timer = setTimeout(done, ms);
+            if (signal) signal.addEventListener('abort', done);
+        });
+    }
 
     function effortOf(conv) {
         const name = conv && conv.effort;
@@ -400,14 +431,25 @@
             const attachments = opts.attachments || [];
             // A '!' question is answered outside the conversation.
             const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
-            const wireText = wireTextFor(conv, text, opts);
+            const RepoMap = window.NymbotRepoMap;
+            if (RepoMap && repos.length && (conv.proModel || settings.proModel)) {
+                if (repos.some(r => !RepoMap.entry(r))) {
+                    this._say(t('Nymbot is reading your repositories'));
+                }
+                try { await RepoMap.ready(repos); } catch (_) { }
+            }
+            let wireText = wireTextFor(conv, text, opts);
             // NIP-44 caps one plaintext, and a gift wrap holds two of them
             // nested, so a long message does not fit in one event. Rather than
             // refuse it, it travels as several — each tagged with where it
             // sits, all sharing one message id, joined back into one question
             // by the worker. What stays capped is how many: past that it is
             // not a message.
-            const bodies = Wire.split(wireText);
+            let bodies = Wire.split(wireText);
+            if (bodies.length > Wire.PARTS_MAX) {
+                wireText = wireTextFor(conv, text, Object.assign({}, opts, { skipMap: true }));
+                bodies = Wire.split(wireText);
+            }
             if (bodies.length > Wire.PARTS_MAX) {
                 throw new Error(overLimitMessage(wireText));
             }
@@ -489,15 +531,30 @@
             if (ownsController) this.controller = controller;
             let status, data;
             try {
-                for (let tries = 0; ; tries++) {
+                let held = 0;
+                let waited = 0;
+                for (;;) {
                     ({ status, data } = await Api.call('pm', extra, {
                         timeout: C.pmTimeoutMs,
                         signer: anon ? Anon.signer() : null,
                         controller
                     }));
-                    if (!data || !data.pending || tries >= 5) break;
-                    this._say(t('Still working on that one…'));
-                    await new Promise(r => setTimeout(r, 3000));
+                    if (data && data.pending && held < 5 && !controller.signal.aborted) {
+                        held++;
+                        this._say(t('Still working on that one…'));
+                        await pause(3000, controller.signal);
+                        continue;
+                    }
+                    const failed = status >= 400 || !data || !!data.error;
+                    if (failed && !(data && data.noCredits) && waited < BUSY_WAITS.length
+                        && Api.busy(status, data) && !controller.signal.aborted) {
+                        const wait = BUSY_WAITS[waited++];
+                        this._say(t('Too many requests just now — waiting {n} seconds rather than asking again straight away.',
+                            { n: Math.round(wait / 1000) }));
+                        await pause(wait, controller.signal);
+                        continue;
+                    }
+                    break;
                 }
             } finally {
                 if (ownsController) this.controller = null;
@@ -541,6 +598,11 @@
                 ids.push(wrap.id);
                 if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
                 Store.setThread(conv.id, ids);
+            }
+
+            if (data.checkpoint && data.checkpoint.repo && RepoMap) {
+                const written = repos.find(r => r.repo === data.checkpoint.repo);
+                if (written) RepoMap.forget(written);
             }
 
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });

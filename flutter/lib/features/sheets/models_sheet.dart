@@ -73,7 +73,9 @@ class _ModelsSheetState extends State<_ModelsSheet> {
   /// number said nothing about what it counted.
   String _price(int credits, int max) {
     final span = max > credits;
-    final n = span ? '$credits–$max' : '$credits';
+    // Each side of a range is its own figure; the range is not one number to
+    // format.
+    final n = span ? '${figure(credits)}–${figure(max)}' : figure(credits);
     return (!span && credits == 1)
         ? t('{n} credit', {'n': n})
         : t('{n} credits', {'n': n});

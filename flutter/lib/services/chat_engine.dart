@@ -16,6 +16,7 @@ import 'memory_keeper.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
 import 'pq_announce.dart';
+import 'repo_map.dart';
 import 'free_tier.dart';
 import 'relay_pool.dart';
 import 'wire_limits.dart';
@@ -90,6 +91,7 @@ class ChatEngine {
     required this.pq,
     required this.api,
     required this.anon,
+    this.maps,
   });
 
   final Identity identity;
@@ -97,6 +99,8 @@ class ChatEngine {
   final PqAnnounce pq;
   final NymbotApi api;
   final AnonMode anon;
+
+  final RepoMap? maps;
 
   void Function(String? status)? onStatus;
 
@@ -151,6 +155,12 @@ class ChatEngine {
   // back against the question before sending it. Both are charged as what they
   // are — more model calls — so the price says what the work was.
   static const effortLevels = {'normal': 1, 'careful': 2, 'deep': 3};
+
+  static const busyWaits = [
+    Duration(seconds: 4),
+    Duration(seconds: 9),
+    Duration(seconds: 16),
+  ];
 
   static String effortOf(Conversation? conv) {
     final name = conv?.effort ?? 'normal';
@@ -384,8 +394,9 @@ class ChatEngine {
     Workspace? space,
     Bot? bot,
     String query,
-    List<Memory> memories,
-  ) {
+    List<Memory> memories, {
+    String repoFiles = '',
+  }) {
     final parts = <String>[];
     final instructions = [
       bot?.instructions ?? '',
@@ -408,6 +419,7 @@ class ChatEngine {
       parts.add('[repositories in scope]\n${lines.join('\n')}\n'
           'Refer to a repository by its name when you cite a file.');
     }
+    if (repoFiles.isNotEmpty) parts.add(repoFiles);
     final knowledge = knowledgeBlock(space, query);
     if (knowledge.isNotEmpty) parts.add(knowledge);
     final remembered = MemoryKeeper.block(memories, conv, query);
@@ -423,9 +435,11 @@ class ChatEngine {
     Bot? bot,
     String query = '',
     List<Memory> memories = const [],
+    String repoFiles = '',
   ]) {
-    final standing =
-        standingContext(conv, repos, persona, space, bot, query, memories);
+    final standing = standingContext(
+        conv, repos, persona, space, bot, query, memories,
+        repoFiles: repoFiles);
     final parts = <String>[];
     if (standing.isNotEmpty) {
       parts.add('${standing.join('\n\n')}\n\n$standingEnd');
@@ -462,6 +476,16 @@ class ChatEngine {
     final space = cut.lastIndexOf(' ');
     final trimmed = space > 24 ? cut.substring(0, space) : cut;
     return '${trimmed.replaceFirst(RegExp(r'[,;:.\-]$'), '')}…';
+  }
+
+  Future<void> _wait(Duration total) async {
+    const slice = Duration(milliseconds: 250);
+    var left = total;
+    while (left > Duration.zero && !_cancelled) {
+      final step = left < slice ? left : slice;
+      await Future<void>.delayed(step);
+      left -= step;
+    }
   }
 
   String _sharedId() => bytesToHex(randomBytes(32));
@@ -516,13 +540,33 @@ class ChatEngine {
         : identity.kemPublicKey;
 
     final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
-    final head =
-        preamble(conv, repos, persona, workspace, bot, text, memories);
+    final reader = maps;
+    var repoFiles = '';
+    if (reader != null && repos.isNotEmpty && proModel != null) {
+      if (!reader.knows(repos)) {
+        onStatus?.call(t('Nymbot is reading your repositories'));
+      }
+      try {
+        await reader.ready(repos);
+      } catch (_) {}
+      repoFiles = reader.block(repos, text);
+    }
     final quoted = (quote == null || quote.isEmpty)
         ? ''
         : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
     final attached = attachments.map((a) => a.wireBlock).join();
-    final wireText = '$head$quoted$text$attached';
+    String assemble(String files) {
+      final head = preamble(
+          conv, repos, persona, workspace, bot, text, memories, files);
+      return '$head$quoted$text$attached';
+    }
+
+    var wireText = assemble(repoFiles);
+    if (repoFiles.isNotEmpty &&
+        WireLimits.split(wireText).length > WireLimits.partsMax) {
+      repoFiles = '';
+      wireText = assemble('');
+    }
 
     // NIP-44 refuses a plaintext over 65535 bytes, and a gift wrap nests two
     // of them, so a long question does not fit in one event. It travels as
@@ -611,14 +655,30 @@ class ChatEngine {
     // generating. Asking again with the same event id collects that reply
     // rather than paying for a second one.
     ApiResult res;
-    var tries = 0;
+    var held = 0;
+    var waited = 0;
     while (true) {
       if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
       res = await api.call('pm', signer,
           extra: extra, timeout: NymbotConfig.pmTimeout);
-      if (res.data['pending'] != true || tries++ >= 5) break;
-      onStatus?.call(t('Still working on that one…'));
-      await Future<void>.delayed(const Duration(seconds: 3));
+      if (res.data['pending'] == true && held++ < 5) {
+        onStatus?.call(t('Still working on that one…'));
+        await _wait(const Duration(seconds: 3));
+        continue;
+      }
+      final failed = res.status >= 400 || res.data['error'] != null;
+      if (failed &&
+          res.data['noCredits'] != true &&
+          waited < busyWaits.length &&
+          NymbotApi.busy(res.status, res.data)) {
+        final wait = busyWaits[waited++];
+        onStatus?.call(t(
+            'Too many requests just now — waiting {n} seconds rather than asking again straight away.',
+            {'n': wait.inSeconds}));
+        await _wait(wait);
+        continue;
+      }
+      break;
     }
     if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
     final data = res.data;
@@ -681,6 +741,13 @@ class ChatEngine {
     // become context. The chat still shows it.
     if (!freshTurn) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
+    }
+
+    final mark = data['checkpoint'];
+    if (reader != null && mark is Map && mark['repo'] is String) {
+      for (final r in repos.where((r) => r.repo == mark['repo'])) {
+        await reader.forget(r);
+      }
     }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');

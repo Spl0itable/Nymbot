@@ -97,5 +97,124 @@
         return rows;
     }
 
-    window.NymbotGitApi = { listRepos, supports, needsHost, providers: Object.keys(PROVIDERS) };
+    const TREE_PAGE_MAX = 10;
+    const TREE_PAGE_SIZE = 100;
+
+    const TREES = {
+        github: {
+            async defaultBranch(cfg, ask) {
+                const body = await ask(`/repos/${cfg.repo}`);
+                return (body && body.default_branch) || '';
+            },
+            async files(cfg, ask, branch) {
+                const body = await ask(
+                    `/repos/${cfg.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+                const rows = (body && body.tree) || [];
+                return {
+                    paths: rows.filter(r => r && r.type === 'blob' && r.path).map(r => r.path),
+                    partial: !!(body && body.truncated)
+                };
+            }
+        },
+        gitlab: {
+            async defaultBranch(cfg, ask) {
+                const body = await ask(`/projects/${encodeURIComponent(cfg.repo)}`);
+                return (body && body.default_branch) || '';
+            },
+            async files(cfg, ask, branch) {
+                const project = encodeURIComponent(cfg.repo);
+                const paths = [];
+                let partial = false;
+                for (let page = 1; page <= TREE_PAGE_MAX; page++) {
+                    const body = await ask(`/projects/${project}/repository/tree`
+                        + `?recursive=true&per_page=${TREE_PAGE_SIZE}&page=${page}`
+                        + (branch ? `&ref=${encodeURIComponent(branch)}` : ''));
+                    const rows = Array.isArray(body) ? body : [];
+                    for (const r of rows) {
+                        if (r && r.type === 'blob' && r.path) paths.push(r.path);
+                    }
+                    if (rows.length < TREE_PAGE_SIZE) return { paths, partial };
+                    partial = page === TREE_PAGE_MAX;
+                }
+                return { paths, partial };
+            }
+        },
+        gitea: {
+            async defaultBranch(cfg, ask) {
+                const body = await ask(`/repos/${cfg.repo}`);
+                return (body && body.default_branch) || '';
+            },
+            async files(cfg, ask, branch) {
+                let ref = branch;
+                try {
+                    const head = await ask(`/repos/${cfg.repo}/branches/${encodeURIComponent(branch)}`);
+                    if (head && head.commit && head.commit.id) ref = head.commit.id;
+                } catch (_) { }
+                const body = await ask(`/repos/${cfg.repo}/git/trees/${encodeURIComponent(ref)}`
+                    + '?recursive=true&per_page=1000');
+                const rows = (body && body.tree) || [];
+                return {
+                    paths: rows.filter(r => r && r.type === 'blob' && r.path).map(r => r.path),
+                    partial: !!(body && body.truncated)
+                };
+            }
+        },
+        bitbucket: {
+            async defaultBranch(cfg, ask) {
+                const body = await ask(`/repositories/${cfg.repo}`);
+                return (body && body.mainbranch && body.mainbranch.name) || '';
+            },
+            async files(cfg, ask, branch) {
+                const paths = [];
+                let next = `/repositories/${cfg.repo}/src/${encodeURIComponent(branch)}/`
+                    + '?max_depth=100&pagelen=100&fields=values.path,values.type,next';
+                for (let page = 1; page <= TREE_PAGE_MAX; page++) {
+                    const body = await ask(next);
+                    for (const r of (body && body.values) || []) {
+                        if (r && r.type === 'commit_file' && r.path) paths.push(r.path);
+                    }
+                    next = (body && body.next) || '';
+                    if (!next) return { paths, partial: false };
+                }
+                return { paths, partial: true };
+            }
+        }
+    };
+
+    TREES.codeberg = TREES.gitea;
+
+    async function tree(cfg) {
+        const name = cfg.provider || 'github';
+        const provider = PROVIDERS[name];
+        const reader = TREES[name];
+        if (!provider || !reader) throw new Error('unsupported');
+        if (!cfg.token) throw new Error('token');
+        if (!cfg.repo) throw new Error('repo');
+        if (needsHost(name) && !cfg.host) throw new Error('host');
+
+        const base = provider.base(cfg.host);
+        const headers = provider.headers(cfg.token);
+        const ask = async (path) => {
+            const url = /^https?:\/\//i.test(path) ? path : base + path;
+            let res;
+            try {
+                res = await fetch(url, { headers });
+            } catch (_) {
+                throw new Error('unreachable');
+            }
+            if (res.status === 401 || res.status === 403) throw new Error('denied');
+            if (res.status === 404) throw new Error('missing');
+            if (!res.ok) throw new Error('failed:' + res.status);
+            return res.json();
+        };
+
+        const branch = cfg.branch || await reader.defaultBranch(cfg, ask);
+        if (!branch) throw new Error('branch');
+        const read = await reader.files(cfg, ask, branch);
+        return { branch, paths: read.paths, partial: read.partial };
+    }
+
+    window.NymbotGitApi = {
+        listRepos, tree, supports, needsHost, providers: Object.keys(PROVIDERS)
+    };
 })();

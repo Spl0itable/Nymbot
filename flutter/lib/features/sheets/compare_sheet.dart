@@ -223,7 +223,7 @@ class _CompareSheetState extends State<_CompareSheet> {
           DropdownMenuItem(
             value: m['key'] as String,
             child: Text(
-              '${m['label']} · ${(m['credits'] as num?)?.toInt() ?? 1}',
+              '${m['label']} · ${figure((m['credits'] as num?)?.toInt() ?? 1)}',
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -266,7 +266,7 @@ class _Result extends StatelessWidget {
                           fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
                 if (run.ok)
-                  Text(t('{n} credits', {'n': run.cost}),
+                  Text(t('{n} credits', {'n': figure(run.cost)}),
                       style:
                           TextStyle(fontSize: 11, color: theme.hintColor)),
               ],

@@ -153,7 +153,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   await identity.adoptRootCode(_link.text);
                   final kem = identity.kem;
                   if (kem != null) {
-                    await app.pq.announce(identity.signer, kem);
+                    await app.pq
+                        .announce(identity.signer, kem, epoch: identity.epoch);
                   }
                   if (!mounted) return;
                   setState(() {
