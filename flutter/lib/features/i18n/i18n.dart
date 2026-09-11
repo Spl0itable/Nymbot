@@ -117,6 +117,17 @@ String t(String text, [Map<String, Object?>? vars]) => I18n.translate(text, vars
 /// The grouping is written out rather than left to a locale formatter so it is
 /// deterministic: the same figure however the app has been translated, and
 /// whatever the device's own locale happens to be.
+String creditAmount(double value, bool metered) {
+  if (!metered) return figure(value.round());
+  if (value >= 10) return figure(value.round());
+  if (value >= 1) {
+    final one = value.toStringAsFixed(1);
+    return one.endsWith('.0') ? one.substring(0, one.length - 2) : one;
+  }
+  final two = value.toStringAsFixed(2);
+  return two.endsWith('0') ? two.substring(0, two.length - 1) : two;
+}
+
 String figure(Object? value) {
   final n = value is int
       ? value

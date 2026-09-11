@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'i18n/i18n.dart';
+import '../core/theme/theme.dart';
 
 enum DiffLineKind { add, remove, context, hunk, meta }
 
@@ -168,7 +169,7 @@ class _FilePanelState extends State<_FilePanel> {
                       file.path.isEmpty ? t('patch') : file.path,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontFamily: 'monospace',
+                          fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                           fontSize: 11.5,
                           fontWeight: FontWeight.w600),
                     ),
@@ -176,13 +177,13 @@ class _FilePanelState extends State<_FilePanel> {
                   Text('+${file.added}',
                       style: const TextStyle(
                           fontSize: 11,
-                          fontFamily: 'monospace',
+                          fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                           color: Color(0xFF2DA44E))),
                   const SizedBox(width: 6),
                   Text('−${file.removed}',
                       style: const TextStyle(
                           fontSize: 11,
-                          fontFamily: 'monospace',
+                          fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                           color: Color(0xFFCF222E))),
                   IconButton(
                     icon: const Icon(Icons.copy_all_outlined, size: 15),
@@ -220,7 +221,7 @@ class _FilePanelState extends State<_FilePanel> {
       BuildContext context, DiffLine line, Color addBg, Color delBg) {
     final theme = Theme.of(context);
     final mono = TextStyle(
-      fontFamily: 'monospace',
+      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
       fontSize: 11.5,
       height: 1.45,
       color: switch (line.kind) {

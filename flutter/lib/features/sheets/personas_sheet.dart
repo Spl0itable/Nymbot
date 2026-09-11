@@ -4,7 +4,8 @@ import '../../app.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
-import '../nym_icons.dart';
+import '../nym_glyph.dart';
+import '../nym_glyphs.dart';
 
 Future<void> showPersonasSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
@@ -74,7 +75,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                     : null,
                 child: ListTile(
                   dense: true,
-                  leading: Icon(NymIcons.forPersona(p.icon), size: 20),
+                  leading: NymGlyph(p.icon, size: 20),
                   title: Text(p.name),
                   subtitle: Text(
                     p.instructions,
@@ -144,7 +145,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                for (final name in NymIcons.personaOrder)
+                for (final name in kNymPersonaGlyphs)
                   InkWell(
                     borderRadius: BorderRadius.circular(8),
                     onTap: () => setState(() => _icon = name),
@@ -159,8 +160,8 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                         ),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Icon(
-                        NymIcons.forPersona(name),
+                      child: NymGlyph(
+                        name,
                         size: 19,
                         color: name == _icon
                             ? Theme.of(context).colorScheme.primary

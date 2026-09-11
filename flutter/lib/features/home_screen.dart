@@ -40,6 +40,7 @@ import 'sheets/prompts_sheet.dart';
 import 'sheets/repos_sheet.dart';
 import 'toolbar.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -1163,19 +1164,44 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
               ],
             ),
-            if (app.settings.showCostEstimate && _input.text.trim().isNotEmpty)
+            if (app.repoNeedsPro)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  t('Only a Pro model can read a repository — pick one with ?model, or this chat answers without it.'),
+                  style:
+                      TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                ),
+              )
+            else if (app.settings.showCostEstimate && _input.text.trim().isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   estimate.tier == 'pro'
-                      ? (estimate.low == estimate.high
-                          ? t('About {n} Pro credits', {'n': figure(estimate.low)})
-                          : t('About {low}–{high} Pro credits',
-                              {'low': estimate.low, 'high': estimate.high}))
-                      : (estimate.low == 1
-                          ? t('1 standard credit')
-                          : t('{n} standard credits',
-                              {'n': figure(estimate.low)})),
+                      ? (creditAmount(estimate.low, estimate.metered) ==
+                              creditAmount(estimate.high, estimate.metered)
+                          ? t('About {n} Pro credits', {
+                              'n': creditAmount(estimate.low, estimate.metered)
+                            })
+                          : t('About {low}–{high} Pro credits', {
+                              'low':
+                                  creditAmount(estimate.low, estimate.metered),
+                              'high':
+                                  creditAmount(estimate.high, estimate.metered)
+                            }))
+                      : estimate.metered
+                          ? (creditAmount(estimate.low, true) ==
+                                  creditAmount(estimate.high, true)
+                              ? t('{n} standard credits',
+                                  {'n': creditAmount(estimate.low, true)})
+                              : t('About {low}–{high} standard credits', {
+                                  'low': creditAmount(estimate.low, true),
+                                  'high': creditAmount(estimate.high, true)
+                                }))
+                          : (estimate.low == 1
+                              ? t('1 standard credit')
+                              : t('{n} standard credits',
+                                  {'n': figure(estimate.low.round())})),
                   style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                 ),
               ),
@@ -1420,7 +1446,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     child: Text(
                       'Nymbot',
                       style: TextStyle(
-                        fontFamily: 'monospace',
+                        fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         height: 1,
@@ -1481,29 +1507,30 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   : ListView(children: rows),
             ),
             const Divider(height: 1),
-            for (final entry in <(IconData, String, Future<void> Function())>[
-              (Icons.account_tree_outlined, t('Repositories'),
+            for (final entry in <(String, String, Future<void> Function())>[
+              ('repositories', t('Repositories'),
                   () => showReposSheet(context)),
-              (Icons.chat_bubble_outline, t('Prompt library'), () async {
+              ('prompt-library', t('Prompt library'), () async {
                 final picked = await showPromptsSheet(context);
                 if (picked != null) app.queueInput(picked);
                 if (picked != null && context.mounted) Navigator.pop(context);
               }),
-              (Icons.person_outline, t('Personas'), () => showPersonasSheet(context)),
-              (Icons.star_border, t('Saved messages'), () async {
+              ('personas', t('Personas'), () => showPersonasSheet(context)),
+              ('saved-messages', t('Saved messages'), () async {
                 await showSavedMessagesSheet(context);
               }),
-              (Icons.psychology_outlined, t('Memory'),
-                  () => showMemorySheet(context)),
-              (Icons.tune, t('Settings'), () => showAppearanceSheet(context)),
-              (Icons.help_outline, t('Help'), () => showHelpSheet(context)),
-              (Icons.keyboard_outlined, t('Getting around'),
+              ('memory', t('Memory'), () => showMemorySheet(context)),
+              ('settings', t('Settings'), () => showAppearanceSheet(context)),
+              ('help', t('Help'), () => showHelpSheet(context)),
+              ('keyboard', t('Getting around'),
                   () => showShortcutsSheet(context)),
             ])
               ListTile(
                 dense: true,
                 visualDensity: VisualDensity.compact,
-                leading: Icon(entry.$1, size: 18),
+                leading: NymGlyph.has(entry.$1)
+                    ? NymGlyph(entry.$1, size: 18)
+                    : const Icon(Icons.keyboard_outlined, size: 18),
                 title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
                 onTap: entry.$3,
               ),

@@ -5,6 +5,7 @@ import '../../app.dart';
 import '../../models/conversation.dart';
 import '../markdown_body.dart';
 import '../i18n/i18n.dart';
+import '../../core/theme/theme.dart';
 
 typedef MessageJump = ({String conversationId, String? messageId});
 
@@ -400,7 +401,7 @@ class _ShortcutsSheet extends StatelessWidget {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(row.$1,
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                        style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
                   ),
                   const SizedBox(width: 10),
                   Expanded(

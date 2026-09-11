@@ -303,6 +303,11 @@
     /// Says what is too big and by how much, rather than the byte count the
     /// crypto would have thrown. A file is named as the thing to move,
     /// because a workspace holds a document the wire cannot.
+    function repoNeedsPro(conv, settings) {
+        return reposFor(conv || {}).length > 0
+            && !((conv && conv.proModel) || (settings && settings.proModel));
+    }
+
     function overLimitMessage(wireText) {
         const kb = Math.round(Wire.bodyCost(wireText) / 1024);
         const max = Math.round((Wire.BODY_MAX * Wire.PARTS_MAX) / 1024);
@@ -361,14 +366,81 @@
         return Math.max(0, parts - 1);
     }
 
-    function estimateCredits(text, settings, conv, options) {
+    const EST_SCAFFOLD_TOKENS = 900;
+    const EST_TYPICAL_OUT = 400;
+    const EST_LONG_OUT = 1600;
+
+    function estTokens(chars) {
+        return Math.ceil(Math.max(0, Number(chars) || 0) / 4);
+    }
+
+    function estHistoryChars(conv) {
+        const msgs = (conv && conv.messages) || [];
+        let n = 0;
+        for (let i = msgs.length - 1; i >= 0 && n < 160000; i--) {
+            n += String((msgs[i] && msgs[i].text) || '').length;
+        }
+        return n;
+    }
+
+    function estMeteredCredits(model, inTok, outTok, calls, usdPerCredit) {
+        const pin = Number(model.inUsdPerMTok);
+        const pout = Number(model.outUsdPerMTok);
+        if (!(pin > 0) || !(pout > 0) || !(usdPerCredit > 0)) return null;
+        const pcr = Number(model.cacheReadUsdPerMTok) > 0
+            ? Number(model.cacheReadUsdPerMTok) : pin * 0.1;
+        const legs = Math.max(1, calls);
+        const usd = (inTok * pin + inTok * (legs - 1) * pcr + outTok * legs * pout) / 1e6;
+        return usd / usdPerCredit;
+    }
+
+    function estStandardCredits(conv, text, options, pricing) {
+        const routes = (pricing && pricing.standardRoutes) || [];
+        const usd = Number(pricing && pricing.standardUsdPerCredit) || 0;
+        if (!routes.length || !(usd > 0)) return null;
+        const wire = wireTextFor(conv || {}, text || '', options || {});
+        const inTok = EST_SCAFFOLD_TOKENS + estTokens(wire.length)
+            + estTokens(estHistoryChars(conv));
+        const floor = Number(pricing && pricing.minChargeCredits) || 0;
+        const priced = routes.map(function (r) {
+            const one = estMeteredCredits(r, inTok, EST_TYPICAL_OUT, 1, usd);
+            const long = estMeteredCredits(r, inTok, Math.min(EST_LONG_OUT, r.maxTokens || EST_LONG_OUT), 1, usd);
+            return { one: one, long: long };
+        }).filter(function (r) { return r.one != null; });
+        if (!priced.length) return null;
+        const low = Math.max(floor, Math.min.apply(null, priced.map(function (r) { return r.one; })));
+        const high = Math.max(low, Math.max.apply(null, priced.map(function (r) { return r.long; })));
+        return { low: low, high: high };
+    }
+
+    function estimateCredits(text, settings, conv, options, pricing) {
         const extra = partSurcharge(conv, text, options);
         const model = (conv && conv.proModel) || settings.proModel;
-        if (!model) return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
-        const size = String(text || '').length;
-        const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
+        if (!model) {
+            const std = estStandardCredits(conv, text, options, pricing);
+            if (std) {
+                return { tier: 'standard', low: std.low + extra, high: std.high + extra,
+                    parts: extra + 1, metered: true };
+            }
+            return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
+        }
         const repoTask = reposFor(conv || {}).length > 0;
         const calls = repoTask ? 1 : effortCalls(conv);
+        const usdPerCredit = Number(pricing && pricing.usdPerCredit) || 0;
+        const wire = wireTextFor(conv || {}, text || '', options || {});
+        const inTok = EST_SCAFFOLD_TOKENS + estTokens(wire.length)
+            + estTokens(estHistoryChars(conv));
+        const floor = Number(pricing && pricing.minChargeCredits) || 0;
+        const lowMetered = estMeteredCredits(model, inTok, EST_TYPICAL_OUT, calls, usdPerCredit);
+        if (lowMetered != null) {
+            const maxCalls = repoTask ? (model.repoMaxCalls || 12) : calls;
+            const highMetered = estMeteredCredits(model, inTok, EST_LONG_OUT, maxCalls, usdPerCredit);
+            const low = Math.max(floor, lowMetered) + extra;
+            const high = Math.max(low, Math.max(floor, highMetered) + extra);
+            return { tier: 'pro', low, high, calls, parts: extra + 1, repoTask, metered: true };
+        }
+        const size = String(text || '').length;
+        const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
         const base = (repoTask ? model.repoCredits : model.credits) || model.credits || 1;
         const worst = (repoTask ? model.repoMax : model.max) || model.max || base;
         const low = base * calls + extra;
@@ -407,6 +479,7 @@
         },
 
         overLimitMessage,
+        repoNeedsPro,
         partSurcharge,
 
         async send(conv, text, settings, options) {

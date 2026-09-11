@@ -230,17 +230,22 @@ html[data-motion="reduce"] *::after {
 }
 
 .gate-card {
-    width: min(560px, 100%);
+    width: min(500px, 100%);
     max-width: 100%;
-    /* Without this the card's automatic minimum is the <pre>'s width again. */
+    /* Without this the column's automatic minimum is the <pre>'s width again. */
     min-width: 0;
-    background: var(--bg-raised);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 1.75rem;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
 }
 
 .wordmark {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
+    text-align: left;
     font-family: var(--mono);
     /* The logo is 61 monospace columns, so its width is ~37.7x the font size.
        Scaling with the viewport below ~480px keeps the whole wordmark on
@@ -253,6 +258,23 @@ html[data-motion="reduce"] *::after {
     overflow-x: auto;
     scrollbar-width: none;
     margin-bottom: 1.25rem;
+}
+
+.gate-card > .gate-lede,
+.gate-card > .gate-title,
+.gate-card > .gate-foot,
+.gate-card > .gate-busy,
+.gate-card > .gate-error {
+    text-align: center;
+}
+
+.gate-card > .gate-actions {
+    justify-content: center;
+}
+
+.gate .btn {
+    flex: 1 1 auto;
+    justify-content: center;
 }
 
 .gate-title { font-size: 1.35rem; margin-bottom: 0.5rem; }
@@ -1765,6 +1787,28 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .modal-status { margin-top: 0.6rem; font-size: 0.85rem; color: var(--text-dim); min-height: 1.2em; }
 .modal-status.is-warn { color: var(--danger); }
 .modal-status.is-ok { color: var(--primary); }
+
+.lang-list { max-height: 50vh; overflow-y: auto; margin-top: 0.6rem; display: grid; gap: 0.25rem; }
+.lang-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+}
+.lang-row:hover { background: var(--bubble-bot); }
+.lang-row.is-active { border-color: var(--primary); background: var(--bubble-self); }
+.lang-name { font-size: 0.92rem; }
+.lang-sub { font-size: 0.76rem; color: var(--text-faint); }
+#firstLangSearch { width: 100%; }
 
 .model-list { max-height: 46vh; overflow-y: auto; margin-top: 0.6rem; }
 .model-group { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin: 0.85rem 0 0.35rem; }

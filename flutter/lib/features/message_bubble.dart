@@ -10,6 +10,7 @@ import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
 import 'nym_avatar.dart';
+import 'nym_glyph.dart';
 
 enum MessageAction {
   copy,
@@ -426,7 +427,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.psychology_outlined, size: 12),
+                const NymGlyph('memory', size: 12),
                 const SizedBox(width: 3),
                 Text(t('Reasoning'), style: const TextStyle(fontSize: 10.5)),
                 Icon(open ? Icons.expand_less : Icons.expand_more, size: 13),
@@ -533,7 +534,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           children: [
             Row(
               children: [
-                const Icon(Icons.account_tree_outlined, size: 13),
+                const NymGlyph('branch', size: 13),
                 const SizedBox(width: 5),
                 Flexible(
                   child: Text(
@@ -541,7 +542,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: 11.5,
-                        fontFamily: 'monospace',
+                        fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                         color: theme.hintColor),
                   ),
                 ),
@@ -554,7 +555,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               Text(paths.join(', '),
                   style: TextStyle(
                       fontSize: 11,
-                      fontFamily: 'monospace',
+                      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                       color: theme.hintColor)),
             ],
             const SizedBox(height: 6),
@@ -595,7 +596,8 @@ class _MessageBubbleState extends State<MessageBubble> {
 
     // A long-press tooltip is no use when the row itself had to be tapped
     // open, so each action wears its label rather than hiding it.
-    void add(IconData icon, String tip, MessageAction action, {bool on = false}) {
+    void add(String glyph, String tip, MessageAction action,
+        {bool on = false, bool solid = false}) {
       final colour = on
           ? Theme.of(context).colorScheme.primary
           : Theme.of(context).hintColor;
@@ -609,7 +611,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 15, color: colour),
+                NymGlyph(glyph, size: 15, color: colour, filled: solid),
                 const SizedBox(width: 3),
                 Text(tip, style: TextStyle(fontSize: 10.5, color: colour)),
               ],
@@ -619,27 +621,26 @@ class _MessageBubbleState extends State<MessageBubble> {
       ));
     }
 
-    add(Icons.copy_all_outlined, t('Copy'), MessageAction.copy);
+    add('copy', t('Copy'), MessageAction.copy);
     if (bot) {
-      add(Icons.refresh, t('Ask again'), MessageAction.regenerate);
-      add(widget.speaking ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
-          t('Read aloud'), MessageAction.speak, on: widget.speaking);
-      add(Icons.call_split, t('Branch from here'), MessageAction.fork);
-      add(Icons.format_quote, t('Quote'), MessageAction.quote);
-      add(Icons.thumb_up_outlined, t('Good reply'), MessageAction.rateUp,
-          on: m.rating == 1);
-      add(Icons.thumb_down_outlined, t('Poor reply'), MessageAction.rateDown,
-          on: m.rating == -1);
+      add('refresh', t('Ask again'), MessageAction.regenerate);
+      add(widget.speaking ? 'mute' : 'speaker', t('Read aloud'),
+          MessageAction.speak, on: widget.speaking);
+      add('branch', t('Branch from here'), MessageAction.fork);
+      add('quote', t('Quote'), MessageAction.quote);
+      add('thumbUp', t('Good reply'), MessageAction.rateUp,
+          on: m.rating == 1, solid: m.rating == 1);
+      add('thumbDown', t('Poor reply'), MessageAction.rateDown,
+          on: m.rating == -1, solid: m.rating == -1);
     }
     if (self) {
-      add(Icons.edit_outlined, t('Ask this differently'), MessageAction.edit);
-      add(Icons.send_outlined, t('Send again'), MessageAction.resend);
+      add('pencil', t('Ask this differently'), MessageAction.edit);
+      add('sendAgain', t('Send again'), MessageAction.resend);
     }
-    add(m.pinned ? Icons.star : Icons.star_border, t('Save this message'),
-        MessageAction.pin,
-        on: m.pinned);
-    add(Icons.psychology_outlined, t('Remember this'), MessageAction.remember);
-    add(Icons.close, t('Delete'), MessageAction.delete);
+    add('star', t('Save this message'), MessageAction.pin,
+        on: m.pinned, solid: m.pinned);
+    add('memory', t('Remember this'), MessageAction.remember);
+    add('close', t('Delete'), MessageAction.delete);
 
     return Padding(
       padding: const EdgeInsets.only(top: 2),
@@ -731,7 +732,7 @@ class TypingIndicator extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 11,
-                          fontFamily: 'monospace',
+                          fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                           color: theme.hintColor.withValues(alpha: 0.75),
                         ),
                       ),

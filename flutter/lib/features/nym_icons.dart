@@ -1,37 +1,5 @@
 import 'package:flutter/material.dart';
 
-class NymIcons {
-  const NymIcons._();
-
-  static const persona = <String, IconData>{
-    'tools': Icons.build_outlined,
-    'code': Icons.code,
-    'search': Icons.plagiarism_outlined,
-    'pen': Icons.edit_note_outlined,
-    'graduation': Icons.school_outlined,
-    'chart': Icons.insights_outlined,
-    'flask': Icons.science_outlined,
-    'scale': Icons.balance_outlined,
-    'compass': Icons.explore_outlined,
-    'lightbulb': Icons.lightbulb_outline,
-    'globe': Icons.public,
-    'terse': Icons.short_text,
-    'robot': Icons.smart_toy_outlined,
-    'model': Icons.auto_awesome,
-    'person': Icons.person_outline,
-    'bolt': Icons.bolt,
-  };
-
-  static const personaOrder = <String>[
-    'tools', 'code', 'search', 'pen', 'graduation', 'chart', 'flask',
-    'scale', 'compass', 'lightbulb', 'globe', 'terse', 'robot', 'model',
-    'person', 'bolt',
-  ];
-
-  static IconData forPersona(String? name) =>
-      persona[name] ?? Icons.smart_toy_outlined;
-}
-
 /// The app's own mark, drawn rather than shipped as a bitmap: the same robot
 /// head the icon and the ASCII wordmark use, so the drawer, the tab and the
 /// avatar are recognisably one thing.

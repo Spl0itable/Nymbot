@@ -10,8 +10,7 @@ import '../state/app_controller.dart';
 import '../state/identity.dart';
 import 'i18n/i18n.dart';
 
-const String nymbotWordmark = r'''
-                                  ##\                  ##\
+const String nymbotWordmark = r'''                                  ##\                  ##\
                                   ## |                 ## |
 #######\  ##\   ##\ ######\####\  #######\   ######\ ######\
 ##  __##\ ## |  ## |##  _##  _##\ ##  __##\ ##  __##\\_##  _|
@@ -267,15 +266,20 @@ class _GateScreenState extends State<GateScreen> {
     );
   }
 
-  Widget _wordmark(BuildContext context) => SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Text(
-          nymbotWordmark,
-          style: TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 5.6,
-            height: 1.06,
-            color: Theme.of(context).colorScheme.primary,
+  Widget _wordmark(BuildContext context) => Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            nymbotWordmark,
+            textAlign: TextAlign.left,
+            style: TextStyle(
+              fontFamily: kMonoFamily,
+              fontFamilyFallback: kMonoFallback,
+              fontSize: 10,
+              height: 1.08,
+              letterSpacing: 0,
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
         ),
       );
@@ -377,7 +381,7 @@ class _GateScreenState extends State<GateScreen> {
               Expanded(
                 child: SelectableText(
                   value,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 12),
                 ),
               ),
               IconButton(

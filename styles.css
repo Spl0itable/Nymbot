@@ -1983,6 +1983,18 @@ footer {
     border-radius: var(--radius-xs);
 }
 
+.price-maker th {
+    background: var(--glass-border-subtle);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.price-maker th svg {
+    vertical-align: -0.3em;
+    margin-right: 0.5em;
+}
+
 /* The badge table's Mark column shows the ACTUAL glyph the app draws, not a
    description of it — the whole question a reader has here is "which of these
    is the one on my screen?". Paths, stroke widths and colours are copied from

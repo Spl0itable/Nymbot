@@ -36,6 +36,12 @@
     /// Credits and sats, with their thousands separated. Never abbreviated —
     /// they are money, and every digit stays.
     const num = (v) => window.NymbotI18n.count(v);
+    const creditAmount = (v) => {
+        const n = Number(v) || 0;
+        if (n >= 10) return num(Math.round(n));
+        if (n >= 1) return n.toFixed(1).replace(/\.0$/, '');
+        return n.toFixed(2).replace(/0$/, '');
+    };
 
     const $ = (id) => document.getElementById(id);
     const el = (tag, cls, text) => {
@@ -146,6 +152,7 @@
             if (!Identity.restore()) {
                 $('gate').hidden = false;
                 if (window.nostr) $('gateExtension').hidden = false;
+                this.maybeFirstLanguage();
                 return;
             }
             this.enter();
@@ -1946,15 +1953,22 @@
                     name: media.label,
                     price: this.modelPrice(media)
                 });
+            } else if (Chat.repoNeedsPro(this.conv, this.settings)) {
+                hint.textContent = t('Only a Pro model can read a repository — pick one with ?model, or this chat answers without it.');
             } else if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
-                const est = Chat.estimateCredits(text, this.settings, this.conv, opts);
+                const est = Chat.estimateCredits(text, this.settings, this.conv, opts, this.models);
+                const cr = (v) => est.metered ? creditAmount(v) : num(v);
                 hint.textContent = est.tier === 'pro'
-                    ? (est.low === est.high
-                        ? t('About {n} Pro credits', { n: num(est.low) })
-                        : t('About {low}–{high} Pro credits', { low: num(est.low), high: num(est.high) }))
-                    : (est.low === 1
-                        ? t('1 standard credit')
-                        : t('{n} standard credits', { n: num(est.low) }));
+                    ? (cr(est.low) === cr(est.high)
+                        ? t('About {n} Pro credits', { n: cr(est.low) })
+                        : t('About {low}–{high} Pro credits', { low: cr(est.low), high: cr(est.high) }))
+                    : (est.metered
+                        ? (cr(est.low) === cr(est.high)
+                            ? t('{n} standard credits', { n: cr(est.low) })
+                            : t('About {low}–{high} standard credits', { low: cr(est.low), high: cr(est.high) }))
+                        : (est.low === 1
+                            ? t('1 standard credit')
+                            : t('{n} standard credits', { n: num(est.low) })));
             } else {
                 hint.textContent = '';
             }
@@ -5695,6 +5709,64 @@
             else if (!document.querySelector('.modal:not([hidden])') && $('palette').hidden) $('scrim').hidden = true;
         },
 
+        languageChosen() {
+            try {
+                return localStorage.getItem(C.storagePrefix + 'lang_chosen') === 'true';
+            } catch (_) { return true; }
+        },
+
+        markLanguageChosen() {
+            try { localStorage.setItem(C.storagePrefix + 'lang_chosen', 'true'); } catch (_) { }
+        },
+
+        maybeFirstLanguage() {
+            const I18n = window.NymbotI18n;
+            if (this.languageChosen()) return;
+            if (!I18n || !(I18n.available || []).length) return;
+            this.renderFirstLanguages();
+            $('scrim').hidden = false;
+            $('modalFirstLang').hidden = false;
+            setTimeout(() => { try { $('firstLangSearch').focus(); } catch (_) { } }, 60);
+        },
+
+        renderFirstLanguages(query) {
+            const I18n = window.NymbotI18n;
+            const list = $('firstLangList');
+            const q = String(query || '').trim().toLowerCase();
+            const all = [{ code: 'en', name: 'English' }, ...(I18n.available || [])];
+            const match = (l) => !q
+                || (l.native || '').toLowerCase().includes(q)
+                || (l.name || '').toLowerCase().includes(q)
+                || l.code.toLowerCase().includes(q);
+            list.innerHTML = '';
+            const shown = all.filter(match);
+            if (!shown.length) {
+                list.appendChild(el('p', 'hint', t('No language by that name.')));
+                return;
+            }
+            for (const lang of shown) {
+                const row = el('button', 'lang-row');
+                row.type = 'button';
+                row.dataset.lang = lang.code;
+                if (lang.code === I18n.lang) row.classList.add('is-active');
+                row.appendChild(el('span', 'lang-name', lang.native || lang.name || lang.code));
+                if (lang.native && lang.name && lang.native !== lang.name) {
+                    row.appendChild(el('span', 'lang-sub', lang.name));
+                }
+                list.appendChild(row);
+            }
+        },
+
+        pickFirstLanguage(code) {
+            this.markLanguageChosen();
+            const I18n = window.NymbotI18n;
+            if (!code || code === I18n.lang) {
+                this.closeModals();
+                return;
+            }
+            I18n.setLang(code);
+        },
+
         openModal(id) {
             this.closeModals();
             $('scrim').hidden = false;
@@ -5980,6 +6052,7 @@
                     this.refreshToolbar();
                 },
                 'close-modal': () => this.closeModals(),
+                'first-lang-skip': () => { this.markLanguageChosen(); this.closeModals(); },
                 'model-off': () => {
                     this.dropProMedia();
                     this.setModel(null);
@@ -6378,6 +6451,13 @@
             });
             $('gateNsec').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') this.gateImport();
+            });
+            $('firstLangSearch').addEventListener('input', (e) => {
+                this.renderFirstLanguages(e.target.value);
+            });
+            $('firstLangList').addEventListener('click', (e) => {
+                const row = e.target.closest('.lang-row');
+                if (row) this.pickFirstLanguage(row.dataset.lang);
             });
             $('langSelect').addEventListener('change', (e) => {
                 window.NymbotI18n.setLang(e.target.value);

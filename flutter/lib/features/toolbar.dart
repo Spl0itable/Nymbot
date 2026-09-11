@@ -6,7 +6,6 @@ import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
 import 'brand_tile.dart';
 import 'i18n/i18n.dart';
-import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
 import 'sheets/artifacts_sheet.dart';
 import 'sheets/bots_sheet.dart';
@@ -17,6 +16,7 @@ import 'sheets/personas_sheet.dart';
 import 'sheets/repos_sheet.dart';
 import 'sheets/schedules_sheet.dart';
 import 'sheets/workspaces_sheet.dart';
+import 'nym_glyph.dart';
 
 /// The AI toolbar: which balance this chat spends, which model answers, the
 /// connected repository, anonymous mode, and the credit balance.
@@ -39,14 +39,14 @@ class NymbotToolbar extends StatelessWidget {
     // Every chip that can be on for this chat, in the order the bar reads.
     final chips = <_ChipSpec>[
       _ChipSpec(
-        icon: Icons.auto_awesome,
+        glyph: 'auto-routed',
         label: shown == null ? t('Auto-routed') : shown['label'] as String,
         active: shown != null,
         brand: shown == null ? null : shown['slug'] as String?,
         onTap: () => showModelsSheet(context),
       ),
       _ChipSpec(
-        icon: Icons.account_tree_outlined,
+        glyph: 'git',
         label: repos.isEmpty
             ? t('Git')
             : repos.length == 1
@@ -56,7 +56,7 @@ class NymbotToolbar extends StatelessWidget {
         onTap: () => showReposSheet(context),
       ),
       _ChipSpec(
-        icon: Icons.person_outline,
+        glyph: 'persona',
         label: persona != null
             ? persona.name
             : hasSystem
@@ -66,7 +66,7 @@ class NymbotToolbar extends StatelessWidget {
         onTap: () => showPersonasSheet(context),
       ),
       _ChipSpec(
-        icon: Icons.schedule,
+        glyph: 'scheduled',
         label: app.schedules.where((s) => s.enabled).isEmpty
             ? t('Scheduled')
             : t('{n} scheduled',
@@ -75,34 +75,32 @@ class NymbotToolbar extends StatelessWidget {
         onTap: () => showSchedulesSheet(context),
       ),
       _ChipSpec(
-        icon: app.current?.ephemeral == true
-            ? Icons.no_accounts
-            : Icons.history_toggle_off,
+        glyph: 'ghost',
         label: app.current?.ephemeral == true ? t('Ghost on') : t('Ghost'),
         active: app.current?.ephemeral == true,
         onTap: () => _confirmGhost(context, app),
       ),
       _ChipSpec(
-        icon: NymIcons.forPersona(app.activeBot?.icon ?? 'robot'),
+        glyph: app.activeBot?.icon ?? 'robot',
         label: app.activeBot?.name ?? t('Bot'),
         active: app.activeBot != null,
         onTap: () => showBotsSheet(context),
       ),
       _ChipSpec(
-        icon: Icons.folder_outlined,
+        glyph: 'workspace',
         label: app.activeWorkspace?.name ?? t('Workspace'),
         active: app.activeWorkspace != null,
         onTap: () => showWorkspacesSheet(context),
       ),
       _ChipSpec(
-        icon: Icons.splitscreen_outlined,
+        glyph: 'compare',
         label: t('Compare'),
         active: false,
         onTap: () => showCompareSheet(context),
       ),
       if (app.artifacts.isNotEmpty)
         _ChipSpec(
-          icon: Icons.description_outlined,
+          glyph: 'artifacts',
           label: app.artifacts.length == 1
               ? t('1 artifact')
               : t('{n} artifacts', {'n': app.artifacts.length}),
@@ -114,7 +112,7 @@ class NymbotToolbar extends StatelessWidget {
       // a budget of its own.
       if (pro && repos.isEmpty)
         _ChipSpec(
-          icon: Icons.lightbulb_outline,
+          glyph: 'effort',
           label: switch (ChatEngine.effortOf(app.current)) {
             'careful' => t('Careful'),
             'deep' => t('Deep'),
@@ -124,13 +122,13 @@ class NymbotToolbar extends StatelessWidget {
           onTap: () => _cycleEffort(context, app),
         ),
       _ChipSpec(
-        icon: Icons.public,
+        glyph: 'web',
         label: t('Web'),
         active: app.settings.webSearch,
         onTap: () => app.setWebSearch(!app.settings.webSearch),
       ),
       _ChipSpec(
-        icon: Icons.visibility_off_outlined,
+        glyph: 'anon',
         label: app.anon.enabled ? t('Anon on') : t('Anon'),
         active: app.anon.enabled,
         onTap: () => showAnonSheet(context),
@@ -180,7 +178,7 @@ class NymbotToolbar extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           _Chip(
-            icon: Icons.bolt,
+            glyph: 'bolt',
             // With nothing to spend, the chip counts what the day has left
             // rather than showing a zero — which is a wall, where the free
             // tier is a thing that is still working.
@@ -205,21 +203,21 @@ class NymbotToolbar extends StatelessWidget {
 /// that are on to the front before any of them is laid out.
 class _ChipSpec {
   const _ChipSpec({
-    required this.icon,
+    required this.glyph,
     required this.label,
     required this.active,
     required this.onTap,
     this.brand,
   });
 
-  final IconData icon;
+  final String glyph;
   final String label;
   final bool active;
   final VoidCallback onTap;
   final String? brand;
 
   Widget build(BuildContext context) => _Chip(
-      icon: icon, label: label, active: active, onTap: onTap, brand: brand);
+      glyph: glyph, label: label, active: active, onTap: onTap, brand: brand);
 }
 
 /// Each step is another model call the reply takes and the balance pays for,
@@ -396,7 +394,7 @@ class _TierSwitch extends StatelessWidget {
 
 class _Chip extends StatelessWidget {
   const _Chip({
-    required this.icon,
+    required this.glyph,
     required this.label,
     required this.active,
     required this.onTap,
@@ -404,7 +402,7 @@ class _Chip extends StatelessWidget {
     this.brand,
   });
 
-  final IconData icon;
+  final String glyph;
   final String label;
   final bool active;
   final VoidCallback onTap;
@@ -434,7 +432,7 @@ class _Chip extends StatelessWidget {
             if (brand != null)
               BrandTile(slug: brand!, size: 15)
             else
-              Icon(icon, size: 14, color: tint),
+              NymGlyph(glyph, size: 14, color: tint),
             const SizedBox(width: 5),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 150),

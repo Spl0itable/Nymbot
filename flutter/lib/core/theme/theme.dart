@@ -1,5 +1,16 @@
 import 'package:flutter/material.dart';
 
+const String kMonoFamily = 'Menlo';
+const List<String> kMonoFallback = <String>[
+  'SF Mono',
+  'Roboto Mono',
+  'Droid Sans Mono',
+  'DejaVu Sans Mono',
+  'Liberation Mono',
+  'Courier New',
+  'monospace',
+];
+
 /// The same palette as the web app, so the two read as one product.
 class NymbotColors {
   static const primary = Color(0xFF00FF00);

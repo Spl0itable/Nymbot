@@ -7,6 +7,7 @@ import '../models/artifact.dart';
 import 'code_highlight.dart';
 import 'markdown_body.dart';
 import 'i18n/i18n.dart';
+import '../core/theme/theme.dart';
 
 Future<void> showArtifact(BuildContext context, Artifact artifact) =>
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -85,7 +86,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(artifact.lang.isEmpty ? 'text' : artifact.lang,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                  style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
             ),
           ),
           IconButton(
@@ -172,7 +173,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
           maxLines: null,
           expands: true,
           textAlignVertical: TextAlignVertical.top,
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 13),
           decoration: const InputDecoration(border: OutlineInputBorder()),
           onChanged: (v) {
             final dirty = v != artifact.body;

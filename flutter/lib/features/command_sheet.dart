@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'i18n/i18n.dart';
+import '../core/theme/theme.dart';
 
 class BotCommand {
   const BotCommand({
@@ -155,7 +156,7 @@ class CommandSuggestions extends StatelessWidget {
                   Text(
                     '?${c.name}',
                     style: TextStyle(
-                      fontFamily: 'monospace',
+                      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                       fontSize: 13,
                       color: theme.colorScheme.primary,
                     ),

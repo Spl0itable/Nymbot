@@ -7,7 +7,9 @@ import '../../app.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/bot.dart';
 import '../i18n/i18n.dart';
-import '../nym_icons.dart';
+import '../../core/theme/theme.dart';
+import '../nym_glyph.dart';
+import '../nym_glyphs.dart';
 
 Future<void> showBotsSheet(BuildContext context) => showModalBottomSheet<void>(
       context: context,
@@ -50,6 +52,7 @@ class _BotsSheetState extends State<_BotsSheet> {
 
   Future<void> _load() async {
     final catalog = await AppScope.read(context).api.models();
+    if (mounted) AppScope.read(context).notePricing(catalog);
     if (!mounted) return;
     setState(() => _catalog = catalog);
   }
@@ -166,7 +169,7 @@ class _BotsSheetState extends State<_BotsSheet> {
                     : null,
                 child: ListTile(
                   dense: true,
-                  leading: Icon(NymIcons.forPersona(bot.icon), size: 20),
+                  leading: NymGlyph(bot.icon, size: 20),
                   title: Text(bot.name.isEmpty ? t('Untitled') : bot.name),
                   subtitle: Text(
                     bot.tagline.isNotEmpty
@@ -233,9 +236,9 @@ class _BotsSheetState extends State<_BotsSheet> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                for (final name in NymIcons.personaOrder)
+                for (final name in kNymPersonaGlyphs)
                   ChoiceChip(
-                    label: Icon(NymIcons.forPersona(name), size: 17),
+                    label: NymGlyph(name, size: 17),
                     selected: _icon == name,
                     visualDensity: VisualDensity.compact,
                     onSelected: (_) => setState(() => _icon = name),
@@ -391,7 +394,7 @@ class _ShareBotState extends State<_ShareBot> {
             ),
             const SizedBox(height: 10),
             SelectableText(link,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
             const SizedBox(height: 10),
             Row(
               children: [
@@ -428,7 +431,7 @@ class _ShareBotState extends State<_ShareBot> {
               ),
               SelectableText(widget.bot.naddr,
                   style:
-                      const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+                      const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
             ],
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -566,7 +569,7 @@ class _AddBotState extends State<_AddBot> {
                   children: [
                     Row(
                       children: [
-                        Icon(NymIcons.forPersona(bot.icon), size: 16),
+                        NymGlyph(bot.icon, size: 16),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(bot.name,
@@ -594,7 +597,7 @@ class _AddBotState extends State<_AddBot> {
                         child: SingleChildScrollView(
                           child: Text(bot.instructions,
                               style: const TextStyle(
-                                  fontFamily: 'monospace', fontSize: 11)),
+                                  fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
                         ),
                       ),
                     ],

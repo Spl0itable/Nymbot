@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/theme/theme.dart';
 
 class HighlightedCode extends StatelessWidget {
   const HighlightedCode({
@@ -67,7 +68,7 @@ class HighlightedCode extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = TextStyle(
-      fontFamily: 'monospace',
+      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
       fontSize: fontSize,
       height: 1.45,
       color: DefaultTextStyle.of(context).style.color,

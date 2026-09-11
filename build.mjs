@@ -31,6 +31,7 @@ const hashedAssets = [
   // Only the knowledge base loads this one; the landing and legal pages never
   // reference it, so they never pay for it.
   { src: "docs.js", ref: "docs.js" },
+  { src: "brand-marks.js", ref: "brand-marks.js" },
   // Same again for the not-found page: it is the only page that loads this.
   { src: "404.js", ref: "404.js" },
 ];

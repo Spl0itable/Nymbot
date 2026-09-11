@@ -185,7 +185,7 @@ function blocks(node, ctx, depth = 0) {
 
       case 'table': out.push(table(child, ctx)); break;
 
-      case 'div': case 'section': case 'main': case 'article': case 'aside': {
+      case 'div': case 'section': case 'main': case 'article': case 'aside': case 'noscript': {
         // A callout: its label is a heading-ish line, the rest is the body.
         if (has(child, 'docs-note')) {
           const label = child.children.find((c) => has(c, 'docs-note-label'));

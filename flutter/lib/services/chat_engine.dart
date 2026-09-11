@@ -83,7 +83,7 @@ typedef TurnStep = ({
   bool flag,
 });
 
-typedef CostEstimate = ({String tier, int low, int high});
+typedef CostEstimate = ({String tier, double low, double high, bool metered});
 
 /// One turn, end to end: seal, publish, ask the worker, open the reply.
 class ChatEngine {
@@ -123,18 +123,109 @@ class ChatEngine {
     return (thinking: null, body: text);
   }
 
+  static const int estScaffoldTokens = 900;
+  static const int estTypicalOut = 400;
+  static const int estLongOut = 1600;
+
+  static int estTokens(int chars) => chars <= 0 ? 0 : (chars / 4).ceil();
+
+
+  static double? estMeteredCredits(Map<String, dynamic> model, int inTok,
+      int outTok, int calls, double usdPerCredit) {
+    final pin = (model['inUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    final pout = (model['outUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    if (pin <= 0 || pout <= 0 || usdPerCredit <= 0) return null;
+    final cached = (model['cacheReadUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    final pcr = cached > 0 ? cached : pin * 0.1;
+    final legs = calls < 1 ? 1 : calls;
+    final usd = (inTok * pin + inTok * (legs - 1) * pcr + outTok * legs * pout) /
+        1e6;
+    return usd / usdPerCredit;
+  }
+
+  static (double, double)? estStandardCredits(
+      int inTok, Map<String, dynamic>? pricing) {
+    final routes = (pricing?['standardRoutes'] as List?) ?? const [];
+    final usd = (pricing?['standardUsdPerCredit'] as num?)?.toDouble() ?? 0;
+    if (routes.isEmpty || usd <= 0) return null;
+    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
+    double? low;
+    double? high;
+    for (final raw in routes) {
+      if (raw is! Map) continue;
+      final route = Map<String, dynamic>.from(raw);
+      final one = estMeteredCredits(route, inTok, estTypicalOut, 1, usd);
+      if (one == null) continue;
+      final cap = (route['maxTokens'] as num?)?.toInt() ?? estLongOut;
+      final long = estMeteredCredits(
+              route, inTok, cap < estLongOut ? cap : estLongOut, 1, usd) ??
+          one;
+      if (low == null || one < low) low = one;
+      if (high == null || long > high) high = long;
+    }
+    if (low == null || high == null) return null;
+    final lo = low < floor ? floor : low;
+    return (lo, high < lo ? lo : high);
+  }
+
   static CostEstimate estimate(String text, Map<String, dynamic>? model,
-      {Conversation? conv, bool hasRepos = false, String wireText = ''}) {
+      {Conversation? conv,
+      bool hasRepos = false,
+      String wireText = '',
+      int historyChars = 0,
+      Map<String, dynamic>? pricing}) {
     // A question too long for one wrap travels as several, and each extra one
     // is a credit. Splitting is a transport detail, but the input it carries is
     // real and the published price has never charged for input.
     final extra =
         WireLimits.partSurcharge(wireText.isEmpty ? text : wireText);
     if (model == null) {
-      return (tier: 'standard', low: 1 + extra, high: 1 + extra);
+      final wire = wireText.isEmpty ? text : wireText;
+      final inTok = estScaffoldTokens +
+          estTokens(wire.length) +
+          estTokens(historyChars);
+      final std = estStandardCredits(inTok, pricing);
+      if (std != null) {
+        return (
+          tier: 'standard',
+          low: std.$1 + extra,
+          high: std.$2 + extra,
+          metered: true
+        );
+      }
+      return (
+        tier: 'standard',
+        low: 1.0 + extra,
+        high: 1.0 + extra,
+        metered: false
+      );
+    }
+    final calls = hasRepos ? 1 : effortCalls(conv);
+    final usdPerCredit =
+        (pricing?['usdPerCredit'] as num?)?.toDouble() ?? 0;
+    final wire = wireText.isEmpty ? text : wireText;
+    final inTok =
+        estScaffoldTokens + estTokens(wire.length) + estTokens(historyChars);
+    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
+    final lowMetered =
+        estMeteredCredits(model, inTok, estTypicalOut, calls, usdPerCredit);
+    if (lowMetered != null) {
+      final maxCalls = hasRepos
+          ? ((model['repoMaxCalls'] as num?)?.toInt() ?? 12)
+          : calls;
+      final highMetered =
+          estMeteredCredits(model, inTok, estLongOut, maxCalls, usdPerCredit) ??
+              lowMetered;
+      final low = (lowMetered < floor ? floor : lowMetered) + extra;
+      final scaled = (highMetered < floor ? floor : highMetered) + extra;
+      return (
+        tier: 'pro',
+        low: low,
+        high: scaled < low ? low : scaled,
+        metered: true
+      );
     }
     final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
-    final calls = hasRepos ? 1 : effortCalls(conv);
     final chatBase = (model['credits'] as num?)?.toInt() ?? 1;
     final chatMax = (model['max'] as num?)?.toInt() ?? chatBase;
     final base = hasRepos
@@ -142,10 +233,14 @@ class ChatEngine {
         : chatBase;
     final max =
         hasRepos ? ((model['repoMax'] as num?)?.toInt() ?? chatMax) : chatMax;
-    final low = base * calls + extra;
-    final scaled = (max + bump) * calls + extra;
-    final high = scaled < low ? low : scaled;
-    return (tier: 'pro', low: low, high: high);
+    final low = (base * calls + extra).toDouble();
+    final scaled = ((max + bump) * calls + extra).toDouble();
+    return (
+      tier: 'pro',
+      low: low,
+      high: scaled < low ? low : scaled,
+      metered: false
+    );
   }
 
   // Project knowledge is retrieved per message rather than poured into the

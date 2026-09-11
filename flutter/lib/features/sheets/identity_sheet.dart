@@ -210,7 +210,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                 child: SelectableText(
                   value,
                   maxLines: 2,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 12),
                 ),
               ),
               ...actions,

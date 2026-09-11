@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
 import 'i18n/i18n.dart';
+import '../core/theme/theme.dart';
 
 class MarkdownBody extends StatelessWidget {
   const MarkdownBody(
@@ -229,7 +230,7 @@ class MarkdownBody extends StatelessWidget {
   Widget _inline(BuildContext context, String text, {TextStyle? style}) {
     var base = style ?? DefaultTextStyle.of(context).style;
     if (monospace && style == null) {
-      base = base.copyWith(fontFamily: 'monospace', fontSize: (base.fontSize ?? 14) - 1);
+      base = base.copyWith(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: (base.fontSize ?? 14) - 1);
     }
     return RichText(
       text: TextSpan(style: base, children: _spans(context, text, base)),
@@ -258,7 +259,7 @@ class MarkdownBody extends StatelessWidget {
         spans.add(TextSpan(
           text: m.group(1),
           style: base.copyWith(
-            fontFamily: 'monospace',
+            fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
             backgroundColor: theme.dividerColor,
           ),
         ));
@@ -538,7 +539,7 @@ class _CodeBlockState extends State<CodeBlock> {
               children: [
                 Text(
                   widget.language.isEmpty ? 'text' : widget.language.toLowerCase(),
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                  style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11),
                 ),
                 const SizedBox(width: 8),
                 Text(

@@ -4,6 +4,7 @@ import '../../app.dart';
 import '../../models/compare.dart';
 import '../i18n/i18n.dart';
 import '../markdown_body.dart';
+import '../nym_glyph.dart';
 
 Future<void> showCompareSheet(BuildContext context, {String prefill = ''}) =>
     showModalBottomSheet<void>(
@@ -47,6 +48,7 @@ class _CompareSheetState extends State<_CompareSheet> {
   Future<void> _load() async {
     final app = AppScope.read(context);
     final catalog = await app.api.models();
+    app.notePricing(catalog);
     if (!mounted) return;
     final rows =
         (catalog?['models'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
@@ -257,7 +259,7 @@ class _Result extends StatelessWidget {
             ),
             child: Row(
               children: [
-                const Icon(Icons.auto_awesome, size: 14),
+                const NymGlyph('model', size: 14),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(run.label,

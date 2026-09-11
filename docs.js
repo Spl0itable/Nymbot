@@ -219,3 +219,121 @@
     window.addEventListener('resize', onScroll);
     update();
 })();
+
+(function () {
+    'use strict';
+
+    var mount = document.getElementById('priceSheet');
+    if (!mount) return;
+
+    var num = function (n) {
+        return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    };
+
+    var price = function (m) {
+        var span = m.max && m.max !== m.credits;
+        var n = span ? num(m.credits) + '–' + num(m.max) : num(m.credits);
+        return (!span && m.credits === 1) ? n + ' credit' : n + ' credits';
+    };
+
+    var repoPrice = function (m) {
+        if (!m.repoCredits) return '';
+        var span = m.repoMax && m.repoMax !== m.repoCredits;
+        return span ? num(m.repoCredits) + '–' + num(m.repoMax) : num(m.repoCredits);
+    };
+
+    var rate = function (usd) {
+        if (!(usd > 0)) return '—';
+        return '$' + (usd < 1 ? usd.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
+            : usd.toFixed(2)) + ' / 1M';
+    };
+
+    var say = function (text, cls) {
+        mount.innerHTML = '';
+        var p = document.createElement('p');
+        if (cls) p.className = cls;
+        p.textContent = text;
+        mount.appendChild(p);
+    };
+
+    var render = function (data) {
+        var models = (data && data.models) || [];
+        var groups = (data && data.groups) || [];
+        if (!models.length) return say('The model list could not be loaded just now.', 'hint');
+        var byKey = {};
+        models.forEach(function (m) { byKey[m.key] = m; });
+
+        var wrap = document.createElement('div');
+        wrap.className = 'docs-table-wrap';
+        var table = document.createElement('table');
+        var anyRepo = models.some(function (m) { return !!m.repoCredits; });
+        var anyRate = models.some(function (m) { return m.inUsdPerMTok > 0; });
+        var head = '<thead><tr><th>Model</th><th>A reply</th>'
+            + (anyRepo ? '<th>A repo call</th>' : '')
+            + (anyRate ? '<th>Input</th><th>Output</th><th>Cached input</th>' : '')
+            + '<th>Context</th></tr></thead>';
+        table.innerHTML = head;
+        var body = document.createElement('tbody');
+
+        groups.forEach(function (group) {
+            var rows = (group.keys || []).map(function (k) { return byKey[k]; })
+                .filter(function (m) { return m && m.priced !== false; });
+            if (!rows.length) return;
+            var head = document.createElement('tr');
+            head.className = 'price-maker';
+            var cell = document.createElement('th');
+            cell.setAttribute('colspan', String(3 + (anyRepo ? 1 : 0) + (anyRate ? 3 : 0)));
+            var marks = window.NymbotBrands;
+            if (marks && group.authorSlug) {
+                cell.appendChild(marks.mark(group.authorSlug, 18));
+            }
+            cell.appendChild(document.createTextNode(group.author));
+            head.appendChild(cell);
+            body.appendChild(head);
+            rows.forEach(function (m) {
+                var tr = document.createElement('tr');
+                var cells = [m.label, price(m)];
+                if (anyRepo) cells.push(repoPrice(m) || '—');
+                if (anyRate) {
+                    cells.push(rate(m.inUsdPerMTok), rate(m.outUsdPerMTok),
+                        rate(m.cacheReadUsdPerMTok));
+                }
+                cells.push(m.context ? num(m.context) + ' tokens' : '—');
+                cells.forEach(function (text, i) {
+                    var td = document.createElement(i === 0 ? 'th' : 'td');
+                    td.textContent = text;
+                    tr.appendChild(td);
+                });
+                body.appendChild(tr);
+            });
+        });
+
+        if (!body.children.length) return say('The model list could not be loaded just now.', 'hint');
+        table.appendChild(body);
+        wrap.appendChild(table);
+        mount.innerHTML = '';
+        mount.appendChild(wrap);
+
+        var note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = 'Live from the same catalog the app reads, so this page and the '
+            + 'model picker can never disagree. Where a model has per-million-token rates, '
+            + 'that is what you are charged on: the tokens a reply actually used, billed in '
+            + 'thousandths of a credit, so a short question costs a fraction of one. Repeated '
+            + 'context is billed at the cached rate rather than the full one, which is why a '
+            + 'long chat does not re-pay for its own history. A dash means that model is '
+            + 'billed per reply instead, and the reply column is what it comes to.';
+        mount.appendChild(note);
+    };
+
+    fetch('https://web.nymchat.app/api/bot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'models' })
+    }).then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+    }).then(render).catch(function () {
+        say('The model list could not be loaded just now — it is in the app under ?model.', 'hint');
+    });
+})();

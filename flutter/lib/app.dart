@@ -6,6 +6,7 @@ import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
 import 'models/workspace.dart';
 import 'state/app_controller.dart';
+import 'features/i18n/language_select.dart';
 
 /// Hands the one controller down without a state-management package: every
 /// screen listens to the same [ChangeNotifier].
@@ -86,6 +87,9 @@ class _RootState extends State<_Root> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
+    if (!app.languageChosen && !app.signedIn && I18n.available.isNotEmpty) {
+      return LanguageSelectScreen(onDone: () => setState(() {}));
+    }
     if (!app.signedIn) return const GateScreen();
     if (!_entered) {
       _entered = true;

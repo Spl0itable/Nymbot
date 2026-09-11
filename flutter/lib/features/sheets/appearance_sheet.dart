@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../app.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
+import '../i18n/language_select.dart';
 
 Future<void> showAppearanceSheet(BuildContext context) =>
     showModalBottomSheet<void>(
@@ -54,19 +55,25 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             // The language a reader wants is a setting like any other, not
             // something to go looking for behind their keys.
             if (I18n.available.isNotEmpty) ...[
-              DropdownButtonFormField<String>(
-                // ignore: deprecated_member_use
-                value: I18n.lang,
+              InputDecorator(
                 decoration: InputDecoration(labelText: t('Language')),
-                items: [
-                  const DropdownMenuItem(value: 'en', child: Text('English')),
-                  for (final lang in I18n.available)
-                    if (lang.code != 'en')
-                      DropdownMenuItem(value: lang.code, child: Text(lang.label)),
-                ],
-                onChanged: (code) {
-                  if (code != null) app.setLanguage(code);
-                },
+                child: InkWell(
+                  onTap: () => showLanguagePicker(context, app),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(I18n.lang == 'en'
+                            ? 'English'
+                            : I18n.available
+                                .firstWhere((l) => l.code == I18n.lang,
+                                    orElse: () => LanguageOption(
+                                        code: I18n.lang, name: I18n.lang))
+                                .label),
+                      ),
+                      const Icon(Icons.arrow_drop_down),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 10),
             ],

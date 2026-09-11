@@ -137,6 +137,7 @@ export const OUTLINE = [
           { id: 'two-balances', title: 'Two balances' },
           { id: 'buying', title: 'Buying over Lightning' },
           { id: 'what-a-reply-costs', title: 'What a reply costs' },
+          { id: 'every-model', title: 'Every model and what it costs' },
           { id: 'gifting', title: 'Gifting and transferring' },
           { id: 'refunds', title: 'When nothing is charged' },
         ],

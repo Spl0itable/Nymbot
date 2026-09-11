@@ -181,6 +181,8 @@ class AppController extends ChangeNotifier {
 
   Map<String, dynamic>? get activeModel => current?.proModel ?? proModel;
 
+  bool get repoNeedsPro => activeRepos.isNotEmpty && activeModel == null;
+
   Map<String, dynamic>? get activeMediaModel =>
       current?.mediaModel ?? mediaModel;
 
@@ -469,6 +471,13 @@ class AppController extends ChangeNotifier {
   /// packs are bundle assets, and `main` is the one place that can wait on the
   /// bundle without a widget test's clock waiting with it.
   String? get preferredLanguage => store.getString('lang');
+
+  bool get languageChosen => store.getBool('lang_chosen');
+
+  Future<void> markLanguageChosen() async {
+    await store.setBool('lang_chosen', true);
+    notifyListeners();
+  }
 
   /// Reloads the pack in place. Every screen reads `t()` on build, so a
   /// notify is the whole of the switch — no restart, no rebuilt widget tree.
@@ -2120,14 +2129,45 @@ class AppController extends ChangeNotifier {
   int satsFor(int credits, String tier) =>
       credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
 
+  Map<String, dynamic>? catalogPricing;
+
+  void notePricing(Map<String, dynamic>? catalog) {
+    if (catalog == null) return;
+    final usd = (catalog['usdPerCredit'] as num?)?.toDouble() ?? 0;
+    if (usd <= 0) return;
+    catalogPricing = {
+      'usdPerCredit': usd,
+      'standardUsdPerCredit': catalog['standardUsdPerCredit'],
+      'standardRoutes': catalog['standardRoutes'],
+      'btcUsd': catalog['btcUsd'],
+      'minChargeCredits': catalog['minChargeCredits'],
+    };
+    notifyListeners();
+  }
+
+  Future<void> ensurePricing() async {
+    if (catalogPricing != null) return;
+    notePricing(await api.models());
+  }
+
   CostEstimate estimate(String text) => ChatEngine.estimate(text, activeModel,
       conv: current,
       hasRepos: activeRepos.isNotEmpty,
+      pricing: catalogPricing,
+      historyChars: _historyCharsNow(),
       // Priced against what will actually go on the wire — the standing
       // context and the attachments included — because that is what decides
       // whether the question needs more than one wrap, and each extra one is a
       // credit.
       wireText: _wireTextNow(text));
+
+  int _historyCharsNow() {
+    var n = 0;
+    for (var i = messages.length - 1; i >= 0 && n < 160000; i--) {
+      n += messages[i].content.length;
+    }
+    return n;
+  }
 
   String _wireTextNow(String text) {
     final conv = current;

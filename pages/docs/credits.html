@@ -112,6 +112,21 @@
             <p>A <a href="/docs/git/#cost">repository task</a> can use up to six model calls for one message,
                 each billed at the pinned model's price. Only the calls actually made are charged.</p>
 
+            <h2 id="every-model">Every model and what it costs</h2>
+            <p>The same sheet the app shows under <code>?model</code>, read from the same catalog, so you
+                can check a price without opening anything. A range is the base and what a
+                maximum-length reply would cost; the charge is what the reply actually came to.</p>
+            <p>A repository call is priced higher than a plain reply because each one carries the
+                repository's file trees and everything read so far as input &mdash; see
+                <a href="/docs/git/#cost">repository tasks</a>.</p>
+            <div id="priceSheet">
+                <p class="hint">Loading the model list&hellip;</p>
+            </div>
+            <noscript>
+                <p class="hint">This sheet is read live from the model catalog, which needs JavaScript.
+                    <code>?model</code> in the app lists the same thing.</p>
+            </noscript>
+
             <h2 id="gifting">Gifting and transferring</h2>
             <ul>
                 <li><code>?gift @nym#abcd</code> buys credits and puts them straight onto someone else's
@@ -156,6 +171,7 @@
         <p class="lang-picker-label">Language</p>
         <!--LANG-SELECTOR-->
     </footer>
+    <script src="brand-marks.js"></script>
     <script src="docs.js"></script>
 </body>
 

@@ -90,6 +90,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
 
   Future<void> _load() async {
     final catalog = await AppScope.read(context).api.models();
+    if (mounted) AppScope.read(context).notePricing(catalog);
     if (!mounted) return;
     setState(() {
       _catalog = catalog;

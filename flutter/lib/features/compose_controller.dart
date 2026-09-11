@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/theme/theme.dart';
 
 /// The composer, which shows the markdown you write as what it means.
 ///
@@ -50,7 +51,7 @@ class MarkdownEditingController extends TextEditingController {
     final theme = Theme.of(context);
     final faint = base.copyWith(
         color: theme.hintColor, fontWeight: FontWeight.normal, fontStyle: FontStyle.normal);
-    final mono = base.copyWith(fontFamily: 'monospace', fontSize: (base.fontSize ?? 14) * 0.92);
+    final mono = base.copyWith(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: (base.fontSize ?? 14) * 0.92);
 
     final spans = <InlineSpan>[];
     final lines = text.split('\n');

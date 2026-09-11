@@ -92,6 +92,18 @@
         </div>
     </section>
 
+    <div class="modal" id="modalFirstLang" hidden>
+        <div class="modal-card">
+            <header>
+                <h2>Choose your language</h2>
+                <button class="icon-btn" type="button" data-act="first-lang-skip" aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-lede">You can change this anytime in Settings.</p>
+            <input data-i18n-skip type="search" id="firstLangSearch" placeholder="Search languages" autocomplete="off" spellcheck="false">
+            <div class="lang-list" id="firstLangList"></div>
+        </div>
+    </div>
+
     <!-- The one-time recovery reveal, after a key is created. -->
     <section class="gate" id="reveal" hidden>
         <div class="gate-card">
