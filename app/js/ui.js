@@ -39,8 +39,6 @@
     const creditAmount = (v) => {
         const n = Number(v) || 0;
         if (Number.isInteger(n)) return num(n);
-        if (n >= 10) return num(Math.round(n));
-        if (n >= 1) return n.toFixed(1).replace(/\.0$/, '');
         if (n > 0 && n < 0.01) return '<0.01';
         return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
     };
@@ -882,7 +880,8 @@
                     thinking: next.thinking || null,
                     cost: next.cost || 0,
                     pro: !!next.pro,
-                    model: next.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
+                    model: next.modelLabel
+                        || (next.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: next.sources || null,
                     calls: next.modelCalls || 1,
                     task: next.taskType || null,
@@ -1269,7 +1268,8 @@
                     thinking: res.thinking || null,
                     cost: res.cost || 0,
                     pro: !!res.pro,
-                    model: res.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null,
+                    model: res.modelLabel
+                        || (res.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: res.sources || null,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
                     // Kept so the cost breakdown reports what the worker said
@@ -2514,6 +2514,25 @@
             this.renderModels();
         },
 
+        cheapChatCeiling() {
+            if (this._cheapCeilingFor === this.models) return this._cheapCeiling;
+            const rates = ((this.models && this.models.models) || [])
+                .filter(m => (m.kind || 'chat') === 'chat' && !m.command
+                    && Number(m.outUsdPerMTok) > 0)
+                .map(m => Number(m.outUsdPerMTok))
+                .sort((a, b) => a - b);
+            this._cheapCeilingFor = this.models;
+            this._cheapCeiling = rates.length ? rates[Math.floor(rates.length / 2)] : null;
+            return this._cheapCeiling;
+        },
+
+        modelIsCheap(m) {
+            const ceiling = this.cheapChatCeiling();
+            const rate = Number(m.outUsdPerMTok);
+            if (ceiling != null) return rate > 0 && rate <= ceiling;
+            return (m.credits || 0) <= 2;
+        },
+
         modelMatchesFilter(m) {
             const text = `${m.key} ${m.label} ${m.description || ''}`.toLowerCase();
             const kind = m.kind || 'chat';
@@ -2523,7 +2542,7 @@
             if (this.modelFilter === 'video') return kind === 'video';
             if (kind !== 'chat') return false;
             switch (this.modelFilter) {
-                case 'cheap': return (m.credits || 0) <= 2;
+                case 'cheap': return this.modelIsCheap(m);
                 case 'reasoning': return /reason|think|o\d|r1|deep/.test(text);
                 case 'vision': return /vision|image|multimodal|omni|4o|gemini|claude|gpt-4/.test(text);
                 case 'code': return /code|coder|dev|engineer|sonnet|opus|qwen|kimi/.test(text);
@@ -3943,7 +3962,6 @@
             if (m.calls && m.calls > 1) {
                 rows.push([t('Model calls'), String(m.calls)]);
             }
-            if (m.task) rows.push([t('Routed as'), m.task]);
             if (m.repos && m.repos.length) {
                 rows.push([t('Repositories read'), m.repos.join(', ')]);
             }
@@ -3976,6 +3994,11 @@
                 {
                     title: t('Asking, and what it costs'),
                     body: t('Every reply is paid for a message at a time, in credits you buy over Lightning. Standard replies are auto-routed; Pro pins a model you choose. The toolbar says which is answering and roughly what the next reply will cost. Type ? in the composer for the full list of commands.')
+                },
+                {
+                    title: t('How a reply is priced'),
+                    body: t('Replies are metered on the tokens they actually use, not a flat price per message, and charged in thousandths of a credit — so a short question costs a fraction of one and a long answer costs more. Context you have already sent is billed at a cached rate, a tenth of the fresh one, so a long conversation does not re-pay for its own history. Coding and reasoning cost more per token because they use bigger models, and a repo task costs more only because every one of its calls carries the file trees. Tap the price on any reply to see exactly what it was charged.'),
+                    link: { href: 'https://nymbot.ai/docs/credits/', label: t('Every model and what it costs') }
                 },
                 {
                     title: t('Artifacts'),
@@ -4092,6 +4115,13 @@
                 const head = el('summary', null, topic.title);
                 item.appendChild(head);
                 item.appendChild(el('p', null, topic.body));
+                if (topic.link) {
+                    const a = el('a', 'help-link', topic.link.label);
+                    a.href = topic.link.href;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    item.appendChild(a);
+                }
                 box.appendChild(item);
             }
         },

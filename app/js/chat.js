@@ -669,7 +669,7 @@
             return {
                 reply: split.body,
                 thinking: split.thinking,
-                cost: data.cost || 0,
+                cost: data.costCredits != null ? data.costCredits : (data.cost || 0),
                 balance: typeof data.balance === 'number' ? data.balance : null,
                 pro: !!data.pro,
                 modelCalls: data.modelCalls || 1,
@@ -683,6 +683,7 @@
                 resumeToken: data.resumeToken || null,
                 nextReserve: data.nextReserve || 0,
                 taskType: data.taskType || null,
+                modelLabel: data.modelLabel || null,
                 sources: Array.isArray(data.sources) ? data.sources : null,
                 // What the day's free allowance has left, when this reply came
                 // out of it rather than out of a balance.

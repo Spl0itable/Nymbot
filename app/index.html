@@ -273,7 +273,7 @@
                         <span class="chip-label">Web</span>
                     </button>
                     <button class="chip" type="button" data-act="open-anon" id="chipAnon" title="Chat from a throwaway key">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><line x1="3" y1="21" x2="21" y2="3"></line></svg>
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                         <span class="chip-label">Anon</span>
                     </button>
                     <button class="chip" type="button" data-act="open-schedules" id="chipSchedules" title="Prompts Nymbot sends on a schedule">
@@ -413,6 +413,7 @@
             </div>
             <label class="check"><input type="checkbox" id="modelForChat"> Only for this chat</label>
             <div class="model-list" id="modelList"></div>
+            <p class="hint">Replies are metered on the tokens they use, at the per-million rates shown. A full breakdown of every model and what it costs is in the <a href="https://nymbot.ai/docs/credits/" target="_blank" rel="noopener">pricing knowledge base</a>.</p>
             <footer>
                 <button class="btn" type="button" data-act="model-off">Auto-routed (standard)</button>
             </footer>

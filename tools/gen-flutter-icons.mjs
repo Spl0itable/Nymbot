@@ -50,12 +50,19 @@ function table(source, name) {
   if (end < 0) throw new Error(`gen-flutter-icons: ${name} table is unterminated`);
   const body = source.slice(source.indexOf('{', start) + 1, end);
   const out = new Map();
+  const seen = [];
   const entry = /(\w+)\s*:\s*'((?:[^'\\]|\\.)*)'/g;
   let m;
   while ((m = entry.exec(body)) !== null) {
+    if (out.has(m[1])) seen.push(m[1]);
     out.set(m[1], m[2].replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
   }
   if (out.size === 0) throw new Error(`gen-flutter-icons: ${name} table is empty`);
+  if (seen.length) {
+    throw new Error(`gen-flutter-icons: ${name} defines ${[...new Set(seen)].join(', ')} `
+      + 'more than once. The last one silently wins, so editing an earlier copy '
+      + 'changes nothing — delete the dead ones.');
+  }
   return out;
 }
 

@@ -121,11 +121,6 @@ String creditFigure(num? value) {
   if (value == null) return '…';
   final n = value.toDouble();
   if (n == n.roundToDouble()) return figure(n.round());
-  if (n >= 10) return figure(n.round());
-  if (n >= 1) {
-    final one = n.toStringAsFixed(1);
-    return one.endsWith('.0') ? one.substring(0, one.length - 2) : one;
-  }
   if (n > 0 && n < 0.01) return '<0.01';
   var two = n.toStringAsFixed(2);
   while (two.endsWith('0')) {
