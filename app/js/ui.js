@@ -2172,9 +2172,6 @@
                 modelChip.firstElementChild);
 
             const repos = Chat.reposFor(conv);
-            if (model && repos.length && window.NymbotRepoMap) {
-                window.NymbotRepoMap.warm(repos);
-            }
             const gitChip = $('chipGit');
             gitChip.classList.toggle('is-active', repos.length > 0);
             gitChip.querySelector('.chip-label').textContent = repos.length === 0
@@ -2627,7 +2624,6 @@
                         danger: true
                     });
                     if (!ok) return;
-                    if (window.NymbotRepoMap) window.NymbotRepoMap.forget(r);
                     Store.deleteRepo(r.id);
                     this.conv = Store.conversation(this.conv.id);
                     this.renderRepos();
@@ -2872,8 +2868,6 @@
             }
             let entry;
             if (this.repoEditing) {
-                const before = Store.repo(this.repoEditing);
-                if (before && window.NymbotRepoMap) window.NymbotRepoMap.forget(before);
                 entry = Store.updateRepo(this.repoEditing, cfg);
             } else {
                 entry = Store.addRepo(cfg);

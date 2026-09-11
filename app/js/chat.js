@@ -257,7 +257,7 @@
     /// moment it became history — so instructions and project knowledge stopped
     /// applying after a single reply, silently. The worker strips these blocks
     /// from historical turns, so repeating them costs one copy, not twenty.
-    function standingContext(conv, repos, query, opts) {
+    function standingContext(conv, repos, query) {
         const parts = [];
         const space = workspaceFor(conv);
         const bot = botFor(conv);
@@ -277,12 +277,6 @@
                 `${i + 1}. ${r.repo}${r.branch ? '@' + r.branch : ''} (${r.provider || 'github'}${r.allowWrites ? ', writable' : ', read-only'})${r.paths ? ' paths: ' + r.paths : ''}`
             ).join('\n') + '\nRefer to a repository by its name when you cite a file.');
         }
-        const RepoMap = window.NymbotRepoMap;
-        const pinned = conv.proModel || (Store.settings() || {}).proModel;
-        if (RepoMap && pinned && repos.length && !(opts && opts.skipMap)) {
-            const files = RepoMap.block(repos, query);
-            if (files) parts.push(files);
-        }
         if (space) {
             const knowledge = knowledgeBlock(space, query);
             if (knowledge) parts.push(knowledge);
@@ -299,7 +293,7 @@
         const repos = reposFor(conv);
         const attachments = opts.attachments || [];
         const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
-        const preamble = preambleFor(conv, repos, text, opts);
+        const preamble = preambleFor(conv, repos, text);
         const quoted = opts.quote
             ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
             : '';
@@ -315,8 +309,8 @@
         return t('This message is {n} KB, and the most one question can carry is about {max} KB. Put a long file in a workspace instead, where the whole of it is searched rather than sent.', { n: kb, max: max });
     }
 
-    function preambleFor(conv, repos, query, opts) {
-        const standing = standingContext(conv, repos, query, opts);
+    function preambleFor(conv, repos, query) {
+        const standing = standingContext(conv, repos, query);
         const parts = standing.length
             ? [standing.join('\n\n') + '\n\n' + STANDING_END]
             : [];
@@ -431,25 +425,14 @@
             const attachments = opts.attachments || [];
             // A '!' question is answered outside the conversation.
             const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
-            const RepoMap = window.NymbotRepoMap;
-            if (RepoMap && repos.length && (conv.proModel || settings.proModel)) {
-                if (repos.some(r => !RepoMap.entry(r))) {
-                    this._say(t('Nymbot is reading your repositories'));
-                }
-                try { await RepoMap.ready(repos); } catch (_) { }
-            }
-            let wireText = wireTextFor(conv, text, opts);
+            const wireText = wireTextFor(conv, text, opts);
             // NIP-44 caps one plaintext, and a gift wrap holds two of them
             // nested, so a long message does not fit in one event. Rather than
             // refuse it, it travels as several — each tagged with where it
             // sits, all sharing one message id, joined back into one question
             // by the worker. What stays capped is how many: past that it is
             // not a message.
-            let bodies = Wire.split(wireText);
-            if (bodies.length > Wire.PARTS_MAX) {
-                wireText = wireTextFor(conv, text, Object.assign({}, opts, { skipMap: true }));
-                bodies = Wire.split(wireText);
-            }
+            const bodies = Wire.split(wireText);
             if (bodies.length > Wire.PARTS_MAX) {
                 throw new Error(overLimitMessage(wireText));
             }
@@ -598,11 +581,6 @@
                 ids.push(wrap.id);
                 if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
                 Store.setThread(conv.id, ids);
-            }
-
-            if (data.checkpoint && data.checkpoint.repo && RepoMap) {
-                const written = repos.find(r => r.repo === data.checkpoint.repo);
-                if (written) RepoMap.forget(written);
             }
 
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });

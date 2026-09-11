@@ -25,7 +25,6 @@ import '../services/nymbot_api.dart';
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
 import '../services/relay_pool.dart';
-import '../services/repo_map.dart';
 import '../services/storage_sync.dart';
 import 'identity.dart';
 import 'store.dart';
@@ -75,15 +74,12 @@ class AppController extends ChangeNotifier {
 
   late final Blossom blossom = Blossom();
 
-  late final RepoMap maps = RepoMap(store);
-
   late final ChatEngine chat = ChatEngine(
     identity: identity,
     relays: relays,
     pq: pq,
     api: api,
     anon: anon,
-    maps: maps,
   );
 
   bool signedIn = false;
@@ -179,7 +175,6 @@ class AppController extends ChangeNotifier {
       }
     }
     await clearMediaModel();
-    warmRepoMaps();
     notifyListeners();
   }
 
@@ -549,17 +544,11 @@ class AppController extends ChangeNotifier {
       conv.repoIds = [...conv.repoIds, repo.id];
       await store.saveConversations(conversations);
     }
-    await maps.forget(repo);
-    warmRepoMaps();
     notifyListeners();
     return repo;
   }
 
   Future<void> deleteRepo(String id) async {
-    final going = repos.where((r) => r.id == id).toList();
-    for (final r in going) {
-      await maps.forget(r);
-    }
     repos = repos.where((r) => r.id != id).toList();
     await store.saveRepos(repos);
     for (final c in conversations) {
@@ -569,11 +558,6 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void warmRepoMaps() {
-    if (proModel == null && current?.proModel == null) return;
-    maps.warm(activeRepos);
-  }
-
   Future<void> toggleRepoHere(String id) async {
     final conv = current;
     if (conv == null) return;
@@ -581,7 +565,6 @@ class AppController extends ChangeNotifier {
         ? conv.repoIds.where((x) => x != id).toList()
         : [...conv.repoIds, id];
     await store.saveConversations(conversations);
-    warmRepoMaps();
     notifyListeners();
   }
 
@@ -590,7 +573,6 @@ class AppController extends ChangeNotifier {
     if (conv == null) return;
     conv.repoIds = ids;
     await store.saveConversations(conversations);
-    warmRepoMaps();
     notifyListeners();
   }
 
@@ -1126,7 +1108,6 @@ class AppController extends ChangeNotifier {
     // A queue belongs to the chat it was typed into, not to the app.
     queued = [];
     quote = null;
-    warmRepoMaps();
     notifyListeners();
   }
 
@@ -2097,12 +2078,8 @@ class AppController extends ChangeNotifier {
   String _wireTextNow(String text) {
     final conv = current;
     if (conv == null) return text;
-    final scoped = activeRepos;
-    final files = activeModel != null && scoped.isNotEmpty
-        ? maps.block(scoped, text)
-        : '';
-    final head = ChatEngine.preamble(conv, scoped, activePersona,
-        activeWorkspace, activeBot, text, store.memories(), files);
+    final head = ChatEngine.preamble(conv, activeRepos, activePersona,
+        activeWorkspace, activeBot, text, store.memories());
     final attached = attachments.map((a) => a.wireBlock).join();
     return '$head$text$attached';
   }
