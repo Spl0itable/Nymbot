@@ -1877,7 +1877,9 @@ class AppController extends ChangeNotifier {
     }
     var left = continueBudget;
     if (left <= 0) {
-      await note(t('That answer stopped early. Turn on continuing in Settings, or ask it to carry on.'));
+      await note(t('That answer stopped early — the task needs more steps than one '
+          'turn holds. Set “When a repo task runs out of room” in Settings and '
+          'Nymbot will carry on by itself.'));
       return;
     }
     if (reserve > left) {

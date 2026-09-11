@@ -796,7 +796,7 @@
             }
             let left = this.continueBudget();
             if (left <= 0) {
-                this.note(t('That answer stopped early. Turn on continuing in Settings, or ask it to carry on.'));
+                this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'));
                 return;
             }
             if (reserve && reserve > left) {

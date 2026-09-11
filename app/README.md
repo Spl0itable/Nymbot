@@ -100,6 +100,17 @@ Asking again is the most expensive possible response to a rate limit — the who
 loop runs from the start — which is why the wait is here rather than a message
 telling you to retry.
 
+The other half of the cost is the loop's length. One turn is capped at six model
+calls, which a task spanning several repositories will use up before it is
+finished; the worker then parks its whole conversation and hands back a
+continuation token rather than throwing the work away. Spending that token is a
+setting, because each leg costs credits: **When a repo task runs out of room**
+under Settings → Long tasks. On "Stop and tell me" — the default — a big task
+stops part-way with a partial answer and says so; set it to carry on and the
+remaining legs run by themselves, each resuming from exactly what the last one
+had read. A leg the gateway refuses outright is parked the same way, so a rate
+limit costs a pause rather than the whole task.
+
 ## How separate conversations work
 
 The worker keeps one thread per pubkey, but scopes a reply's context to the
