@@ -33,7 +33,7 @@ class ChatFailure implements Exception {
   final String message;
   final bool noCredits;
   final bool pro;
-  final int balance;
+  final double balance;
   final bool cancelled;
 
   final String? resumeToken;
@@ -49,8 +49,8 @@ class ChatFailure implements Exception {
 typedef TurnResult = ({
   String reply,
   String? thinking,
-  int cost,
-  int? balance,
+  double cost,
+  double? balance,
   bool pro,
   int modelCalls,
   bool lowBalance,
@@ -770,7 +770,8 @@ class ChatEngine {
                 : t('You are out of credits.')),
         noCredits: true,
         pro: data['pro'] == true,
-        balance: (data['balance'] as num?)?.toInt() ?? 0,
+        balance: (data['balanceCredits'] as num?)?.toDouble()
+            ?? (data['balance'] as num?)?.toDouble() ?? 0,
         free: FreeAllowance.fromJson(data['free']),
       );
     }
@@ -825,8 +826,10 @@ class ChatEngine {
     return (
       reply: split.body,
       thinking: split.thinking,
-      cost: (data['cost'] as num?)?.toInt() ?? 0,
-      balance: (data['balance'] as num?)?.toInt(),
+      cost: (data['costCredits'] as num?)?.toDouble()
+          ?? (data['cost'] as num?)?.toDouble() ?? 0,
+      balance: (data['balanceCredits'] as num?)?.toDouble()
+          ?? (data['balance'] as num?)?.toDouble(),
       pro: data['pro'] == true,
       modelCalls: (data['modelCalls'] as num?)?.toInt() ?? 1,
       lowBalance: data['lowBalance'] == true,

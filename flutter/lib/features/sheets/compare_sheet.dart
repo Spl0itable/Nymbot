@@ -268,7 +268,7 @@ class _Result extends StatelessWidget {
                           fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
                 if (run.ok)
-                  Text(t('{n} credits', {'n': figure(run.cost)}),
+                  Text(t('{n} credits', {'n': creditFigure(run.cost)}),
                       style:
                           TextStyle(fontSize: 11, color: theme.hintColor)),
               ],

@@ -100,8 +100,8 @@ class AppController extends ChangeNotifier {
   List<GitRepo> repos = [];
   Map<String, dynamic>? proModel;
   Map<String, dynamic>? mediaModel;
-  int? standardBalance;
-  int? proBalance;
+  double? standardBalance;
+  double? proBalance;
 
   /// What the day's free allowance has left on the key that is signed in, as
   /// the worker last reported it.
@@ -395,7 +395,7 @@ class AppController extends ChangeNotifier {
 
   /// Credits already spent carrying the current chat's run on, so a budget is
   /// a budget for the task rather than for each leg of it.
-  int continuedSpend = 0;
+  double continuedSpend = 0;
 
   /// What the running turn is doing, newest last. Advisory: it is emptied the
   /// moment a turn ends, and an empty list simply shows the plain spinner.
@@ -406,7 +406,7 @@ class AppController extends ChangeNotifier {
   /// What is left of this chat's continuation budget. A budget of -1 is
   /// "whatever the balance holds", which is still a real ceiling — it is just
   /// the user's own balance rather than a number they typed.
-  int get continueBudget {
+  double get continueBudget {
     final cap = settings.autoContinue;
     if (cap == 0) return 0;
     if (cap < 0) {
@@ -1614,7 +1614,7 @@ class AppController extends ChangeNotifier {
     sending = false;
     status = null;
 
-    final spent = out.fold<int>(0, (n, r) => n + r.cost);
+    final spent = out.fold<double>(0, (n, r) => n + r.cost);
     if (spent > 0) await store.recordUsage(spent);
     notifyListeners();
     return out;
@@ -2048,8 +2048,10 @@ class AppController extends ChangeNotifier {
       if (announce) await note(t('Could not reach Nymbot to check your balance.'));
       return;
     }
-    standardBalance = (res.data['balance'] as num?)?.toInt() ?? 0;
-    proBalance = (res.data['proBalance'] as num?)?.toInt() ?? 0;
+    standardBalance = (res.data['balanceCredits'] as num?)?.toDouble()
+        ?? (res.data['balance'] as num?)?.toDouble() ?? 0;
+    proBalance = (res.data['proBalanceCredits'] as num?)?.toDouble()
+        ?? (res.data['proBalance'] as num?)?.toDouble() ?? 0;
     // The worker is the authority on what this key has used; the device keeps
     // its own count so signing in with a fresh key does not start the day over.
     final seen = FreeAllowance.fromJson(res.data['free']);
@@ -2069,7 +2071,7 @@ class AppController extends ChangeNotifier {
 
   bool get proTier => activeModel != null || mediaNeedsPro(activeMediaModel);
 
-  int? get shownBalance => proTier ? proBalance : standardBalance;
+  double? get shownBalance => proTier ? proBalance : standardBalance;
 
   /// How many free replies are actually available: the lower of what the worker
   /// says this key has left and what this device has left. Null when the free
@@ -2094,7 +2096,7 @@ class AppController extends ChangeNotifier {
     if ((standardBalance ?? 0) > 0) return true;
     final held = free;
     if (held == null || held.limit <= 0) return true;
-    return store.freeTier.allows(held.limit, standardBalance ?? 0);
+    return store.freeTier.allows(held.limit, (standardBalance ?? 0).floor());
   }
 
   /// The day is spent. Said as a time and a price rather than as a wall.
@@ -2195,10 +2197,10 @@ class AppController extends ChangeNotifier {
     return next;
   }
 
-  ({int sent, int replies, int credits, int words}) currentStats() {
+  ({int sent, int replies, double credits, int words}) currentStats() {
     var sent = 0;
     var replies = 0;
-    var credits = 0;
+    var credits = 0.0;
     var words = 0;
     for (final m in messages) {
       if (m.role == ChatRole.self) sent++;

@@ -38,9 +38,11 @@
     const num = (v) => window.NymbotI18n.count(v);
     const creditAmount = (v) => {
         const n = Number(v) || 0;
+        if (Number.isInteger(n)) return num(n);
         if (n >= 10) return num(Math.round(n));
         if (n >= 1) return n.toFixed(1).replace(/\.0$/, '');
-        return n.toFixed(2).replace(/0$/, '');
+        if (n > 0 && n < 0.01) return '<0.01';
+        return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
     };
 
     const $ = (id) => document.getElementById(id);
@@ -896,7 +898,8 @@
                 const spent = (this.conv._continued || 0) + (more.cost || 0);
                 this.conv._continued = spent;
                 if (next.balance != null) {
-                    this.balance[next.pro ? 'pro' : 'standard'] = next.balance;
+                    this.balance[next.pro ? 'pro' : 'standard'] =
+                        next.balanceCredits != null ? next.balanceCredits : next.balance;
                     this.renderBalance();
                 }
                 left = this.continueBudget();
@@ -910,12 +913,12 @@
                 }
                 if (token && left <= 0) {
                     this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-                        { n: num(spent) }));
+                        { n: creditAmount(spent) }));
                     return;
                 }
             }
             if (this.conv._continued) {
-                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: num(this.conv._continued) }));
+                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(this.conv._continued) }));
                 this.conv._continued = 0;
             }
         },
@@ -1298,7 +1301,8 @@
                     Free.observe(res.free.used);
                 }
                 if (res.balance != null) {
-                    this.balance[res.pro ? 'pro' : 'standard'] = res.balance;
+                    this.balance[res.pro ? 'pro' : 'standard'] =
+                        res.balanceCredits != null ? res.balanceCredits : res.balance;
                     this.renderBalance();
                 }
                 if (res.lowBalance) {
@@ -1308,8 +1312,8 @@
                     const topped = this.conv.anon ? await this.runAutoTopUp() : null;
                     if (!topped) {
                         this.note(res.pro
-                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: num(res.balance) })
-                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: num(res.balance) }));
+                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) })
+                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) }));
                     }
                 }
                 if (res.truncated) await this.continueRun(res, reply);
@@ -1957,15 +1961,14 @@
                 hint.textContent = t('Only a Pro model can read a repository — pick one with ?model, or this chat answers without it.');
             } else if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
                 const est = Chat.estimateCredits(text, this.settings, this.conv, opts, this.models);
-                const cr = (v) => est.metered ? creditAmount(v) : num(v);
                 hint.textContent = est.tier === 'pro'
-                    ? (cr(est.low) === cr(est.high)
-                        ? t('About {n} Pro credits', { n: cr(est.low) })
-                        : t('About {low}–{high} Pro credits', { low: cr(est.low), high: cr(est.high) }))
+                    ? (creditAmount(est.low) === creditAmount(est.high)
+                        ? t('About {n} Pro credits', { n: creditAmount(est.low) })
+                        : t('About {low}–{high} Pro credits', { low: creditAmount(est.low), high: creditAmount(est.high) }))
                     : (est.metered
-                        ? (cr(est.low) === cr(est.high)
-                            ? t('{n} standard credits', { n: cr(est.low) })
-                            : t('About {low}–{high} standard credits', { low: cr(est.low), high: cr(est.high) }))
+                        ? (creditAmount(est.low) === creditAmount(est.high)
+                            ? t('{n} standard credits', { n: creditAmount(est.low) })
+                            : t('About {low}–{high} standard credits', { low: creditAmount(est.low), high: creditAmount(est.high) }))
                         : (est.low === 1
                             ? t('1 standard credit')
                             : t('{n} standard credits', { n: num(est.low) })));
@@ -2107,7 +2110,10 @@
                 if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
                 return;
             }
-            this.balance = { standard: data.balance || 0, pro: data.proBalance || 0 };
+            this.balance = {
+                standard: data.balanceCredits != null ? data.balanceCredits : (data.balance || 0),
+                pro: data.proBalanceCredits != null ? data.proBalanceCredits : (data.proBalance || 0)
+            };
             // The worker is the authority on what this key has used; the
             // device keeps its own count so signing in with a fresh key does
             // not start the day over.
@@ -2119,10 +2125,10 @@
                 const anon = this.conv && this.conv.anon;
                 this.note((anon
                     ? t('This chat\'s anonymous balance: {standard} standard, {pro} Pro.',
-                        { standard: num(this.balance.standard), pro: num(this.balance.pro) })
+                        { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })
                         + ' ' + t('Tap Anon to move more across from your nym.')
                     : t('Your balance: {standard} standard, {pro} Pro.',
-                        { standard: num(this.balance.standard), pro: num(this.balance.pro) })));
+                        { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })));
             }
         },
 
@@ -2140,10 +2146,10 @@
             const free = this.freeLeft();
             $('chipBuyLabel').textContent = (!pro && !this.balance.standard && free != null)
                 ? t('{n} free', { n: num(free) })
-                : (value == null ? t('Buy') : num(value));
+                : (value == null ? t('Buy') : creditAmount(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
                 : t('{standard} standard · {pro} Pro',
-                    { standard: num(this.balance.standard), pro: num(this.balance.pro) });
+                    { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) });
         },
 
         /// Whether a message may go at all. Only ever false on the free tier
@@ -3929,7 +3935,7 @@
             const pro = !!m.model;
             const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
             const rows = [
-                [t('Charged'), t('{n} credits', { n: num(m.cost) })],
+                [t('Charged'), t('{n} credits', { n: creditAmount(m.costCredits != null ? m.costCredits : m.cost) })],
                 [t('Tier'), pro ? t('Pro') : t('Standard')],
                 [t('Model'), m.model || t('Auto-routed')],
                 [t('At today\'s price'), t('{n} sats', { n: num(sats) })]
@@ -4884,7 +4890,7 @@
             if (this.balance.pro != null && this.balance.pro < price) {
                 this.modalStatus('compareStatus',
                     t('Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
-                        { n: num(price), have: num(this.balance.pro) }), 'warn');
+                        { n: num(price), have: creditAmount(this.balance.pro) }), 'warn');
                 return;
             }
             const go = await this.ask({
@@ -4937,7 +4943,7 @@
                 head.appendChild(el('span', 'compare-name', run.model.label));
                 if (run.ok) {
                     head.appendChild(el('span', 'compare-cost',
-                        t('{n} credits', { n: num(run.result.cost || 0) })));
+                        t('{n} credits', { n: creditAmount(run.result.costCredits != null ? run.result.costCredits : (run.result.cost || 0)) })));
                 }
                 col.appendChild(head);
                 const body = el('div', 'compare-body' + (run.ok ? '' : ' is-error'));
@@ -5166,7 +5172,7 @@
                     + (this.creditTier === tier ? ' is-active' : ''));
                 cell.appendChild(el('span', 'credit-balance-label', label));
                 cell.appendChild(el('span', 'credit-balance-value',
-                    value == null ? '—' : t('{n} credits', { n: num(value) })));
+                    value == null ? '—' : t('{n} credits', { n: creditAmount(value) })));
                 if (tier === 'standard' && !value && free != null) {
                     cell.appendChild(el('span', 'credit-balance-free',
                         t('{n} free left today', { n: num(free) })));
@@ -5293,7 +5299,7 @@
                 this.resetInvoice();
                 this.modalStatus('creditStatus',
                     t('Credited. Balance: {balance}. Create a new invoice to buy more.',
-                        { balance: num(data.balance) }), 'ok');
+                        { balance: creditAmount(data.balance) }), 'ok');
                 return true;
             }
             if (data && /already claimed/i.test(data.error || '')) {

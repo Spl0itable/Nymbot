@@ -13,7 +13,7 @@ class CompareRun {
   final Map<String, dynamic> model;
   final String reply;
   final String? thinking;
-  final int cost;
+  final double cost;
   final List<Map<String, dynamic>> sources;
   final String? error;
 

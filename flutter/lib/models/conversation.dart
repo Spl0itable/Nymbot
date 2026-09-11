@@ -61,7 +61,7 @@ class Conversation {
   Map<String, dynamic>? mediaModel;
   String? seed;
   int messageCount;
-  int creditsSpent;
+  double creditsSpent;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -110,7 +110,7 @@ class Conversation {
         mediaModel: j['mediaModel'] as Map<String, dynamic>?,
         seed: j['seed'] as String?,
         messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
-        creditsSpent: (j['creditsSpent'] as num?)?.toInt() ?? 0,
+        creditsSpent: (j['creditsSpent'] as num?)?.toDouble() ?? 0,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
@@ -164,7 +164,7 @@ class ChatMessage {
   final ChatRole role;
   final String content;
   final String? thinking;
-  final int cost;
+  final double cost;
   final String? model;
 
   /// Which tier answered.
@@ -242,7 +242,7 @@ class ChatMessage {
         ),
         content: j['content'] as String? ?? '',
         thinking: j['thinking'] as String?,
-        cost: (j['cost'] as num?)?.toInt() ?? 0,
+        cost: (j['cost'] as num?)?.toDouble() ?? 0,
         model: j['model'] as String?,
         pro: j['pro'] as bool?,
         calls: (j['calls'] as num?)?.toInt() ?? 1,

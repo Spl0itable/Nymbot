@@ -182,9 +182,12 @@ const flutter = process.argv[2] || process.env.NYMBOT_FLUTTER
   || path.resolve(ROOT, '../nymbot-flutter');
 
 await writeFile(path.join(ROOT, 'brand-marks.js'), site);
+const nymchat = process.env.NYMCHAT_FLUTTER
+  || path.resolve(ROOT, '../spl0itable/flutter-app');
 const dartTargets = [
   path.join(ROOT, 'flutter/lib/features/brand_marks.dart'),
-  path.join(flutter, 'lib/features/brand_marks.dart')
+  path.join(flutter, 'lib/features/brand_marks.dart'),
+  path.join(nymchat, 'lib/features/nymbot/brand_marks.dart')
 ];
 for (const target of dartTargets) {
   try { await writeFile(target, dart); } catch (e) {

@@ -170,7 +170,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
   /// that lands while this is open is reflected here rather than only behind
   /// it. This is the section a buyer is looking at when the credits arrive.
   Widget _balances(BuildContext context, AppController app) {
-    Widget cell(String label, int? value, bool active, {bool freeTier = false}) {
+    Widget cell(String label, double? value, bool active, {bool freeTier = false}) {
       final free = app.freeLeft;
       return Expanded(
         child: Container(
@@ -195,7 +195,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
               Text(
                 value == null
                     ? '—'
-                    : t('{n} credits', {'n': figure(value)}),
+                    : t('{n} credits', {'n': creditFigure(value)}),
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
               // With nothing to spend, the day's allowance is what is left —

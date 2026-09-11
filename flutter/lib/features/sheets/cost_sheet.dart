@@ -12,7 +12,7 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m) {
   final pro = m.model != null;
   final sats = m.cost * (NymbotConfig.satsPerCredit[pro ? 'pro' : 'standard'] ?? 1);
   final rows = <(String, String)>[
-    (t('Charged'), t('{n} credits', {'n': figure(m.cost)})),
+    (t('Charged'), t('{n} credits', {'n': creditFigure(m.cost)})),
     (t('Tier'), pro ? t('Pro') : t('Standard')),
     (t('Model'), m.model ?? t('Auto-routed')),
     (t("At today's price"), t('{n} sats', {'n': figure(sats)})),

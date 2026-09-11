@@ -1604,8 +1604,8 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 app.standardBalance == null
                     ? t('{n} relays', {'n': app.relaysUp})
                     : t('{standard} standard · {pro} Pro', {
-                        'standard': figure(app.standardBalance),
-                        'pro': figure(app.proBalance),
+                        'standard': creditFigure(app.standardBalance),
+                        'pro': creditFigure(app.proBalance),
                       }),
                 style: const TextStyle(fontSize: 11),
               ),

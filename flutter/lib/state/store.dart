@@ -291,9 +291,9 @@ class Store {
         replies: _prefs.getInt('usageReplies') ?? 0,
       );
 
-  Future<void> recordUsage(int cost) async {
+  Future<void> recordUsage(double cost) async {
     final u = usage();
-    await _prefs.setInt('usageCredits', u.credits + cost);
+    await _prefs.setInt('usageCredits', (u.credits + cost).round());
     await _prefs.setInt('usageReplies', u.replies + 1);
   }
 
