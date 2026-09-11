@@ -367,11 +367,13 @@
         if (!model) return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
         const size = String(text || '').length;
         const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
-        // A repo task loops on its own budget and ignores the effort level.
-        const calls = reposFor(conv || {}).length ? 1 : effortCalls(conv);
-        const low = (model.credits || 1) * calls + extra;
-        const high = Math.max(low, ((model.max || model.credits || 1) + bump) * calls + extra);
-        return { tier: 'pro', low, high, calls, parts: extra + 1 };
+        const repoTask = reposFor(conv || {}).length > 0;
+        const calls = repoTask ? 1 : effortCalls(conv);
+        const base = (repoTask ? model.repoCredits : model.credits) || model.credits || 1;
+        const worst = (repoTask ? model.repoMax : model.max) || model.max || base;
+        const low = base * calls + extra;
+        const high = Math.max(low, (worst + bump) * calls + extra);
+        return { tier: 'pro', low, high, calls, parts: extra + 1, repoTask };
     }
 
     const Chat = {
@@ -559,7 +561,12 @@
                 throw err;
             }
             if (status >= 400 || !data || data.error) {
-                throw new Error((data && data.error) || t('The request failed.'));
+                const err = new Error((data && data.error) || t('The request failed.'));
+                if (data && data.resumable && data.resumeToken) {
+                    err.resumeToken = data.resumeToken;
+                    err.resumable = true;
+                }
+                throw err;
             }
             if (!data.event) throw new Error(t('Nymbot sent no reply.'));
 

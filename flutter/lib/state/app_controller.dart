@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -1863,6 +1864,27 @@ class AppController extends ChangeNotifier {
     return true;
   }
 
+  static const _legGapMs = 3500;
+  static const _legGapJitterMs = 1500;
+  static const _legStallWaits = [
+    Duration(seconds: 8),
+    Duration(seconds: 20),
+    Duration(seconds: 45),
+  ];
+  final _rng = math.Random();
+
+  Future<void> _legPause(Duration total) async {
+    final until = DateTime.now().add(total);
+    while (!_stopped) {
+      final left = until.difference(DateTime.now());
+      if (left <= Duration.zero) break;
+      await Future<void>.delayed(
+          left > const Duration(milliseconds: 250)
+              ? const Duration(milliseconds: 250)
+              : left);
+    }
+  }
+
   /// A repo run stopped at its tool-call cap with work left. Spend the budget
   /// the user set on carrying it on, one leg at a time, saying what each leg
   /// cost as it goes — never silently.
@@ -1888,7 +1910,17 @@ class AppController extends ChangeNotifier {
       return;
     }
 
+    var legs = 0;
+    var stalls = 0;
     while (token != null && token.isNotEmpty && left > 0 && !_stopped) {
+      if (legs++ > 0) {
+        final gap = _legGapMs + _rng.nextInt(_legGapJitterMs);
+        sending = true;
+        status = t('Pausing a moment so the next step does not crowd the last');
+        notifyListeners();
+        await _legPause(Duration(milliseconds: gap));
+        if (_stopped) break;
+      }
       sending = true;
       status = t('Carrying on where it left off');
       notifyListeners();
@@ -1916,6 +1948,25 @@ class AppController extends ChangeNotifier {
         _stopWatching();
         sending = false;
         status = null;
+        final again = e.resumeToken;
+        if (again != null &&
+            again.isNotEmpty &&
+            stalls < _legStallWaits.length &&
+            !_stopped) {
+          final wait = _legStallWaits[stalls++];
+          token = again;
+          legs = 0;
+          await note(t('That step could not go out — the gateway is busy. '
+              'Nothing is lost; trying again in {n} seconds.',
+              {'n': wait.inSeconds}));
+          await _legPause(wait);
+          continue;
+        }
+        if (again != null && again.isNotEmpty) {
+          await note(t('Stopped there — the gateway stayed busy. The work so '
+              'far is saved, so ask it to carry on later.'));
+          return;
+        }
         await note(e.message);
         return;
       } catch (_) {
@@ -1925,6 +1976,7 @@ class AppController extends ChangeNotifier {
         await note(t('Could not carry on from there.'));
         return;
       }
+      stalls = 0;
       _stopWatching();
       sending = false;
       status = null;

@@ -27,6 +27,7 @@ class ChatFailure implements Exception {
       this.pro = false,
       this.balance = 0,
       this.cancelled = false,
+      this.resumeToken,
       this.free});
 
   final String message;
@@ -34,6 +35,8 @@ class ChatFailure implements Exception {
   final bool pro;
   final int balance;
   final bool cancelled;
+
+  final String? resumeToken;
 
   /// Present when it was the day's free allowance that ran out rather than a
   /// balance, which is a time rather than a wall.
@@ -131,10 +134,15 @@ class ChatEngine {
       return (tier: 'standard', low: 1 + extra, high: 1 + extra);
     }
     final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
-    // A repo task loops on a budget of its own and ignores the effort level.
     final calls = hasRepos ? 1 : effortCalls(conv);
-    final low = ((model['credits'] as num?)?.toInt() ?? 1) * calls + extra;
-    final max = (model['max'] as num?)?.toInt() ?? 1;
+    final chatBase = (model['credits'] as num?)?.toInt() ?? 1;
+    final chatMax = (model['max'] as num?)?.toInt() ?? chatBase;
+    final base = hasRepos
+        ? ((model['repoCredits'] as num?)?.toInt() ?? chatBase)
+        : chatBase;
+    final max =
+        hasRepos ? ((model['repoMax'] as num?)?.toInt() ?? chatMax) : chatMax;
+    final low = base * calls + extra;
     final scaled = (max + bump) * calls + extra;
     final high = scaled < low ? low : scaled;
     return (tier: 'pro', low: low, high: high);
@@ -672,7 +680,10 @@ class ChatEngine {
       );
     }
     if (res.status >= 400 || data['error'] != null) {
-      throw ChatFailure((data['error'] as String?) ?? 'The request failed.');
+      throw ChatFailure((data['error'] as String?) ?? 'The request failed.',
+          resumeToken: data['resumable'] == true
+              ? data['resumeToken'] as String?
+              : null);
     }
     final eventJson = data['event'];
     if (eventJson is! Map<String, dynamic>) {

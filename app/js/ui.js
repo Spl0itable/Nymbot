@@ -9,6 +9,12 @@
     const Api = window.NymbotApi;
     const Anon = window.NymbotAnon;
     const Chat = window.NymbotChat;
+
+    const NON_SETTING_CONTROLS = new Set(['langSelect', 'importPicker']);
+
+    const LEG_GAP_MS = 3500;
+    const LEG_GAP_JITTER_MS = 1500;
+    const LEG_STALL_WAITS_MS = [8000, 20000, 45000];
     const MD = window.NymbotMarkdown;
     const QR = window.NymbotQR;
     const Avatar = window.NymbotAvatar;
@@ -784,6 +790,15 @@
             return Math.max(0, cap - spent);
         },
 
+        async legPause(ms) {
+            const until = Date.now() + ms;
+            while (!this.stopped) {
+                const left = until - Date.now();
+                if (left <= 0) break;
+                await new Promise(r => setTimeout(r, Math.min(250, left)));
+            }
+        },
+
         /// A repo run stopped at its tool-call cap with work left. Spend the
         /// budget the user set on carrying it on, one leg at a time, and say
         /// what each leg cost as it goes — never silently.
@@ -806,7 +821,18 @@
             }
 
             const box = $('messages');
+            let legs = 0;
+            let stalls = 0;
             while (token && left > 0 && !this.stopped) {
+                if (legs++) {
+                    const gap = LEG_GAP_MS + Math.round(Math.random() * LEG_GAP_JITTER_MS);
+                    const waiting = this.thinkingNode(t('Pausing a moment so the next step does not crowd the last'));
+                    box.appendChild(waiting);
+                    this.scrollToBottom();
+                    await this.legPause(gap);
+                    waiting.remove();
+                    if (this.stopped) break;
+                }
                 const pending = this.thinkingNode(t('Carrying on where it left off'));
                 box.appendChild(pending);
                 this.scrollToBottom();
@@ -819,9 +845,24 @@
                 } catch (e) {
                     this.stopWatchingTurn();
                     pending.remove();
+                    if (e && e.resumable && e.resumeToken && stalls < LEG_STALL_WAITS_MS.length
+                        && !this.stopped) {
+                        const wait = LEG_STALL_WAITS_MS[stalls++];
+                        token = e.resumeToken;
+                        legs = 0;
+                        this.note(t('That step could not go out — the gateway is busy. Nothing is lost; trying again in {n} seconds.',
+                            { n: Math.round(wait / 1000) }));
+                        await this.legPause(wait);
+                        continue;
+                    }
+                    if (e && e.resumable) {
+                        this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'));
+                        return;
+                    }
                     this.note((e && e.message) || t('Could not carry on from there.'));
                     return;
                 }
+                stalls = 0;
                 this.stopWatchingTurn();
                 pending.remove();
 
@@ -6342,12 +6383,9 @@
                 window.NymbotI18n.setLang(e.target.value);
             });
 
-            for (const id of ['setTheme', 'setDensity', 'setFont', 'setGrouping', 'setBubbles',
-                'setAvatars', 'setTimestamps', 'setTypewriter', 'setReasoning', 'setMono',
-                'setLineNumbers', 'setCodeWrap', 'setMotion', 'setEnter', 'setEstimate',
-                'setSound', 'setHaptic', 'setAutoSpeak', 'setVoice', 'setRate']) {
-                const node = $(id);
-                if (node) node.addEventListener('change', () => this.readAppearance());
+            for (const node of $('modalAppearance').querySelectorAll('input, select')) {
+                if (NON_SETTING_CONTROLS.has(node.id)) continue;
+                node.addEventListener('change', () => this.readAppearance());
             }
 
             if (Speech.canSpeak() && window.speechSynthesis) {
