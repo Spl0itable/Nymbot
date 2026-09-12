@@ -37,7 +37,8 @@
     /// they are money, and every digit stays.
     const num = (v) => window.NymbotI18n.count(v);
     const NOMINAL_TURN_IN = 3000;
-    const NOMINAL_TURN_OUT = 700;
+    const EST_TYPICAL_OUT = 400;
+    const EST_LONG_OUT = 1600;
 
     const CREDIT_PRESETS = [5, 10, 25, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000];
 
@@ -2564,16 +2565,23 @@
             const pin = Number(m.inUsdPerMTok);
             const pout = Number(m.outUsdPerMTok);
             if (!(usd > 0) || !(pin > 0) || !(pout > 0)) return null;
-            const spend = (NOMINAL_TURN_IN * pin + NOMINAL_TURN_OUT * pout) / 1e6 / usd;
             const floor = Number(this.models.minChargeCredits) || 0;
-            return Math.max(floor, spend);
+            const at = (out) =>
+                Math.max(floor, (NOMINAL_TURN_IN * pin + out * pout) / 1e6 / usd);
+            return { low: at(EST_TYPICAL_OUT), high: at(EST_LONG_OUT) };
         },
 
         modelPrice(m) {
             const turn = this.modelTurnCredits(m);
             if (turn != null) {
-                const n = creditAmount(turn);
-                return n === '1' ? t('~{n} credit a turn', { n }) : t('~{n} credits a turn', { n });
+                const low = creditAmount(turn.low);
+                const high = creditAmount(turn.high);
+                if (low === high) {
+                    return low === '1'
+                        ? t('~{n} credit a reply', { n: low })
+                        : t('~{n} credits a reply', { n: low });
+                }
+                return t('~{low}–{high} credits a reply', { low, high });
             }
             const span = m.max && m.max !== m.credits;
             const n = span ? `${num(m.credits)}–${num(m.max)}` : num(m.credits);
@@ -3962,6 +3970,17 @@
                 }
                 const mark = el('span', 'citation-mark',
                     (host || title).slice(0, 1).toUpperCase());
+                if (host) {
+                    const icon = el('img', 'citation-icon');
+                    icon.src = `https://${C.apiHost}/api/proxy?url=`
+                        + encodeURIComponent(`https://${host}/favicon.ico`);
+                    icon.alt = '';
+                    icon.loading = 'lazy';
+                    icon.referrerPolicy = 'no-referrer';
+                    icon.addEventListener('load', () => mark.classList.add('has-icon'));
+                    icon.addEventListener('error', () => icon.remove());
+                    mark.appendChild(icon);
+                }
                 card.appendChild(mark);
                 const main = el('span', 'citation-main');
                 main.appendChild(el('strong', null, `${i + 1}. ${title}`));
@@ -6272,6 +6291,16 @@
                 }
                 if (handlers[act]) { e.preventDefault(); handlers[act](target); }
             });
+
+            const settled = (e) => {
+                const media = e.target;
+                if (!media || !media.classList || !media.classList.contains('msg-media')) return;
+                const box = media.closest('.msg-media-box');
+                if (box) box.classList.remove('is-loading');
+            };
+            for (const type of ['load', 'loadedmetadata', 'error']) {
+                document.addEventListener(type, settled, true);
+            }
 
             $('scrim').addEventListener('click', () => { this.closePalette(); this.closeModals(); });
             $('dialogScrim').addEventListener('click', () => this.settleDialog(false));

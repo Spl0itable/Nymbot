@@ -55,8 +55,13 @@
         + '<path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline>'
         + '<path d="M4 20h16"></path></svg>';
 
-    function mediaBox(inner, url) {
-        return `<figure class="msg-media-box">${inner}`
+    function mediaBox(inner, url, waits) {
+        const cls = waits ? 'msg-media-box is-loading' : 'msg-media-box';
+        const spinner = waits
+            ? `<span class="msg-media-wait" role="status"`
+              + ` aria-label="${esc(t('Loading'))}"></span>`
+            : '';
+        return `<figure class="${cls}">${inner}${spinner}`
             + `<button class="msg-media-save" type="button" data-act="save-media"`
             + ` data-url="${esc(url)}" title="${esc(t('Save this file'))}"`
             + ` aria-label="${esc(t('Save this file'))}">${SAVE_ICON}</button></figure>`;
@@ -65,13 +70,13 @@
     function mediaFor(url, kind) {
         const bare = !/\.[a-z0-9]{2,5}(\?|$)/i.test(url);
         if (/\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)/i.test(url) || (bare && kind === 'image')) {
-            return mediaBox(`<img class="msg-media" src="${esc(url)}" alt="" loading="lazy">`, url);
+            return mediaBox(`<img class="msg-media" src="${esc(url)}" alt="" loading="lazy">`, url, true);
         }
         if (/\.(mp3|wav|ogg|m4a|opus|flac)(\?|$)/i.test(url) || (bare && kind === 'speak')) {
             return mediaBox(`<audio class="msg-media" controls preload="none" src="${esc(url)}"></audio>`, url);
         }
         if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || (bare && kind === 'video')) {
-            return mediaBox(`<video class="msg-media" controls preload="none" src="${esc(url)}"></video>`, url);
+            return mediaBox(`<video class="msg-media" controls preload="metadata" src="${esc(url)}"></video>`, url, true);
         }
         return null;
     }

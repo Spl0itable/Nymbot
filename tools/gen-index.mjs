@@ -30,6 +30,7 @@ const FEATURES = [
     'Quantum-Resistant',
     'ML-KEM key encapsulation is combined with the classical exchange rather than replacing it, so an attacker has to break both. Traffic captured today does not become readable later. <a href="/docs/encryption/#post-quantum">How the hybrid works</a>.'),
   feature(`                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+                        <circle cx="12" cy="12" r="3" />
                         <line x1="3" y1="21" x2="21" y2="3" />`,
     'Anonymous Mode',
     'Move the whole conversation onto a throwaway key and your credits across as blind vouchers Nymbot signs without seeing. It bills a message it cannot attribute to you. <a href="/docs/anonymous/">The full mechanism</a>.'),
@@ -186,7 +187,7 @@ ${ART}
                                 <span class="bot-ctrl-label">Git</span>
                             </span>
                             <span class="bot-ctrl-btn" id="phoneAnonChip">
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><line x1="3" y1="21" x2="21" y2="3"></line></svg>
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                                 <span class="bot-ctrl-label">Anon</span>
                             </span>
                             <span class="bot-ctrl-btn bot-ctrl-buy">

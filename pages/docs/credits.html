@@ -95,20 +95,38 @@
             <p><strong>Standard replies</strong> cost one credit for an ordinary answer, and more for a task
                 that genuinely needs more work &mdash; a long reasoning route or a search-backed answer. The
                 app tells you when a reply cost more than one.</p>
-            <p><strong>Pro replies</strong> cost a per-model base of one or two credits, and then scale with
-                the length of the reply up to that model's maximum. The maximum is <em>reserved</em> when you
-                send the message and only the real cost is charged, so a short answer from an expensive
-                model costs the base even though the budget allowed for more.</p>
-            <p><code>?model</code> lists every model with its base and its maximum before you commit to
-                one. Image and speech generation are charged
+            <p><strong>Pro replies</strong> are metered on the tokens the model actually reads and writes,
+                at that model's published per-million rates. A maximum is <em>reserved</em> when you send the
+                message and only the real cost is charged, so a short answer from an expensive model costs a
+                fraction of what the budget allowed for.</p>
+            <p><strong>A reply is not a fixed price per message.</strong> Two things move it, and the second
+                is the one that surprises people:</p>
+            <ul>
+                <li><strong>How long the answer is.</strong> Output tokens are the expensive side &mdash;
+                    often five times the input rate &mdash; so a long answer can cost twice a short one from
+                    the same model.</li>
+                <li><strong>How much the model had to read.</strong> Everything in front of it is charged as
+                    input: your question, the conversation so far, and anything a tool pulled in. A
+                    <a href="/docs/commands/#knowledge">web-backed answer</a> that reads six pages, a
+                    <a href="/docs/git/#cost">repository task</a> carrying file trees, or an attached
+                    document all cost more than the same question asked cold &mdash; sometimes several times
+                    more.</li>
+            </ul>
+            <p>Conversation history you have already sent is billed at the cached rate, a tenth of the fresh
+                one, so a long chat does not re-pay for itself &mdash; but it is not free either.</p>
+            <p><code>?model</code> quotes each model as a range before you commit to one: the low end is a
+                short answer at a typical context, the high end a long one. A reply that reads a lot can land
+                above the range, which is why the app shows what every reply actually cost &mdash; tap the
+                price on any of them. Image and speech generation are charged
                 <a href="/docs/media/#pricing">per generation</a> instead.</p>
             <p>A <a href="/docs/git/#cost">repository task</a> can use up to six model calls for one message,
                 each billed at the pinned model's price. Only the calls actually made are charged.</p>
 
             <h2 id="every-model">Every model and what it costs</h2>
             <p>The same sheet the app shows under <code>?model</code>, read from the same catalog, so you
-                can check a price without opening anything. A range is the base and what a
-                maximum-length reply would cost; the charge is what the reply actually came to.</p>
+                can check a price without opening anything. A range runs from a short answer to a long one at
+                a typical context; what you are charged is what the reply actually came to, which can sit
+                above the range when the model had to read a great deal.</p>
             <p>A repository call is priced higher than a plain reply because each one carries the
                 repository's file trees and everything read so far as input &mdash; see
                 <a href="/docs/git/#cost">repository tasks</a>.</p>
