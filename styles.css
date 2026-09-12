@@ -409,6 +409,18 @@ body {
     box-shadow: 0 4px 20px var(--store-shadow-hover);
 }
 
+.store-badge.is-pending {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.store-badge.is-pending:hover {
+    background: var(--store-bg);
+    border-color: var(--store-border);
+    transform: none;
+    box-shadow: none;
+}
+
 .store-badge svg {
     width: 24px;
     height: 24px;
