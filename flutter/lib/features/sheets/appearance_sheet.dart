@@ -162,7 +162,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                 (v) => s.monospaceReplies = v),
             toggle(t('Reduce motion'), s.reduceMotion, (v) => s.reduceMotion = v),
             const SizedBox(height: 12),
-            Text(t('Behaviour'), style: Theme.of(context).textTheme.titleSmall),
+            Text(t('Behavior'), style: Theme.of(context).textTheme.titleSmall),
             toggle(t('Enter sends, Shift+Enter starts a line'), s.sendOnEnter,
                 (v) => s.sendOnEnter = v),
             toggle(t('Show what the next reply will cost'), s.showCostEstimate,

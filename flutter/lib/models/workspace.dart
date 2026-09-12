@@ -422,7 +422,7 @@ class SavedPrompt {
     SavedPrompt(
       id: 'p-refactor',
       title: 'Refactor',
-      body: 'Refactor this for clarity without changing behaviour. Show the diff and say what each '
+      body: 'Refactor this for clarity without changing behavior. Show the diff and say what each '
           'change buys.\n\n```\n{{code}}\n```',
     ),
     SavedPrompt(
@@ -433,8 +433,8 @@ class SavedPrompt {
     ),
     SavedPrompt(
       id: 'p-summarise',
-      title: 'Summarise',
-      body: 'Summarise the following in {{count}} bullet points, keeping every number and name '
+      title: 'Summarize',
+      body: 'Summarize the following in {{count}} bullet points, keeping every number and name '
           'intact:\n\n{{text}}',
     ),
     SavedPrompt(

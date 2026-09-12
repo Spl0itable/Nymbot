@@ -127,6 +127,9 @@ class ChatEngine {
   static const int estTypicalOut = 400;
   static const int estLongOut = 1600;
 
+  static const int nominalTurnIn = 3000;
+  static const int nominalTurnOut = 700;
+
   static int estTokens(int chars) => chars <= 0 ? 0 : (chars / 4).ceil();
 
 
@@ -141,6 +144,16 @@ class ChatEngine {
     final usd = (inTok * pin + inTok * (legs - 1) * pcr + outTok * legs * pout) /
         1e6;
     return usd / usdPerCredit;
+  }
+
+  static double? nominalTurnCredits(
+      Map<String, dynamic> model, Map<String, dynamic>? pricing) {
+    final usd = (pricing?['usdPerCredit'] as num?)?.toDouble() ?? 0;
+    final spend =
+        estMeteredCredits(model, nominalTurnIn, nominalTurnOut, 1, usd);
+    if (spend == null) return null;
+    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
+    return spend < floor ? floor : spend;
   }
 
   static (double, double)? estStandardCredits(

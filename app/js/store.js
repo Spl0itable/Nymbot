@@ -152,9 +152,9 @@
         { id: 'p-explain', title: 'Explain this code', body: 'Explain what this code does, then name the three things most likely to break it:\n\n```\n{{code}}\n```' },
         { id: 'p-review', title: 'Review a diff', body: 'Review this diff for correctness bugs and simplifications. Most severe first, each with a concrete failing case.\n\n```diff\n{{diff}}\n```' },
         { id: 'p-tests', title: 'Write tests', body: 'Write thorough tests for the following, covering the boundary and failure cases as well as the happy path:\n\n```\n{{code}}\n```' },
-        { id: 'p-refactor', title: 'Refactor', body: 'Refactor this for clarity without changing behaviour. Show the diff and say what each change buys.\n\n```\n{{code}}\n```' },
+        { id: 'p-refactor', title: 'Refactor', body: 'Refactor this for clarity without changing behavior. Show the diff and say what each change buys.\n\n```\n{{code}}\n```' },
         { id: 'p-commit', title: 'Commit message', body: 'Write a commit message for this diff: a subject under 60 characters in the imperative, then a body explaining why rather than what.\n\n```diff\n{{diff}}\n```' },
-        { id: 'p-summarise', title: 'Summarise', body: 'Summarise the following in {{count}} bullet points, keeping every number and name intact:\n\n{{text}}' },
+        { id: 'p-summarise', title: 'Summarize', body: 'Summarize the following in {{count}} bullet points, keeping every number and name intact:\n\n{{text}}' },
         { id: 'p-translate', title: 'Translate', body: 'Translate the following into {{language}}, preserving tone and formatting:\n\n{{text}}' },
         { id: 'p-brainstorm', title: 'Brainstorm', body: 'Give me {{count}} genuinely different approaches to {{goal}}. For each: the idea in one line, why it might win, and what would sink it.' }
     ];

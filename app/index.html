@@ -513,7 +513,7 @@
                 <label for="botModel">Model</label>
                 <select id="botModel"></select>
                 <label for="botStarters">Openers, one per line</label>
-                <textarea id="botStarters" rows="3" placeholder="Summarise the last release&#10;What changed in the API?"></textarea>
+                <textarea id="botStarters" rows="3" placeholder="Summarize the last release&#10;What changed in the API?"></textarea>
                 <p class="modal-status" id="botStatus"></p>
                 <footer>
                     <button class="btn primary" type="button" data-act="bot-save">Save bot</button>
@@ -857,7 +857,7 @@
         </div>
     </div>
 
-    <!-- Settings: appearance and behaviour -->
+    <!-- Settings: appearance and behavior -->
     <div class="modal" id="modalAppearance" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Settings</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -914,7 +914,7 @@
             <label class="check"><input type="checkbox" id="setCodeWrap"> Wrap long code lines</label>
             <label class="check"><input type="checkbox" id="setMotion"> Reduce motion</label>
 
-            <h3 class="section-head">Behaviour</h3>
+            <h3 class="section-head">Behavior</h3>
             <label class="check"><input type="checkbox" id="setEnter"> Enter sends, Shift+Enter starts a line</label>
             <label class="check"><input type="checkbox" id="setEstimate"> Show what the next reply will cost</label>
             <label class="check"><input type="checkbox" id="setSound"> Sound when a reply lands</label>
@@ -1049,6 +1049,7 @@
         <div class="modal-card">
             <header><h2>Buy credits</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
             <div class="credit-balances" id="creditBalances"></div>
+            <p class="modal-lede">Standard picks a model for you, per question. Pro answers with the one frontier model you choose. Separate balances, and neither converts into the other.</p>
             <div class="tier-switch wide" id="creditTier">
                 <button class="tier-btn is-active" type="button" data-act="credit-tier" data-tier="standard">Standard &middot; 10 sats</button>
                 <button class="tier-btn" type="button" data-act="credit-tier" data-tier="pro">Pro &middot; 100 sats</button>

@@ -14,24 +14,13 @@ ${NOTE}
 
             <h2 id="free">The free daily allowance</h2>
             <p>You do not have to buy anything to start. With an empty balance you get
-                <strong>20 replies a day</strong>, on the same model the public Nymbot runs on, and they
+                <strong>10 replies a day</strong>, on the same model the public Nymbot runs on, and they
                 cost nothing. The count is in the toolbar where the balance normally sits, and it resets
                 at midnight UTC.</p>
             <p>What the allowance does not cover is anything with a bill of its own: the frontier
                 <a href="/docs/models/#pro">Pro models</a>, <a href="/docs/git/">repositories</a>,
                 <a href="/docs/media/">pictures, video and speech</a>, and live web search. Those are what
                 credits are for.</p>
-            <p>It is counted per key <em>and</em> per network. Making a new key is a single tap in the app's
-                own gate, so a per-key count on its own would reset every time somebody cleared their site
-                data &mdash; the allowance would not be daily, it would be per-wipe. A network gets several
-                times what one key does, so a household, an office or a phone network sharing one address
-                is not turned away.</p>
-            <p>Nothing about that count is stored against you. The address a request arrives from is hashed
-                with a server secret and today's date and immediately forgotten; only the hash is written
-                down, on a row that has no public key on it and cannot have one. All it can say is how many
-                free replies came from one network today, and it forgets that at midnight. It cannot say
-                whose they were, and it cannot tell one of your keys from another &mdash; which is the whole
-                reason the count works this way rather than the easy way.</p>
 
             <h2 id="two-balances">Two balances</h2>
             <div class="docs-table-wrap">

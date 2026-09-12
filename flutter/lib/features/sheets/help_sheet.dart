@@ -157,7 +157,7 @@ List<HelpTopic> helpTopics() => [
             'question — along with the repositories, persona, workspace, model '
             'and effort it was set to, and the files those messages produced. '
             'Untick the box and it rewrites in place instead, throwing away '
-            'everything after it. That used to be the only behaviour; it is no '
+            'everything after it. That used to be the only behavior; it is no '
             'longer the default, because nothing about it could be undone.'),
       ),
       HelpTopic(

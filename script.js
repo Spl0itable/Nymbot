@@ -1,4 +1,4 @@
-// Landing page behaviour: the FAQ accordion, and the Nymbot conversation that
+// Landing page behavior: the FAQ accordion, and the Nymbot conversation that
 // plays inside the phone mockup.
 
 // FAQ accordion. Delegated rather than an inline onclick so the page stays

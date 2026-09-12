@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../core/theme/theme.dart';
+import '../../services/chat_engine.dart';
 import '../../state/app_controller.dart';
 import '../brand_tile.dart';
 import '../i18n/i18n.dart';
@@ -81,6 +82,29 @@ class _ModelsSheetState extends State<_ModelsSheet> {
         : t('{n} credits', {'n': n});
   }
 
+  double? _turnCredits(Map<String, dynamic> m) =>
+      ChatEngine.nominalTurnCredits(m, _catalog);
+
+  String _turnLabel(Map<String, dynamic> m, int credits, int max) {
+    final turn = _turnCredits(m);
+    if (turn == null) return _price(credits, max);
+    final n = creditFigure(turn);
+    return n == '1'
+        ? t('~{n} credit a turn', {'n': n})
+        : t('~{n} credits a turn', {'n': n});
+  }
+
+  String? _rates(Map<String, dynamic> m) {
+    if (_turnCredits(m) == null) return null;
+    final pin = m['inUsdPerMTok'];
+    final pout = m['outUsdPerMTok'];
+    final cached = (m['cacheReadUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    return cached > 0
+        ? t('{in}/M in · {out}/M out · {cached}/M cached',
+            {'in': '\$$pin', 'out': '\$$pout', 'cached': '\$$cached'})
+        : t('{in}/M in · {out}/M out', {'in': '\$$pin', 'out': '\$$pout'});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -158,32 +182,38 @@ class _ModelsSheetState extends State<_ModelsSheet> {
             (group['authorSlug'] as String? ?? '');
         final standing = command != null ? app.activeMediaModel : app.activeModel;
         final pinned = standing != null && standing['key'] == key;
+        final desc = m['description'] as String?;
+        final rates = _rates(m);
         rows.add(ListTile(
           dense: true,
           selected: pinned,
+          isThreeLine: true,
           // Who makes it, on the left, so the list scans by maker.
           leading: BrandTile(slug: slug),
           title: Text(m['label'] as String),
-          subtitle: (m['description'] as String?)?.isNotEmpty == true
-              ? Text(m['description'] as String,
-                  maxLines: 2, overflow: TextOverflow.ellipsis)
-              : null,
-          trailing: Row(
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_price(credits, max)),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                iconSize: 16,
-                icon: Icon(starred ? Icons.star : Icons.star_border,
-                    color: starred ? NymbotColors.lightning : null),
-                tooltip: t('Star this model'),
-                onPressed: () async {
-                  await app.toggleFavouriteModel(key);
-                  if (mounted) setState(() {});
-                },
-              ),
+              if (desc != null && desc.isNotEmpty)
+                Text(desc, maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(_turnLabel(m, credits, max),
+                  style: const TextStyle(
+                      fontSize: 12, color: NymbotColors.lightning)),
+              if (rates != null)
+                Text(rates, style: const TextStyle(fontSize: 11)),
             ],
+          ),
+          trailing: IconButton(
+            visualDensity: VisualDensity.compact,
+            iconSize: 16,
+            icon: Icon(starred ? Icons.star : Icons.star_border,
+                color: starred ? NymbotColors.lightning : null),
+            tooltip: t('Star this model'),
+            onPressed: () async {
+              await app.toggleFavouriteModel(key);
+              if (mounted) setState(() {});
+            },
           ),
           onTap: () async {
             final messenger = ScaffoldMessenger.of(context);

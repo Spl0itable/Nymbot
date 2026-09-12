@@ -2177,8 +2177,8 @@
             // Whose allowance ran out matters.
             if (this.free && this.free.netSpent) {
                 this.note(when
-                    ? t('This network has used today\'s free replies — a new key does not get more, because they are counted per connection too. They come back at {time}, or tap Buy for credits.', { time: when })
-                    : t('This network has used today\'s free replies — a new key does not get more, because they are counted per connection too. Tap Buy for credits.'));
+                    ? t('This address has used today\'s free replies — a new key does not get another set, because they are counted per address too. They come back at {time}, or tap Buy for credits.', { time: when })
+                    : t('This address has used today\'s free replies — a new key does not get another set, because they are counted per address too. Tap Buy for credits.'));
                 return;
             }
             this.note(when
@@ -4084,7 +4084,7 @@
                 },
                 {
                     title: t('Asking a question differently'),
-                    body: t('Under any message you sent, "Ask this differently" reopens it. By default the chat you had stays exactly as it is and the new answer arrives on a branch carrying everything said before that question — along with the repositories, persona, workspace, model and effort it was set to, and the files those messages produced. Untick the box and it rewrites in place instead, throwing away everything after it. That used to be the only behaviour; it is no longer the default, because nothing about it could be undone.')
+                    body: t('Under any message you sent, "Ask this differently" reopens it. By default the chat you had stays exactly as it is and the new answer arrives on a branch carrying everything said before that question — along with the repositories, persona, workspace, model and effort it was set to, and the files those messages produced. Untick the box and it rewrites in place instead, throwing away everything after it. That used to be the only behavior; it is no longer the default, because nothing about it could be undone.')
                 },
                 {
                     title: t('Asking it to think harder'),
@@ -5291,6 +5291,17 @@
                 || t('Not paid yet. Finish paying in your wallet, then tap it again.'), 'warn');
         },
 
+        bulkBonus(sats) {
+            const rows = (this.models && this.models.bulkBonus) || [];
+            const key = this.creditTier === 'pro' ? 'proSats' : 'standardSats';
+            let best = 0;
+            for (const row of rows) {
+                const at = Number(row && row[key]) || 0;
+                if (at > 0 && sats >= at) best = Math.max(best, Number(row.bonus) || 0);
+            }
+            return best;
+        },
+
         creditSats() {
             const credits = Math.max(0, parseInt($('creditAmount').value, 10) || 0);
             const sats = credits * C.satsPerCredit[this.creditTier];
@@ -5302,9 +5313,15 @@
             }
             this.renderCreditPricingNote();
             if (!credits) { $('creditSats').textContent = ''; return; }
-            $('creditSats').textContent = this.creditTier === 'pro'
+            const bonus = this.bulkBonus(sats);
+            const got = Math.floor(credits * (1 + bonus));
+            const line = this.creditTier === 'pro'
                 ? t('{credits} Pro credits = {sats} sats', { credits: num(credits), sats: num(sats) })
                 : t('{credits} credits = {sats} sats', { credits: num(credits), sats: num(sats) });
+            $('creditSats').textContent = got > credits
+                ? line + ' ' + t('— you get {n}, with the {pct}% bulk bonus',
+                    { n: num(got), pct: num(Math.round(bonus * 100)) })
+                : line;
         },
 
         renderCreditPricingNote() {
@@ -5312,8 +5329,8 @@
             if (!box) return;
             box.innerHTML = '';
             box.appendChild(document.createTextNode(this.creditTier === 'pro'
-                ? t('Pro replies are metered on the tokens they use and charged in thousandths of a credit, so an ordinary question costs a fraction of one. Context you have already sent is billed at a cached rate, a tenth of the fresh one.')
-                : t('Replies are metered on the tokens they use and charged in thousandths of a credit, so a short question costs a fraction of one. Coding and reasoning cost more per token because they use bigger models.')));
+                ? t('Every reply is metered on the tokens it uses, so an ordinary question costs a fraction of a credit. Context you have already sent is billed at a tenth of the fresh rate, so a long chat does not re-pay for its own history.')
+                : t('Every reply is metered on the tokens it uses, so a short question costs a fraction of a credit. Coding and reasoning questions cost more, because they are routed to bigger models.')));
             box.appendChild(document.createTextNode(' '));
             const a = el('a', null, t('Every model and what it costs'));
             a.href = 'https://nymbot.ai/docs/credits/';

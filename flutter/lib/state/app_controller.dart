@@ -2103,22 +2103,22 @@ class AppController extends ChangeNotifier {
   String freeSpentMessage() {
     final at = free?.resetsAt ?? 0;
     // Whose allowance ran out matters.
-    final byNetwork = free?.netSpent ?? false;
+    final byAddress = free?.netSpent ?? false;
     if (at <= 0) {
-      return byNetwork
-          ? t("This network has used today's free replies — a new key does not "
-              'get more, because they are counted per connection too. Tap Buy '
-              'for credits.')
+      return byAddress
+          ? t("This address has used today's free replies — a new key does not "
+              'get another set, because they are counted per address too. Tap '
+              'Buy for credits.')
           : t("That is today's free replies used. Tap Buy for credits, which "
               'also unlock the sharper models, repositories, images and web search.');
     }
     final when = DateTime.fromMillisecondsSinceEpoch(at);
     final clock = '${when.hour.toString().padLeft(2, '0')}'
         ':${when.minute.toString().padLeft(2, '0')}';
-    return byNetwork
-        ? t("This network has used today's free replies — a new key does not "
-            'get more, because they are counted per connection too. They come '
-            'back at {time}, or tap Buy for credits.', {'time': clock})
+    return byAddress
+        ? t("This address has used today's free replies — a new key does not "
+            'get another set, because they are counted per address too. They '
+            'come back at {time}, or tap Buy for credits.', {'time': clock})
         : t(
             "That is today's free replies used. They come back at {time} — or tap "
             'Buy for credits, which also unlock the sharper models, repositories, '
@@ -2130,6 +2130,41 @@ class AppController extends ChangeNotifier {
 
   int satsFor(int credits, String tier) =>
       credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
+
+  static const List<Map<String, num>> bulkBonusFallback = [
+    {'bonus': 0.10, 'standardSats': 500, 'proSats': 5000},
+    {'bonus': 0.15, 'standardSats': 1000, 'proSats': 10000},
+    {'bonus': 0.20, 'standardSats': 5000, 'proSats': 50000},
+  ];
+
+  List<Map<String, num>> get bulkBonus {
+    final raw = catalogPricing?['bulkBonus'];
+    if (raw is! List) return bulkBonusFallback;
+    final rows = <Map<String, num>>[];
+    for (final r in raw) {
+      if (r is! Map) continue;
+      final bonus = (r['bonus'] as num?) ?? 0;
+      final std = (r['standardSats'] as num?) ?? 0;
+      final pro = (r['proSats'] as num?) ?? 0;
+      if (bonus > 0 && std > 0) {
+        rows.add({'bonus': bonus, 'standardSats': std, 'proSats': pro});
+      }
+    }
+    return rows.isEmpty ? bulkBonusFallback : rows;
+  }
+
+  int creditsCredited(int credits, String tier) {
+    if (credits <= 0) return 0;
+    final sats = satsFor(credits, tier);
+    final key = tier == 'pro' ? 'proSats' : 'standardSats';
+    var best = 0.0;
+    for (final row in bulkBonus) {
+      final at = (row[key] ?? 0).toDouble();
+      final bonus = (row['bonus'] ?? 0).toDouble();
+      if (at > 0 && sats >= at && bonus > best) best = bonus;
+    }
+    return (credits * (1 + best)).floor();
+  }
 
   Map<String, dynamic>? catalogPricing;
 
@@ -2143,6 +2178,7 @@ class AppController extends ChangeNotifier {
       'standardRoutes': catalog['standardRoutes'],
       'btcUsd': catalog['btcUsd'],
       'minChargeCredits': catalog['minChargeCredits'],
+      'bulkBonus': catalog['bulkBonus'],
     };
     notifyListeners();
   }

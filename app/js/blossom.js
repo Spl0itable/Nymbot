@@ -83,7 +83,7 @@
             const header = await auth(await sha256Hex(bytes), options.signer);
             let last = null;
             for (const host of HOSTS) {
-                if (options.signal && options.signal.aborted) throw new Error(t('Cancelled.'));
+                if (options.signal && options.signal.aborted) throw new Error(t('Canceled.'));
                 try {
                     return await putTo(host, bytes, mime, header, options.signal);
                 } catch (e) { last = e; }

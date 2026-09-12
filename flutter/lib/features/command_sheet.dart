@@ -50,7 +50,7 @@ class BotCommands {
         BotCommand(name: 'export', args: '', group: 'local', hint: () => t('Share this conversation')),
         BotCommand(name: 'stats', args: '', group: 'local', hint: () => t('What this chat has cost so far')),
         BotCommand(name: 'theme', args: '[dark|light|system]', group: 'local', hint: () => t('Switch the theme')),
-        BotCommand(name: 'settings', args: '', group: 'local', hint: () => t('Open appearance and behaviour')),
+        BotCommand(name: 'settings', args: '', group: 'local', hint: () => t('Open appearance and behavior')),
         BotCommand(name: 'guide', args: '[topic]', group: 'local', hint: () => t('Open the help guide')),
         BotCommand(name: 'retry', args: '', group: 'local', hint: () => t('Ask the last question again')),
         BotCommand(name: 'clear', args: '', group: 'local', hint: () => t('Clear this chat and reset the context')),

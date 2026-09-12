@@ -53,6 +53,31 @@ class _CreditsSheetState extends State<_CreditsSheet> {
   int get _credits => int.tryParse(_amount.text) ?? 0;
   int get _sats => _credits * (NymbotConfig.satsPerCredit[_tier] ?? 10);
 
+  String _priceLine(AppController app) {
+    final line = _tier == 'pro'
+        ? (_credits == 1
+            ? t('1 Pro credit = {sats} sats', {'sats': figure(_sats)})
+            : t('{n} Pro credits = {sats} sats',
+                {'n': figure(_credits), 'sats': figure(_sats)}))
+        : (_credits == 1
+            ? t('1 credit = {sats} sats', {'sats': figure(_sats)})
+            : t('{n} credits = {sats} sats',
+                {'n': figure(_credits), 'sats': figure(_sats)}));
+    final got = app.creditsCredited(_credits, _tier);
+    if (got <= _credits) return line;
+    final pct = ((got / _credits - 1) * 100).round();
+    return '$line '
+        '${t('— you get {n}, with the {pct}% bulk bonus', {'n': figure(got), 'pct': '$pct'})}';
+  }
+
+  String _pricingNote() => _tier == 'pro'
+      ? t('Every reply is metered on the tokens it uses, so an ordinary '
+          'question costs a fraction of a credit. Context you have already '
+          'sent is billed at a tenth of the fresh rate.')
+      : t('Every reply is metered on the tokens it uses, so a short question '
+          'costs a fraction of a credit. Coding and reasoning questions cost '
+          'more, because they are routed to bigger models.');
+
   Future<void> _buy() async {
     final app = AppScope.read(context);
     if (_credits <= 0) {
@@ -288,6 +313,13 @@ class _CreditsSheetState extends State<_CreditsSheet> {
             const SizedBox(height: 12),
             _balances(context, app),
             const SizedBox(height: 12),
+            Text(
+              t('Standard picks a model for you, per question. Pro answers with '
+                  'the one frontier model you choose. Separate balances, and '
+                  'neither converts into the other.'),
+              style: const TextStyle(fontSize: 12, height: 1.35),
+            ),
+            const SizedBox(height: 12),
             SegmentedButton<String>(
               segments: [
                 ButtonSegment(value: 'standard', label: Text(t('Standard · 10 sats'))),
@@ -315,19 +347,11 @@ class _CreditsSheetState extends State<_CreditsSheet> {
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 6),
-            if (_credits > 0)
-              Text(
-                _tier == 'pro'
-                    ? (_credits == 1
-                        ? t('1 Pro credit = {sats} sats', {'sats': figure(_sats)})
-                        : t('{n} Pro credits = {sats} sats',
-                            {'n': figure(_credits), 'sats': figure(_sats)}))
-                    : (_credits == 1
-                        ? t('1 credit = {sats} sats', {'sats': figure(_sats)})
-                        : t('{n} credits = {sats} sats',
-                            {'n': figure(_credits), 'sats': figure(_sats)})),
-                style: const TextStyle(fontSize: 12),
-              ),
+            if (_credits > 0) ...[
+              Text(_priceLine(app), style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 6),
+              Text(_pricingNote(), style: const TextStyle(fontSize: 11)),
+            ],
             if (_invoice != null) ...[
               const SizedBox(height: 14),
               Center(
