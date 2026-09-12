@@ -83,6 +83,17 @@
                 .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         },
 
+        amount(value, places) {
+            const digits = places == null ? 2 : places;
+            const scale = Math.pow(10, digits);
+            const n = Math.round((Number(value) || 0) * scale) / scale;
+            const whole = Math.trunc(n);
+            const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            let frac = Math.abs(n - whole).toFixed(digits).slice(1).replace(/0+$/, '');
+            if (frac === '.') frac = '';
+            return grouped + frac;
+        },
+
         /// One string, with `{name}` placeholders filled from [vars].
         ///
         /// Untranslated text is returned as it came in, so a pack missing an
@@ -151,4 +162,5 @@
     window.NymbotI18n = I18n;
     /// Shorthand the extractor looks for: `t('…')` in app/js/*.js.
     window.t = (text, vars) => I18n.t(text, vars);
+    window.amount = (value, places) => I18n.amount(value, places);
 })();

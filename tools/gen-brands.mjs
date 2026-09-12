@@ -111,7 +111,34 @@ const site = `(function () {
         return svg;
     };
 
-    window.NymbotBrands = { mark: mark, names: Object.keys(BRANDS) };
+    var markup = function (slug, size) {
+        var raw = String(slug || '').toLowerCase();
+        var key = ALIASES[raw] || raw;
+        var hit = BRANDS[key];
+        var px = size || 18;
+        var inner;
+        if (hit) {
+            var inset = 24 - PAD * 2;
+            var scale = inset / Math.max(hit.box[2], hit.box[3]);
+            var tx = PAD + (inset - hit.box[2] * scale) / 2 - hit.box[0] * scale;
+            var ty = PAD + (inset - hit.box[3] * scale) / 2 - hit.box[1] * scale;
+            inner = '<g fill="#fff" fill-rule="evenodd" clip-rule="evenodd" transform="translate('
+                + round(tx) + ' ' + round(ty) + ') scale(' + round(scale) + ')">'
+                + hit.paths.map(function (d) { return '<path d="' + d + '"></path>'; }).join('')
+                + '</g>';
+        } else {
+            var text = initials(key);
+            inner = '<text x="12" y="12" fill="#fff" font-size="' + (text.length > 1 ? 9 : 11) + '"'
+                + ' font-weight="700" font-family="system-ui, sans-serif"'
+                + ' text-anchor="middle" dominant-baseline="central">' + text + '</text>';
+        }
+        return '<svg class="brand-tile" viewBox="0 0 24 24" width="' + px + '" height="' + px
+            + '" aria-hidden="true" focusable="false">'
+            + '<rect x="0" y="0" width="24" height="24" rx="6" fill="'
+            + (hit ? hit.fill : tint(key)) + '"></rect>' + inner + '</svg>';
+    };
+
+    window.NymbotBrands = { mark: mark, markup: markup, names: Object.keys(BRANDS) };
 })();
 `;
 
@@ -180,8 +207,13 @@ ${tints.map((t) => '    0xFF' + t.replace('#', '').toUpperCase() + ',').join('\n
 
 const flutter = process.argv[2] || process.env.NYMBOT_FLUTTER
   || path.resolve(ROOT, '../nymbot-flutter');
+const nymchatWeb = process.env.NYMCHAT_WEB || path.resolve(ROOT, '../nym-staging');
 
 await writeFile(path.join(ROOT, 'brand-marks.js'), site);
+const nymchatSite = path.join(nymchatWeb, 'js/brand-marks.js');
+try { await writeFile(nymchatSite, site); } catch (e) {
+  console.log('  skipped ' + nymchatSite + ' (' + e.code + ')');
+}
 const nymchat = process.env.NYMCHAT_FLUTTER
   || path.resolve(ROOT, '../spl0itable/flutter-app');
 const dartTargets = [

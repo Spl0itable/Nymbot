@@ -230,13 +230,46 @@
         return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     };
 
-    var price = function (m) {
+    var TURN_IN = 3000;
+    var TURN_OUT = 700;
+
+    var credits = function (n) {
+        if (n === Math.round(n)) return num(n);
+        if (n > 0 && n < 0.01) return '<0.01';
+        return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    };
+
+    var turnPrice = function (m, sheet) {
+        var usd = Number(sheet && sheet.usdPerCredit) || 0;
+        var pin = Number(m.inUsdPerMTok);
+        var pout = Number(m.outUsdPerMTok);
+        if (!(usd > 0) || !(pin > 0) || !(pout > 0)) return null;
+        var spend = (TURN_IN * pin + TURN_OUT * pout) / 1e6 / usd;
+        var floor = Number(sheet.minChargeCredits) || 0;
+        return spend < floor ? floor : spend;
+    };
+
+    var price = function (m, sheet) {
+        var turn = turnPrice(m, sheet);
+        if (turn !== null) return '~' + credits(turn);
         var span = m.max && m.max !== m.credits;
         var n = span ? num(m.credits) + '–' + num(m.max) : num(m.credits);
         return (!span && m.credits === 1) ? n + ' credit' : n + ' credits';
     };
 
-    var repoPrice = function (m) {
+    var REPO_FRESH = 23500;
+    var REPO_CACHED = 65000;
+    var REPO_OUT = 4200;
+
+    var repoPrice = function (m, sheet) {
+        var usd = Number(sheet && sheet.usdPerCredit) || 0;
+        var pin = Number(m.inUsdPerMTok);
+        var pout = Number(m.outUsdPerMTok);
+        if (usd > 0 && pin > 0 && pout > 0) {
+            var pcr = Number(m.cacheReadUsdPerMTok) > 0 ? Number(m.cacheReadUsdPerMTok) : pin * 0.1;
+            var spend = (REPO_FRESH * pin + REPO_CACHED * pcr + REPO_OUT * pout) / 1e6 / usd;
+            return '~' + credits(spend);
+        }
         if (!m.repoCredits) return '';
         var span = m.repoMax && m.repoMax !== m.repoCredits;
         return span ? num(m.repoCredits) + '–' + num(m.repoMax) : num(m.repoCredits);
@@ -268,8 +301,8 @@
         var table = document.createElement('table');
         var anyRepo = models.some(function (m) { return !!m.repoCredits; });
         var anyRate = models.some(function (m) { return m.inUsdPerMTok > 0; });
-        var head = '<thead><tr><th>Model</th><th>A reply</th>'
-            + (anyRepo ? '<th>A repo call</th>' : '')
+        var head = '<thead><tr><th>Model</th><th>A typical turn</th>'
+            + (anyRepo ? '<th>A repo task</th>' : '')
             + (anyRate ? '<th>Input</th><th>Output</th><th>Cached input</th>' : '')
             + '<th>Context</th></tr></thead>';
         table.innerHTML = head;
@@ -292,8 +325,8 @@
             body.appendChild(head);
             rows.forEach(function (m) {
                 var tr = document.createElement('tr');
-                var cells = [m.label, price(m)];
-                if (anyRepo) cells.push(repoPrice(m) || '—');
+                var cells = [m.label, price(m, data)];
+                if (anyRepo) cells.push(repoPrice(m, data) || '—');
                 if (anyRate) {
                     cells.push(rate(m.inUsdPerMTok), rate(m.outUsdPerMTok),
                         rate(m.cacheReadUsdPerMTok));
@@ -321,8 +354,12 @@
             + 'that is what you are charged on: the tokens a reply actually used, billed in '
             + 'thousandths of a credit, so a short question costs a fraction of one. Repeated '
             + 'context is billed at the cached rate rather than the full one, which is why a '
-            + 'long chat does not re-pay for its own history. A dash means that model is '
-            + 'billed per reply instead, and the reply column is what it comes to.';
+            + 'long chat does not re-pay for its own history. "A typical turn" prices '
+            + num(TURN_IN) + ' tokens in and ' + num(TURN_OUT) + ' out, all of it fresh — a '
+            + 'real turn part-way into a conversation is usually cheaper, because most of what '
+            + 'it sends is a cache hit. A repo call is priced on a measured six-leg task: '
+            + num(REPO_FRESH) + ' fresh input tokens, ' + num(REPO_CACHED) + ' read from cache '
+            + 'and ' + num(REPO_OUT) + ' out. A dash means that model is billed per reply instead.';
         mount.appendChild(note);
     };
 

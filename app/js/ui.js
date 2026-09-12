@@ -36,11 +36,16 @@
     /// Credits and sats, with their thousands separated. Never abbreviated —
     /// they are money, and every digit stays.
     const num = (v) => window.NymbotI18n.count(v);
+    const NOMINAL_TURN_IN = 3000;
+    const NOMINAL_TURN_OUT = 700;
+
+    const CREDIT_PRESETS = [5, 10, 25, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000];
+
     const creditAmount = (v) => {
         const n = Number(v) || 0;
         if (Number.isInteger(n)) return num(n);
         if (n > 0 && n < 0.01) return '<0.01';
-        return n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+        return window.amount(n, 2);
     };
 
     const $ = (id) => document.getElementById(id);
@@ -1323,7 +1328,8 @@
                 if (e && e.name === 'AbortError') {
                     this.note(t('Stopped. That reply was not charged for unless it had already finished.'));
                 } else if (e && e.noCredits) {
-                    this.balance[e.pro ? 'pro' : 'standard'] = e.balance;
+                    this.balance[e.pro ? 'pro' : 'standard'] =
+                        e.balanceCredits != null ? e.balanceCredits : e.balance;
                     // The worker says the day is spent. Believe it over the
                     // device's own count, which can only ever be behind.
                     if (e.free) {
@@ -2553,10 +2559,26 @@
 
         /// "3 credits", or "1–4 credits" where the reply's length moves it.
         /// A bare number said nothing about what it counted.
+        modelTurnCredits(m) {
+            const usd = Number(this.models && this.models.usdPerCredit) || 0;
+            const pin = Number(m.inUsdPerMTok);
+            const pout = Number(m.outUsdPerMTok);
+            if (!(usd > 0) || !(pin > 0) || !(pout > 0)) return null;
+            const spend = (NOMINAL_TURN_IN * pin + NOMINAL_TURN_OUT * pout) / 1e6 / usd;
+            const floor = Number(this.models.minChargeCredits) || 0;
+            return Math.max(floor, spend);
+        },
+
         modelPrice(m) {
+            const turn = this.modelTurnCredits(m);
+            if (turn != null) {
+                const rates = Number(m.cacheReadUsdPerMTok) > 0
+                    ? t('${in}/M in · ${out}/M out · ${cached}/M cached', {
+                        in: m.inUsdPerMTok, out: m.outUsdPerMTok, cached: m.cacheReadUsdPerMTok })
+                    : t('${in}/M in · ${out}/M out', { in: m.inUsdPerMTok, out: m.outUsdPerMTok });
+                return t('~{n} credits a turn', { n: creditAmount(turn) }) + ' · ' + rates;
+            }
             const span = m.max && m.max !== m.credits;
-            // Each side of a range is its own figure; the range is not one
-            // number to format.
             const n = span ? `${num(m.credits)}–${num(m.max)}` : num(m.credits);
             return (!span && m.credits === 1) ? t('{n} credit', { n }) : t('{n} credits', { n });
         },
@@ -4952,7 +4974,8 @@
             this.bumpStats(spent);
             const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
             if (balance) {
-                this.balance[balance.pro ? 'pro' : 'standard'] = balance.balance;
+                this.balance[balance.pro ? 'pro' : 'standard'] =
+                    balance.balanceCredits != null ? balance.balanceCredits : balance.balance;
                 this.renderBalance();
             }
             this.modalStatus('compareStatus', out.every(r => r.ok)
@@ -5167,7 +5190,7 @@
             }
             const grid = $('amountGrid');
             grid.innerHTML = '';
-            for (const n of [10, 25, 50, 100, 250, 500]) {
+            for (const n of CREDIT_PRESETS) {
                 const b = el('button', null, String(n));
                 b.type = 'button';
                 b.addEventListener('click', () => { $('creditAmount').value = n; this.creditSats(); });
@@ -5269,10 +5292,26 @@
                 this.modalStatus('creditStatus',
                     t('That invoice was for a different amount. Create a new one.'), 'warn');
             }
+            this.renderCreditPricingNote();
             if (!credits) { $('creditSats').textContent = ''; return; }
             $('creditSats').textContent = this.creditTier === 'pro'
                 ? t('{credits} Pro credits = {sats} sats', { credits: num(credits), sats: num(sats) })
                 : t('{credits} credits = {sats} sats', { credits: num(credits), sats: num(sats) });
+        },
+
+        renderCreditPricingNote() {
+            const box = $('creditPricingNote');
+            if (!box) return;
+            box.innerHTML = '';
+            box.appendChild(document.createTextNode(this.creditTier === 'pro'
+                ? t('Pro replies are metered on the tokens they use and charged in thousandths of a credit, so an ordinary question costs a fraction of one. Context you have already sent is billed at a cached rate, a tenth of the fresh one.')
+                : t('Replies are metered on the tokens they use and charged in thousandths of a credit, so a short question costs a fraction of one. Coding and reasoning cost more per token because they use bigger models.')));
+            box.appendChild(document.createTextNode(' '));
+            const a = el('a', null, t('Every model and what it costs'));
+            a.href = 'https://nymbot.ai/docs/credits/';
+            a.target = '_blank';
+            a.rel = 'noopener';
+            box.appendChild(a);
         },
 
         async buyCredits() {
@@ -5321,7 +5360,8 @@
             if (this.invoice !== invoice) return true;
 
             if (data && !data.error) {
-                this.balance[invoice.tier] = data.balance;
+                this.balance[invoice.tier] =
+                    data.balanceCredits != null ? data.balanceCredits : data.balance;
                 this.renderBalance();
                 // The modal is still open on top of all this, and its balances
                 // are what the buyer is looking at — the chip behind it is not.

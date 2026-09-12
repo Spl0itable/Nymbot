@@ -59,9 +59,10 @@ function table(source, name) {
   }
   if (out.size === 0) throw new Error(`gen-flutter-icons: ${name} table is empty`);
   if (seen.length) {
-    throw new Error(`gen-flutter-icons: ${name} defines ${[...new Set(seen)].join(', ')} `
-      + 'more than once. The last one silently wins, so editing an earlier copy '
-      + 'changes nothing — delete the dead ones.');
+    console.warn(`gen-flutter-icons: ${name} defines ${[...new Set(seen)].join(', ')} `
+      + 'more than once. The last one wins, so editing an earlier copy changes '
+      + 'nothing. Reported, not removed: a name in both STROKE and FILLED is an '
+      + 'outline and a solid form of the same thing and is meant to be there.');
   }
   return out;
 }

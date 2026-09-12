@@ -627,7 +627,9 @@
                     || (data.pro ? t('You are out of Pro credits.') : t('You are out of credits.')));
                 err.noCredits = true;
                 err.pro = !!data.pro;
-                err.balance = data.balance || 0;
+                err.balance = data.balanceCredits != null
+                    ? data.balanceCredits : (data.balance || 0);
+                err.balanceCredits = data.balanceCredits;
                 // Present when it was the day's free allowance that ran out
                 // rather than a balance, which is a time rather than a wall.
                 err.free = data.free || null;
@@ -671,6 +673,9 @@
                 thinking: split.thinking,
                 cost: data.costCredits != null ? data.costCredits : (data.cost || 0),
                 balance: typeof data.balance === 'number' ? data.balance : null,
+                balanceCredits: typeof data.balanceCredits === 'number'
+                    ? data.balanceCredits : null,
+                dustMilli: typeof data.dustMilli === 'number' ? data.dustMilli : 0,
                 pro: !!data.pro,
                 modelCalls: data.modelCalls || 1,
                 lowBalance: !!data.lowBalance,
