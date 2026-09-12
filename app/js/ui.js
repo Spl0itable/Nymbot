@@ -2572,15 +2572,21 @@
         modelPrice(m) {
             const turn = this.modelTurnCredits(m);
             if (turn != null) {
-                const rates = Number(m.cacheReadUsdPerMTok) > 0
-                    ? t('${in}/M in · ${out}/M out · ${cached}/M cached', {
-                        in: m.inUsdPerMTok, out: m.outUsdPerMTok, cached: m.cacheReadUsdPerMTok })
-                    : t('${in}/M in · ${out}/M out', { in: m.inUsdPerMTok, out: m.outUsdPerMTok });
-                return t('~{n} credits a turn', { n: creditAmount(turn) }) + ' · ' + rates;
+                const n = creditAmount(turn);
+                return n === '1' ? t('~{n} credit a turn', { n }) : t('~{n} credits a turn', { n });
             }
             const span = m.max && m.max !== m.credits;
             const n = span ? `${num(m.credits)}–${num(m.max)}` : num(m.credits);
             return (!span && m.credits === 1) ? t('{n} credit', { n }) : t('{n} credits', { n });
+        },
+
+        modelRates(m) {
+            if (this.modelTurnCredits(m) == null) return null;
+            const usd = (v) => '$' + v;
+            return Number(m.cacheReadUsdPerMTok) > 0
+                ? t('{in}/M in · {out}/M out · {cached}/M cached', {
+                    in: usd(m.inUsdPerMTok), out: usd(m.outUsdPerMTok), cached: usd(m.cacheReadUsdPerMTok) })
+                : t('{in}/M in · {out}/M out', { in: usd(m.inUsdPerMTok), out: usd(m.outUsdPerMTok) });
         },
 
         renderModels() {
@@ -2608,10 +2614,12 @@
                     // Who makes it, on the left, so the list scans by maker.
                     row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
                     const name = el('span', 'model-name');
-                    name.appendChild(document.createTextNode(m.label));
+                    name.appendChild(el('span', 'model-title', m.label));
                     if (m.description) name.appendChild(el('span', 'model-desc', m.description));
+                    name.appendChild(el('span', 'model-cost', this.modelPrice(m)));
+                    const rates = this.modelRates(m);
+                    if (rates) name.appendChild(el('span', 'model-rates', rates));
                     row.appendChild(name);
-                    row.appendChild(el('span', 'model-cost', this.modelPrice(m)));
                     const on = this.favourites.includes(m.key);
                     const star = el('span', 'model-star' + (on ? ' is-on' : ''));
                     star.appendChild(Icons.node('star', { size: 13, filled: on }));
