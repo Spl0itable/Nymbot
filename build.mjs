@@ -16,8 +16,10 @@ const outDir = "dist";
 // Static assets copied through verbatim (referenced by absolute URLs in the HTML,
 // or read by the host — `_redirects` keeps retired slugs resolving and
 // `_headers` carries the security and caching policy). `app` is the standalone
-// Nymbot web app, copied through as built rather than rebuilt here.
-const staticAssets = ["images", "app", "robots.txt", "_redirects", "_headers"];
+// Nymbot web app, copied through as built rather than rebuilt here. `media` is
+// the promo video the knowledge base opens with; it is served from this origin,
+// which is what `default-src 'self'` in `_headers` requires of it.
+const staticAssets = ["images", "app", "media", "robots.txt", "_redirects", "_headers"];
 
 // Local assets that get minified and content-hashed for cache busting.
 const hashedAssets = [

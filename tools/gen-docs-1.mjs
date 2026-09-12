@@ -13,6 +13,15 @@ await docsPage({
                 device is the whole of it.</p>
 ${NOTE}
 
+            <figure class="docs-video">
+                <video controls preload="none" playsinline
+                       poster="/images/docs/promo-poster.webp"
+                       width="1920" height="1080">
+                    <source src="/media/nymbot-promo.mp4" type="video/mp4">
+                </video>
+                <figcaption>Thirty seconds of Nymbot. Every screen is the real app.</figcaption>
+            </figure>
+
             <h2 id="what-nymbot-is">What Nymbot is</h2>
             <p>An assistant you talk to the way you would talk to a person in a messenger. You open a
                 conversation, you type, it answers. What is different is underneath.</p>
