@@ -16,6 +16,7 @@ import '../models/memory.dart';
 import '../models/schedule.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
+import '../services/account_sync.dart';
 import '../services/anon.dart';
 import '../services/blossom.dart';
 import '../services/chat_engine.dart';
@@ -44,7 +45,9 @@ typedef AccountRoot = ({
 /// toolbar's state and the balances.
 class AppController extends ChangeNotifier {
   AppController._(this.store, this.identity, this.relays, this.pq, this.api,
-      this.anon, this.storage);
+      this.anon, this.storage) {
+    sync = AccountSync(store: store, identity: identity, storage: storage);
+  }
 
   static Future<AppController> boot() async {
     final store = await Store.open();
@@ -71,6 +74,9 @@ class AppController extends ChangeNotifier {
   final NymbotApi api;
   final AnonMode anon;
   final StorageSync storage;
+
+  late final AccountSync sync;
+
   late final Profiles profiles;
 
   late final Blossom blossom = Blossom();
@@ -86,6 +92,7 @@ class AppController extends ChangeNotifier {
   bool signedIn = false;
   bool _entered = false;
   Timer? _bootWork;
+  Timer? _syncTimer;
   bool sending = false;
   bool _topping = false;
   String? status;
@@ -102,6 +109,8 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic>? mediaModel;
   double? standardBalance;
   double? proBalance;
+  double? anonStandardBalance;
+  double? anonProBalance;
 
   /// What the day's free allowance has left on the key that is signed in, as
   /// the worker last reported it.
@@ -138,10 +147,7 @@ class AppController extends ChangeNotifier {
         mediaModel = j['mediaModel'] as Map<String, dynamic>?;
       } catch (_) {}
     }
-    favouriteModels =
-        (jsonDecode(store.getString('favouriteModels') ?? '[]') as List)
-            .map((e) => '$e')
-            .toList();
+    favouriteModels = store.favouriteModels();
   }
 
   Future<void> _saveModel() => store.setString(
@@ -276,7 +282,7 @@ class AppController extends ChangeNotifier {
     favouriteModels = favouriteModels.contains(key)
         ? (favouriteModels.where((k) => k != key).toList())
         : ([...favouriteModels, key]);
-    await store.setString('favouriteModels', jsonEncode(favouriteModels));
+    await store.saveFavouriteModels(favouriteModels);
     notifyListeners();
   }
 
@@ -383,7 +389,12 @@ class AppController extends ChangeNotifier {
         .map((c) => c.id)
         .toList();
     if (doomed.isEmpty) return 0;
+    final ghosts = {
+      for (final c in conversations)
+        if (c.ephemeral) c.id
+    };
     for (final id in doomed) {
+      if (!ghosts.contains(id)) await store.bury(id);
       await store.dropConversation(id);
     }
     conversations.removeWhere((c) => doomed.contains(c.id));
@@ -420,6 +431,18 @@ class AppController extends ChangeNotifier {
   Future<void> setAutoContinue(int credits) async {
     settings.autoContinue = credits;
     await store.saveSettings(settings);
+    notifyListeners();
+  }
+
+  Future<void> setSync(bool on) async {
+    settings.sync = on;
+    await store.saveSettings(settings);
+    if (on) {
+      sync.follow();
+      unawaited(sync.run());
+    } else {
+      sync.stop();
+    }
     notifyListeners();
   }
 
@@ -559,6 +582,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteRepo(String id) async {
+    await store.bury(id);
     repos = repos.where((r) => r.id != id).toList();
     await store.saveRepos(repos);
     for (final c in conversations) {
@@ -612,6 +636,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deletePersona(String id) async {
+    await store.bury(id);
     await store.savePersonas(
         store.customPersonas().where((p) => p.id != id).toList());
     for (final c in conversations) {
@@ -654,6 +679,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteBot(String id) async {
+    await store.bury(id);
     await store.saveBots(store.bots().where((b) => b.id != id).toList());
     for (final c in conversations) {
       if (c.botId == id) c.botId = null;
@@ -731,6 +757,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteSchedule(String id) async {
+    await store.bury(id);
     schedules = schedules.where((s) => s.id != id).toList();
     await store.saveSchedules(schedules);
     notifyListeners();
@@ -819,11 +846,15 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteMemory(String id) async {
+    await store.bury(id);
     await store.deleteMemory(id);
     notifyListeners();
   }
 
   Future<void> clearMemories() async {
+    for (final m in store.memories()) {
+      await store.bury(m.id);
+    }
     await store.clearMemories();
     notifyListeners();
   }
@@ -875,6 +906,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteWorkspace(String id) async {
+    await store.bury(id);
     await store
         .saveWorkspaces(store.workspaces().where((w) => w.id != id).toList());
     for (final c in conversations) {
@@ -907,6 +939,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deletePrompt(String id) async {
+    await store.bury(id);
     await store.savePrompts(store.prompts().where((p) => p.id != id).toList());
     notifyListeners();
   }
@@ -1047,6 +1080,14 @@ class AppController extends ChangeNotifier {
     }
     notifyListeners();
 
+    sync.onChange = _afterSync;
+    sync.follow();
+    unawaited(sync.run().then((round) {
+      if (round.isOk || round.state == 'blocked') notifyListeners();
+    }));
+    _syncTimer = Timer.periodic(
+        const Duration(minutes: 5), (_) => unawaited(sync.run()));
+
     // The announcement and the bot's key are what make a reply post-quantum;
     // neither blocks the first message. Held so it can be cancelled: a wipe or
     // a disposed controller must not leave network work running behind it.
@@ -1084,10 +1125,35 @@ class AppController extends ChangeNotifier {
     });
   }
 
+  void _afterSync(List<String> touched) {
+    if (touched.contains('settings')) _loadSettings();
+    if (touched.contains('repos')) unawaited(_loadRepos());
+    if (touched.contains('favouriteModels')) {
+      favouriteModels = store.favouriteModels();
+    }
+    if (touched.contains('schedules')) schedules = store.schedules();
+    if (touched.contains('chats')) {
+      conversations = store.conversations();
+      final open = current;
+      if (open != null) {
+        for (final c in conversations) {
+          if (c.id == open.id) current = c;
+        }
+      }
+    }
+    final open = current;
+    if (open != null && touched.contains('chat-${open.id}')) {
+      messages = store.messages(open.id);
+    }
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _bootWork?.cancel();
+    _syncTimer?.cancel();
     _scheduler?.cancel();
+    sync.stop();
     relays.close();
     super.dispose();
   }
@@ -1278,6 +1344,7 @@ class AppController extends ChangeNotifier {
     final conv = target ?? current;
     if (conv == null) return;
     final wasOpen = conv.id == current?.id;
+    await store.bury(conv.id);
     conversations.removeWhere((c) => c.id == conv.id);
     await store.saveConversations(conversations);
     await store.dropConversation(conv.id);
@@ -1793,13 +1860,7 @@ class AppController extends ChangeNotifier {
         await store.freeTier.spent();
         await store.freeTier.observe(res.free!.used);
       }
-      if (res.balance != null) {
-        if (res.pro) {
-          proBalance = res.balance;
-        } else {
-          standardBalance = res.balance;
-        }
-      }
+      _creditBalance(res.pro, res.balance, anonKey: conv.anon && anon.ready);
       if (res.lowBalance) {
         // In an anonymous chat a low balance is usually the throwaway key
         // running dry rather than the nym, which is what the automatic
@@ -1824,11 +1885,7 @@ class AppController extends ChangeNotifier {
       if (e.cancelled) {
         await note(t('Stopped. That reply was not charged for unless it had already finished.'));
       } else if (e.noCredits) {
-        if (e.pro) {
-          proBalance = e.balance;
-        } else {
-          standardBalance = e.balance;
-        }
+        _creditBalance(e.pro, e.balance, anonKey: conv.anon && anon.ready);
         // The worker says the day is spent. Believe it over the device's own
         // count, which can only ever be behind.
         if (e.free != null) {
@@ -2009,13 +2066,8 @@ class AppController extends ChangeNotifier {
       await store.saveConversations(conversations);
       await store.recordUsage(next.cost);
       continuedSpend += next.cost;
-      if (next.balance != null) {
-        if (next.pro) {
-          proBalance = next.balance;
-        } else {
-          standardBalance = next.balance;
-        }
-      }
+      _creditBalance(next.pro, next.balance,
+          anonKey: conv.anon && anon.ready);
 
       left = continueBudget;
       token = next.truncated ? next.resumeToken : null;
@@ -2040,10 +2092,26 @@ class AppController extends ChangeNotifier {
 
   // --- balances --------------------------------------------------------------------
 
+  void _creditBalance(bool pro, double? value, {required bool anonKey}) {
+    if (value == null) return;
+    if (anonKey) {
+      if (pro) {
+        anonProBalance = value;
+      } else {
+        anonStandardBalance = value;
+      }
+      return;
+    }
+    if (pro) {
+      proBalance = value;
+    } else {
+      standardBalance = value;
+    }
+  }
+
   Future<void> refreshBalance({bool announce = false}) async {
     final useAnon = (current?.anon ?? false) && anon.ready;
-    final signer = useAnon ? await anon.signer() : identity.signer;
-    final res = await api.balance(signer);
+    final res = await api.balance(identity.signer);
     if (res.data['error'] != null) {
       if (announce) await note(t('Could not reach Nymbot to check your balance.'));
       return;
@@ -2052,6 +2120,18 @@ class AppController extends ChangeNotifier {
         ?? (res.data['balance'] as num?)?.toDouble() ?? 0;
     proBalance = (res.data['proBalanceCredits'] as num?)?.toDouble()
         ?? (res.data['proBalance'] as num?)?.toDouble() ?? 0;
+    if (useAnon) {
+      final mine = await api.balance(await anon.signer());
+      if (mine.data['error'] == null) {
+        anonStandardBalance = (mine.data['balanceCredits'] as num?)?.toDouble()
+            ?? (mine.data['balance'] as num?)?.toDouble() ?? 0;
+        anonProBalance = (mine.data['proBalanceCredits'] as num?)?.toDouble()
+            ?? (mine.data['proBalance'] as num?)?.toDouble() ?? 0;
+      }
+    } else {
+      anonStandardBalance = null;
+      anonProBalance = null;
+    }
     // The worker is the authority on what this key has used; the device keeps
     // its own count so signing in with a fresh key does not start the day over.
     final seen = FreeAllowance.fromJson(res.data['free']);
@@ -2061,17 +2141,27 @@ class AppController extends ChangeNotifier {
     }
     notifyListeners();
     if (announce) {
-      final vars = {'standard': standardBalance, 'pro': proBalance};
       await note(useAnon
           ? t("This chat's anonymous balance: {standard} standard, {pro} Pro. "
-              'Tap Anon to move more across from your nym.', vars)
-          : t('Your balance: {standard} standard, {pro} Pro.', vars));
+              'Your nym still holds {nymStandard} standard and {nymPro} Pro.', {
+              'standard': anonStandardBalance,
+              'pro': anonProBalance,
+              'nymStandard': standardBalance,
+              'nymPro': proBalance,
+            })
+          : t('Your balance: {standard} standard, {pro} Pro.',
+              {'standard': standardBalance, 'pro': proBalance}));
     }
   }
 
   bool get proTier => activeModel != null || mediaNeedsPro(activeMediaModel);
 
-  double? get shownBalance => proTier ? proBalance : standardBalance;
+  bool get spendingAnon =>
+      (current?.anon ?? false) && anon.ready && anonStandardBalance != null;
+
+  double? get shownBalance => spendingAnon
+      ? (proTier ? anonProBalance : anonStandardBalance)
+      : (proTier ? proBalance : standardBalance);
 
   /// How many free replies are actually available: the lower of what the worker
   /// says this key has left and what this device has left. Null when the free
@@ -2249,6 +2339,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> wipe() async {
     _bootWork?.cancel();
+    _syncTimer?.cancel();
+    sync.stop();
+    sync.forget();
     // Signed while the key is still here; bounded so a signer that never
     // answers cannot hold the wipe up.
     if (signedIn) {

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Press Release - Nymbot</title>
+    <meta name="description" content="Press release: Nymbot, an AI assistant with no account, end-to-end encrypted messages and replies paid for in Bitcoin over Lightning, is available now on Google Play, Zapstore and the web.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Nymbot launches an AI assistant that does not need to know who is asking">
+    <meta property="og:description" content="Press release: Nymbot, an AI assistant with no account, end-to-end encrypted messages and replies paid for in Bitcoin over Lightning, is available now on Google Play, Zapstore and the web.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/press-release/">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in green terminal type, above the words Private. Paid in sats. Yours alone.">
+    <!-- The dateline, in machine-readable form. A page carrying this is emitted
+         as a NewsArticle rather than a WebPage — see structuredData in
+         i18n/render.mjs. -->
+    <meta property="article:published_time" content="2026-09-15">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in green terminal type, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Nymbot launches an AI assistant that does not need to know who is asking">
+    <meta name="twitter:description" content="Press release: Nymbot, an AI assistant with no account, end-to-end encrypted messages and replies paid for in Bitcoin over Lightning, is available now on Google Play, Zapstore and the web.">
+    <link rel="canonical" href="https://nymbot.ai/press-release/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <main class="legal-page press-release">
+        <a href="/" class="legal-back"><span aria-hidden="true">&larr;</span> Back to Nymbot</a>
+        <p class="press-flag">For immediate release</p>
+        <h1>Nymbot launches an AI assistant that does not need to know who is asking</h1>
+        <p class="press-deck">No account, no subscription and no name on the bill: every message is
+            end-to-end encrypted, replies are paid for in Bitcoin a message at a time, and anonymous mode
+            lets the service charge for an answer it cannot attribute to anyone. Available now on Google
+            Play, Zapstore and the web.</p>
+        <p class="press-dateline">September 15, 2026</p>
+        <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+        <p>21 Million LLC today announced the general availability of <strong>Nymbot</strong>, an AI
+            assistant that asks for no email address, no phone number and no account, encrypts every message
+            end to end, and sells replies for Bitcoin a message at a time instead of by subscription.
+            Nymbot is available now as a web app at
+            <a href="https://nymbot.ai/app" target="_blank" rel="noopener">nymbot.ai/app</a>, on Android
+            through <a href="https://play.google.com/store/apps/details?id=ai.nymbot" target="_blank"
+            rel="noopener">Google Play</a> and
+            <a href="https://zapstore.dev/apps/ai.nymbot" target="_blank" rel="noopener">Zapstore</a>, and as
+            an iOS build from source.</p>
+
+        <p>Every assistant in wide use starts with a sign-up, and everything after it is attached to that
+            account: the questions, the payment method, the history. Encryption, where it exists at all, does
+            not change who the bill is addressed to. Nymbot is built the other way round &mdash; the key on
+            the device is the account, and the service is designed so that it can charge for an answer
+            without being able to say whose question it was.</p>
+
+        <h2>Encryption was never the gap. Attribution was.</h2>
+        <p>Messages to Nymbot are end-to-end encrypted, but encryption alone still leaves the service
+            holding a public key: the credit row, the conversation thread and the archived reply all hang
+            off it. <strong>Anonymous mode</strong> closes that. The conversation moves onto a throwaway
+            keypair generated on the device, and the credits move with it as <strong>blind vouchers</strong>
+            in the Chaumian style a Cashu mint uses &mdash; the app blinds a random secret, the server debits
+            the real balance and signs something it cannot read, and the app unblinds the result into a token
+            the server cannot match to the nym that paid for it. Each signature comes with a proof that the
+            published signing key was the one used, and the app refuses the whole move if that does not check
+            out, because an unprovable signature is a tagging vector rather than a cosmetic problem.</p>
+        <p>While anonymous mode is on, read receipts, typing indicators, reactions and edits are held back,
+            since each would carry the real signature into the same conversation and undo the point of it. If
+            the app cannot honor that, it refuses to send rather than quietly falling back to the identity
+            key.</p>
+
+        <h2>No account to close, and no password to lose</h2>
+        <p>There is no Nymbot account, because there is no directory to hold one. An identity is a Nostr
+            keypair generated on the device the first time the app opens, or an existing key brought in by
+            pasting an <code>nsec</code>, through a browser extension (NIP-07) or from a remote signer
+            (NIP-46). That key is the identity, the conversation history and the credit balance at once:
+            sign in with it on a second device and everything is already there, because nothing lives
+            anywhere else. The stored key can be encrypted behind a password, a PIN, a passkey or a
+            biometric.</p>
+        <p>The same key works in <a href="https://nymchat.app" target="_blank" rel="noopener">Nymchat</a>,
+            the messenger Nymbot is also built into. Credits bought in one are spendable in the other.</p>
+
+        <h2>Paid by the message, in Bitcoin</h2>
+        <p>Nymbot has no subscription and takes no card. Ten replies a day are free. Beyond that, credits
+            are bought over the <strong>Bitcoin Lightning Network</strong> &mdash; ten sats for a standard
+            reply, a hundred for a Pro credit &mdash; and spent one message at a time. A Lightning invoice
+            carries no identity, nothing about a purchase has to be true about the person making it, and the
+            claim is idempotent, so an app closed between paying and crediting lands the credit once rather
+            than twice. Pro replies are metered on the tokens the model actually reads and writes, with a
+            maximum reserved when the message is sent and only the real cost charged.</p>
+
+        <h2>Every frontier model, routed or pinned</h2>
+        <p>By default a message is classified and routed to a model suited to it, so a quick factual answer
+            does not pay for a reasoning model and a hard question is not handed to a fast one; questions
+            that turn on current information trigger a web search, with the sources listed underneath the
+            answer. Anyone who wants a particular model's judgment can pin one instead &mdash; Claude, GPT,
+            Gemini, Grok, Kimi, Qwen and MiniMax models are all in the catalog, which is generated live from
+            what the server will actually accept and charge for rather than hard-coded into the app. An
+            Effort setting decides how much work a reply is worth: one pass, a planned answer, or an answer
+            the model reads back against the question and corrects before it is shown.</p>
+
+        <h2>An assistant that works where the work is</h2>
+        <p>With a Pro model pinned, Nymbot works inside a connected <strong>git repository</strong> the way a
+            coding agent does &mdash; GitHub, GitLab or Gitea/Forgejo, reading the real files and, with
+            writes enabled, changing them. The access token stays on the device, and the request that lists
+            what a token can reach goes straight from the device to the forge rather than through Nymbot's
+            infrastructure.</p>
+        <p>Long replies that amount to a whole file are lifted out of the conversation into an
+            <strong>artifact</strong> beside it, editable in place and versioned, with previews running in a
+            sandboxed frame that cannot reach the conversations, the keys or the credits.
+            <strong>Workspaces</strong> give a run of chats standing instructions, repositories and reference
+            files, searched on the device so that only the passages that bear on a question travel with it.
+            <strong>Bots</strong> are reusable ways of answering, and <strong>scheduled prompts</strong> ask a
+            question on a timetable. Images, video and speech are generated by command, charged per
+            generation, with a failed generation costing nothing.</p>
+
+        <h2>Encryption that is already thinking about quantum computers</h2>
+        <p>Messages travel as Nostr <strong>gift wraps</strong>: a rumor that is never signed, so it cannot
+            be proved to a third party; a seal encrypted to the recipient; and an outer wrap signed by a
+            single-use key with a randomized timestamp, which is all a relay ever sees. Over the classical
+            elliptic-curve exchange, Nymbot layers <strong>ML-KEM</strong>, the NIST-standardized lattice key
+            encapsulation, combined with it rather than replacing it, so an attacker has to break both. That
+            defeats "harvest now, decrypt later", where traffic recorded today is stored until a quantum
+            computer can break the mathematics it was encrypted with. There is nothing to switch on: Nymbot
+            publishes a signed capability announcement carrying its KEM key, and the app publishes one of its
+            own, which is how replies come back hybrid too.</p>
+
+        <h2>What Nymbot does not claim</h2>
+        <p>The project publishes its own limits, and they belong in any accurate story about it:</p>
+        <ul>
+            <li><strong>The assistant reads the question.</strong> End-to-end encryption means nobody else
+                can. It does not and cannot mean the assistant answers something it never saw &mdash;
+                anonymous mode is the answer to the different question of whether it should know who asked.</li>
+            <li><strong>Anonymous mode does not hide an IP address.</strong> It breaks the link between a
+                payment and a nym, not the one between a device and a network; use Tor or a VPN if that
+                matters. Every message under one throwaway key is linked to the others by construction,
+                because the assistant needs the thread as context, and no amount of key hygiene helps if the
+                question names its author's employer.</li>
+            <li><strong>Not every model runs on our own infrastructure.</strong> Models badged as hosted do;
+                the rest are proxied to the provider that runs them, which is where a question sent to one
+                goes.</li>
+            <li><strong>There is no published third-party security audit.</strong> What Nymbot offers instead
+                is open source apps and a protocol page written against them.</li>
+            <li><strong>iOS is not in the App Store.</strong> The iOS app builds from source today.</li>
+            <li><strong>Scheduled prompts are not a server.</strong> A run happens in the app while it is
+                open; one that came due while the app was shut fires once when it is reopened rather than
+                catching up on every slot it went past.</li>
+        </ul>
+
+        <h2>Availability and pricing</h2>
+        <ul>
+            <li><strong>Web:</strong> <a href="https://nymbot.ai/app" target="_blank"
+                rel="noopener">nymbot.ai/app</a>, installable to a home screen or dock as a Progressive Web
+                App.</li>
+            <li><strong>Android:</strong> <a href="https://play.google.com/store/apps/details?id=ai.nymbot"
+                target="_blank" rel="noopener">Google Play</a>, or
+                <a href="https://zapstore.dev/apps/ai.nymbot" target="_blank" rel="noopener">Zapstore</a> for
+                a signed build with no store account.</li>
+            <li><strong>iOS:</strong> builds from source out of the repository.</li>
+            <li><strong>Price:</strong> ten replies a day free. Beyond that, credits over Lightning at ten
+                sats a standard reply and a hundred sats a Pro credit. No subscription, no advertising, no
+                data sold.</li>
+        </ul>
+
+        <h2>About Nymbot</h2>
+        <p>Nymbot is an anonymous AI assistant built on Nostr, an open protocol nobody owns. There is no
+            sign-up: a keypair is generated on the device, or an existing Nostr key is brought in, and that
+            key is the identity, the conversation history and the credit balance. Every message is end-to-end
+            encrypted as a gift-wrapped Nostr event, with an ML-KEM layer alongside the classical exchange so
+            that traffic recorded today survives a future quantum computer. Replies are paid for in Bitcoin
+            over Lightning, a message at a time, and in anonymous mode the credits move as blind vouchers so
+            that the service can bill a message without learning whose it is. Nymbot runs as a web app and as
+            native Android and iOS apps, is licensed under the AGPL-3.0, and is developed by 21 Million LLC.
+            Private. Paid in Bitcoin. Yours alone.</p>
+
+        <h2>Press contact</h2>
+        <p>21 Million LLC &mdash; <a href="mailto:support@nymbot.ai">support@nymbot.ai</a></p>
+        <p>Assets, boilerplate and fast facts: <a href="/brand/#press-kit">the Nymbot press kit</a>. Technical
+            detail behind every claim above: the <a href="/docs/">knowledge base</a>. Source code:
+            <a href="https://github.com/Spl0itable/nymbot" target="_blank" rel="noopener">github.com/Spl0itable/nymbot</a>.</p>
+        <p>Journalism, reviews and commentary about Nymbot need no permission. The assets on the press kit
+            page are free to use in coverage of the app.</p>
+
+        <p class="press-end">###</p>
+    </main>
+
+    <footer>
+        <div style="margin-top: 1rem;">
+            <p>Nymbot - your AI, on your key</p>
+            <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="/terms/"
+                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="/privacy/"
+                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="/dmca/"
+                    style="color: var(--secondary)">DMCA</a> &bull; <a href="/contact/"
+                    style="color: var(--secondary)">Contact</a> &bull; <a href="/brand/"
+                    style="color: var(--secondary)">Brand</a> &bull; <a href="/docs/"
+                    style="color: var(--secondary)">Knowledge Base</a> &bull; <a href="https://nymchat.app"
+                    style="color: var(--secondary)">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+</body>
+
+</html>

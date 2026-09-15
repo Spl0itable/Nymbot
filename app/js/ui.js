@@ -98,6 +98,7 @@
         settings: Store.settings(),
         models: null,
         balance: { standard: null, pro: null },
+        anonBalance: { standard: null, pro: null },
         sending: false,
         invoice: null,
         attachments: [],
@@ -190,6 +191,7 @@
             }
             this.renderIdentity();
             this.refreshToolbar();
+            this.restoreLibrary();
 
             // The announcement and the bot's key are what make a reply
             // post-quantum; neither blocks the first message.
@@ -902,11 +904,8 @@
 
                 const spent = (this.conv._continued || 0) + (more.cost || 0);
                 this.conv._continued = spent;
-                if (next.balance != null) {
-                    this.balance[next.pro ? 'pro' : 'standard'] =
-                        next.balanceCredits != null ? next.balanceCredits : next.balance;
-                    this.renderBalance();
-                }
+                this.creditBalance(next.pro,
+                    next.balanceCredits != null ? next.balanceCredits : next.balance);
                 left = this.continueBudget();
                 token = next.truncated ? next.resumeToken : null;
                 reserve = next.nextReserve || 0;
@@ -1306,11 +1305,8 @@
                     Free.spent();
                     Free.observe(res.free.used);
                 }
-                if (res.balance != null) {
-                    this.balance[res.pro ? 'pro' : 'standard'] =
-                        res.balanceCredits != null ? res.balanceCredits : res.balance;
-                    this.renderBalance();
-                }
+                this.creditBalance(res.pro,
+                    res.balanceCredits != null ? res.balanceCredits : res.balance);
                 if (res.lowBalance) {
                     // In an anonymous chat a low balance is usually the
                     // throwaway key running dry rather than the nym, and that
@@ -1329,8 +1325,8 @@
                 if (e && e.name === 'AbortError') {
                     this.note(t('Stopped. That reply was not charged for unless it had already finished.'));
                 } else if (e && e.noCredits) {
-                    this.balance[e.pro ? 'pro' : 'standard'] =
-                        e.balanceCredits != null ? e.balanceCredits : e.balance;
+                    this.creditBalance(e.pro,
+                        e.balanceCredits != null ? e.balanceCredits : e.balance);
                     // The worker says the day is spent. Believe it over the
                     // device's own count, which can only ever be behind.
                     if (e.free) {
@@ -2111,8 +2107,8 @@
         // --- balances --------------------------------------------------------
 
         async refreshBalance(announce) {
-            const opts = this.conv && this.conv.anon && Anon.ready() ? { signer: Anon.signer() } : {};
-            const { data } = await Api.balance(opts);
+            const useAnon = !!(this.conv && this.conv.anon && Anon.ready());
+            const { data } = await Api.balance({});
             if (!data || data.error) {
                 if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
                 return;
@@ -2121,6 +2117,18 @@
                 standard: data.balanceCredits != null ? data.balanceCredits : (data.balance || 0),
                 pro: data.proBalanceCredits != null ? data.proBalanceCredits : (data.proBalance || 0)
             };
+            if (useAnon) {
+                const mine = await Api.balance({ signer: Anon.signer() });
+                if (mine.data && !mine.data.error) {
+                    const d = mine.data;
+                    this.anonBalance = {
+                        standard: d.balanceCredits != null ? d.balanceCredits : (d.balance || 0),
+                        pro: d.proBalanceCredits != null ? d.proBalanceCredits : (d.proBalance || 0)
+                    };
+                }
+            } else {
+                this.anonBalance = { standard: null, pro: null };
+            }
             // The worker is the authority on what this key has used; the
             // device keeps its own count so signing in with a fresh key does
             // not start the day over.
@@ -2129,11 +2137,11 @@
             this.renderBalance();
             if (!$('modalCredits').hidden) this.renderCreditBalances();
             if (announce) {
-                const anon = this.conv && this.conv.anon;
-                this.note((anon
+                this.note((useAnon
                     ? t('This chat\'s anonymous balance: {standard} standard, {pro} Pro.',
-                        { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })
-                        + ' ' + t('Tap Anon to move more across from your nym.')
+                        { standard: creditAmount(this.anonBalance.standard), pro: creditAmount(this.anonBalance.pro) })
+                        + ' ' + t('Your nym still holds {standard} standard and {pro} Pro.',
+                            { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })
                     : t('Your balance: {standard} standard, {pro} Pro.',
                         { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })));
             }
@@ -2144,14 +2152,33 @@
                 || this.mediaNeedsPro(this.mediaModel());
         },
 
+        creditBalance(pro, value) {
+            if (value == null) return;
+            const wallet = (this.conv && this.conv.anon && Anon.ready())
+                ? this.anonBalance : this.balance;
+            wallet[pro ? 'pro' : 'standard'] = value;
+            this.renderBalance();
+        },
+
+        spendingAnon() {
+            return !!(this.conv && this.conv.anon && Anon.ready()
+                && this.anonBalance.standard != null);
+        },
+
         renderBalance() {
             const pro = this.proTier();
-            const value = this.balance[pro ? 'pro' : 'standard'];
+            const anon = this.spendingAnon();
+            const wallet = anon ? this.anonBalance : this.balance;
+            const value = wallet[pro ? 'pro' : 'standard'];
             // With nothing to spend, the chip counts what the day has left
             // rather than showing a zero — which is a wall, where the free
             // tier is a thing that is still working.
             const free = this.freeLeft();
-            $('chipBuyLabel').textContent = (!pro && !this.balance.standard && free != null)
+            $('chipBuy').classList.toggle('is-anon', anon);
+            $('chipBuy').title = anon
+                ? t('This chat spends the throwaway key')
+                : t('Buy credits');
+            $('chipBuyLabel').textContent = (!pro && !anon && !this.balance.standard && free != null)
                 ? t('{n} free', { n: num(free) })
                 : (value == null ? t('Buy') : creditAmount(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
@@ -2312,7 +2339,7 @@
                     ? (media.kind === 'video'
                         ? t('Describe the video to make')
                         : t('Describe the picture to make'))
-                    : t('Message Nymbot, or ? for commands'));
+                    : t('Ask something, or type ? for commands'));
             }
 
             $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
@@ -2354,6 +2381,63 @@
                     : t('Deep: it plans, answers, then checks its answer. Three passes, so about three times the credits.'));
         },
 
+        openChipMenu() {
+            const rail = $('toolbarRail');
+            const list = $('chipMenuList');
+            if (!rail || !list) return;
+            const chips = [...rail.querySelectorAll('.chip')].filter(c => !c.hidden);
+            const on = chips.filter(c => c.classList.contains('is-active'));
+            const off = chips.filter(c => !c.classList.contains('is-active'));
+            list.innerHTML = '';
+
+            const section = (title, group) => {
+                if (!group.length) return;
+                list.appendChild(el('div', 'chip-menu-head', title));
+                for (const chip of group) {
+                    const row = el('button', 'chip-menu-item'
+                        + (chip.classList.contains('is-active') ? ' is-active' : ''));
+                    row.type = 'button';
+                    const icon = chip.querySelector('svg, img');
+                    if (icon) row.appendChild(icon.cloneNode(true));
+                    row.appendChild(el('span', 'chip-menu-label',
+                        chip.querySelector('.chip-label').textContent));
+                    if (chip.classList.contains('is-active')) {
+                        const tick = Icons.node('check', { size: 14 });
+                        tick.classList.add('chip-menu-on');
+                        row.appendChild(tick);
+                    }
+                    row.addEventListener('click', () => {
+                        this.closeModals();
+                        chip.click();
+                    });
+                    list.appendChild(row);
+                }
+            };
+
+            section(t('On for this chat'), on);
+            section(on.length ? t('Also available') : t('Settings'), off);
+            this.openModal('modalChipMenu');
+        },
+
+        toggleLibrary() {
+            const links = $('sidebarLinks');
+            const head = $('libraryToggle');
+            if (!links || !head) return;
+            const open = links.hidden;
+            links.hidden = !open;
+            head.setAttribute('aria-expanded', open ? 'true' : 'false');
+            Store.write('libraryOpen', open);
+        },
+
+        restoreLibrary() {
+            if (Store.read('libraryOpen', true) !== false) return;
+            const links = $('sidebarLinks');
+            const head = $('libraryToggle');
+            if (!links || !head) return;
+            links.hidden = true;
+            head.setAttribute('aria-expanded', 'false');
+        },
+
         groupChips() {
             const rail = $('toolbarRail');
             if (!rail) return;
@@ -2367,6 +2451,12 @@
             split.hidden = !on.length
                 || !on.some(c => !c.hidden)
                 || !off.some(c => !c.hidden);
+            const count = $('chipMenuCount');
+            if (count) {
+                const live = on.filter(c => !c.hidden).length;
+                count.hidden = live === 0;
+                count.textContent = live ? String(live) : '';
+            }
             const order = [...on, split, ...off];
             if (order.every((node, i) => rail.children[i] === node)) return;
             // Moving nodes resets the rail's scroll; putting it back keeps a
@@ -5001,9 +5091,8 @@
             this.bumpStats(spent);
             const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
             if (balance) {
-                this.balance[balance.pro ? 'pro' : 'standard'] =
-                    balance.balanceCredits != null ? balance.balanceCredits : balance.balance;
-                this.renderBalance();
+                this.creditBalance(balance.pro,
+                    balance.balanceCredits != null ? balance.balanceCredits : balance.balance);
             }
             this.modalStatus('compareStatus', out.every(r => r.ok)
                 ? t('Both answered. Keep the one you want to carry on from.')
@@ -6154,6 +6243,8 @@
                         + '.' + Artifacts.extensionFor(a.lang);
                     Exporter.download(name, 'text/plain', $('artifactBody').value);
                 },
+                'open-chip-menu': () => this.openChipMenu(),
+                'toggle-library': () => this.toggleLibrary(),
                 'open-repos': () => this.openRepos(),
                 'open-personas': () => this.openPersonas(),
                 'open-prompts': () => this.openPrompts(),

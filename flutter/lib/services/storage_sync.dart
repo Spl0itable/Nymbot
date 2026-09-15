@@ -53,6 +53,21 @@ class StorageSync {
         ),
       );
 
+  Future<Map<String, dynamic>?> settingsGet(EventSigner signer) =>
+      _call('settings-get', signer, timeout: const Duration(seconds: 20));
+
+  Future<bool> settingsSet(
+    EventSigner signer, {
+    required String category,
+    required String blob,
+    required String contentHash,
+  }) async {
+    final resp = await _call('settings-set', signer,
+        extra: {'category': category, 'blob': blob, 'contentHash': contentHash},
+        timeout: const Duration(seconds: 20));
+    return resp != null && resp['error'] == null;
+  }
+
   Future<Map<String, dynamic>?> _call(
     String action,
     EventSigner signer, {

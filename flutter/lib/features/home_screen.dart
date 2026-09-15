@@ -58,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _keys = <String, GlobalKey>{};
 
   String _suggestTerm = '';
+  bool _hasText = false;
 
   /// What the composer held before the last change, so a paste can be told
   /// apart from typing by how much one change added.
@@ -458,7 +459,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _composerHint(Map<String, dynamic>? media) {
-    if (media == null) return t('Message Nymbot, or ? for commands');
+    if (media == null) return t('Ask something, or type ? for commands');
     return media['kind'] == 'video'
         ? t('Describe the video to make')
         : t('Describe the picture to make');
@@ -1141,22 +1142,45 @@ class _HomeScreenState extends State<HomeScreen> {
                       final conv = app.current;
                       if (conv != null) app.store.setDraft(conv.id, v);
                       final next = v.startsWith('?') ? v : '';
-                      if (next != _suggestTerm) setState(() => _suggestTerm = next);
+                      final has = v.trim().isNotEmpty;
+                      if (next != _suggestTerm || has != _hasText) {
+                        setState(() {
+                          _suggestTerm = next;
+                          _hasText = has;
+                        });
+                      }
                     },
                     onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
                     decoration: InputDecoration(
                       hintText: _composerHint(app.activeMediaModel),
+                      hintStyle: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).hintColor.withValues(alpha: 0.7),
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 6),
-                if (app.sending)
+                if (app.sending) ...[
                   IconButton.filledTonal(
                     onPressed: app.stop,
                     tooltip: t('Stop'),
+                    style: IconButton.styleFrom(
+                      foregroundColor: NymbotColors.danger,
+                      backgroundColor:
+                          NymbotColors.danger.withValues(alpha: 0.16),
+                    ),
                     icon: const Icon(Icons.stop, size: 20),
-                  )
-                else
+                  ),
+                  if (_hasText) ...[
+                    const SizedBox(width: 6),
+                    IconButton.filledTonal(
+                      onPressed: () => _send(),
+                      tooltip: t('Send when this one is done'),
+                      icon: const Icon(Icons.send, size: 20),
+                    ),
+                  ],
+                ] else
                   IconButton.filledTonal(
                     onPressed: () => _send(),
                     tooltip: t('Send'),
@@ -1339,6 +1363,8 @@ class _ChatDrawer extends StatefulWidget {
 }
 
 class _ChatDrawerState extends State<_ChatDrawer> {
+  bool _libraryOpen = true;
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -1507,33 +1533,59 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   : ListView(children: rows),
             ),
             const Divider(height: 1),
-            for (final entry in <(String, String, Future<void> Function())>[
-              ('repositories', t('Repositories'),
-                  () => showReposSheet(context)),
-              ('prompt-library', t('Prompt library'), () async {
-                final picked = await showPromptsSheet(context);
-                if (picked != null) app.queueInput(picked);
-                if (picked != null && context.mounted) Navigator.pop(context);
-              }),
-              ('personas', t('Personas'), () => showPersonasSheet(context)),
-              ('saved-messages', t('Saved messages'), () async {
-                await showSavedMessagesSheet(context);
-              }),
-              ('memory', t('Memory'), () => showMemorySheet(context)),
-              ('settings', t('Settings'), () => showAppearanceSheet(context)),
-              ('help', t('Help'), () => showHelpSheet(context)),
-              ('keyboard', t('Getting around'),
-                  () => showShortcutsSheet(context)),
-            ])
-              ListTile(
-                dense: true,
-                visualDensity: VisualDensity.compact,
-                leading: NymGlyph.has(entry.$1)
-                    ? NymGlyph(entry.$1, size: 18)
-                    : const Icon(Icons.keyboard_outlined, size: 18),
-                title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
-                onTap: entry.$3,
+            InkWell(
+              onTap: () => setState(() => _libraryOpen = !_libraryOpen),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        t('Library'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          letterSpacing: 0.4,
+                          color: Theme.of(context).hintColor,
+                        ),
+                      ),
+                    ),
+                    AnimatedRotation(
+                      turns: _libraryOpen ? 0 : -0.25,
+                      duration: const Duration(milliseconds: 150),
+                      child: const NymGlyph('down', size: 16),
+                    ),
+                  ],
+                ),
               ),
+            ),
+            if (_libraryOpen)
+              for (final entry in <(String, String, Future<void> Function())>[
+                ('repositories', t('Repositories'),
+                    () => showReposSheet(context)),
+                ('prompt-library', t('Prompt library'), () async {
+                  final picked = await showPromptsSheet(context);
+                  if (picked != null) app.queueInput(picked);
+                  if (picked != null && context.mounted) Navigator.pop(context);
+                }),
+                ('personas', t('Personas'), () => showPersonasSheet(context)),
+                ('saved-messages', t('Saved messages'), () async {
+                  await showSavedMessagesSheet(context);
+                }),
+                ('memory', t('Memory'), () => showMemorySheet(context)),
+                ('settings', t('Settings'), () => showAppearanceSheet(context)),
+                ('help', t('Help'), () => showHelpSheet(context)),
+                ('keyboard', t('Getting around'),
+                    () => showShortcutsSheet(context)),
+              ])
+                ListTile(
+                  dense: true,
+                  visualDensity: VisualDensity.compact,
+                  leading: NymGlyph.has(entry.$1)
+                      ? NymGlyph(entry.$1, size: 18)
+                      : const Icon(Icons.keyboard_outlined, size: 18),
+                  title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
+                  onTap: entry.$3,
+                ),
             const Divider(height: 1),
             ListTile(
               leading: Stack(

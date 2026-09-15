@@ -512,7 +512,26 @@ kbd {
 .conv-badge.is-tag { color: var(--text-faint); }
 .conv-pin { color: var(--lightning); flex: 0 0 auto; display: inline-flex; }
 
-.sidebar-links { border-top: 1px solid var(--line); padding: 0.35rem 0.45rem; display: grid; gap: 1px; }
+.side-links-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.5rem 0.85rem;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: transparent;
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+.side-links-head:hover { color: var(--text-dim); }
+.side-links-caret { transition: transform 0.15s ease; }
+.side-links-head[aria-expanded="false"] .side-links-caret { transform: rotate(-90deg); }
+.sidebar-links { padding: 0 0.45rem 0.35rem; display: grid; gap: 1px; }
+.sidebar-links[hidden] { display: none; }
 .side-link {
     display: flex;
     align-items: center;
@@ -690,6 +709,35 @@ kbd {
 .chip.is-active { border-color: var(--secondary); color: var(--secondary); }
 .chip .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .chip-buy { flex: 0 0 auto; border-color: rgba(247, 147, 26, 0.5); color: var(--lightning); }
+.chip-buy.is-anon { border-color: rgba(0, 212, 255, 0.5); color: var(--secondary); }
+.chip-menu { flex: 0 0 auto; padding: 0.28rem 0.45rem; gap: 0.25rem; }
+.chip-count { color: var(--primary); font-size: 0.72rem; }
+
+.chip-menu-list { display: grid; gap: 1px; padding: 0.3rem 0; }
+.chip-menu-head {
+    padding: 0.55rem 0.9rem 0.25rem;
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.chip-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.5rem 0.9rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+.chip-menu-item:hover { background: var(--bg-sunken); color: var(--text); }
+.chip-menu-item.is-active { color: var(--secondary); }
+.chip-menu-item .chip-menu-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-menu-item .chip-menu-on { color: var(--secondary); flex: 0 0 auto; }
 
 .context-bar {
     display: flex;

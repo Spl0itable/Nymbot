@@ -1,12 +1,7 @@
-/// Where the app points and what it talks to.
-///
-/// The worker is Nymchat's: one identity, one credit balance and one set of
-/// Nymbot conversations across both services, which is the whole reason an
-/// account works in either.
 library;
 
 class NymbotConfig {
-  static const String apiHost = 'web.nymchat.app';
+  static const String apiHost = 'nymbot.ai';
   static String get botUrl => 'https://$apiHost/api/bot';
   static String get storageUrl => 'https://$apiHost/api/storage';
 
@@ -14,8 +9,6 @@ class NymbotConfig {
       'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2';
   static const String botName = 'Nymbot';
 
-  /// The worker fetches a wrap by id from exactly these relays, so a message
-  /// published anywhere else is one it can never open (bot.js FETCH_RELAYS).
   static const List<String> relays = [
     'wss://relay.damus.io',
     'wss://nos.lol',

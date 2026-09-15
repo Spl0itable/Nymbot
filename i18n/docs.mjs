@@ -31,7 +31,7 @@ export const OUTLINE = [
         slug: 'docs',
         nav: 'Overview',
         sections: [
-          { id: 'what-nymbot-is', title: 'What Nymbot is' },
+          { id: 'what-nymbot-is', title: 'What is Nymbot' },
           { id: 'how-to-read-this', title: 'How to read this' },
           { id: 'the-short-version', title: 'The short version' },
         ],
@@ -233,8 +233,13 @@ export const OUTLINE = [
     // Pages that belong beside the knowledge base without being part of it.
     // `page` is a slug elsewhere on the site, so the link follows the reader's
     // language; `url` would be somewhere else entirely.
+    // Pages that belong beside the knowledge base without being part of it.
+    // `page` is a slug elsewhere on the site, so the link follows the reader's
+    // language; `url` would be somewhere else entirely.
     group: 'Elsewhere',
     pages: [
+      { nav: 'Press kit and brand', page: 'brand' },
+      { nav: 'Press release', page: 'press-release' },
       { nav: 'Terms of Service', page: 'terms' },
       { nav: 'Privacy Policy', page: 'privacy' },
       { nav: 'Contact', page: 'contact' },

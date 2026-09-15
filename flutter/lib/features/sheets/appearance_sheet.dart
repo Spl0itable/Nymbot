@@ -233,6 +233,23 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             Text(t('Your data'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: s.sync,
+              title: Text(t('Sync across my devices'),
+                  style: const TextStyle(fontSize: 13)),
+              onChanged: app.setSync,
+            ),
+            Text(
+              t('Your chats and your library, sealed to your key and kept where '
+                  'every device you sign in on can read them back. Nobody else '
+                  'can open them — not Nymbot, not the server holding them. '
+                  'Ghost chats are never included.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 10),
             DropdownButtonFormField<int>(
               initialValue: s.autoDeleteDays,
               decoration: InputDecoration(labelText: t('Delete chats after')),

@@ -33,6 +33,31 @@ class Store {
 
   static Future<Store> open() async => Store(await SharedPreferences.getInstance());
 
+  void Function()? onChanged;
+  bool _muted = false;
+
+  Future<T> quiet<T>(Future<T> Function() body) async {
+    final was = _muted;
+    _muted = true;
+    try {
+      return await body();
+    } finally {
+      _muted = was;
+    }
+  }
+
+  void _touched() {
+    if (_muted) return;
+    final watcher = onChanged;
+    if (watcher != null) watcher();
+  }
+
+  Future<T> _watched<T>(Future<T> write) async {
+    final out = await write;
+    _touched();
+    return out;
+  }
+
   /// The free allowance this device has spent today, whichever key was signed
   /// in. Handed the same preferences the rest of the store uses, so signing
   /// out does not clear it — which is the whole point of it.
@@ -67,15 +92,15 @@ class Store {
   }
 
   Future<void> saveSettings(AppSettings s) =>
-      _prefs.setString('appSettings', jsonEncode(s.toJson()));
+      _watched(_prefs.setString('appSettings', jsonEncode(s.toJson())));
 
   Future<void> resetSettings() => _prefs.remove('appSettings');
 
   Future<List<GitRepo>> repos() async =>
       GitRepo.decodeList(await _secure.read(key: 'repos'));
 
-  Future<void> saveRepos(List<GitRepo> list) =>
-      _secure.write(key: 'repos', value: GitRepo.encodeList(list.take(40).toList()));
+  Future<void> saveRepos(List<GitRepo> list) => _watched(
+      _secure.write(key: 'repos', value: GitRepo.encodeList(list.take(40).toList())));
 
   Future<GitRepo?> repo(String id) async {
     for (final r in await repos()) {
@@ -97,8 +122,8 @@ class Store {
     return null;
   }
 
-  Future<void> savePersonas(List<Persona> list) =>
-      _prefs.setString('personas', Persona.encodeList(list.take(60).toList()));
+  Future<void> savePersonas(List<Persona> list) => _watched(
+      _prefs.setString('personas', Persona.encodeList(list.take(60).toList())));
 
   List<Bot> bots() => Bot.decodeList(_prefs.getString('bots'));
 
@@ -110,14 +135,14 @@ class Store {
     return null;
   }
 
-  Future<void> saveBots(List<Bot> list) =>
-      _prefs.setString('bots', Bot.encodeList(list.take(60).toList()));
+  Future<void> saveBots(List<Bot> list) => _watched(
+      _prefs.setString('bots', Bot.encodeList(list.take(60).toList())));
 
   List<Schedule> schedules() =>
       Schedule.decodeList(_prefs.getString('schedules'));
 
-  Future<void> saveSchedules(List<Schedule> list) => _prefs.setString(
-      'schedules', Schedule.encodeList(list.take(40).toList()));
+  Future<void> saveSchedules(List<Schedule> list) => _watched(_prefs.setString(
+      'schedules', Schedule.encodeList(list.take(40).toList())));
 
   List<Workspace> workspaces() =>
       Workspace.decodeList(_prefs.getString('workspaces'));
@@ -130,14 +155,14 @@ class Store {
     return null;
   }
 
-  Future<void> saveWorkspaces(List<Workspace> list) => _prefs.setString(
-      'workspaces', Workspace.encodeList(list.take(40).toList()));
+  Future<void> saveWorkspaces(List<Workspace> list) => _watched(_prefs.setString(
+      'workspaces', Workspace.encodeList(list.take(40).toList())));
 
   /// What Nymbot has been told to remember, newest first.
   List<Memory> memories() => Memory.decodeList(_prefs.getString('memories'));
 
-  Future<void> saveMemories(List<Memory> list) => _prefs.setString(
-      'memories', Memory.encodeList(list.take(Memory.maxKept).toList()));
+  Future<void> saveMemories(List<Memory> list) => _watched(_prefs.setString(
+      'memories', Memory.encodeList(list.take(Memory.maxKept).toList())));
 
   /// Adds or replaces one entry. The same fact told twice is one fact: a chat
   /// that repeats itself should not fill memory with copies.
@@ -176,21 +201,21 @@ class Store {
     return SavedPrompt.decodeList(raw);
   }
 
-  Future<void> savePrompts(List<SavedPrompt> list) =>
-      _prefs.setString('prompts', SavedPrompt.encodeList(list.take(200).toList()));
+  Future<void> savePrompts(List<SavedPrompt> list) => _watched(
+      _prefs.setString('prompts', SavedPrompt.encodeList(list.take(200).toList())));
 
   List<ChatFolder> folders() => ChatFolder.decodeList(_prefs.getString('folders'));
 
-  Future<void> saveFolders(List<ChatFolder> list) =>
-      _prefs.setString('folders', ChatFolder.encodeList(list.take(100).toList()));
+  Future<void> saveFolders(List<ChatFolder> list) => _watched(
+      _prefs.setString('folders', ChatFolder.encodeList(list.take(100).toList())));
 
   // --- conversations ---------------------------------------------------------
 
   List<Conversation> conversations() =>
       Conversation.decodeList(_prefs.getString('conversations'));
 
-  Future<void> saveConversations(List<Conversation> list) => _prefs.setString(
-      'conversations', Conversation.encodeList(list.take(500).toList()));
+  Future<void> saveConversations(List<Conversation> list) => _watched(_prefs.setString(
+      'conversations', Conversation.encodeList(list.take(500).toList())));
 
   /// Ghost chats live here and nowhere else: the map goes when the process
   /// does, which is the whole promise.
@@ -221,6 +246,7 @@ class Store {
     }
     _ghosts.remove(convId);
     await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
+    _touched();
   }
 
   /// Moves what a chat has already said into memory and off the disk, which is
@@ -290,6 +316,49 @@ class Store {
         credits: _prefs.getInt('usageCredits') ?? 0,
         replies: _prefs.getInt('usageReplies') ?? 0,
       );
+
+  static const _tombstone = Duration(days: 60);
+
+  Map<String, int> syncGraves() {
+    final raw = _prefs.getString('sync_graves');
+    if (raw == null || raw.isEmpty) return {};
+    Map<String, int> held;
+    try {
+      held = (jsonDecode(raw) as Map).map((k, v) => MapEntry('$k', (v as num).toInt()));
+    } catch (_) {
+      return {};
+    }
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _tombstone.inMilliseconds;
+    final live = <String, int>{};
+    for (final e in held.entries) {
+      if (e.value > cutoff) live[e.key] = e.value;
+    }
+    if (live.length != held.length) _prefs.setString('sync_graves', jsonEncode(live));
+    return live;
+  }
+
+  Future<void> saveSyncGraves(Map<String, int> graves) =>
+      _prefs.setString('sync_graves', jsonEncode(graves));
+
+  Future<void> bury(String id) async {
+    if (id.isEmpty) return;
+    final held = syncGraves();
+    held[id] = DateTime.now().millisecondsSinceEpoch;
+    await saveSyncGraves(held);
+  }
+
+  List<String> favouriteModels() {
+    try {
+      return (jsonDecode(_prefs.getString('favouriteModels') ?? '[]') as List)
+          .map((e) => '$e')
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveFavouriteModels(List<String> keys) =>
+      _watched(_prefs.setString('favouriteModels', jsonEncode(keys)));
 
   Future<void> recordUsage(double cost) async {
     final u = usage();

@@ -610,6 +610,7 @@ class AppSettings {
     this.memoryCapture = true,
     this.autoContinue = 0,
     this.showProgress = true,
+    this.sync = true,
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
@@ -649,6 +650,9 @@ class AppSettings {
   /// 0 is never, -1 is whatever the balance holds.
   int autoContinue;
   bool showProgress;
+
+  bool sync;
+
   SidebarGrouping grouping;
   String? defaultPersonaId;
   List<String> defaultRepoIds;
@@ -679,6 +683,7 @@ class AppSettings {
         'memoryCapture': memoryCapture,
         'autoContinue': autoContinue,
         'showProgress': showProgress,
+        'sync': sync,
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
@@ -717,6 +722,7 @@ class AppSettings {
         memoryCapture: j['memoryCapture'] as bool? ?? true,
         autoContinue: (j['autoContinue'] as num?)?.toInt() ?? 0,
         showProgress: j['showProgress'] as bool? ?? true,
+        sync: j['sync'] as bool? ?? true,
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:

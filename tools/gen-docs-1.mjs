@@ -22,7 +22,7 @@ ${NOTE}
                 <figcaption>Thirty seconds of Nymbot. Every screen is the real app.</figcaption>
             </figure>
 
-            <h2 id="what-nymbot-is">What Nymbot is</h2>
+            <h2 id="what-nymbot-is">What is Nymbot</h2>
             <p>An assistant you talk to the way you would talk to a person in a messenger. You open a
                 conversation, you type, it answers. What is different is underneath.</p>
             <ul>

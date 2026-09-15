@@ -7,6 +7,7 @@ import '../core/theme/theme.dart';
 import 'brand_tile.dart';
 import 'i18n/i18n.dart';
 import 'sheets/anon_sheet.dart';
+import 'sheets/sheet.dart';
 import 'sheets/artifacts_sheet.dart';
 import 'sheets/bots_sheet.dart';
 import 'sheets/compare_sheet.dart';
@@ -161,6 +162,8 @@ class NymbotToolbar extends StatelessWidget {
         children: [
           _TierSwitch(pro: pro, accent: accent),
           const SizedBox(width: 6),
+          _ChipMenuButton(on: on, off: off),
+          const SizedBox(width: 6),
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -178,11 +181,12 @@ class NymbotToolbar extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           _Chip(
-            glyph: 'bolt',
+            glyph: app.spendingAnon ? 'anon' : 'bolt',
             // With nothing to spend, the chip counts what the day has left
             // rather than showing a zero — which is a wall, where the free
             // tier is a thing that is still working.
             label: (!app.proTier &&
+                    !app.spendingAnon &&
                     (app.standardBalance ?? 0) == 0 &&
                     app.freeLeft != null)
                 ? t('{n} free', {'n': figure(app.freeLeft)})
@@ -197,6 +201,98 @@ class NymbotToolbar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ChipMenuButton extends StatelessWidget {
+  const _ChipMenuButton({required this.on, required this.off});
+
+  final List<_ChipSpec> on;
+  final List<_ChipSpec> off;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Tooltip(
+      message: t('All settings for this chat'),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),
+        onTap: () => _showChipMenu(context, on, off),
+        child: Container(
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            border: Border.all(color: theme.dividerColor),
+            borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const NymGlyph('menu', size: 14),
+              if (on.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text('${on.length}',
+                    style: TextStyle(
+                        fontSize: 11, color: theme.colorScheme.primary)),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _showChipMenu(
+    BuildContext context, List<_ChipSpec> on, List<_ChipSpec> off) {
+  return showNymSheet<void>(context, (sheetContext) {
+    final theme = Theme.of(sheetContext);
+
+    Widget row(_ChipSpec spec) => ListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          leading: spec.brand != null
+              ? BrandTile(slug: spec.brand!, size: 18)
+              : NymGlyph(spec.glyph,
+                  size: 18,
+                  color: spec.active ? theme.colorScheme.primary : null),
+          title: Text(spec.label, style: const TextStyle(fontSize: 13)),
+          trailing: spec.active
+              ? Icon(Icons.check, size: 16, color: theme.colorScheme.primary)
+              : null,
+          onTap: () {
+            Navigator.pop(sheetContext);
+            spec.onTap();
+          },
+        );
+
+    Widget heading(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 11,
+                  letterSpacing: 0.4,
+                  color: theme.hintColor)),
+        );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (on.isNotEmpty) ...[
+              heading(t('On for this chat')),
+              for (final spec in on) row(spec),
+              const Divider(height: 1),
+            ],
+            heading(on.isEmpty ? t('This chat') : t('Also available')),
+            for (final spec in off) row(spec),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  });
 }
 
 /// One toolbar chip, described rather than built, so the bar can sort the ones
