@@ -160,6 +160,35 @@ export async function botThreadDelete(db, pk) {
   try { await db.prepare("DELETE FROM botpm_thread WHERE pubkey = ?").bind(pk).run(); } catch (e) {}
 }
 
+// Created on first use rather than only by schema.sql: every other table the
+// bot needs is made lazily, and a deployment that had not re-run the migration
+// lost the cache silently — the missing table was caught, the read came back
+// empty, and every turn went to the relays as if nothing had been cached.
+var botWrapsReady = null;
+
+function ensureBotWraps(db) {
+  if (!hasD1(db)) return Promise.resolve(false);
+  if (!botWrapsReady) {
+    botWrapsReady = db.batch([
+      db.prepare(
+        "CREATE TABLE IF NOT EXISTS botpm_wraps (" +
+        "pubkey TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, " +
+        "created_at INTEGER NOT NULL DEFAULT 0, stored_at INTEGER NOT NULL DEFAULT 0, " +
+        "PRIMARY KEY (pubkey, id))"
+      ),
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey)"
+      )
+    ]).then(function () { return true; }, function () {
+      // Not cached as a failure: the next turn tries again rather than the
+      // isolate giving up on the cache for its whole life.
+      botWrapsReady = null;
+      return false;
+    });
+  }
+  return botWrapsReady;
+}
+
 export async function botWrapsGet(db, pk, ids) {
   var out = {};
   if (!hasD1(db) || !ids || ids.length === 0) return out;
@@ -179,6 +208,7 @@ export async function botWrapsGet(db, pk, ids) {
 
 export async function botWrapsPut(db, pk, events, keepIds) {
   if (!hasD1(db)) return;
+  if (!await ensureBotWraps(db)) return;
   var list = events || [];
   try {
     var now = Date.now();
@@ -209,6 +239,7 @@ export async function botWrapsDelete(db, pk) {
 
 export async function botWrapsSweep(db, olderThanMs, limit) {
   if (!hasD1(db)) return 0;
+  if (!await ensureBotWraps(db)) return 0;
   try {
     var res = await db.prepare(
       "DELETE FROM botpm_wraps WHERE rowid IN (" +
