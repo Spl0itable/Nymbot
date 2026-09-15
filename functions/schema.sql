@@ -58,11 +58,14 @@ CREATE TABLE IF NOT EXISTS botpm_wraps (
   pubkey TEXT NOT NULL,
   id TEXT NOT NULL,
   json TEXT NOT NULL,
+  root TEXT,
+  msg TEXT,
   created_at INTEGER NOT NULL DEFAULT 0,
   stored_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (pubkey, id)
 );
 CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey);
+CREATE INDEX IF NOT EXISTS botpm_wraps_root ON botpm_wraps (pubkey, root);
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,

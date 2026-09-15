@@ -169,19 +169,28 @@ var botWrapsReady = null;
 function ensureBotWraps(db) {
   if (!hasD1(db)) return Promise.resolve(false);
   if (!botWrapsReady) {
-    botWrapsReady = db.batch([
-      db.prepare(
+    botWrapsReady = (async function () {
+      await db.prepare(
         "CREATE TABLE IF NOT EXISTS botpm_wraps (" +
         "pubkey TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, " +
+        "root TEXT, msg TEXT, " +
         "created_at INTEGER NOT NULL DEFAULT 0, stored_at INTEGER NOT NULL DEFAULT 0, " +
         "PRIMARY KEY (pubkey, id))"
-      ),
-      db.prepare(
-        "CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey)"
-      )
-    ]).then(function () { return true; }, function () {
-      // Not cached as a failure: the next turn tries again rather than the
-      // isolate giving up on the cache for its whole life.
+      ).run();
+      // A table from before the scope columns existed. Duplicates throw and
+      // are the expected case once it has run anywhere.
+      try { await db.prepare("ALTER TABLE botpm_wraps ADD COLUMN root TEXT").run(); } catch (e) {}
+      try { await db.prepare("ALTER TABLE botpm_wraps ADD COLUMN msg TEXT").run(); } catch (e) {}
+      try {
+        await db.prepare(
+          "CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey)").run();
+      } catch (e) {}
+      try {
+        await db.prepare(
+          "CREATE INDEX IF NOT EXISTS botpm_wraps_root ON botpm_wraps (pubkey, root)").run();
+      } catch (e) {}
+      return true;
+    })().catch(function () {
       botWrapsReady = null;
       return false;
     });
@@ -195,33 +204,46 @@ export async function botWrapsGet(db, pk, ids) {
   try {
     var ph = ids.map(function () { return "?"; }).join(",");
     var rs = await db.prepare(
-      "SELECT id, json FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")"
+      "SELECT id, json, root, msg FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")"
     ).bind(pk, ...ids).all();
     for (var i = 0; i < (rs.results || []).length; i++) {
       var row = rs.results[i];
       var evt = parseJson(row.json, null);
-      if (evt && evt.id === row.id) out[row.id] = evt;
+      if (!evt || evt.id !== row.id) continue;
+      // `labelled` is what says the scope columns were written for this row,
+      // as opposed to a row cached before they existed. An unlabelled row is
+      // never treated as out of scope.
+      out[row.id] = {
+        event: evt,
+        root: row.root || "",
+        msg: row.msg || "",
+        labelled: row.root !== null || row.msg !== null
+      };
     }
   } catch (e) {}
   return out;
 }
 
-export async function botWrapsPut(db, pk, events, keepIds) {
+export async function botWrapsPut(db, pk, entries, keepIds) {
   if (!hasD1(db)) return;
   if (!await ensureBotWraps(db)) return;
-  var list = events || [];
+  var list = entries || [];
   try {
     var now = Date.now();
     var stmts = [];
     for (var i = 0; i < list.length; i++) {
-      var evt = list[i];
+      var entry = list[i];
+      var evt = entry && entry.event;
       if (!evt || typeof evt.id !== "string") continue;
       var json = JSON.stringify(evt);
       if (json.length > 262144) continue;
       stmts.push(db.prepare(
-        "INSERT INTO botpm_wraps (pubkey, id, json, created_at, stored_at) VALUES (?, ?, ?, ?, ?) " +
-        "ON CONFLICT(pubkey, id) DO UPDATE SET stored_at = excluded.stored_at"
-      ).bind(pk, evt.id, json, evt.created_at || 0, now));
+        "INSERT INTO botpm_wraps (pubkey, id, json, root, msg, created_at, stored_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(pubkey, id) DO UPDATE SET stored_at = excluded.stored_at, " +
+        "root = excluded.root, msg = excluded.msg"
+      ).bind(pk, evt.id, json, entry.root || "", entry.msg || "",
+        evt.created_at || 0, now));
     }
     if (Array.isArray(keepIds) && keepIds.length) {
       var ph = keepIds.map(function () { return "?"; }).join(",");
