@@ -192,7 +192,7 @@ class NymbotToolbar extends StatelessWidget {
                 ? t('{n} free', {'n': figure(app.freeLeft)})
                 : (app.shownBalance == null
                     ? t('Buy')
-                    : figure(app.shownBalance)),
+                    : creditFigure(app.shownBalance)),
             active: false,
             color: NymbotColors.lightning,
             onTap: () => showCreditsSheet(context),

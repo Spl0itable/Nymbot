@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS botpm_wraps (
   json TEXT NOT NULL,
   root TEXT,
   msg TEXT,
+  misses INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT 0,
   stored_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (pubkey, id)

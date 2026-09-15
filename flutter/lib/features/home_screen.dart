@@ -1373,7 +1373,19 @@ class _ChatDrawer extends StatefulWidget {
 }
 
 class _ChatDrawerState extends State<_ChatDrawer> {
+  static const _menuOpenKey = 'menuOpen';
   bool _libraryOpen = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _libraryOpen = AppScope.read(context).store.getBool(_menuOpenKey, fallback: true);
+  }
+
+  void _toggleMenu() {
+    setState(() => _libraryOpen = !_libraryOpen);
+    unawaited(AppScope.read(context).store.setBool(_menuOpenKey, _libraryOpen));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1544,7 +1556,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             ),
             const Divider(height: 1),
             InkWell(
-              onTap: () => setState(() => _libraryOpen = !_libraryOpen),
+              onTap: _toggleMenu,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
                 child: Row(
