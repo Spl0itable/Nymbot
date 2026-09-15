@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../config.dart';
+import '../core/crypto/keys.dart';
 import '../core/crypto/ml_kem.dart';
 import '../core/crypto/pq.dart' as pq;
 import '../core/crypto/schnorr.dart' as schnorr;
 import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
 import 'relay_pool.dart';
+import '../state/store.dart';
 
 typedef PqKey = ({Uint8List pk, String fmt});
 
@@ -18,11 +20,15 @@ typedef PqKey = ({Uint8List pk, String fmt});
 /// reply is sealed to it deterministically instead of depending on a lookup
 /// that could lose a race and leave the answer classical.
 class PqAnnounce {
-  PqAnnounce(this.relays);
+  PqAnnounce(this.relays, {this.store});
 
   static const int _kemPkLen = 1184;
 
   final RelayPool relays;
+
+  final Store? store;
+
+  static const String _botKeyPref = 'botPqKey';
 
   PqKey? botKey;
   NostrEvent? selfAnnouncement;
@@ -80,7 +86,42 @@ class PqAnnounce {
   }
 
   Future<PqKey?> resolveBot() async {
-    botKey = await resolve(NymbotConfig.botPubkey);
+    PqKey? live;
+    try {
+      live = await resolve(NymbotConfig.botPubkey);
+    } catch (_) {}
+    final held = store;
+    if (live != null) {
+      botKey = live;
+      if (held != null) {
+        try {
+          await held.setString(
+              _botKeyPref,
+              jsonEncode({
+                'pk': bytesToHex(live.pk),
+                'fmt': live.fmt,
+                'at': DateTime.now().millisecondsSinceEpoch,
+              }));
+        } catch (_) {}
+      }
+      return botKey;
+    }
+    if (botKey == null && held != null) {
+      try {
+        final raw = held.getString(_botKeyPref);
+        if (raw != null && raw.isNotEmpty) {
+          final j = jsonDecode(raw) as Map<String, dynamic>;
+          final at = (j['at'] as num?)?.toInt() ?? 0;
+          final age = DateTime.now().millisecondsSinceEpoch - at;
+          if (age < NymbotConfig.pqTtlSec * 1000) {
+            botKey = (
+              pk: hexToBytes(j['pk'] as String),
+              fmt: j['fmt'] as String? ?? 'pq2',
+            );
+          }
+        }
+      } catch (_) {}
+    }
     return botKey;
   }
 

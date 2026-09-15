@@ -53,12 +53,17 @@ import {
   buildPqGiftWrappedDMPair
 } from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
+export { suppliedWraps, wrapsFor };
 import {
   creditsGet,
   creditsPut,
   botThreadGet,
   botThreadPut,
   botThreadDelete,
+  botWrapsGet,
+  botWrapsPut,
+  botWrapsDelete,
+  botWrapsSweep,
   invoiceGet,
   invoiceHas,
   invoicePut,
@@ -3502,6 +3507,65 @@ async function botPutThread(env, pubkey, ids) {
   var trimmed = ids.filter(isHex64);
   if (trimmed.length > BOT_THREAD_MAX) trimmed = trimmed.slice(-BOT_THREAD_MAX);
   await botThreadPut(env.DB_BOT, pubkey, trimmed);
+  return trimmed;
+}
+
+function suppliedWraps(body) {
+  var out = {};
+  var take = function (evt) {
+    if (!evt || typeof evt !== "object") return;
+    if (evt.kind !== 1059 || !isHex64(evt.id)) return;
+    if (typeof evt.content !== "string" || typeof evt.pubkey !== "string") return;
+    try { if (getEventHash(evt) !== evt.id) return; } catch (e) { return; }
+    out[evt.id] = evt;
+  };
+  if (body && body.wrap) take(body.wrap);
+  if (body && Array.isArray(body.wraps)) {
+    for (var i = 0; i < body.wraps.length && i <= BOT_MESSAGE_PARTS_MAX; i++) take(body.wraps[i]);
+  }
+  return out;
+}
+
+async function botCachedWraps(env, pubkey, ids) {
+  if (!ids.length) return {};
+  return botWrapsGet(replica(env.DB_BOT), pubkey, ids.slice(0, BOT_THREAD_MAX + 8));
+}
+
+function wrapsFor(fetched, ids) {
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (fetched[ids[i]]) out.push(fetched[ids[i]]);
+  }
+  return out;
+}
+
+var BOT_WRAP_KEEP_MS = 90 * 86400 * 1000;
+var BOT_WRAP_SWEEP_EVERY_MS = 6 * 3600 * 1000;
+var BOT_WRAP_SWEEP_MAX = 500;
+var botWrapSweepLastMs = 0;
+
+function maybeSweepBotWraps(context, env) {
+  if (!env || !hasD1(env.DB_BOT)) return;
+  var now = Date.now();
+  if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
+  botWrapSweepLastMs = now;
+  var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
+    .catch(function () { return 0; });
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(work);
+  } catch (e) { }
+}
+
+function botCacheWraps(context, env, pubkey, events, keepIds) {
+  var live = [];
+  for (var i = 0; i < events.length; i++) {
+    if (events[i] && isHex64(events[i].id)) live.push(events[i]);
+  }
+  if (!live.length) return;
+  var work = botWrapsPut(env.DB_BOT, pubkey, live, keepIds).catch(function () { });
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(work);
+  } catch (e) { }
 }
 // Split a PM message into its leading quote-reply block
 function splitQuotedReply(raw) {
@@ -3957,6 +4021,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // announced a key of their own — all fail-open to classical.
   var botPq = botPqSelfFromEnv(env);
   maybeEnsureBotPqAnnouncement(context, botPrivkey, botPubkey, botPq);
+  maybeSweepBotWraps(context, env);
   // Deterministic post-quantum replies: the client hands us its own signed
   // `nym-pq` announcement with the request (every peer that can PM the bot is
   // a Nymchat client, post-quantum by default), so sealing back to it never
@@ -4574,10 +4639,17 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     if (fetchIds.indexOf(currentId) === -1) fetchIds.push(currentId);
 
-    if (fetchIds.length > 1) {
-      pushProgress({ kind: "stage", stage: "reading", turns: fetchIds.length - 1 });
+    var fetched = suppliedWraps(body);
+    var wantCached = fetchIds.filter(function (id) { return !fetched[id]; });
+    var cached = await botCachedWraps(env, userPubkey, wantCached);
+    for (var ck in cached) { if (!fetched[ck]) fetched[ck] = cached[ck]; }
+
+    var missing = fetchIds.filter(function (id) { return !fetched[id]; });
+    if (missing.length) {
+      pushProgress({ kind: "stage", stage: "reading", turns: missing.length });
+      var pulled = await fetchGiftWrapsByIds(missing, fetched[currentId] ? null : currentId, 3000);
+      for (var pk2 in pulled) { if (!fetched[pk2]) fetched[pk2] = pulled[pk2]; }
     }
-    var fetched = await fetchGiftWrapsByIds(fetchIds, currentId, 3000);
     var currentWrap = fetched[currentId];
     if (!currentWrap) {
       return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
@@ -4695,7 +4767,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var noMediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
       noMediaThread.push.apply(noMediaThread, askedIds);
       noMediaThread.push(noMedia.selfEvent.id);
-      try { await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
+      var noMediaKeep = noMediaThread;
+      try { noMediaKeep = await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
+      botCacheWraps(context, env, userPubkey,
+        wrapsFor(fetched, Object.keys(fetched)).concat([noMedia.selfEvent]), noMediaKeep);
       return await turnDone({
         event: noMedia.event, selfEvent: noMedia.selfEvent,
         balance: 0, cost: 0, taskType: "general", pro: false,
@@ -4726,7 +4801,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         var listThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
         listThread.push.apply(listThread, askedIds);
         listThread.push(listPair.selfEvent.id);
-        try { await botPutThread(env, userPubkey, listThread); } catch (e) { }
+        var listKeep = listThread;
+        try { listKeep = await botPutThread(env, userPubkey, listThread); } catch (e) { }
+        botCacheWraps(context, env, userPubkey,
+          wrapsFor(fetched, Object.keys(fetched)).concat([listPair.selfEvent]), listKeep);
         var listBody = {
           event: listPair.event,
           selfEvent: listPair.selfEvent,
@@ -4842,7 +4920,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var mediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
       mediaThread.push.apply(mediaThread, askedIds);
       mediaThread.push(mediaPair.selfEvent.id);
-      try { await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
+      var mediaKeep = mediaThread;
+      try { mediaKeep = await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
+      botCacheWraps(context, env, userPubkey,
+        wrapsFor(fetched, Object.keys(fetched)).concat([mediaPair.selfEvent]), mediaKeep);
       var mediaBody = {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
@@ -5058,7 +5139,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       updatedThread.push.apply(updatedThread, askedIds);
       updatedThread.push(pair.selfEvent.id);
     }
-    try { await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
+    var updatedKeep = updatedThread;
+    try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
+    botCacheWraps(context, env, userPubkey,
+      wrapsFor(fetched, Object.keys(fetched)).concat([pair.selfEvent]), updatedKeep);
     var chatBody = {
       event: pair.event,
       selfEvent: pair.selfEvent,
@@ -5100,6 +5184,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "clear-history") {
     try { await botThreadDelete(env.DB_BOT, userPubkey); } catch (e) { }
+    try { await botWrapsDelete(env.DB_BOT, userPubkey); } catch (e) { }
     return json({ cleared: true });
   }
 

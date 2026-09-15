@@ -769,17 +769,27 @@ class _HomeScreenState extends State<HomeScreen> {
           const NymbotToolbar(),
           const ContextBar(),
           if (_findTerm != null) _findBar(context, app),
-          Expanded(child: _messages(context, app)),
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(child: _messages(context, app)),
+                if (!_atBottom && app.messages.isNotEmpty)
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: FloatingActionButton.small(
+                      heroTag: 'toBottom',
+                      tooltip: t('Jump to the newest message'),
+                      onPressed: () => _toBottom(),
+                      child: const Icon(Icons.arrow_downward, size: 18),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           _composer(context, app),
         ],
       ),
-      floatingActionButton: _atBottom || app.messages.isEmpty
-          ? null
-          : FloatingActionButton.small(
-              tooltip: t('Jump to the newest message'),
-              onPressed: () => _toBottom(),
-              child: const Icon(Icons.arrow_downward, size: 18),
-            ),
     );
   }
 
@@ -1541,7 +1551,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   children: [
                     Expanded(
                       child: Text(
-                        t('Library'),
+                        t('Menu'),
                         style: TextStyle(
                           fontSize: 11,
                           letterSpacing: 0.4,

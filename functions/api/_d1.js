@@ -159,3 +159,61 @@ export async function botThreadPut(db, pk, ids) {
 export async function botThreadDelete(db, pk) {
   try { await db.prepare("DELETE FROM botpm_thread WHERE pubkey = ?").bind(pk).run(); } catch (e) {}
 }
+
+export async function botWrapsGet(db, pk, ids) {
+  var out = {};
+  if (!hasD1(db) || !ids || ids.length === 0) return out;
+  try {
+    var ph = ids.map(function () { return "?"; }).join(",");
+    var rs = await db.prepare(
+      "SELECT id, json FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")"
+    ).bind(pk, ...ids).all();
+    for (var i = 0; i < (rs.results || []).length; i++) {
+      var row = rs.results[i];
+      var evt = parseJson(row.json, null);
+      if (evt && evt.id === row.id) out[row.id] = evt;
+    }
+  } catch (e) {}
+  return out;
+}
+
+export async function botWrapsPut(db, pk, events, keepIds) {
+  if (!hasD1(db)) return;
+  var list = events || [];
+  try {
+    var now = Date.now();
+    var stmts = [];
+    for (var i = 0; i < list.length; i++) {
+      var evt = list[i];
+      if (!evt || typeof evt.id !== "string") continue;
+      var json = JSON.stringify(evt);
+      if (json.length > 262144) continue;
+      stmts.push(db.prepare(
+        "INSERT INTO botpm_wraps (pubkey, id, json, created_at, stored_at) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT(pubkey, id) DO UPDATE SET stored_at = excluded.stored_at"
+      ).bind(pk, evt.id, json, evt.created_at || 0, now));
+    }
+    if (Array.isArray(keepIds) && keepIds.length) {
+      var ph = keepIds.map(function () { return "?"; }).join(",");
+      stmts.push(db.prepare(
+        "DELETE FROM botpm_wraps WHERE pubkey = ? AND id NOT IN (" + ph + ")"
+      ).bind(pk, ...keepIds));
+    }
+    if (stmts.length) await db.batch(stmts);
+  } catch (e) {}
+}
+
+export async function botWrapsDelete(db, pk) {
+  try { await db.prepare("DELETE FROM botpm_wraps WHERE pubkey = ?").bind(pk).run(); } catch (e) {}
+}
+
+export async function botWrapsSweep(db, olderThanMs, limit) {
+  if (!hasD1(db)) return 0;
+  try {
+    var res = await db.prepare(
+      "DELETE FROM botpm_wraps WHERE rowid IN (" +
+      "SELECT rowid FROM botpm_wraps WHERE stored_at < ? ORDER BY stored_at LIMIT ?)"
+    ).bind(olderThanMs, limit || 500).run();
+    return (res && res.meta && res.meta.changes) || 0;
+  } catch (e) { return 0; }
+}

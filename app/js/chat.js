@@ -485,9 +485,6 @@
         async send(conv, text, settings, options) {
             const opts = options || {};
             if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
-            if (Relays.connected === 0) {
-                throw new Error(t('Not connected to any relay yet — your message cannot be published.'));
-            }
 
             const anon = !!conv.anon && Anon.ready();
             const sender = anon ? Anon.sender() : null;
@@ -523,16 +520,15 @@
             // later, which is exactly what a ghost chat is refusing.
             const ghost = !!conv.ephemeral;
             const partIds = [];
+            const partWraps = [];
             let wrap = null;
             for (let i = 0; i < bodies.length; i++) {
                 const rumor = Wire.rumor(bodies[i], C.botPubkey, conv.rootId, msgId, senderPubkey,
                     bodies.length > 1 ? { index: i + 1, of: bodies.length } : null);
                 wrap = await Wire.wrap(rumor, C.botPubkey, botKem, sender);
-                const accepted = await Relays.publish(wrap, 5000);
-                if (accepted === 0) {
-                    throw new Error(t('No relay accepted your message. Check your connection and try again.'));
-                }
+                Relays.publish(wrap, 5000);
                 partIds.push(wrap.id);
+                partWraps.push(wrap);
                 if (!ghost) {
                     try {
                         const selfWrap = await Wire.wrap(rumor, senderPubkey, selfKemPk, sender);
@@ -551,12 +547,16 @@
 
             const extra = {
                 eventId: wrap.id,
+                wrap,
                 fresh: isFresh
             };
             // Every event the question was split across, in order. The last is
             // `eventId`, which is what a single-event message has always sent
             // and what an older worker will still answer from.
-            if (partIds.length > 1) extra.parts = partIds;
+            if (partIds.length > 1) {
+                extra.parts = partIds;
+                extra.wraps = partWraps;
+            }
             // Continuing a run that stopped at its tool-call cap. The token is
             // single-use and the worker only redeems it for the key that made
             // it, so nothing here is worth intercepting.

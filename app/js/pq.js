@@ -10,6 +10,8 @@
     const C = window.NymbotConfig;
     const Relays = window.NymbotRelays;
     const Identity = window.NymbotIdentity;
+    const Store = () => window.NymbotStore;
+    const Hex = () => window.NymbotHex;
     const NT = () => window.NostrTools;
     const NC = () => window.NymCrypto;
 
@@ -75,7 +77,30 @@
         },
 
         async resolveBot() {
-            this.botKey = await this.resolve(C.botPubkey);
+            let live = null;
+            try { live = await this.resolve(C.botPubkey); } catch (_) { }
+            const store = Store();
+            const hex = Hex();
+            if (live && live.pk) {
+                this.botKey = live;
+                if (store && hex) {
+                    try {
+                        store.write('botPqKey',
+                            { pk: hex.hex(live.pk), fmt: live.fmt, at: Date.now() });
+                    } catch (_) { }
+                }
+                return this.botKey;
+            }
+            if (!this.botKey && store && hex) {
+                const held = store.read('botPqKey', null);
+                const fresh = held && held.pk
+                    && (Date.now() - (held.at || 0)) < C.pqTtlSec * 1000;
+                if (fresh) {
+                    try {
+                        this.botKey = { pk: hex.unhex(held.pk), fmt: held.fmt || 'pq2' };
+                    } catch (_) { }
+                }
+            }
             return this.botKey;
         },
 

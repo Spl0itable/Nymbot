@@ -77,7 +77,7 @@ class NymbotToolbar extends StatelessWidget {
       ),
       _ChipSpec(
         glyph: 'ghost',
-        label: app.current?.ephemeral == true ? t('Ghost on') : t('Ghost'),
+        label: t('Ghost'),
         active: app.current?.ephemeral == true,
         onTap: () => _confirmGhost(context, app),
       ),
@@ -130,7 +130,7 @@ class NymbotToolbar extends StatelessWidget {
       ),
       _ChipSpec(
         glyph: 'anon',
-        label: app.anon.enabled ? t('Anon on') : t('Anon'),
+        label: t('Anon'),
         active: app.anon.enabled,
         onTap: () => showAnonSheet(context),
       ),

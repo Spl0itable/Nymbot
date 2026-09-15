@@ -53,7 +53,7 @@ class AppController extends ChangeNotifier {
     final store = await Store.open();
     final identity = Identity(store);
     final relays = RelayPool();
-    final pq = PqAnnounce(relays);
+    final pq = PqAnnounce(relays, store: store);
     final api = NymbotApi();
     final anon = AnonMode(store, api, pq);
     final storage = StorageSync();
@@ -1861,6 +1861,9 @@ class AppController extends ChangeNotifier {
         await store.freeTier.observe(res.free!.used);
       }
       _creditBalance(res.pro, res.balance, anonKey: conv.anon && anon.ready);
+      if (conv.anon && anon.ready && anonStandardBalance == null) {
+        unawaited(refreshBalance());
+      }
       if (res.lowBalance) {
         // In an anonymous chat a low balance is usually the throwaway key
         // running dry rather than the nym, which is what the automatic
@@ -2092,6 +2095,10 @@ class AppController extends ChangeNotifier {
 
   // --- balances --------------------------------------------------------------------
 
+  @visibleForTesting
+  void creditBalanceForTest(bool pro, double? value, {required bool anonKey}) =>
+      _creditBalance(pro, value, anonKey: anonKey);
+
   void _creditBalance(bool pro, double? value, {required bool anonKey}) {
     if (value == null) return;
     if (anonKey) {
@@ -2110,7 +2117,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> refreshBalance({bool announce = false}) async {
-    final useAnon = (current?.anon ?? false) && anon.ready;
+    final inAnonChat = (current?.anon ?? false) && anon.ready;
     final res = await api.balance(identity.signer);
     if (res.data['error'] != null) {
       if (announce) await note(t('Could not reach Nymbot to check your balance.'));
@@ -2120,7 +2127,7 @@ class AppController extends ChangeNotifier {
         ?? (res.data['balance'] as num?)?.toDouble() ?? 0;
     proBalance = (res.data['proBalanceCredits'] as num?)?.toDouble()
         ?? (res.data['proBalance'] as num?)?.toDouble() ?? 0;
-    if (useAnon) {
+    if (anon.ready) {
       final mine = await api.balance(await anon.signer());
       if (mine.data['error'] == null) {
         anonStandardBalance = (mine.data['balanceCredits'] as num?)?.toDouble()
@@ -2141,7 +2148,7 @@ class AppController extends ChangeNotifier {
     }
     notifyListeners();
     if (announce) {
-      await note(useAnon
+      await note(inAnonChat
           ? t("This chat's anonymous balance: {standard} standard, {pro} Pro. "
               'Your nym still holds {nymStandard} standard and {nymPro} Pro.', {
               'standard': anonStandardBalance,
@@ -2156,8 +2163,7 @@ class AppController extends ChangeNotifier {
 
   bool get proTier => activeModel != null || mediaNeedsPro(activeMediaModel);
 
-  bool get spendingAnon =>
-      (current?.anon ?? false) && anon.ready && anonStandardBalance != null;
+  bool get spendingAnon => (current?.anon ?? false) && anon.ready;
 
   double? get shownBalance => spendingAnon
       ? (proTier ? anonProBalance : anonStandardBalance)

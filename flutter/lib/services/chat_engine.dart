@@ -156,6 +156,16 @@ class ChatEngine {
     return spend < floor ? floor : spend;
   }
 
+  static (double, double)? nominalTurnRange(
+      Map<String, dynamic> model, Map<String, dynamic>? pricing) {
+    final usd = (pricing?['usdPerCredit'] as num?)?.toDouble() ?? 0;
+    final low = estMeteredCredits(model, nominalTurnIn, estTypicalOut, 1, usd);
+    final high = estMeteredCredits(model, nominalTurnIn, estLongOut, 1, usd);
+    if (low == null || high == null) return null;
+    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
+    return (low < floor ? floor : low, high < floor ? floor : high);
+  }
+
   static (double, double)? estStandardCredits(
       int inTok, Map<String, dynamic>? pricing) {
     final routes = (pricing?['standardRoutes'] as List?) ?? const [];
@@ -632,11 +642,6 @@ class ChatEngine {
         await pq.resolveBot();
       } catch (_) {}
     }
-    if (relays.connected == 0) {
-      throw ChatFailure(
-          t('Not connected to any relay yet — your message cannot be published.'));
-    }
-
     // Anonymous mode: the throwaway key signs the rumor, the seal and the
     // request, and the reply comes back to it. The account key signs nothing in
     // this conversation at all.
@@ -673,6 +678,7 @@ class ChatEngine {
     final ghost = conv.ephemeral;
     final botKem = pq.botKey?.pk;
     final partIds = <String>[];
+    final partWraps = <NostrEvent>[];
     NostrEvent? wrap;
     for (var i = 0; i < bodies.length; i++) {
       final rumor = UnsignedEvent(
@@ -689,13 +695,9 @@ class ChatEngine {
         content: bodies[i],
       );
       wrap = await _wrap(rumor, senderSk, NymbotConfig.botPubkey, botKem);
-      final accepted =
-          await relays.publish(wrap, timeout: const Duration(seconds: 5));
-      if (accepted == 0) {
-        throw ChatFailure(
-            t('No relay accepted your message. Check your connection and try again.'));
-      }
+      unawaited(relays.publish(wrap, timeout: const Duration(seconds: 5)));
       partIds.add(wrap.id);
+      partWraps.add(wrap);
 
       // Our own copy, so the conversation restores on another device.
       if (!ghost) {
@@ -720,10 +722,13 @@ class ChatEngine {
         useAnon ? await anon.announcement() : pq.selfAnnouncement;
     final extra = <String, dynamic>{
       'eventId': wrap!.id,
+      'wrap': wrap.toJson(),
       'fresh': freshTurn,
       // Every event the question was split across, in order. The last is
       // `eventId`, which is what a message that fits has always sent.
       if (partIds.length > 1) 'parts': partIds,
+      if (partIds.length > 1)
+        'wraps': [for (final w in partWraps) w.toJson()],
       if (resume != null && resume.isNotEmpty) 'resume': resume,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (webSearch) 'web': true,

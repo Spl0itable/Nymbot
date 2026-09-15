@@ -1307,6 +1307,9 @@
                 }
                 this.creditBalance(res.pro,
                     res.balanceCredits != null ? res.balanceCredits : res.balance);
+                if (this.spendingAnon() && this.anonBalance.standard == null) {
+                    this.refreshBalance().catch(() => { });
+                }
                 if (res.lowBalance) {
                     // In an anonymous chat a low balance is usually the
                     // throwaway key running dry rather than the nym, and that
@@ -2107,7 +2110,7 @@
         // --- balances --------------------------------------------------------
 
         async refreshBalance(announce) {
-            const useAnon = !!(this.conv && this.conv.anon && Anon.ready());
+            const inAnonChat = !!(this.conv && this.conv.anon && Anon.ready());
             const { data } = await Api.balance({});
             if (!data || data.error) {
                 if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
@@ -2117,7 +2120,7 @@
                 standard: data.balanceCredits != null ? data.balanceCredits : (data.balance || 0),
                 pro: data.proBalanceCredits != null ? data.proBalanceCredits : (data.proBalance || 0)
             };
-            if (useAnon) {
+            if (Anon.ready()) {
                 const mine = await Api.balance({ signer: Anon.signer() });
                 if (mine.data && !mine.data.error) {
                     const d = mine.data;
@@ -2137,7 +2140,7 @@
             this.renderBalance();
             if (!$('modalCredits').hidden) this.renderCreditBalances();
             if (announce) {
-                this.note((useAnon
+                this.note((inAnonChat
                     ? t('This chat\'s anonymous balance: {standard} standard, {pro} Pro.',
                         { standard: creditAmount(this.anonBalance.standard), pro: creditAmount(this.anonBalance.pro) })
                         + ' ' + t('Your nym still holds {standard} standard and {pro} Pro.',
@@ -2161,8 +2164,7 @@
         },
 
         spendingAnon() {
-            return !!(this.conv && this.conv.anon && Anon.ready()
-                && this.anonBalance.standard != null);
+            return !!(this.conv && this.conv.anon && Anon.ready());
         },
 
         renderBalance() {
@@ -2299,9 +2301,7 @@
 
             const ghostChip = $('chipGhost');
             ghostChip.classList.toggle('is-active', !!conv.ephemeral);
-            ghostChip.querySelector('.chip-label').textContent = conv.ephemeral
-                ? t('Ghost on')
-                : t('Ghost');
+            ghostChip.querySelector('.chip-label').textContent = t('Ghost');
 
             const bot = Chat.botFor(conv);
             const botChip = $('chipBot');
@@ -2331,7 +2331,7 @@
             const anonChip = $('chipAnon');
             const anonOn = Anon.enabled();
             anonChip.classList.toggle('is-active', anonOn);
-            anonChip.querySelector('.chip-label').textContent = anonOn ? t('Anon on') : t('Anon');
+            anonChip.querySelector('.chip-label').textContent = t('Anon');
 
             const composer = $('input');
             if (composer) {
