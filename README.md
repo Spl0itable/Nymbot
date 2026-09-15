@@ -15,9 +15,7 @@ either with the same key and your credits, history and throwaway key follow you.
 | `/app` | The standalone web app (a PWA), served at `nymbot.ai/app`. |
 | `/flutter` | The Android and iOS app. |
 | `/tools` | Generators for the pages and the social card. Not part of the runtime. |
-
-There is no worker in this repository. The apps call the Nymbot service on
-`web.nymchat.app`, which is what makes one identity work across both products.
+| `/functions` | Cloudflare Pages worker functions that handle the backend. |
 
 ## License
 
