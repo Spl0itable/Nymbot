@@ -305,7 +305,7 @@ export async function catalogMediaParams(env, opts) {
     var rs = await replica(db).prepare(
       "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 " +
       "AND task_slug IN (" + MEDIA_TASKS.map(function () { return "?"; }).join(", ") + ")"
-    ).bind.apply(null, MEDIA_TASKS).all();
+    ).bind(...MEDIA_TASKS).all();
     rows = rs.results || [];
   } catch (e) { return null; }
   if (!rows.length) return null;
@@ -372,7 +372,7 @@ export async function catalogGenerators(env, opts) {
       "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
       "AND hosting = 'third-party' AND task_slug IN (" +
       tasks.map(function () { return "?"; }).join(", ") + ") ORDER BY author_slug, slug"
-    ).bind.apply(null, tasks).all();
+    ).bind(...tasks).all();
     rows = rs.results || [];
   } catch (e) { return null; }
   if (!rows.length) return null;
