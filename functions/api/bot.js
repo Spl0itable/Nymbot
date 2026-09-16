@@ -541,7 +541,7 @@ var BOT_MEDIA_BLOSSOM_HOSTS = [
   "https://blossom.primal.net",
   "https://nostr.download"
 ];
-var BOT_MEDIA_UPLOAD_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+var BOT_BROWSER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 function botBlossomHosts(env) {
   var list = String((env && env.BLOSSOM_HOSTS) || "").split(",")
@@ -1157,7 +1157,7 @@ async function botBlossomPut(host, bytes, contentType, auth) {
     headers: {
       "Authorization": auth,
       "Content-Type": contentType,
-      "User-Agent": BOT_MEDIA_UPLOAD_AGENT,
+      "User-Agent": BOT_BROWSER_AGENT,
       "Accept": "application/json"
     },
     body: bytes
@@ -1367,7 +1367,7 @@ async function botBtcPrice() {
   if (botBtcUsd > 0 && now - botBtcAt < BOT_BTC_TTL_MS) return botBtcUsd;
   try {
     var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     });
     if (resp.ok) {
       var data = await resp.json();
@@ -6921,7 +6921,7 @@ async function searchDDGInstant(query) {
   var controller = new AbortController();
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1&skip_disambig=1", {
-    headers: { "User-Agent": "NymchatBot/1.0", "Accept": "application/json" },
+    headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "application/json" },
     signal: controller.signal
   });
   clearTimeout(timer);
@@ -6950,7 +6950,7 @@ async function searchDDGHtml(query) {
   var resp = await fetch("https://html.duckduckgo.com/html/", {
     method: "POST",
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "User-Agent": BOT_BROWSER_AGENT,
       "Accept": "text/html",
       "Content-Type": "application/x-www-form-urlencoded"
     },
@@ -7025,7 +7025,7 @@ async function searchGoogle(query) {
   var timer = setTimeout(function() { controller.abort(); }, SEARCH_TIMEOUT);
   var resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query) + "&hl=en&gl=us", {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      "User-Agent": BOT_BROWSER_AGENT,
       "Accept": "text/html,application/xhtml+xml",
       "Accept-Language": "en-US,en;q=0.9"
     },
@@ -7146,7 +7146,7 @@ async function searchNewsRss(query) {
   try {
     var resp = await fetch(
       "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q=" + encodeURIComponent(query), {
-        headers: { "User-Agent": "Nymbot/1.0", "Accept": "application/rss+xml, application/xml" },
+        headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "application/rss+xml, application/xml" },
         signal: controller.signal
       });
     clearTimeout(timer);
@@ -7190,7 +7190,7 @@ async function searchMojeek(query) {
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
     var resp = await fetch("https://www.mojeek.com/search?q=" + encodeURIComponent(query), {
-      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html" },
+      headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "text/html" },
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -7518,7 +7518,7 @@ async function fetchPageDocument(url, limit) {
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
     var resp = await fetch(url, {
-      headers: { "User-Agent": "Nymbot/1.0 (+https://nymchat.app)", "Accept": "text/html,text/plain;q=0.9" },
+      headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "text/html,text/plain;q=0.9" },
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -8545,7 +8545,7 @@ function handleUnits(args) {
 async function handleBtc() {
   try {
     var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     });
     if (!resp.ok) throw new Error("API error");
     var data = await resp.json();
@@ -8554,7 +8554,7 @@ async function handleBtc() {
     var formatted = usd.toLocaleString("en-US", { maximumFractionDigits: 0 });
     // Also fetch block height for extra context
     var blockResp = await fetch("https://mempool.space/api/blocks/tip/height", {
-      headers: { "User-Agent": "Nymbot/1.0" }
+      headers: { "User-Agent": BOT_BROWSER_AGENT }
     }).catch(function() { return null; });
     var blockHeight = blockResp && blockResp.ok ? await blockResp.text() : null;
     var lines = ["\u20BF Bitcoin: $" + formatted + " USD"];
@@ -8597,7 +8597,7 @@ var NEWS_FEEDS = [
 async function handleNews() {
   var headlines = [];
   var feedPromises = NEWS_FEEDS.map(function(feed) {
-    return fetch(feed.url, { headers: { "User-Agent": "Nymbot/1.0" } })
+    return fetch(feed.url, { headers: { "User-Agent": BOT_BROWSER_AGENT } })
       .then(function(res) { return res.ok ? res.text() : ""; })
       .then(function(xml) {
         return parseRssItems(xml, 3).map(function (item) {
