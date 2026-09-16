@@ -1580,11 +1580,7 @@ function proCompatEndpoints(env) {
   return out.filter(function (e) { return e.kind !== "api" || proApiToken(env); });
 }
 
-function proNoZdr(modelId) {
-  return /fable/.test(String(modelId || ""));
-}
-
-function proCompatHeaders(env, kind, modelId) {
+function proCompatHeaders(env, kind) {
   var headers = { "Content-Type": "application/json" };
   if (kind === "api") {
     var token = proApiToken(env);
@@ -1592,7 +1588,6 @@ function proCompatHeaders(env, kind, modelId) {
   } else if (env.AI_GATEWAY_TOKEN) {
     headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
   }
-  if (proNoZdr(modelId)) headers["cf-aig-zdr"] = "false";
   return headers;
 }
 
@@ -1882,9 +1877,9 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
   if (step.kind === "anthropic") {
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
     if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
-    if (proNoZdr(step.model)) {
+    if (/fable/.test(step.model) && env.ANTHROPIC_API_KEY) {
       nativeHeaders["cf-aig-zdr"] = "false";
-      if (env.ANTHROPIC_API_KEY) nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
+      nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
     }
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
     return proHttpChat(proAnthropicNativeUrl(env),
@@ -1924,7 +1919,7 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
   for (var i = 0; i < endpoints.length; i++) {
     try {
       return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
-        proCompatHeaders(env, endpoints[i].kind, step.model),
+        proCompatHeaders(env, endpoints[i].kind),
         Object.assign({ model: step.model }, req));
     } catch (e) {
       lastErr = e;
