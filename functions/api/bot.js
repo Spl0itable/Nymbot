@@ -37,7 +37,8 @@
 import { ledgerCall } from "./_ledger.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
-import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams } from "./_catalog.js";
+import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams,
+  catalogGenerators, catalogMergeGenerators } from "./_catalog.js";
 import {
   PQ_D_TAG,
   pqAwareDecrypt,
@@ -591,9 +592,29 @@ var BOT_GEN_AUTHORS = {
   "runwayml": "Runway"
 };
 
+function botGeneratorCeiling(table) {
+  var top = 0;
+  Object.keys(table).forEach(function (k) {
+    if (table[k].credits > top) top = table[k].credits;
+  });
+  return top || 1;
+}
+var BOT_GENERATOR_DEFAULTS = {
+  image: botGeneratorCeiling(BOT_PRO_IMAGE_MODELS),
+  video: botGeneratorCeiling(BOT_PRO_VIDEO_MODELS)
+};
+
+async function botProGenerators(env) {
+  var live = null;
+  try { live = await catalogGenerators(env); } catch (e) { live = null; }
+  return catalogMergeGenerators(
+    { image: BOT_PRO_IMAGE_MODELS, video: BOT_PRO_VIDEO_MODELS },
+    live, BOT_GENERATOR_DEFAULTS);
+}
+
 /// The picture and video models as picker rows. Priced flat rather than per
 /// token, so `credits` and `max` are the same number.
-function botGeneratorCatalog() {
+function botGeneratorCatalog(gens) {
   var out = [];
   var add = function (kind, command, table) {
     Object.keys(table).forEach(function (k) {
@@ -608,16 +629,17 @@ function botGeneratorCatalog() {
         label: m.label,
         credits: m.credits,
         max: m.credits,
-        description: "",
-        author: BOT_GEN_AUTHORS[slug] || slug,
+        description: m.description || "",
+        author: m.author || BOT_GEN_AUTHORS[slug] || slug,
         authorSlug: slug,
         vision: false, reasoning: false, tools: false, context: null,
-        hosting: "third-party", priced: true, kind: kind
+        hosting: "third-party", priced: m.priced !== false, kind: kind,
+        needsImage: !!m.needsImage
       });
     });
   };
-  add("image", "?image", BOT_PRO_IMAGE_MODELS);
-  add("video", "?video", BOT_PRO_VIDEO_MODELS);
+  add("image", "?image", (gens && gens.image) || BOT_PRO_IMAGE_MODELS);
+  add("video", "?video", (gens && gens.video) || BOT_PRO_VIDEO_MODELS);
   out.sort(function (a, b) {
     if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
     if (a.author !== b.author) return a.author < b.author ? -1 : 1;
@@ -630,25 +652,29 @@ function botGeneratorCatalog() {
 // a ?video sent with a picture in the message uses the reference where the chosen
 var BOT_VIDEO_MAX_SECONDS = 8;
 
-function botProVideoModel(key) {
+function botProVideoModel(key, table) {
+  var models = table || BOT_PRO_VIDEO_MODELS;
   var k = String(key || "").trim().toLowerCase();
   if (!k) return BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT];
-  if (Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, k)) return BOT_PRO_VIDEO_MODELS[k];
-  for (var mk in BOT_PRO_VIDEO_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, mk)) continue;
-    if (mk.indexOf(k) !== -1 || BOT_PRO_VIDEO_MODELS[mk].label.toLowerCase().indexOf(k) !== -1) {
-      return BOT_PRO_VIDEO_MODELS[mk];
+  if (Object.prototype.hasOwnProperty.call(models, k)) return models[k];
+  for (var mk in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, mk)) continue;
+    if (mk.indexOf(k) !== -1 || models[mk].label.toLowerCase().indexOf(k) !== -1) {
+      return models[mk];
     }
   }
   return null;
 }
 
-function botProVideoList() {
+function botProVideoList(table) {
+  var models = table || BOT_PRO_VIDEO_MODELS;
   var out = [];
-  for (var k in BOT_PRO_VIDEO_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_VIDEO_MODELS, k)) continue;
-    var m = BOT_PRO_VIDEO_MODELS[k];
-    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits)");
+  for (var k in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
+    var m = models[k];
+    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits"
+      + (m.priced === false ? ", estimated" : "") + ")"
+      + (m.needsImage ? " \u2014 animates a picture you send" : ""));
   }
   return out;
 }
@@ -931,27 +957,30 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
   return await botBlossomUpload(bytes, botSniffVideoMime(bytes), privkey, pubkey);
 }
 
-function botProImageModel(key) {
+function botProImageModel(key, table) {
+  var models = table || BOT_PRO_IMAGE_MODELS;
   var k = String(key || "").trim().toLowerCase();
   if (!k) return BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT];
-  if (Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, k)) return BOT_PRO_IMAGE_MODELS[k];
+  if (Object.prototype.hasOwnProperty.call(models, k)) return models[k];
   // Loose match so "flux 2 max" / "gpt" resolve the way ?model does.
-  for (var mk in BOT_PRO_IMAGE_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, mk)) continue;
-    if (mk.indexOf(k) !== -1 || BOT_PRO_IMAGE_MODELS[mk].label.toLowerCase().indexOf(k) !== -1) {
-      return BOT_PRO_IMAGE_MODELS[mk];
+  for (var mk in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, mk)) continue;
+    if (mk.indexOf(k) !== -1 || models[mk].label.toLowerCase().indexOf(k) !== -1) {
+      return models[mk];
     }
   }
   return null;
 }
 
-function botProImageList() {
+function botProImageList(table) {
+  var models = table || BOT_PRO_IMAGE_MODELS;
   var out = [];
-  for (var k in BOT_PRO_IMAGE_MODELS) {
-    if (!Object.prototype.hasOwnProperty.call(BOT_PRO_IMAGE_MODELS, k)) continue;
-    var m = BOT_PRO_IMAGE_MODELS[k];
+  for (var k in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
+    var m = models[k];
     var c = m.credits || BOT_MEDIA_COSTS.image.pro;
-    out.push(k + " — " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s") + ")");
+    out.push(k + " — " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s")
+      + (m.priced === false ? ", estimated" : "") + ")");
   }
   return out;
 }
@@ -4020,7 +4049,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // The picture and video generators, so the picker can price them too. They
     // are not chat models — picking one writes the command rather than pinning
     // it — which is why they carry a kind and a command.
-    list = list.concat(botGeneratorCatalog());
+    list = list.concat(botGeneratorCatalog(await botProGenerators(env)));
     var groups = [];
     list.forEach(function (m) {
       var last = groups[groups.length - 1];
@@ -4922,20 +4951,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     if (media) {
       var mediaTier = proModel ? "pro" : "standard";
+      var gens = await botProGenerators(env);
       // ?image models — a free listing, so it returns before any charge.
       if (media.list) {
         var listText;
         if (media.kind === "video") {
           listText = mediaTier === "pro"
             ? "Video models — use ?video --model <name> <description>:\n\u2022 "
-              + botProVideoList().join("\n\u2022 ")
+              + botProVideoList(gens.video).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT].label
               + ". Send a picture in the same message to animate it instead of starting from nothing."
             : "?video needs Nymbot Pro — every video model is provider-hosted, so there is no standard-tier generator. Select one with ?model first.";
         } else {
           listText = mediaTier === "pro"
             ? "Frontier image models \u2014 use ?image --model <name> <description>:\n\u2022 "
-              + botProImageList().join("\n\u2022 ")
+              + botProImageList(gens.image).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT].label + "."
             : "Frontier image models need a Pro model selected (?model <name>). Standard ?image uses the built-in generator for "
               + BOT_MEDIA_COSTS.image.standard + " credits.";
@@ -4989,12 +5019,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (mediaTier !== "pro") {
           return await turnFail({ error: "?video needs Nymbot Pro \u2014 every video model is provider-hosted, so there is no standard-tier generator. Select a Pro model with ?model first, then ?video models to see the generators and their prices." }, 400);
         }
-        proVideo = botProVideoModel(media.modelKey);
+        proVideo = botProVideoModel(media.modelKey, gens.video);
         if (!proVideo) {
           return await turnFail({ error: "Unknown video model '" + media.modelKey + "'. Type ?video models to see them." }, 400);
         }
+        if (proVideo.needsImage && !botExtractImageUrls(message).length) {
+          return await turnFail({ error: proVideo.label + " animates a picture rather than starting from nothing \u2014 send one in the same message, or pick a text-to-video model (?video models)." }, 400);
+        }
       } else if (media.kind === "image" && mediaTier === "pro") {
-        proImage = botProImageModel(media.modelKey);
+        proImage = botProImageModel(media.modelKey, gens.image);
         if (!proImage) {
           return await turnFail({ error: "Unknown image model '" + media.modelKey + "'. Type ?image models to see them." }, 400);
         }
