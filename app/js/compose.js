@@ -158,6 +158,8 @@
                 if (info[n - 1] === 'fence-open') cls += ' is-code-first';
                 if (n === lines.length - 1 || info[n + 1] === 'fence-close') cls += ' is-code-last';
                 html = '<span class="ce-incode">' + esc(line) + '</span>';
+            } else if (FENCE_RE.test(line)) {
+                html = esc(line);
             } else {
                 html = lineHtml(line, false);
             }
@@ -506,7 +508,23 @@
                 if (onVirtual()) text = '\n' + text;
             }
             replace(text);
+            if (text === '`') closeTyped();
         });
+
+        const closeTyped = () => {
+            const t = state.text;
+            const { lines, info } = layout(t);
+            const n = lineOf(t, state.start);
+            if (info[n] !== 'fence-close' || n + 1 >= lines.length || info[n + 1] !== 'text') return;
+            const typed = FENCE_RE.exec(lines[n]);
+            const stray = FENCE_RE.exec(lines[n + 1]);
+            if (!typed || !stray || stray[1] !== typed[1] || stray[2]) return;
+            const lineEnd = t.indexOf('\n', state.start);
+            if (lineEnd === -1 || state.start !== lineEnd) return;
+            state.text = t.slice(0, lineEnd) + t.slice(lineEnd + 1 + lines[n + 1].length);
+            draw(state.text.length === lineEnd ? lineEnd : lineEnd + 1);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        };
 
         const openBlock = () => {
             const t = state.text;
