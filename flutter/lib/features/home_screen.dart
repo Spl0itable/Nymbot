@@ -85,7 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final app = AppScope.read(context);
       final conv = app.current;
-      if (conv != null) _input.text = app.store.draft(conv.id);
+      if (conv != null) _input.setMarkdown(app.store.draft(conv.id));
     });
   }
 
@@ -100,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final app = _app;
     final conv = app?.current;
     if (app != null && conv != null) {
-      unawaited(app.store.setDraft(conv.id, _input.text));
+      unawaited(app.store.setDraft(conv.id, _input.markdown));
     }
     _input.dispose();
     _scroll.dispose();
@@ -262,12 +262,12 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'prompt':
         final picked = await showPromptsSheet(context);
         if (picked != null) {
-          _input.text = picked;
+          _input.setMarkdown(picked);
           setState(() => _suggestTerm = '');
         }
         return true;
       case 'save':
-        final body = _input.text.trim().isEmpty ? arg : _input.text.trim();
+        final body = _input.markdown.trim().isEmpty ? arg : _input.markdown.trim();
         if (body.isEmpty) {
           await app.note(t('There is nothing in the composer to save.'));
           return true;
@@ -466,7 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _send([String? override]) async {
-    final text = override ?? _input.text.trim();
+    final text = override ?? _input.markdown.trim();
     if (text.isEmpty) return;
     final app = AppScope.read(context);
     if (override == null) {
@@ -715,8 +715,7 @@ class _HomeScreenState extends State<HomeScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final text = app.takeInput();
         if (text == null || !mounted) return;
-        _input.text = text;
-        _input.selection = TextSelection.collapsed(offset: text.length);
+        _input.setMarkdown(text);
         setState(() => _suggestTerm = '');
       });
     }
@@ -946,7 +945,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: Text(s.$1, style: const TextStyle(fontSize: 14)),
                 subtitle: Text(s.$2, style: const TextStyle(fontSize: 12)),
                 onTap: () {
-                  _input.text = s.$2;
+                  _input.setMarkdown(s.$2);
                   setState(() {});
                 },
               ),
@@ -961,7 +960,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ActionChip(
                   label: Text(tip, style: const TextStyle(fontSize: 12)),
                   onPressed: () {
-                    _input.text = tip;
+                    _input.setMarkdown(tip);
                     setState(() => _suggestTerm = tip);
                   },
                 ),
@@ -973,7 +972,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _composer(BuildContext context, AppController app) {
-    final estimate = app.estimate(_input.text);
+    final estimate = app.estimate(_input.markdown);
     return SafeArea(
       top: false,
       child: Container(
@@ -989,9 +988,7 @@ class _HomeScreenState extends State<HomeScreen> {
               CommandSuggestions(
                 term: _suggestTerm,
                 onPick: (c) {
-                  _input.text = '?${c.name}${c.args.isEmpty ? '' : ' '}';
-                  _input.selection =
-                      TextSelection.collapsed(offset: _input.text.length);
+                  _input.setMarkdown('?${c.name}${c.args.isEmpty ? '' : ' '}');
                   setState(() => _suggestTerm = c.args.isEmpty ? '' : '?${c.name} ');
                   if (c.args.isEmpty) _send();
                 },
@@ -1138,20 +1135,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       // this much in one change; typing cannot.
                       final run = _insertedRun(_lastInput, v);
                       if (run != null && Attachments.pasteIsLong(run)) {
-                        final rest = v.replaceFirst(run, '');
+                        final rest = _input.markdown.replaceFirst(run, '');
                         app.addAttachment(Attachments.fromText(run,
                             id: bytesToHex(randomBytes(8))));
-                        _input.text = rest;
-                        _input.selection =
-                            TextSelection.collapsed(offset: rest.length);
-                        _lastInput = rest;
+                        _input.setMarkdown(rest);
+                        _lastInput = _input.text;
                         final conv = app.current;
                         if (conv != null) app.store.setDraft(conv.id, rest);
                         return;
                       }
                       _lastInput = v;
                       final conv = app.current;
-                      if (conv != null) app.store.setDraft(conv.id, v);
+                      if (conv != null) app.store.setDraft(conv.id, _input.markdown);
                       final next = v.startsWith('?') ? v : '';
                       final has = v.trim().isNotEmpty;
                       if (next != _suggestTerm || has != _hasText) {
@@ -1208,7 +1203,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                 ),
               )
-            else if (app.settings.showCostEstimate && _input.text.trim().isNotEmpty)
+            else if (app.settings.showCostEstimate && _input.markdown.trim().isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(

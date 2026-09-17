@@ -1718,11 +1718,8 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .composer-input .ce-line { min-height: 1.4em; }
 
 /* The marks stay where you typed them so the text you are editing is still
-   the text you wrote. They show, dimmed, on the line the caret is on and
-   vanish everywhere else, so a finished block reads as what it means. */
+   the text you wrote; they are only dimmed out of the way. */
 .ce-mark { color: var(--text-faint); font-weight: 400; font-style: normal; }
-.composer-input .ce-line:not(.is-active) .ce-mark:not(.ce-prefix),
-.composer-input .ce-line:not(.is-active) .ce-fence { color: transparent; }
 .composer-input strong { font-weight: 700; }
 .composer-input em { font-style: italic; }
 .composer-input s { text-decoration: line-through; }
@@ -1730,8 +1727,8 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .ce-quote { color: var(--text-dim); font-style: italic; }
 .ce-link { color: var(--primary); }
 .ce-url { color: var(--text-faint); font-family: var(--mono); font-size: 0.9em; }
-.ce-fence, .ce-incode { font-family: var(--mono); font-size: 0.9em; }
-.ce-fence { color: var(--text-faint); }
+.ce-incode { font-family: var(--mono); font-size: 0.9em; }
+.ce-hidden { display: none; }
 .ce-code {
     font-family: var(--mono);
     font-size: 0.9em;
@@ -1742,12 +1739,13 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 
 /* A block is tinted across the line rather than around the words, so it reads
    as one run of code and not as a string of inline spans. */
-.composer-input .ce-line:has(.ce-fence),
 .composer-input .ce-line.is-code {
     background: var(--bg-raised);
     margin: 0 -0.25rem;
     padding: 0 0.25rem;
 }
+.composer-input .ce-line.is-code-first { border-radius: 6px 6px 0 0; padding-top: 0.15em; }
+.composer-input .ce-line.is-code-last { border-radius: 0 0 6px 6px; padding-bottom: 0.15em; }
 
 @media (pointer: coarse) {
     .composer-input { font-size: 16px; }
