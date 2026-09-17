@@ -16,6 +16,7 @@ import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
 import 'artifact_screen.dart';
+import 'code_frame.dart';
 import 'compose_controller.dart';
 import 'sheets/bots_sheet.dart';
 import 'sheets/compare_sheet.dart';
@@ -53,6 +54,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // Styles the markdown you write while you write it, so what is in the
   // field looks like what will be sent.
   final _input = MarkdownEditingController();
+  late final _inputFocus = FocusNode(onKeyEvent: _input.handleKey);
+  final _inputScroll = ScrollController();
   final _scroll = ScrollController();
   final _voice = Voice();
   final _keys = <String, GlobalKey>{};
@@ -103,6 +106,8 @@ class _HomeScreenState extends State<HomeScreen> {
       unawaited(app.store.setDraft(conv.id, _input.markdown));
     }
     _input.dispose();
+    _inputFocus.dispose();
+    _inputScroll.dispose();
     _scroll.dispose();
     _voice.dispose();
     super.dispose();
@@ -1121,47 +1126,53 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: _attach,
                 ),
                 Expanded(
-                  child: TextField(
+                  child: CodeFrame(
                     controller: _input,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: app.settings.sendOnEnter
-                        ? TextInputAction.send
-                        : TextInputAction.newline,
-                    onChanged: (v) {
-                      // A wall of pasted text is a document, not a sentence:
-                      // it goes in as an attachment so the question you are
-                      // asking about it stays readable. Only a paste can add
-                      // this much in one change; typing cannot.
-                      final run = _insertedRun(_lastInput, v);
-                      if (run != null && Attachments.pasteIsLong(run)) {
-                        final rest = _input.markdown.replaceFirst(run, '');
-                        app.addAttachment(Attachments.fromText(run,
-                            id: bytesToHex(randomBytes(8))));
-                        _input.setMarkdown(rest);
-                        _lastInput = _input.text;
+                    scroll: _inputScroll,
+                    child: TextField(
+                      controller: _input,
+                      focusNode: _inputFocus,
+                      scrollController: _inputScroll,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: app.settings.sendOnEnter
+                          ? TextInputAction.send
+                          : TextInputAction.newline,
+                      onChanged: (v) {
+                        // A wall of pasted text is a document, not a sentence:
+                        // it goes in as an attachment so the question you are
+                        // asking about it stays readable. Only a paste can add
+                        // this much in one change; typing cannot.
+                        final run = _insertedRun(_lastInput, v);
+                        if (run != null && Attachments.pasteIsLong(run)) {
+                          final rest = _input.markdown.replaceFirst(run, '');
+                          app.addAttachment(Attachments.fromText(run,
+                              id: bytesToHex(randomBytes(8))));
+                          _input.setMarkdown(rest);
+                          _lastInput = _input.text;
+                          final conv = app.current;
+                          if (conv != null) app.store.setDraft(conv.id, rest);
+                          return;
+                        }
+                        _lastInput = v;
                         final conv = app.current;
-                        if (conv != null) app.store.setDraft(conv.id, rest);
-                        return;
-                      }
-                      _lastInput = v;
-                      final conv = app.current;
-                      if (conv != null) app.store.setDraft(conv.id, _input.markdown);
-                      final next = v.startsWith('?') ? v : '';
-                      final has = v.trim().isNotEmpty;
-                      if (next != _suggestTerm || has != _hasText) {
-                        setState(() {
-                          _suggestTerm = next;
-                          _hasText = has;
-                        });
-                      }
-                    },
-                    onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
-                    decoration: InputDecoration(
-                      hintText: _composerHint(app.activeMediaModel),
-                      hintStyle: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).hintColor.withValues(alpha: 0.7),
+                        if (conv != null) app.store.setDraft(conv.id, _input.markdown);
+                        final next = v.startsWith('?') ? v : '';
+                        final has = v.trim().isNotEmpty;
+                        if (next != _suggestTerm || has != _hasText) {
+                          setState(() {
+                            _suggestTerm = next;
+                            _hasText = has;
+                          });
+                        }
+                      },
+                      onSubmitted: app.settings.sendOnEnter ? (_) => _send() : null,
+                      decoration: InputDecoration(
+                        hintText: _composerHint(app.activeMediaModel),
+                        hintStyle: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).hintColor.withValues(alpha: 0.7),
+                        ),
                       ),
                     ),
                   ),

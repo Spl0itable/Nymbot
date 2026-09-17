@@ -1733,6 +1733,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     font-family: var(--mono);
     font-size: 0.9em;
     background: var(--bg-raised);
+    border: 1px solid var(--line);
     border-radius: 4px;
     padding: 0 0.15em;
 }
@@ -1741,11 +1742,21 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
    as one run of code and not as a string of inline spans. */
 .composer-input .ce-line.is-code {
     background: var(--bg-raised);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
     margin: 0 -0.25rem;
     padding: 0 0.25rem;
 }
-.composer-input .ce-line.is-code-first { border-radius: 6px 6px 0 0; padding-top: 0.15em; }
-.composer-input .ce-line.is-code-last { border-radius: 0 0 6px 6px; padding-bottom: 0.15em; }
+.composer-input .ce-line.is-code-first {
+    border-top: 1px solid var(--line);
+    border-radius: 6px 6px 0 0;
+    padding-top: 0.15em;
+}
+.composer-input .ce-line.is-code-last {
+    border-bottom: 1px solid var(--line);
+    border-radius: 0 0 6px 6px;
+    padding-bottom: 0.15em;
+}
 
 @media (pointer: coarse) {
     .composer-input { font-size: 16px; }

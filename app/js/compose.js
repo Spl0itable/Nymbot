@@ -105,6 +105,9 @@
                 info.push(open ? 'code' : 'text');
             }
         }
+        if (open) {
+            for (let n = info.lastIndexOf('fence-open'); n < info.length; n++) info[n] = 'text';
+        }
         return { lines, info };
     }
 
@@ -160,8 +163,7 @@
             }
             out += '<div class="' + cls + '">' + (html || '<br>') + '</div>';
         }
-        const last = info[info.length - 1];
-        if (last === 'fence-open' || last === 'fence-close') {
+        if (info[info.length - 1] === 'fence-close') {
             out += '<div class="ce-line ce-virtual"><br></div>';
         }
         return out || '<div class="ce-line"><br></div>';
@@ -321,6 +323,49 @@
             state.start = Math.min(state.text.length, offsetOf(el, range.startContainer, range.startOffset));
             state.end = Math.min(state.text.length, offsetOf(el, range.endContainer, range.endOffset));
             if (state.start > state.end) { const s = state.start; state.start = state.end; state.end = s; }
+            if (range.collapsed) {
+                state.start = Math.min(state.text.length, state.start + pastPill(range.startContainer, range.startOffset));
+                state.end = state.start;
+            }
+        };
+
+        const pastPill = (node, off) => {
+            let n = node;
+            if (n.nodeType === 3) {
+                if (off !== n.data.length) return 0;
+                n = n.parentNode;
+            } else if (off !== n.childNodes.length) {
+                return 0;
+            }
+            while (n && n !== el && !n.classList.contains('ce-line')) {
+                if (n.classList.contains('ce-code')) {
+                    return isHidden(n.nextSibling) ? n.nextSibling.textContent.length : 0;
+                }
+                if (n.parentNode.lastChild !== n) return 0;
+                n = n.parentNode;
+            }
+            return 0;
+        };
+
+        const onVirtual = () => {
+            const { info } = layout(state.text);
+            return state.start === state.text.length && info[info.length - 1] === 'fence-close';
+        };
+
+        const caretRow = () => {
+            const range = selection();
+            if (!range) return 'both';
+            let line = range.startContainer;
+            while (line && line.parentNode !== el) line = line.parentNode;
+            if (!line || line.nodeType !== 1 || !range.getClientRects) return 'both';
+            const rects = range.getClientRects();
+            if (!rects.length) return 'both';
+            const r = rects[0];
+            const lr = line.getBoundingClientRect();
+            const h = r.height || 1;
+            const first = r.top - lr.top < h / 2;
+            const last = lr.bottom - r.bottom < h / 2;
+            return first && last ? 'both' : first ? 'first' : last ? 'last' : 'mid';
         };
 
         const place = (from, to) => {
@@ -458,11 +503,7 @@
             text = String(text).replace(/\r\n?/g, '\n');
             if (state.start === state.end) {
                 if (text === '\n' && openBlock()) return;
-                const { info } = layout(state.text);
-                const last = info[info.length - 1];
-                if (state.start === state.text.length && (last === 'fence-open' || last === 'fence-close')) {
-                    text = '\n' + text;
-                }
+                if (onVirtual()) text = '\n' + text;
             }
             replace(text);
         });
@@ -477,8 +518,7 @@
             const m = FENCE_RE.exec(t.slice(lineStart, lineEnd));
             if (!m) return false;
             const { info } = layout(t);
-            const ln = lineOf(t, at);
-            if (info[ln] !== 'fence-open' || info.indexOf('fence-close', ln + 1) !== -1) return false;
+            if (info[lineOf(t, at)] !== 'text') return false;
             remember();
             state.text = t.slice(0, at) + '\n\n' + m[1] + t.slice(at);
             draw(at + 1);
@@ -494,6 +534,22 @@
             const t = state.text;
             const run = hiddenRuns(t).find((r) => (back ? r.end === at : r.start === at));
             if (!run) return false;
+            if (back && run.partner && run.partner.start < run.start) {
+                if (t[run.start] === '\n') {
+                    state.start = state.end = run.start;
+                    place(run.start, run.start);
+                    return true;
+                }
+                if (run.start - 1 === run.partner.end) {
+                    replace('', run.partner.start, run.end);
+                    return true;
+                }
+                remember();
+                state.text = t.slice(0, run.start - 1) + t.slice(run.start);
+                draw(at - 1);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                return true;
+            }
             const cuts = [run];
             if (run.partner) cuts.push(run.partner);
             cuts.sort((x, y) => x.start - y.start);
@@ -537,6 +593,60 @@
             draw(state.start, state.end);
         });
 
+        el.addEventListener('keydown', (e) => {
+            if (state.composing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+            const key = e.key;
+            if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+            readCaret();
+            if (state.start !== state.end) return;
+            const t = state.text;
+            const at = state.start;
+            const { lines, info } = layout(t);
+            const fence = (n) => info[n] === 'fence-open' || info[n] === 'fence-close';
+            const starts = [];
+            let s = 0;
+            for (const l of lines) { starts.push(s); s += l.length + 1; }
+            const virtual = onVirtual();
+            const ln = virtual ? lines.length : lineOf(t, at);
+            const col = virtual ? 0 : at - starts[ln];
+            const beyond = (n, dir) => {
+                let i = n + dir;
+                while (i >= 0 && i < lines.length && fence(i)) i += dir;
+                return i;
+            };
+            const jump = (o) => {
+                e.preventDefault();
+                state.start = state.end = Math.max(0, Math.min(o, t.length));
+                place(state.start, state.start);
+            };
+            const lineTarget = (n) => (n >= lines.length ? t.length : starts[n] + Math.min(col, lines[n].length));
+            if (key === 'ArrowDown') {
+                if (virtual || ln + 1 >= lines.length || !fence(ln + 1)) return;
+                const row = caretRow();
+                if (row !== 'last' && row !== 'both') return;
+                const n = beyond(ln, 1);
+                if (n >= lines.length && info[lines.length - 1] !== 'fence-close') return;
+                jump(lineTarget(n));
+            } else if (key === 'ArrowUp') {
+                if (!virtual && (ln === 0 || !fence(ln - 1))) return;
+                const row = caretRow();
+                if (row !== 'first' && row !== 'both') return;
+                const n = beyond(ln, -1);
+                if (n < 0) return;
+                jump(lineTarget(n));
+            } else if (key === 'ArrowRight') {
+                if (virtual || ln + 1 >= lines.length || !fence(ln + 1)) return;
+                if (at !== starts[ln] + lines[ln].length) return;
+                const n = beyond(ln, 1);
+                if (n >= lines.length && info[lines.length - 1] !== 'fence-close') return;
+                jump(n >= lines.length ? t.length : starts[n]);
+            } else {
+                if (!virtual && (ln === 0 || !fence(ln - 1) || at !== starts[ln])) return;
+                const n = beyond(ln, -1);
+                if (n < 0) return;
+                jump(starts[n] + lines[n].length);
+            }
+        });
         el.addEventListener('keyup', () => { if (!state.composing) readCaret(); });
         el.addEventListener('mouseup', () => { if (!state.composing) readCaret(); });
         // Focus lands the caret where the field was left, or where something

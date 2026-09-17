@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/theme/theme.dart';
 
 /// The composer, which shows the markdown you write as what it means.
@@ -27,6 +28,59 @@ class MarkdownEditingController extends TextEditingController {
   final List<_Code> _code = <_Code>[];
   final List<_Block> _blocks = <_Block>[];
   bool _applying = false;
+
+  List<TextRange> get blocks =>
+      [for (final b in _blocks) TextRange(start: b.start, end: b.end)];
+
+  List<TextRange> get codeSpans =>
+      [for (final c in _code) TextRange(start: c.start, end: c.end)];
+
+  KeyEventResult handleKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final down = key == LogicalKeyboardKey.arrowDown;
+    if (!down && key != LogicalKeyboardKey.arrowUp) return KeyEventResult.ignored;
+    final keys = HardwareKeyboard.instance;
+    if (keys.isShiftPressed || keys.isControlPressed || keys.isAltPressed || keys.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+    final sel = value.selection;
+    if (!sel.isValid || !sel.isCollapsed) return KeyEventResult.ignored;
+    final at = sel.extentOffset;
+    final block = _blockAt(at);
+    if (block == null) return KeyEventResult.ignored;
+    final text = this.text;
+    if (down) {
+      if (block.end != text.length || text.indexOf('\n', at) != -1) {
+        return KeyEventResult.ignored;
+      }
+      _applying = true;
+      value = TextEditingValue(
+        text: '$text\n',
+        selection: TextSelection.collapsed(offset: text.length + 1),
+      );
+      _applying = false;
+      return KeyEventResult.handled;
+    }
+    if (block.start != 0 || (at > 0 && text.lastIndexOf('\n', at - 1) != -1)) {
+      return KeyEventResult.ignored;
+    }
+    for (final c in _code) {
+      c.start++;
+      c.end++;
+    }
+    for (final b in _blocks) {
+      b.start++;
+      b.end++;
+    }
+    _applying = true;
+    value = TextEditingValue(
+      text: '\n$text',
+      selection: const TextSelection.collapsed(offset: 0),
+    );
+    _applying = false;
+    return KeyEventResult.handled;
+  }
 
   String get markdown {
     final text = this.text;
@@ -345,13 +399,11 @@ class MarkdownEditingController extends TextEditingController {
     final theme = Theme.of(context);
     final faint = base.copyWith(
         color: theme.hintColor, fontWeight: FontWeight.normal, fontStyle: FontStyle.normal);
-    final tint = theme.colorScheme.onSurface.withValues(alpha: 0.08);
-    final plain = base.copyWith(
+    final mono = base.copyWith(
       fontFamily: kMonoFamily,
       fontFamilyFallback: kMonoFallback,
       fontSize: (base.fontSize ?? 14) * 0.92,
     );
-    final mono = plain.copyWith(background: Paint()..color = tint);
 
     final spans = <InlineSpan>[];
     final text = this.text;
@@ -363,7 +415,7 @@ class MarkdownEditingController extends TextEditingController {
       if (block != null && end <= block.end) {
         spans.add(TextSpan(text: text.substring(at, end), style: mono));
       } else {
-        _line(spans, text, at, end, base, faint, mono, plain, theme);
+        _line(spans, text, at, end, base, faint, mono, theme);
       }
       if (nl == -1) break;
       spans.add(TextSpan(text: '\n', style: base));
@@ -373,7 +425,7 @@ class MarkdownEditingController extends TextEditingController {
   }
 
   void _line(List<InlineSpan> spans, String text, int from, int to, TextStyle base,
-      TextStyle faint, TextStyle mono, TextStyle plain, ThemeData theme) {
+      TextStyle faint, TextStyle mono, ThemeData theme) {
     final line = text.substring(from, to);
     var restAt = from;
     TextStyle body = base;
@@ -398,15 +450,15 @@ class MarkdownEditingController extends TextEditingController {
       ..sort((x, y) => x.start.compareTo(y.start));
     var at = restAt;
     for (final c in codes) {
-      if (c.start > at) _prose(spans, text.substring(at, c.start), body, faint, plain, theme);
+      if (c.start > at) _prose(spans, text.substring(at, c.start), body, faint, mono, theme);
       spans.add(TextSpan(text: text.substring(c.start, c.end), style: mono));
       at = c.end;
     }
-    if (at < to) _prose(spans, text.substring(at, to), body, faint, plain, theme);
+    if (at < to) _prose(spans, text.substring(at, to), body, faint, mono, theme);
   }
 
   void _prose(List<InlineSpan> spans, String rest, TextStyle body, TextStyle faint,
-      TextStyle plain, ThemeData theme) {
+      TextStyle mono, ThemeData theme) {
     var at = 0;
     for (final m in _inline.allMatches(rest)) {
       if (m.start > at) {
@@ -427,7 +479,7 @@ class MarkdownEditingController extends TextEditingController {
         spans.add(TextSpan(text: '[', style: faint));
         spans.add(TextSpan(text: m[6], style: body.copyWith(color: theme.colorScheme.primary)));
         spans.add(TextSpan(text: '](', style: faint));
-        spans.add(TextSpan(text: m[7], style: plain.copyWith(color: theme.hintColor)));
+        spans.add(TextSpan(text: m[7], style: mono.copyWith(color: theme.hintColor)));
         spans.add(TextSpan(text: ')', style: faint));
       }
       at = m.end;
