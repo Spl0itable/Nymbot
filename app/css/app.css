@@ -1718,8 +1718,11 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .composer-input .ce-line { min-height: 1.4em; }
 
 /* The marks stay where you typed them so the text you are editing is still
-   the text you wrote; they are only dimmed out of the way. */
+   the text you wrote. They show, dimmed, on the line the caret is on and
+   vanish everywhere else, so a finished block reads as what it means. */
 .ce-mark { color: var(--text-faint); font-weight: 400; font-style: normal; }
+.composer-input .ce-line:not(.is-active) .ce-mark:not(.ce-prefix),
+.composer-input .ce-line:not(.is-active) .ce-fence { color: transparent; }
 .composer-input strong { font-weight: 700; }
 .composer-input em { font-style: italic; }
 .composer-input s { text-decoration: line-through; }

@@ -3,8 +3,9 @@
 // A textarea can only ever show `**loud**` as five literal characters, so what
 // you were writing and what you would be sending looked like two different
 // things. This turns the field into an editable surface that styles the
-// markup in place: the marks stay where you typed them, dimmed, and the text
-// between them is drawn bold, italic or as code.
+// markup in place: the marks stay where you typed them, dimmed on the line
+// the caret is on and invisible elsewhere, and the text between them is
+// drawn bold, italic or as code.
 //
 // Keeping the marks visible is not a compromise, it is what makes the caret
 // arithmetic honest — every character of the source is present in the DOM, in
@@ -44,6 +45,7 @@
     }
 
     const mark = (s) => '<span class="ce-mark">' + esc(s) + '</span>';
+    const prefix = (s) => '<span class="ce-mark ce-prefix">' + esc(s) + '</span>';
 
     // One pass, left to right. Each alternative captures its marks separately
     // from its body so both can be emitted, because dropping a mark would
@@ -89,9 +91,9 @@
         const heading = rest.match(/^(#{1,6}[ \t]+)/);
         const quote = rest.match(/^([ \t]*>[ \t]?)/);
         const bullet = rest.match(/^([ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/);
-        if (heading) { head = mark(heading[1]); rest = rest.slice(heading[1].length); wrap = 'ce-heading'; }
-        else if (quote) { head = mark(quote[1]); rest = rest.slice(quote[1].length); wrap = 'ce-quote'; }
-        else if (bullet) { head = mark(bullet[1]); rest = rest.slice(bullet[1].length); }
+        if (heading) { head = prefix(heading[1]); rest = rest.slice(heading[1].length); wrap = 'ce-heading'; }
+        else if (quote) { head = prefix(quote[1]); rest = rest.slice(quote[1].length); wrap = 'ce-quote'; }
+        else if (bullet) { head = prefix(bullet[1]); rest = rest.slice(bullet[1].length); }
 
         const body = inline(rest);
         return head + (wrap ? '<span class="' + wrap + '">' + body + '</span>' : body);
@@ -99,17 +101,27 @@
 
     /// The text as HTML: one element per line, so a line is addressable and an
     /// empty one still has a box to put the caret in.
-    function render(text) {
+    function lineOf(text, offset) {
+        let n = 0;
+        const end = Math.min(offset, text.length);
+        for (let i = 0; i < end; i++) if (text.charCodeAt(i) === 10) n++;
+        return n;
+    }
+
+    function render(text, activeLine) {
         const lines = String(text == null ? '' : text).split('\n');
         let fence = false;
         let out = '';
-        for (const line of lines) {
+        for (let n = 0; n < lines.length; n++) {
+            const line = lines[n];
             const opener = /^[ \t]*(```|~~~)/.test(line);
             let cls = 'ce-line';
+            if (n === activeLine) cls += ' is-active';
             let html;
             if (opener) {
                 html = '<span class="ce-fence">' + esc(line) + '</span>';
-                fence = !fence;
+                const bare = line.trim();
+                if (!(bare.length >= 6 && bare.endsWith(bare.slice(0, 3)))) fence = !fence;
             } else {
                 html = lineHtml(line, fence);
                 if (fence) cls += ' is-code';
@@ -253,9 +265,17 @@
         };
 
         const paint = () => {
-            const html = render(state.text);
+            const html = render(state.text, lineOf(state.text, state.start));
             if (el.innerHTML !== html) el.innerHTML = html;
             el.classList.toggle('is-empty', state.text === '');
+        };
+
+        /// Moves the active mark to the caret's line without rebuilding the
+        /// DOM, which a caret move must never do.
+        const markActive = () => {
+            const at = lineOf(state.text, state.start);
+            const rows = el.children;
+            for (let i = 0; i < rows.length; i++) rows[i].classList.toggle('is-active', i === at);
         };
 
         /// Puts the text on screen and the caret back where it belongs. The
@@ -395,8 +415,8 @@
             draw(state.start, state.end);
         });
 
-        el.addEventListener('keyup', () => { if (!state.composing) readCaret(); });
-        el.addEventListener('mouseup', () => { if (!state.composing) readCaret(); });
+        el.addEventListener('keyup', () => { if (!state.composing) { readCaret(); markActive(); } });
+        el.addEventListener('mouseup', () => { if (!state.composing) { readCaret(); markActive(); } });
         // Focus lands the caret where the field was left, or where something
         // else asked for it — reading the browser's idea of it would send the
         // caret to the top every time a command filled the field in.
@@ -405,7 +425,7 @@
             else place(state.start, state.end);
         });
         document.addEventListener('selectionchange', () => {
-            if (!state.composing && document.activeElement === el) readCaret();
+            if (!state.composing && document.activeElement === el) { readCaret(); markActive(); }
         });
 
         Object.defineProperty(el, 'value', {
@@ -434,6 +454,7 @@
             state.start = Math.max(0, Math.min(from, state.text.length));
             state.end = Math.max(state.start, Math.min(to === undefined ? from : to, state.text.length));
             if (document.activeElement === el) place(state.start, state.end);
+            markActive();
         };
         el.select = function () { el.focus(); el.setSelectionRange(0, state.text.length); };
 

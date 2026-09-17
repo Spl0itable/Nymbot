@@ -53,14 +53,28 @@ class MarkdownEditingController extends TextEditingController {
         color: theme.hintColor, fontWeight: FontWeight.normal, fontStyle: FontStyle.normal);
     final mono = base.copyWith(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: (base.fontSize ?? 14) * 0.92);
 
+    final hidden = faint.copyWith(color: Colors.transparent);
+
     final spans = <InlineSpan>[];
     final lines = text.split('\n');
+    final caret = value.selection.isValid ? value.selection.extentOffset : -1;
+    var activeLine = -1;
+    if (caret >= 0) {
+      activeLine = 0;
+      final end = caret < text.length ? caret : text.length;
+      for (var i = 0; i < end; i++) {
+        if (text.codeUnitAt(i) == 10) activeLine++;
+      }
+    }
     var inFence = false;
     for (var i = 0; i < lines.length; i++) {
       if (i > 0) spans.add(TextSpan(text: '\n', style: base));
       final line = lines[i];
+      final marks = i == activeLine ? faint : hidden;
       if (_fence.hasMatch(line)) {
-        spans.add(TextSpan(text: line, style: mono.copyWith(color: theme.hintColor)));
+        spans.add(TextSpan(
+            text: line,
+            style: i == activeLine ? mono.copyWith(color: theme.hintColor) : mono.copyWith(color: Colors.transparent)));
         final bare = line.trim();
         final selfClosed = bare.length >= 6 && bare.endsWith(bare.substring(0, 3));
         if (!selfClosed) inFence = !inFence;
@@ -70,13 +84,13 @@ class MarkdownEditingController extends TextEditingController {
         spans.add(TextSpan(text: line, style: mono));
         continue;
       }
-      _line(spans, line, base, faint, mono, theme);
+      _line(spans, line, base, faint, marks, mono, theme);
     }
     return TextSpan(style: base, children: spans);
   }
 
   void _line(List<InlineSpan> spans, String line, TextStyle base, TextStyle faint,
-      TextStyle mono, ThemeData theme) {
+      TextStyle marks, TextStyle mono, ThemeData theme) {
     var rest = line;
     TextStyle body = base;
 
@@ -102,26 +116,26 @@ class MarkdownEditingController extends TextEditingController {
         spans.add(TextSpan(text: rest.substring(at, m.start), style: body));
       }
       if (m[1] != null) {
-        spans.add(TextSpan(text: m[1], style: faint));
+        spans.add(TextSpan(text: m[1], style: marks));
         spans.add(TextSpan(text: m[2], style: mono));
-        spans.add(TextSpan(text: m[1], style: faint));
+        spans.add(TextSpan(text: m[1], style: marks));
       } else if (m[3] != null) {
-        _wrapped(spans, '**', m[3]!, body.copyWith(fontWeight: FontWeight.w700), faint);
+        _wrapped(spans, '**', m[3]!, body.copyWith(fontWeight: FontWeight.w700), marks);
       } else if (m[4] != null) {
-        _wrapped(spans, '__', m[4]!, body.copyWith(fontWeight: FontWeight.w700), faint);
+        _wrapped(spans, '__', m[4]!, body.copyWith(fontWeight: FontWeight.w700), marks);
       } else if (m[5] != null) {
-        _wrapped(spans, '*', m[5]!, body.copyWith(fontStyle: FontStyle.italic), faint);
+        _wrapped(spans, '*', m[5]!, body.copyWith(fontStyle: FontStyle.italic), marks);
       } else if (m[6] != null) {
-        _wrapped(spans, '_', m[6]!, body.copyWith(fontStyle: FontStyle.italic), faint);
+        _wrapped(spans, '_', m[6]!, body.copyWith(fontStyle: FontStyle.italic), marks);
       } else if (m[7] != null) {
         _wrapped(spans, '~~', m[7]!,
-            body.copyWith(decoration: TextDecoration.lineThrough), faint);
+            body.copyWith(decoration: TextDecoration.lineThrough), marks);
       } else {
-        spans.add(TextSpan(text: '[', style: faint));
+        spans.add(TextSpan(text: '[', style: marks));
         spans.add(TextSpan(text: m[8], style: body.copyWith(color: theme.colorScheme.primary)));
-        spans.add(TextSpan(text: '](', style: faint));
+        spans.add(TextSpan(text: '](', style: marks));
         spans.add(TextSpan(text: m[9], style: mono.copyWith(color: theme.hintColor)));
-        spans.add(TextSpan(text: ')', style: faint));
+        spans.add(TextSpan(text: ')', style: marks));
       }
       at = m.end;
     }
