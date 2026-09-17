@@ -22,18 +22,21 @@ class NymAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!bot && picture.isNotEmpty) {
+      final drawn = ClipOval(
+        child: CustomPaint(
+          size: Size.square(size),
+          painter: _IdenticonPainter(seed),
+        ),
+      );
       return ClipOval(
         child: Image.network(
           picture,
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (context, _, __) => ClipOval(
-            child: CustomPaint(
-              size: Size.square(size),
-              painter: _IdenticonPainter(seed),
-            ),
-          ),
+          errorBuilder: (context, _, __) => drawn,
+          frameBuilder: (context, child, frame, wasSync) =>
+              frame == null && !wasSync ? drawn : child,
         ),
       );
     }

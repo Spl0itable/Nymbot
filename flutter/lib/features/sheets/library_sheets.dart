@@ -6,14 +6,14 @@ import '../../models/conversation.dart';
 import '../markdown_body.dart';
 import '../i18n/i18n.dart';
 import '../../core/theme/theme.dart';
+import 'sheet.dart';
 
 typedef MessageJump = ({String conversationId, String? messageId});
 
 Future<MessageJump?> showSearchSheet(BuildContext context, {String term = ''}) =>
-    showModalBottomSheet<MessageJump>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _SearchSheet(term: term),
+    showNymSheet<MessageJump>(
+      context,
+      (_) => _SearchSheet(term: term),
     );
 
 class _SearchSheet extends StatefulWidget {
@@ -117,10 +117,9 @@ class _SearchSheetState extends State<_SearchSheet> {
 }
 
 Future<MessageJump?> showSavedMessagesSheet(BuildContext context) =>
-    showModalBottomSheet<MessageJump>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _SavedSheet(),
+    showNymSheet<MessageJump>(
+      context,
+      (_) => const _SavedSheet(),
     );
 
 class _SavedSheet extends StatefulWidget {
@@ -193,10 +192,9 @@ class _SavedSheetState extends State<_SavedSheet> {
   }
 }
 
-Future<void> showTagsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _TagsSheet(),
+Future<void> showTagsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _TagsSheet(),
     );
 
 class _TagsSheet extends StatefulWidget {
@@ -302,9 +300,10 @@ class _TagsSheetState extends State<_TagsSheet> {
   }
 }
 
-Future<void> showStatsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      builder: (_) => const _StatsSheet(),
+Future<void> showStatsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      isScrollControlled: false,
+      (_) => const _StatsSheet(),
     );
 
 class _StatsSheet extends StatelessWidget {
@@ -362,10 +361,9 @@ class _StatsSheet extends StatelessWidget {
   }
 }
 
-Future<void> showShortcutsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _ShortcutsSheet(),
+Future<void> showShortcutsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _ShortcutsSheet(),
     );
 
 class _ShortcutsSheet extends StatelessWidget {
@@ -416,10 +414,9 @@ class _ShortcutsSheet extends StatelessWidget {
 }
 
 Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
-    showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
+    showNymSheet<String>(
+      context,
+      (context) => SafeArea(
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

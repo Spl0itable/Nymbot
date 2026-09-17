@@ -1906,6 +1906,21 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 #firstLangSearch { width: 100%; }
 
 .model-list { max-height: 46vh; overflow-y: auto; margin-top: 0.6rem; }
+.catalog-wait {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 120px;
+}
+.catalog-wait::before {
+    content: "";
+    width: 26px;
+    height: 26px;
+    border: 2px solid var(--line);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: msg-media-spin 0.8s linear infinite;
+}
 .model-group { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin: 0.85rem 0 0.35rem; }
 /* Maker, name, price, star — the mark and the star pinned to the title line,
    the name, description and price stacked beside them. */

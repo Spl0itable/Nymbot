@@ -176,12 +176,19 @@ class NymbotApi {
       final resp = await _client
           .post(
             Uri.parse(NymbotConfig.botUrl),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
             body: jsonEncode({'action': 'models'}),
           )
           .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return null;
       final decoded = jsonDecode(resp.body);
-      return decoded is Map<String, dynamic> ? decoded : null;
+      if (decoded is! Map<String, dynamic> || decoded['models'] == null) {
+        return null;
+      }
+      return decoded;
     } catch (_) {
       return null;
     }

@@ -5,12 +5,12 @@ import '../../core/crypto/keys.dart';
 import '../../models/memory.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 Future<void> showMemorySheet(BuildContext context) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _MemorySheet(),
+    showNymSheet<void>(
+      context,
+      (_) => const _MemorySheet(),
     );
 
 class _MemorySheet extends StatefulWidget {

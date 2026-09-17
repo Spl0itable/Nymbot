@@ -7,11 +7,11 @@ import '../../models/workspace.dart';
 import '../../services/git_forge.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
-Future<void> showReposSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _ReposSheet(),
+Future<void> showReposSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _ReposSheet(),
     );
 
 class _ReposSheet extends StatefulWidget {

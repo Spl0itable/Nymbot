@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 const supportEmail = 'support@nymbot.ai';
 
@@ -223,10 +224,9 @@ List<HelpTopic> helpTopics() => [
     ];
 
 Future<void> showHelpSheet(BuildContext context, {String prefill = ''}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _HelpSheet(prefill: prefill),
+    showNymSheet<void>(
+      context,
+      (_) => _HelpSheet(prefill: prefill),
     );
 
 class _HelpSheet extends StatefulWidget {

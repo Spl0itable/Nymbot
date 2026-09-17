@@ -214,14 +214,14 @@ class _CodePalette {
             meta: Color(0xFF6ECBFF),
           )
         : const _CodePalette(
-            keyword: Color(0xFFA626A4),
-            string: Color(0xFF2F8A37),
-            number: Color(0xFFB96A00),
-            type: Color(0xFF8A6D00),
+            keyword: Color(0xFF9A2398),
+            string: Color(0xFF236729),
+            number: Color(0xFF854C00),
+            type: Color(0xFF6F5800),
             comment: Color(0x9910151C),
-            ins: Color(0xFF167C3A),
-            del: Color(0xFFB3202F),
-            meta: Color(0xFF0B6FB8),
+            ins: Color(0xFF126831),
+            del: Color(0xFFAF1F2E),
+            meta: Color(0xFF095D9B),
           );
   }
 }

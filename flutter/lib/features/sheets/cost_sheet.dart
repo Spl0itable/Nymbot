@@ -4,6 +4,7 @@ import '../../config.dart';
 import '../../models/conversation.dart';
 import '../i18n/i18n.dart';
 import 'credits_sheet.dart';
+import 'sheet.dart';
 
 /// Everything the device actually knows about one reply's price. Deliberately
 /// not an estimate re-run after the fact: what is shown is what the worker
@@ -33,10 +34,9 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m) {
 }
 
 Future<void> showCostSheet(BuildContext context, ChatMessage m) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _CostSheet(message: m),
+    showNymSheet<void>(
+      context,
+      (_) => _CostSheet(message: m),
     );
 
 class _CostSheet extends StatelessWidget {

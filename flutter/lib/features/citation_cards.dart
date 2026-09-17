@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config.dart';
 import 'i18n/i18n.dart';
 
 /// One thing a reply says it read. A chip only ever showed a title; a card
@@ -46,11 +47,17 @@ class Citation {
 
   String get host => url.isEmpty ? '' : hostOf(url);
 
-  /// The letter drawn in place of a favicon: no request is made for one, so a
-  /// citation card cannot become a tracking pixel.
+  /// The letter drawn while the favicon loads, and instead of it when the site
+  /// has none.
   String get initial {
     final from = host.isEmpty ? title : host;
     return from.isEmpty ? '?' : from.substring(0, 1).toUpperCase();
+  }
+
+  String get faviconUrl {
+    if (host.isEmpty) return '';
+    final target = Uri.encodeComponent(host);
+    return 'https://${NymbotConfig.apiHost}/api/proxy?action=favicon&host=$target';
   }
 }
 
@@ -113,21 +120,7 @@ class _Card extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 20,
-              height: 20,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(citation.initial,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: theme.colorScheme.primary,
-                  )),
-            ),
+            _Mark(citation: citation),
             const SizedBox(width: 8),
             Expanded(
               child: Column(
@@ -163,6 +156,51 @@ class _Card extends StatelessWidget {
             if (open != null)
               Icon(Icons.open_in_new, size: 13, color: theme.hintColor),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Mark extends StatelessWidget {
+  const _Mark({required this.citation});
+
+  final Citation citation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final letter = Container(
+      width: 20,
+      height: 20,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(citation.initial,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: theme.colorScheme.primary,
+          )),
+    );
+    final src = citation.faviconUrl;
+    if (src.isEmpty) return letter;
+    return SizedBox(
+      width: 20,
+      height: 20,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(5),
+        child: Image.network(
+          src,
+          width: 20,
+          height: 20,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) => letter,
+          frameBuilder: (_, child, frame, wasSync) =>
+              frame == null && !wasSync ? letter : child,
         ),
       ),
     );

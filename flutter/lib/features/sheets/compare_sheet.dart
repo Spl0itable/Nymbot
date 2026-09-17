@@ -5,12 +5,12 @@ import '../../models/compare.dart';
 import '../i18n/i18n.dart';
 import '../markdown_body.dart';
 import '../nym_glyph.dart';
+import 'sheet.dart';
 
 Future<void> showCompareSheet(BuildContext context, {String prefill = ''}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _CompareSheet(prefill: prefill),
+    showNymSheet<void>(
+      context,
+      (_) => _CompareSheet(prefill: prefill),
     );
 
 class _CompareSheet extends StatefulWidget {
@@ -169,10 +169,9 @@ class _CompareSheetState extends State<_CompareSheet> {
             ),
             const SizedBox(height: 12),
             if (_loading)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(t('Loading the catalog…'),
-                    style: const TextStyle(fontSize: 12)),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
               )
             else if (_models.isEmpty)
               Padding(
@@ -217,7 +216,7 @@ class _CompareSheetState extends State<_CompareSheet> {
 
   Widget _picker(String label, String? value, ValueChanged<String?> onChanged) {
     return DropdownButtonFormField<String>(
-      initialValue: value,
+      value: value,
       isExpanded: true,
       decoration: InputDecoration(labelText: label),
       items: [

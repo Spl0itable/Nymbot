@@ -12,11 +12,11 @@ import '../../services/nostr/event_signer.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import '../purchase_policy.dart';
+import 'sheet.dart';
 
-Future<void> showCreditsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _CreditsSheet(),
+Future<void> showCreditsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _CreditsSheet(),
     );
 
 class _CreditsSheet extends StatefulWidget {
@@ -235,14 +235,16 @@ class _CreditsSheetState extends State<_CreditsSheet> {
       );
     }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        cell(t('Standard'), app.standardBalance, _tier == 'standard',
-            freeTier: true),
-        const SizedBox(width: 8),
-        cell(t('Pro'), app.proBalance, _tier == 'pro'),
-      ],
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          cell(t('Standard'), app.standardBalance, _tier == 'standard',
+              freeTier: true),
+          const SizedBox(width: 8),
+          cell(t('Pro'), app.proBalance, _tier == 'pro'),
+        ],
+      ),
     );
   }
 

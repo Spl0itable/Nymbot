@@ -5,12 +5,12 @@ import '../../app.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
+import 'sheet.dart';
 
 Future<void> showAppearanceSheet(BuildContext context) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _AppearanceSheet(),
+    showNymSheet<void>(
+      context,
+      (_) => const _AppearanceSheet(),
     );
 
 class _AppearanceSheet extends StatefulWidget {
@@ -194,7 +194,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             Text(t('Long tasks'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
             DropdownButtonFormField<int>(
-              initialValue: s.autoContinue,
+              value: s.autoContinue,
               isExpanded: true,
               decoration: InputDecoration(
                   labelText: t('When a repo task runs out of room')),
@@ -251,7 +251,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<int>(
-              initialValue: s.autoDeleteDays,
+              value: s.autoDeleteDays,
               decoration: InputDecoration(labelText: t('Delete chats after')),
               items: [
                 DropdownMenuItem(value: 0, child: Text(t('Never'))),

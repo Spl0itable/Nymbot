@@ -61,7 +61,9 @@ class MarkdownEditingController extends TextEditingController {
       final line = lines[i];
       if (_fence.hasMatch(line)) {
         spans.add(TextSpan(text: line, style: mono.copyWith(color: theme.hintColor)));
-        inFence = !inFence;
+        final bare = line.trim();
+        final selfClosed = bare.length >= 6 && bare.endsWith(bare.substring(0, 3));
+        if (!selfClosed) inFence = !inFence;
         continue;
       }
       if (inFence) {

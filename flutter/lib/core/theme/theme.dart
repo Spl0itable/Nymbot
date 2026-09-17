@@ -147,6 +147,11 @@ ThemeData nymbotTheme(Brightness brightness,
   );
 }
 
+extension NymSurfaceTint on ThemeData {
+  Color tint(double strength) =>
+      dividerColor.withValues(alpha: dividerColor.a * strength);
+}
+
 final _buttonStyle = ButtonStyle(
   shape: WidgetStatePropertyAll(RoundedRectangleBorder(
     borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),

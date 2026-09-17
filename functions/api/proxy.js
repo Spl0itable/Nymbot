@@ -78,6 +78,8 @@ export async function onRequest(context) {
       return await handleTranslate(request, context);
     } else if (action === 'unfurl') {
       return await handleUnfurl(url.searchParams.get('url'), context);
+    } else if (action === 'favicon') {
+      return await handleFavicon(url.searchParams.get('host'), context);
     } else if (action === 'upload') {
       return await handleBlossomUpload(request, url.searchParams.get('server'));
     } else if (action === 'mirror') {
@@ -712,6 +714,154 @@ async function handleUnfurl(targetUrl, context) {
 
   const meta = extractOpenGraph(html, targetUrl);
   return writeEdgeCache(context, cachePath, JSON.stringify(meta), 'application/json', 3600);
+}
+
+const FAVICON_MAX_BYTES = 512 * 1024;
+const FAVICON_CACHE_TTL = 7 * 86400;
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function bytesStartWith(bytes, magic) {
+  if (bytes.length < magic.length) return false;
+  for (let i = 0; i < magic.length; i++) if (bytes[i] !== magic[i]) return false;
+  return true;
+}
+
+function faviconLinks(html, pageUrl) {
+  const out = [];
+  const linkRe = /<link\b[^>]*>/gi;
+  let m;
+  while ((m = linkRe.exec(html)) !== null) {
+    const tag = m[0];
+    const attr = (name) => {
+      const a = new RegExp('\\b' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i').exec(tag);
+      return a ? (a[1] ?? a[2] ?? a[3] ?? '') : '';
+    };
+    const rel = attr('rel').toLowerCase();
+    if (!/\bicon\b|apple-touch-icon/.test(rel)) continue;
+    const href = attr('href');
+    if (!href) continue;
+    let abs;
+    try { abs = new URL(href, pageUrl).toString(); } catch { continue; }
+    if (!/^https?:/i.test(abs)) continue;
+    const type = attr('type').toLowerCase();
+    if (type === 'image/svg+xml' || /\.svg(?:[?#]|$)/i.test(abs)) continue;
+    const sizes = attr('sizes').toLowerCase();
+    const dims = /(\d+)x(\d+)/.exec(sizes);
+    let size = dims ? parseInt(dims[1], 10) : (sizes === 'any' ? 256 : 0);
+    if (!size && /apple-touch-icon/.test(rel)) size = 180;
+    const png = type === 'image/png' || /\.png(?:[?#]|$)/i.test(abs) || /apple-touch-icon/.test(rel);
+    out.push({ url: abs, size, png });
+  }
+  return out;
+}
+
+function icoPngFrame(bytes) {
+  if (bytes.length < 6 || bytes[0] !== 0 || bytes[1] !== 0 || bytes[2] !== 1 || bytes[3] !== 0) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const count = view.getUint16(4, true);
+  let best = null;
+  for (let i = 0; i < count; i++) {
+    const at = 6 + i * 16;
+    if (at + 16 > bytes.length) break;
+    const width = bytes[at] || 256;
+    const size = view.getUint32(at + 8, true);
+    const offset = view.getUint32(at + 12, true);
+    if (offset + size > bytes.length || size < 16) continue;
+    const frame = bytes.subarray(offset, offset + size);
+    if (!bytesStartWith(frame, PNG_MAGIC)) continue;
+    if (!best || (best.width < 32 && width > best.width) || (width >= 32 && width < best.width) || (best.width < 32 && width >= 32)) {
+      best = { width, frame };
+    }
+  }
+  return best ? best.frame : null;
+}
+
+function faviconType(bytes) {
+  if (bytesStartWith(bytes, PNG_MAGIC)) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  return '';
+}
+
+async function fetchIconBytes(url) {
+  let resp;
+  try {
+    resp = await ssrfSafeFetch(url, {
+      headers: { 'User-Agent': BROWSER_USER_AGENT, 'Accept': 'image/png,image/*;q=0.8,*/*;q=0.5' },
+      cf: { cacheTtl: FAVICON_CACHE_TTL, cacheEverything: true },
+    });
+  } catch {
+    return null;
+  }
+  if (!resp.ok) return null;
+  const cl = parseInt(resp.headers.get('content-length') || '', 10);
+  if (Number.isFinite(cl) && cl > FAVICON_MAX_BYTES) return null;
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  if (!buf.length || buf.length > FAVICON_MAX_BYTES) return null;
+  return buf;
+}
+
+async function handleFavicon(hostParam, context) {
+  const host = String(hostParam || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host || host.length > 253 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+    return jsonResponse({ error: 'Invalid host' }, 400);
+  }
+  const pageUrl = `https://${host}/`;
+  if (isPrivateUrl(pageUrl)) {
+    return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
+  }
+  const cachePath = `/favicon?host=${encodeURIComponent(host)}`;
+  const cached = await readEdgeCache(cachePath);
+  if (cached) return cached;
+
+  const candidates = [];
+  try {
+    const page = await ssrfSafeFetch(pageUrl, {
+      headers: { 'User-Agent': BROWSER_USER_AGENT, 'Accept': 'text/html,application/xhtml+xml' },
+    });
+    if (page.ok && (page.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+      const reader = page.body.getReader();
+      const decoder = new TextDecoder();
+      let html = '';
+      let read = 0;
+      while (read < MAX_UNFURL_SIZE) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        read += value.length;
+        html += decoder.decode(value, { stream: true });
+        if (html.includes('</head>')) break;
+      }
+      try { reader.cancel(); } catch { /* noop */ }
+      const links = faviconLinks(html, page.url || pageUrl)
+        .filter((l) => l.png)
+        .sort((x, y) => {
+          const xa = x.size >= 32 ? x.size : 1000 + (32 - x.size);
+          const ya = y.size >= 32 ? y.size : 1000 + (32 - y.size);
+          return xa - ya;
+        });
+      for (const l of links.slice(0, 3)) candidates.push(l.url);
+    }
+  } catch { /* the page is optional; favicon.ico is still tried */ }
+  candidates.push(`https://${host}/favicon.ico`, `https://${host}/apple-touch-icon.png`);
+
+  const seen = new Set();
+  for (const url of candidates) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const bytes = await fetchIconBytes(url);
+    if (!bytes) continue;
+    let body = bytes;
+    let type = faviconType(bytes);
+    if (!type) {
+      const frame = icoPngFrame(bytes);
+      if (frame) { body = frame; type = 'image/png'; }
+    }
+    if (!type) continue;
+    return writeEdgeCache(context, cachePath, body, type, FAVICON_CACHE_TTL);
+  }
+  return jsonResponse({ error: 'No decodable icon' }, 404);
 }
 
 // Reverse-geocode lat/lng via Nominatim, edge-cached for 1 day. Results are

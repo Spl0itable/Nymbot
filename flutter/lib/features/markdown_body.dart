@@ -12,6 +12,31 @@ import 'diff_view.dart';
 import 'i18n/i18n.dart';
 import '../core/theme/theme.dart';
 
+Widget mediaWaiting(BuildContext context, ImageChunkEvent? progress,
+    {double width = 260, double height = 180}) {
+  final theme = Theme.of(context);
+  final total = progress?.expectedTotalBytes;
+  final done = progress?.cumulativeBytesLoaded;
+  return Container(
+    width: width,
+    height: height,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: theme.tint(0.5),
+      border: Border.all(color: theme.dividerColor),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: SizedBox(
+      width: 26,
+      height: 26,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        value: (total != null && total > 0 && done != null) ? done / total : null,
+      ),
+    ),
+  );
+}
+
 class MarkdownBody extends StatelessWidget {
   const MarkdownBody(
     this.source, {
@@ -27,8 +52,16 @@ class MarkdownBody extends StatelessWidget {
   final bool monospace;
 
   static final _bullet = RegExp(r'^(\s*)([-*+]|\d+[.)])\s+');
-  static final _fence = RegExp(r'^\s*(?:```|~~~)([\w+#.-]*)\s*$');
-  static final _fenceEnd = RegExp(r'^\s*(?:```|~~~)\s*$');
+  static final _fence = RegExp(r'^\s*(```|~~~)(.*)$');
+  static final _fenceInfo = RegExp(r'^[\w+#.-]*$');
+  static final _fenceLead = RegExp(r'^([A-Za-z][\w+#.-]{0,15})\s+(.+)$');
+  static const _fenceLangs = {
+    'js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx', 'py', 'python', 'dart', 'json',
+    'bash', 'sh', 'shell', 'zsh', 'html', 'css', 'scss', 'sql', 'go', 'rust', 'rs', 'java',
+    'c', 'cpp', 'h', 'cs', 'csharp', 'kotlin', 'kt', 'swift', 'ruby', 'rb', 'php', 'yaml',
+    'yml', 'toml', 'xml', 'md', 'markdown', 'diff', 'patch', 'text', 'txt', 'plaintext',
+    'lua', 'r', 'scala', 'perl', 'ini', 'dockerfile', 'makefile', 'nix', 'graphql',
+  };
   static final _heading = RegExp(r'^(#{1,6})\s+(.*)$');
   static final _rule = RegExp(r'^\s*(?:[-*_]\s*){3,}$');
   static final _quote = RegExp(r'^\s*>\s?');
@@ -65,13 +98,44 @@ class MarkdownBody extends StatelessWidget {
 
       final fence = _fence.firstMatch(line);
       if (fence != null) {
-        final lang = fence.group(1) ?? '';
+        final mark = fence.group(1)!;
+        final endRe = RegExp('^(.*?)\\s*${RegExp.escape(mark)}\\s*\$');
+        var rest = fence.group(2) ?? '';
+        var lang = '';
         final body = <String>[];
-        i++;
-        while (i < lines.length && !_fenceEnd.hasMatch(lines[i])) {
-          body.add(lines[i++]);
+        var closed = false;
+        if (rest.trim().isNotEmpty) {
+          final single = endRe.firstMatch(rest);
+          if (single != null) {
+            rest = single.group(1) ?? '';
+            closed = true;
+          }
+        }
+        final info = rest.trim();
+        if (_fenceInfo.hasMatch(info)) {
+          lang = info;
+        } else {
+          final first = _fenceLead.firstMatch(info);
+          if (first != null && _fenceLangs.contains(first.group(1)!.toLowerCase())) {
+            lang = first.group(1)!;
+            body.add(first.group(2)!);
+          } else {
+            body.add(rest.replaceFirst(RegExp(r'^\s'), ''));
+          }
         }
         i++;
+        if (!closed) {
+          while (i < lines.length) {
+            final end = endRe.firstMatch(lines[i]);
+            if (end != null) {
+              final last = end.group(1) ?? '';
+              if (last.trim().isNotEmpty) body.add(last);
+              i++;
+              break;
+            }
+            body.add(lines[i++]);
+          }
+        }
         gap();
         // A patch is read as a patch: per file, with what it costs on the
         // header rather than counted off the `+` lines by eye.
@@ -270,6 +334,9 @@ class MarkdownBody extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: Image.network(m.group(3)!,
+                  loadingBuilder: (c, child, p) => p == null
+                      ? child
+                      : mediaWaiting(c, p, width: 200, height: 140),
                   errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
             ),
           ),
@@ -409,7 +476,7 @@ class _Table extends StatelessWidget {
           ),
           children: [
             TableRow(
-              decoration: BoxDecoration(color: theme.dividerColor.withValues(alpha: 0.4)),
+              decoration: BoxDecoration(color: theme.tint(0.4)),
               children: [
                 for (var i = 0; i < head.length; i++) cell(head[i], i, header: true),
               ],
@@ -447,7 +514,7 @@ class _Callout extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: accent, width: 3)),
-        color: theme.dividerColor.withValues(alpha: 0.35),
+        color: theme.tint(0.35),
         borderRadius: const BorderRadius.horizontal(right: Radius.circular(8)),
       ),
       child: Column(
@@ -523,7 +590,7 @@ class _CodeBlockState extends State<CodeBlock> {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: theme.dividerColor.withValues(alpha: 0.5),
+        color: theme.tint(0.5),
         border: Border.all(color: theme.dividerColor),
         borderRadius: BorderRadius.circular(8),
       ),
@@ -694,6 +761,7 @@ class _MediaBlockState extends State<MediaBlock> {
       ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Image.network(widget.url,
+            loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
             errorBuilder: (c, e, s) => Text(widget.url,
                 style: TextStyle(fontSize: 12, color: theme.hintColor))),
       ),

@@ -268,6 +268,14 @@
         return { html, next: i };
     }
 
+    const FENCE_LANGS = new Set([
+        'js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx', 'py', 'python', 'dart', 'json',
+        'bash', 'sh', 'shell', 'zsh', 'html', 'css', 'scss', 'sql', 'go', 'rust', 'rs', 'java',
+        'c', 'cpp', 'h', 'cs', 'csharp', 'kotlin', 'kt', 'swift', 'ruby', 'rb', 'php', 'yaml',
+        'yml', 'toml', 'xml', 'md', 'markdown', 'diff', 'patch', 'text', 'txt', 'plaintext',
+        'lua', 'r', 'scala', 'perl', 'ini', 'dockerfile', 'makefile', 'nix', 'graphql'
+    ]);
+
     function render(src, options) {
         const opts = options || {};
         const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
@@ -277,13 +285,42 @@
         while (i < lines.length) {
             const line = lines[i];
 
-            const fence = /^\s*(?:```|~~~)([\w+#.-]*)\s*$/.exec(line);
+            const fence = /^\s*(```|~~~)(.*)$/.exec(line);
             if (fence) {
-                const lang = fence[1] || '';
+                const mark = fence[1];
+                const endRe = new RegExp('^(.*?)\\s*' + mark + '\\s*$');
+                let rest = fence[2];
+                let lang = '';
                 const body = [];
+                let closed = false;
+                if (rest.trim()) {
+                    const single = endRe.exec(rest);
+                    if (single) { rest = single[1]; closed = true; }
+                }
+                const info = rest.trim();
+                if (/^[\w+#.-]*$/.test(info)) {
+                    lang = info;
+                } else {
+                    const first = /^([A-Za-z][\w+#.-]{0,15})\s+(.+)$/.exec(info);
+                    if (first && FENCE_LANGS.has(first[1].toLowerCase())) {
+                        lang = first[1];
+                        body.push(first[2]);
+                    } else {
+                        body.push(rest.replace(/^\s/, ''));
+                    }
+                }
                 i++;
-                while (i < lines.length && !/^\s*(?:```|~~~)\s*$/.test(lines[i])) body.push(lines[i++]);
-                i++;
+                if (!closed) {
+                    while (i < lines.length) {
+                        const end = endRe.exec(lines[i]);
+                        if (end) {
+                            if (end[1].trim()) body.push(end[1]);
+                            i++;
+                            break;
+                        }
+                        body.push(lines[i++]);
+                    }
+                }
                 out.push(codeBlock(body.join('\n'), lang, opts));
                 continue;
             }
@@ -349,6 +386,7 @@
                 && !(/^\s*\|/.test(lines[i]) && isTableDivider(lines[i + 1] || ''))) {
                 para.push(lines[i++]);
             }
+            if (!para.length) para.push(lines[i++]);
             const text = para.join('\n');
             const bare = text.trim();
             const media = /^https?:\/\/\S+$/.test(bare)

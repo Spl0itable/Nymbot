@@ -4,12 +4,12 @@ import '../../app.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 Future<String?> showPromptsSheet(BuildContext context) =>
-    showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _PromptsSheet(),
+    showNymSheet<String>(
+      context,
+      (_) => const _PromptsSheet(),
     );
 
 class _PromptsSheet extends StatefulWidget {

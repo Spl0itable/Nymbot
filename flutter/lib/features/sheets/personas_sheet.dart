@@ -6,11 +6,11 @@ import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
 import '../nym_glyph.dart';
 import '../nym_glyphs.dart';
+import 'sheet.dart';
 
-Future<void> showPersonasSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _PersonasSheet(),
+Future<void> showPersonasSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _PersonasSheet(),
     );
 
 class _PersonasSheet extends StatefulWidget {
@@ -213,10 +213,9 @@ class _PersonasSheetState extends State<_PersonasSheet> {
 }
 
 Future<void> showSystemPromptSheet(BuildContext context) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _SystemSheet(),
+    showNymSheet<void>(
+      context,
+      (_) => const _SystemSheet(),
     );
 
 class _SystemSheet extends StatefulWidget {

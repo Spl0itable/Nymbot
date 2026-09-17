@@ -5,12 +5,12 @@ import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../../services/attachments.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 Future<void> showWorkspacesSheet(BuildContext context) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _WorkspacesSheet(),
+    showNymSheet<void>(
+      context,
+      (_) => const _WorkspacesSheet(),
     );
 
 class _WorkspacesSheet extends StatefulWidget {

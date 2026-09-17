@@ -10,11 +10,11 @@ import '../i18n/i18n.dart';
 import '../../core/theme/theme.dart';
 import '../nym_glyph.dart';
 import '../nym_glyphs.dart';
+import 'sheet.dart';
 
-Future<void> showBotsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _BotsSheet(),
+Future<void> showBotsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _BotsSheet(),
     );
 
 class _BotsSheet extends StatefulWidget {
@@ -257,7 +257,7 @@ class _BotsSheetState extends State<_BotsSheet> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
-              initialValue: _modelKey,
+              value: _modelKey,
               isExpanded: true,
               decoration: InputDecoration(labelText: t('Model')),
               items: [
@@ -311,10 +311,9 @@ class _BotsSheetState extends State<_BotsSheet> {
 }
 
 Future<void> showShareBot(BuildContext context, Bot bot) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _ShareBot(bot: bot),
+    showNymSheet<void>(
+      context,
+      (_) => _ShareBot(bot: bot),
     );
 
 class _ShareBot extends StatefulWidget {
@@ -446,10 +445,9 @@ class _ShareBotState extends State<_ShareBot> {
 }
 
 Future<void> showAddBot(BuildContext context, {String prefill = ''}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _AddBot(prefill: prefill),
+    showNymSheet<void>(
+      context,
+      (_) => _AddBot(prefill: prefill),
     );
 
 class _AddBot extends StatefulWidget {

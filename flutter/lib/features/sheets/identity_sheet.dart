@@ -5,11 +5,11 @@ import '../../app.dart';
 import '../../core/theme/theme.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
-Future<void> showIdentitySheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _IdentitySheet(),
+Future<void> showIdentitySheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _IdentitySheet(),
     );
 
 class _IdentitySheet extends StatefulWidget {

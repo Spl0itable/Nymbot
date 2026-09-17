@@ -6,12 +6,12 @@ import '../../services/chat_engine.dart';
 import '../../state/app_controller.dart';
 import '../brand_tile.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 Future<void> showModelsSheet(BuildContext context, {String filter = ''}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _ModelsSheet(initialFilter: filter),
+    showNymSheet<void>(
+      context,
+      (_) => _ModelsSheet(initialFilter: filter),
     );
 
 /// The picker is generated from the worker's live catalog, so what it offers is
@@ -86,12 +86,17 @@ class _ModelsSheetState extends State<_ModelsSheet> {
       ChatEngine.nominalTurnCredits(m, _catalog);
 
   String _turnLabel(Map<String, dynamic> m, int credits, int max) {
-    final turn = _turnCredits(m);
-    if (turn == null) return _price(credits, max);
-    final n = creditFigure(turn);
-    return n == '1'
-        ? t('~{n} credit a turn', {'n': n})
-        : t('~{n} credits a turn', {'n': n});
+    final span = ChatEngine.nominalTurnRange(m, _catalog);
+    if (span == null) return _price(credits, max);
+    final (low, high) = span;
+    final lo = creditFigure(low);
+    final hi = creditFigure(high);
+    if (lo == hi) {
+      return lo == '1'
+          ? t('~{n} credit a reply', {'n': lo})
+          : t('~{n} credits a reply', {'n': lo});
+    }
+    return t('~{low}–{high} credits a reply', {'low': lo, 'high': hi});
   }
 
   String? _rates(Map<String, dynamic> m) {
@@ -306,6 +311,16 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                       : rows.isEmpty
                           ? Center(child: Text(t('Nothing matches that.')))
                           : ListView(controller: controller, children: rows),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              t('An estimate for one reply at these rates: the low end is a '
+                  'short answer, the high end a long one. Whatever the model '
+                  'has to read pushes it up — web results, repository files, '
+                  'attachments, and a long chat behind you — and a task that '
+                  'takes several passes costs more again. You pay for the '
+                  'tokens actually used, never a flat price per message.'),
+              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
             ),
             const SizedBox(height: 8),
             OutlinedButton(

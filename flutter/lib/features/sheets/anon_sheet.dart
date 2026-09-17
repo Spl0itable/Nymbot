@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
-Future<void> showAnonSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _AnonSheet(),
+Future<void> showAnonSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _AnonSheet(),
     );
 
 class _AnonSheet extends StatefulWidget {

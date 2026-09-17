@@ -723,6 +723,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       drawer: const _ChatDrawer(),
+      drawerEdgeDragWidth: MediaQuery.sizeOf(context).width * 0.5,
       appBar: AppBar(
         title: GestureDetector(
           onTap: _rename,

@@ -5,12 +5,12 @@ import '../../core/crypto/keys.dart';
 import '../../models/schedule.dart';
 import '../../services/chat_engine.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
 Future<void> showSchedulesSheet(BuildContext context, {String prefill = ''}) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _SchedulesSheet(prefill: prefill),
+    showNymSheet<void>(
+      context,
+      (_) => _SchedulesSheet(prefill: prefill),
     );
 
 String repeatLabel(ScheduleRepeat repeat) => switch (repeat) {
@@ -236,7 +236,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<ScheduleRepeat>(
-              initialValue: _repeat,
+              value: _repeat,
               decoration: InputDecoration(labelText: t('How often')),
               items: [
                 for (final r in ScheduleRepeat.values)

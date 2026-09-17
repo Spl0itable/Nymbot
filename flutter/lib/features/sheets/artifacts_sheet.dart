@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../artifact_screen.dart';
 import '../i18n/i18n.dart';
+import 'sheet.dart';
 
-Future<void> showArtifactsSheet(BuildContext context) => showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _ArtifactsSheet(),
+Future<void> showArtifactsSheet(BuildContext context) => showNymSheet<void>(
+      context,
+      (_) => const _ArtifactsSheet(),
     );
 
 class _ArtifactsSheet extends StatelessWidget {

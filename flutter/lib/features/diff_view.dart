@@ -233,7 +233,7 @@ class _FilePanelState extends State<_FilePanel> {
     final background = switch (line.kind) {
       DiffLineKind.add => addBg,
       DiffLineKind.remove => delBg,
-      DiffLineKind.hunk => theme.dividerColor.withValues(alpha: 0.35),
+      DiffLineKind.hunk => theme.tint(0.35),
       _ => null,
     };
     String gutter(int? n) => n == null ? '' : '$n';

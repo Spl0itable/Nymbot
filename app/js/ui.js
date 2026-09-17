@@ -2600,7 +2600,8 @@
             this.openModal('modalModels');
             const list = $('modelList');
             if (!this.models) {
-                list.textContent = t('Loading the catalog…');
+                list.innerHTML = '';
+                list.appendChild(el('div', 'catalog-wait'));
                 this.models = await Api.models();
             }
             if (!this.models || !this.models.models) {
@@ -4062,8 +4063,8 @@
                     (host || title).slice(0, 1).toUpperCase());
                 if (host) {
                     const icon = el('img', 'citation-icon');
-                    icon.src = `https://${C.apiHost}/api/proxy?url=`
-                        + encodeURIComponent(`https://${host}/favicon.ico`);
+                    icon.src = `https://${C.apiHost}/api/proxy?action=favicon&host=`
+                        + encodeURIComponent(host);
                     icon.alt = '';
                     icon.loading = 'lazy';
                     icon.referrerPolicy = 'no-referrer';
@@ -5000,9 +5001,10 @@
             if (!this.models) {
                 a.innerHTML = '';
                 b.innerHTML = '';
-                this.modalStatus('compareStatus', t('Loading the catalog…'));
+                const wait = el('div', 'catalog-wait');
+                a.parentNode.insertBefore(wait, a);
                 this.models = await Api.models();
-                this.modalStatus('compareStatus', '');
+                wait.remove();
             }
             if (!this.models || !this.models.models) {
                 this.modalStatus('compareStatus',

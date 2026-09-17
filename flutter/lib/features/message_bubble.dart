@@ -261,7 +261,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     final bubbles = settings.bubbles;
     final background = self
         ? theme.colorScheme.primary.withValues(alpha: 0.10)
-        : theme.dividerColor.withValues(alpha: 0.9);
+        : theme.dividerColor;
 
     final radius = bubbles
         ? BorderRadius.only(
@@ -686,17 +686,18 @@ class TypingIndicator extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Flexible(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
-                color: theme.dividerColor.withValues(alpha: 0.9),
+                color: theme.dividerColor,
                 // Every corner the same.
                 borderRadius: BorderRadius.circular(16),
               ),
-              // Centred: this is a status, not a message, and the lines under it
-              // change length every couple of seconds — ragged against a left
+              // Centered: this is a status, not a message, and the lines under
+              // it change length every couple of seconds — ragged against a left
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,

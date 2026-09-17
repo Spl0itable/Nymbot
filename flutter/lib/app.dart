@@ -27,9 +27,13 @@ class AppScope extends InheritedNotifier<AppController> {
 }
 
 class NymbotApp extends StatelessWidget {
-  const NymbotApp({super.key, required this.controller});
+  const NymbotApp({super.key, required this.controller, this.navigatorKey});
 
   final AppController controller;
+
+  /// Null in the shipped app. The screenshot harness passes one so it can open
+  /// the app's own sheets from outside the widget tree.
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +61,9 @@ class NymbotApp extends StatelessWidget {
 
     return MaterialApp(
         title: 'Nymbot',
+        navigatorKey: navigatorKey,
         debugShowCheckedModeBanner: false,
+        scrollBehavior: const NymScrollBehavior(),
         theme: nymbotTheme(Brightness.light, fontScale: settings.fontScale),
         darkTheme: nymbotTheme(Brightness.dark,
             palette: palette, fontScale: settings.fontScale),
@@ -72,6 +78,15 @@ class NymbotApp extends StatelessWidget {
         home: const _Root(),
       );
   }
+}
+
+class NymScrollBehavior extends MaterialScrollBehavior {
+  const NymScrollBehavior();
+
+  @override
+  ScrollViewKeyboardDismissBehavior getKeyboardDismissBehavior(
+          BuildContext context) =>
+      ScrollViewKeyboardDismissBehavior.onDrag;
 }
 
 class _Root extends StatefulWidget {
