@@ -108,6 +108,7 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
+import { noteUsage, denied } from "./_usage.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -4315,6 +4316,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // device records a clip and Whisper turns it into text.
   if (body.action === "transcribe") {
     if (!env.AI) return json({ error: "Transcription is not configured on this server." }, 503);
+    var transcribeT0 = Date.now();
     var audioRaw = typeof body.audio === "string" ? body.audio : "";
     // Data URL or bare base64 — either is what a MediaRecorder blob reads as.
     var comma = audioRaw.indexOf(",");
@@ -4340,6 +4342,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     } catch (e) {
       return json({ error: "Transcription failed: " + String((e && e.message) || e).slice(0, 160) }, 502);
     }
+    noteUsage(context, { pubkey: userPubkey, kind: "transcribe", tier: "standard", model: BOT_TRANSCRIBE_MODEL,
+      calls: 1, ms: Date.now() - transcribeT0 });
     return json({ text: said });
   }
 
@@ -4649,6 +4653,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "pm") {
+    if (await denied(env, userPubkey)) {
+      return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
+    }
+    var usageT0 = Date.now();
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
     var proModel = null;
     if (proModelKey) {
@@ -4779,6 +4787,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
     var turnFail = async function (obj, status) {
       await turnRelease();
+      noteUsage(context, {
+        pubkey: userPubkey, kind: "chat", tier: freeTurn ? "free" : (proModel ? "pro" : "standard"),
+        ms: Date.now() - usageT0, ok: false,
+        err: obj && obj.noCredits ? "no-credits" : (obj && obj.error) || "error"
+      });
       return json(obj, status);
     };
     var turnDone = async function (obj, status) {
@@ -5228,6 +5241,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       };
       // Charged and delivered: record it so a resend collects this generation
       // rather than paying for another one.
+      noteUsage(context, {
+        pubkey: userPubkey, kind: "media", tier: mediaTier, task: media.kind, model: mediaBody.modelLabel,
+        calls: 1, costMilli: mediaCost * BOT_MILLI_PER_CREDIT, ms: Date.now() - usageT0
+      });
       return await turnDone(mediaBody);
     }
 
@@ -5473,6 +5490,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
     // Charged and delivered. If the socket carrying this response is already
     // gone, the client's HTTP retry reads the reply back out of here.
+    noteUsage(context, {
+      pubkey: userPubkey, kind: "chat", tier: freeTurn ? "free" : (proModel ? "pro" : "standard"),
+      task: taskType,
+      model: proModel ? proModel.model
+        : (freeTurn ? BOT_MODEL_DEFAULT : (chatResult.billedModel || BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general)),
+      calls: chatResult.modelCalls == null ? 1 : chatResult.modelCalls, usage: chatResult.usage,
+      costMilli: costMilli > 0 ? costMilli : cost * BOT_MILLI_PER_CREDIT,
+      git: !!ghConfig, web: body.web === true, ms: Date.now() - usageT0
+    });
     return await turnDone(chatBody);
   }
 
