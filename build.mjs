@@ -10,6 +10,8 @@ import { loadSite } from "./i18n/pages.mjs";
 import { renderPage, renderSitemap, SITE } from "./i18n/render.mjs";
 import { renderLlmsFull, renderLlmsTxt } from "./i18n/llms.mjs";
 import { articleMarkdown } from "./i18n/markdown.mjs";
+import { ERROR_PAGES, renderErrorPage } from "./errors/pages.mjs";
+import { errorStyles } from "./errors/style.mjs";
 
 const outDir = "dist";
 
@@ -160,6 +162,21 @@ for (const asset of staticAssets) {
   await writeFile(path.join(outDir, "404.html"), notFound);
 }
 
+// The pages Cloudflare serves when it cannot reach this origin, or will not:
+// a 5xx, a DNS fault, a firewall block, a challenge. They are deliberately
+// unlike everything above — no hashed asset names, no localized render, no
+// sitemap entry — because each one has to stand on its own with this host
+// unreachable, so it links to nothing and inlines its styling. See
+// errors/pages.mjs for which page covers which Cloudflare slot.
+const errorCss = await errorStyles();
+await mkdir(path.join(outDir, "errors"), { recursive: true });
+for (const page of ERROR_PAGES) {
+  await writeFile(
+    path.join(outDir, "errors", page.file),
+    renderErrorPage(page, errorCss)
+  );
+}
+
 console.log("Build complete:");
 for (const asset of hashedAssets) {
   console.log(`  ${asset.src} -> ${rename.get(asset.src)}`);
@@ -181,6 +198,9 @@ console.log(`  ${documents.length} pages: ${documents.map((d) => d.slug ?? "/").
 
 console.log(`  sitemap.xml (index over ${sitemaps.length - 1} language sitemaps), llms.txt, llms-full.txt, 404.html`);
 console.log(`  ${markdownPages} markdown twins (<page>.md)`);
+console.log(
+  `  ${ERROR_PAGES.length} error pages: ${ERROR_PAGES.map((p) => `errors/${p.file}`).join(", ")}`
+);
 console.log(`  ${sources.length} translatable strings (${runtimeStrings.length} from script.js)`);
 console.log(`  languages published: ${available.size} (+ English at /)`);
 if (partial.length > 0) {

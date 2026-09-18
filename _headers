@@ -22,6 +22,15 @@
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: public, max-age=0, must-revalidate
 
+# The Cloudflare error pages. These are not browsed to — Cloudflare fetches each
+# one, stores its own copy and serves that when this origin cannot be reached —
+# so what this governs is the re-fetch. An error page whose copy changed should
+# be picked up the next time Cloudflare asks for it, not served from a cache,
+# and nothing here belongs in a search index.
+/errors/*
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Robots-Tag: noindex
+
 /
   Cache-Control: public, max-age=0, must-revalidate
 

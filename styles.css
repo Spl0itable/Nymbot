@@ -2920,13 +2920,23 @@ footer {
     white-space: pre;
 }
 
-.nf-art-404 {
+/* This page's own art, and the status code at the top of the error pages in
+   `errors/` — the same glyphs in the same figlet font, so the whole set reads
+   as one page. Each error code is a different number of columns wide, so those
+   pages compute their own font-size rather than inheriting this one. */
+.nf-art-404,
+.nf-art-code {
     color: var(--primary);
+}
+
+.nf-art-404 {
     font-size: min(2.3vw, 15px);
 }
 
 @media (prefers-color-scheme: dark) {
-    .nf-art-404 {
+
+    .nf-art-404,
+    .nf-art-code {
         text-shadow: 0 0 12px rgba(0, 255, 0, 0.18);
     }
 }
@@ -3166,4 +3176,55 @@ footer {
 .bot-thinking .typing-dot {
     width: 4px;
     height: 4px;
+}
+
+/* Cloudflare's own block, dropped in where the error pages put their token:
+   the error or ray ID on an error page, the challenge widget on a challenge
+   page. The markup inside it is Cloudflare's and can change, so this styles the
+   container and the few things it is known to contain, and sets a colour the
+   rest can inherit rather than trying to restyle it element by element. */
+.nf .nf-box {
+    margin: 0 auto 2rem;
+    padding: 1rem 1.1rem;
+    max-width: 34em;
+    border: 1px solid var(--glass-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--card-bg);
+    color: var(--text-white-muted);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+/* A challenge widget is an interactive control and sizes itself; the rest is
+   text Cloudflare writes. Empty until Cloudflare fills it in, and an empty
+   bordered box on a page that never got one would be a puzzle, so it collapses. */
+.nf .nf-box:empty {
+    display: none;
+}
+
+.nf .nf-box h1,
+.nf .nf-box h2,
+.nf .nf-box h3 {
+    margin: 0 0 0.5rem;
+    padding: 0;
+    border: 0;
+    color: var(--secondary);
+    font-size: 0.95rem;
+    line-height: 1.4;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.nf .nf-box p {
+    margin: 0 0 0.5rem;
+}
+
+.nf .nf-box p:last-child {
+    margin-bottom: 0;
+}
+
+.nf .nf-box a {
+    color: var(--secondary);
 }
