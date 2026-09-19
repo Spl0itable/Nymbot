@@ -1,4 +1,4 @@
-// The three translatable surfaces, and where each one's English strings live.
+// The four translatable surfaces, and where each one's English strings live.
 //
 // ONE cache serves all three (i18n/cache/<lang>.json is keyed by the English
 // string, not by where it was found), so a string the site and the app share is
@@ -8,6 +8,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { errorStrings } from '../errors/pages.mjs';
 import { scriptStrings, sourceStrings } from './extract.mjs';
 import { loadSite } from './pages.mjs';
 
@@ -132,6 +133,20 @@ export async function siteSources() {
   return { sources: site.sources, label: 'site' };
 }
 
+/// The Cloudflare error pages.
+///
+/// A surface of their own, and the clearest case for the split there is. They
+/// are not documents and never go through the localized render: Cloudflare
+/// stores one copy of each and serves it under whatever URL was asked for, so
+/// there is no second URL to publish a translation at and every language an
+/// error page offers has to travel inside it. Their copy comes from the
+/// renderer rather than from a walk of the markup — see errors/pages.mjs — and
+/// gating them here means a sentence still missing from a docs page cannot stop
+/// an error page being shown in a language the cache already covers.
+export function errorSources() {
+  return { sources: errorStrings(), label: 'errors' };
+}
+
 /// The web app: its shell markup, plus every `t('…')` in its modules.
 export async function appSources() {
   const html = await readFile(path.join(ROOT, 'app/index.html'), 'utf8');
@@ -161,7 +176,7 @@ export async function flutterSources() {
 
 /// All three, and the union the translator is asked to fill.
 export async function allSurfaces() {
-  const surfaces = await Promise.all([siteSources(), appSources(), flutterSources()]);
+  const surfaces = await Promise.all([siteSources(), errorSources(), appSources(), flutterSources()]);
   const union = new Set();
   for (const surface of surfaces) {
     for (const s of surface.sources) union.add(s);

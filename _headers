@@ -1,5 +1,14 @@
+# `script-src` carries one `sha256-` beyond 'self', and only for the Cloudflare
+# error pages under /errors/. They cannot link a script: Cloudflare stores one
+# copy of each and serves it when this origin is unreachable, so anything they
+# do not already contain is unavailable exactly when they are shown. It is one
+# script (errors/runtime.js), byte-identical across all eight pages, so it is
+# one hash rather than a per-page-per-language explosion. `ERROR-PAGE-RUNTIME`
+# is a placeholder: `npm run build` replaces it with the real hash of what it
+# just minified, and fails if it has gone missing.
+
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

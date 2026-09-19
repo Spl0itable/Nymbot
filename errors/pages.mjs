@@ -50,6 +50,10 @@ const CARDS = {
   nymchat: {
     href: "https://nymchat.app",
     title: "Nymchat",
+    // A brand name on its own. The site's own extractor protects these from
+    // being sent out to be transliterated; these pages collect their strings
+    // from the renderer instead, so they say it here.
+    fixed: true,
     desc: "The messenger on the same key, on a domain of its own.",
   },
   source: {
@@ -91,7 +95,7 @@ export const ERROR_PAGES = [
       "A chat channel called #status. Someone asks whether Nymbot is there, twice, and gets no reply — only a note that nymbot.ai did not answer and that their key was never kept here.",
     quip:
       "Your key, your credits and your history are not held on this server. This page is the part that can go missing.",
-    term: { command: "ping", argument: "nymbot.ai" },
+    term: { command: "ping", host: "nymbot.ai" },
     lead: "None of these are served by whatever just fell over:",
     cards: OUTAGE_CARDS,
   },
@@ -117,7 +121,7 @@ export const ERROR_PAGES = [
       "A chat channel called #dns. Someone asks where nymbot.ai points and gets no answer, twice.",
     quip:
       "Somewhere between the name and the number, the lookup lost the thread. Nothing you sent got this far.",
-    term: { command: "dig", argument: "nymbot.ai" },
+    term: { command: "dig", host: "nymbot.ai" },
     lead: "These do not depend on the record that is missing:",
     cards: OUTAGE_CARDS,
   },
@@ -197,7 +201,7 @@ export const ERROR_PAGES = [
       "A chat channel called #access. Someone asks to come in and is told the address is blocked here, and only here.",
     quip:
       "The block is on this website, not on your key. Anywhere else you sign in with it, you are the same person with the same balance.",
-    term: { command: "traceroute", argument: "nymbot.ai" },
+    term: { command: "traceroute", host: "nymbot.ai" },
     lead: "Nothing below is behind this door:",
     cards: ["nymchat", "source", "contact"],
   },
@@ -282,7 +286,7 @@ export const ERROR_PAGES = [
       "A chat channel called #status. Someone asks whether their request worked; the channel reports an error from the server and notes that nothing was written down.",
     quip:
       "The request failed on our side. There is no account here for it to have been filed against, so it was not.",
-    term: { command: "curl -sI", argument: "nymbot.ai" },
+    term: { command: "curl -sI", host: "nymbot.ai" },
     lead: "These may be having a better day:",
     cards: OUTAGE_CARDS,
   },
@@ -302,82 +306,162 @@ const FAVICON =
   "%3Ctext x='16' y='23' font-family='monospace' font-size='20' fill='%2300ff00' text-anchor='middle'%3EN%3C/text%3E" +
   "%3C/svg%3E";
 
-const card = (key) => {
-  const { href, title, desc } = CARDS[key];
+const card = (key, mark) => {
+  const { href, title, desc, fixed } = CARDS[key];
   return `            <li><a class="docs-card" href="${attr(href)}">
-                <span class="docs-card-title">${esc(title)}</span>
-                <span class="docs-card-desc">${esc(desc)}</span>
+                <span class="docs-card-title"${fixed ? "" : mark(title)}>${esc(title)}</span>
+                <span class="docs-card-desc"${mark(desc)}>${esc(desc)}</span>
             </a></li>`;
 };
 
 // Kept in step with the footer in 404.html and in the rendered pages by hand,
 // the same way the legal copy is.
-const FOOTER = `    <footer>
+//
+// Every link label is a slot: the footer is the same seven words on all eight
+// pages, so it is seven strings the cache already has to hold, not fifty-six.
+const footer = (mark) => `    <footer>
         <div style="margin-top: 1rem;">
-            <p>Nymbot - your AI, on your key</p>
+            <p${mark("Nymbot - your AI, on your key")}>Nymbot - your AI, on your key</p>
             <p style="font-size: 0.8rem; margin-top: 0.5rem;">&copy; <a href="https://nostrservices.com" target="_blank"
                     rel="noopener" style="color: var(--secondary)">21 Million LLC</a> &bull; <a href="${SITE}/terms/"
-                    style="color: var(--secondary)">Terms of Service</a> &bull; <a href="${SITE}/privacy/"
-                    style="color: var(--secondary)">Privacy Policy</a> &bull; <a href="${SITE}/dmca/"
-                    style="color: var(--secondary)">DMCA</a> &bull; <a href="${SITE}/contact/"
-                    style="color: var(--secondary)">Contact</a> &bull; <a href="${SITE}/brand/"
-                    style="color: var(--secondary)">Brand</a> &bull; <a href="${SITE}/docs/"
-                    style="color: var(--secondary)">Knowledge Base</a></p>
+                    style="color: var(--secondary)"${mark("Terms of Service")}>Terms of Service</a> &bull; <a href="${SITE}/privacy/"
+                    style="color: var(--secondary)"${mark("Privacy Policy")}>Privacy Policy</a> &bull; <a href="${SITE}/dmca/"
+                    style="color: var(--secondary)"${mark("DMCA")}>DMCA</a> &bull; <a href="${SITE}/contact/"
+                    style="color: var(--secondary)"${mark("Contact")}>Contact</a> &bull; <a href="${SITE}/brand/"
+                    style="color: var(--secondary)"${mark("Brand")}>Brand</a> &bull; <a href="${SITE}/docs/"
+                    style="color: var(--secondary)"${mark("Knowledge Base")}>Knowledge Base</a></p>
         </div>
     </footer>`;
 
-export function renderErrorPage(page, css) {
+// The translatable strings on a page, numbered in the order the markup uses
+// them. `data-i18n="7"` is the whole of the contract with errors/runtime.js:
+// the renderer decides what is prose, here, once, and the runtime only ever
+// looks a number up.
+//
+// The set this produces is also the set sent for translation — errorStrings()
+// below renders every page to collect it — so the strings the cache is asked
+// to cover cannot drift from the strings the page can actually show.
+function slots() {
+  const strings = [];
+  let sealed = false;
+  const mark = (text) => {
+    // Every slot has to exist before the translations are looked up, or the
+    // rows come back shorter than the markup and the last few strings quietly
+    // stay English. Sealing turns "quietly" into a failed build.
+    if (sealed) throw new Error(`slot "${text}" was added after the table was built`);
+    return ` data-i18n="${strings.push(text) - 1}"`;
+  };
+  const markAttr = (text, name) => `${mark(text)} data-i18n-attr="${name}"`;
+  const seal = () => { sealed = true; };
+  return { strings, mark, markAttr, seal };
+}
+
+/// One finished error page, plus the English strings it turned out to need.
+///
+/// [assets] carries the two things the page inlines rather than links: the
+/// stylesheet subset from errors/style.mjs and the minified errors/runtime.js.
+/// Both arrive already built, because the runtime's exact bytes are what
+/// `_headers` hashes and the build is the one place that can know them.
+///
+/// [translate] is handed the strings once they are all known and returns the
+/// table to embed: `{ t: { es: [...] }, rtl: [...] }`. It is a callback rather
+/// than an argument because the strings are a result of rendering, not an input
+/// to it — the page is written first, and only then is there a list to look up.
+export function renderErrorPage(page, assets = {}, translate = () => ({})) {
+  const { css = "", runtime = "" } = assets;
   const hero = HERO_ART[page.hero];
   if (!hero) {
     throw new Error(`no hero art named ${page.hero} — see errors/art.mjs`);
   }
   const art = squareOff(hero.art);
+  const { strings, mark, markAttr, seal } = slots();
 
   // One extra rule per page: each drawing is a different number of columns
   // wide, so each one gets its own cap.
   const sizing = `\n.nf-art-code{font-size:${codeFontSize(art)}}`;
 
+  const title = `${page.title} - Nymbot`;
   const parts = [];
 
+  // The wordmark's label is a name, not prose. Everything else a screen reader
+  // is read here is copy, and is translated — the drawings themselves stay as
+  // they are, because they are `<pre>` padded to the column and a translation
+  // would take the frame apart.
   parts.push(
-    `        <pre class="nf-art nf-art-code" role="img" aria-label="${attr(hero.label)}">${art}</pre>`
+    `        <pre class="nf-art nf-art-code" role="img" aria-label="${attr(hero.label)}"`
+    + `${hero.fixed ? "" : markAttr(hero.label, "aria-label")}>${art}</pre>`
   );
 
-  parts.push(`        <h1 class="nf-title">${esc(page.title)}</h1>`);
+  parts.push(`        <h1 class="nf-title"${mark(page.title)}>${esc(page.title)}</h1>`);
 
   parts.push(
-    `        <pre class="nf-art nf-art-window" role="img" aria-label="${attr(page.label)}">${windowArt(page.window)}</pre>`
+    `        <pre class="nf-art nf-art-window" role="img" aria-label="${attr(page.label)}"`
+    + `${markAttr(page.label, "aria-label")}>${windowArt(page.window)}</pre>`
   );
 
   // Cloudflare replaces the token with its own markup. On a page served any
   // other way the token would be visible text, so it is the only thing in the
   // box and the box hides itself when it is empty.
+  //
+  // `data-i18n-skip` is belt and braces. Nothing translates these pages by
+  // walking them — the slots above are the whole source set — but this is the
+  // one string on the site where a translator being helpful would break the
+  // page silently: a mangled token is a box Cloudflare never fills in, on a
+  // page nobody visits deliberately.
   if (page.token) {
-    parts.push(`        <div class="nf-box">${page.token}</div>`);
+    parts.push(`        <div class="nf-box" data-i18n-skip>${page.token}</div>`);
   }
 
-  parts.push(`        <p class="nf-quip">${esc(page.quip)}</p>`);
+  parts.push(`        <p class="nf-quip"${mark(page.quip)}>${esc(page.quip)}</p>`);
 
   if (page.term) {
+    // The prompt and the command are typed at a shell, not read as prose, and
+    // carry the skip marker for the same reason the token does. The argument is
+    // either a host — never translated, and the site's own extractor would
+    // reject it too — or a phrase, which is.
+    const argument = page.term.host ?? page.term.argument;
+    const argumentMark = page.term.host
+      ? ' data-i18n-skip'
+      : mark(page.term.argument);
     parts.push(`        <p class="nf-term">
-            <span class="nf-prompt">nym@mesh:~$</span> ${esc(page.term.command)} <span
-                class="nf-path">${esc(page.term.argument)}</span><span class="nf-cursor"
+            <span class="nf-prompt" data-i18n-skip>nym@mesh:~$</span> <span
+                data-i18n-skip>${esc(page.term.command)}</span> <span
+                class="nf-path"${argumentMark}>${esc(argument)}</span><span class="nf-cursor"
                 aria-hidden="true">&#9608;</span>
         </p>`);
   }
 
-  parts.push(`        <p class="nf-lead">${esc(page.lead)}</p>`);
+  parts.push(`        <p class="nf-lead"${mark(page.lead)}>${esc(page.lead)}</p>`);
   parts.push(`        <ul class="docs-cards">
-${page.cards.map(card).join("\n")}
+${page.cards.map((key) => card(key, mark)).join("\n")}
         </ul>`);
 
-  return `<!DOCTYPE html>
+  // The last two pieces of markup that carry copy, written before the table is
+  // asked for so that every slot on the page is numbered by the time it is.
+  const titleTag = `<title${mark(title)}>${esc(title)}</title>`;
+  const footerHtml = footer(mark);
+
+  // Parsed, never executed, so it costs the script policy nothing — the same
+  // arrangement every other page on the site uses for its runtime strings.
+  seal();
+  const table = translate(strings);
+  for (const [code, row] of Object.entries(table.t ?? {})) {
+    if (row.length !== strings.length) {
+      throw new Error(
+        `${page.file}: ${code} has ${row.length} translations for ${strings.length} slots`
+      );
+    }
+  }
+  const data = `    <script type="application/json" id="nym-i18n-errors">`
+    + `${JSON.stringify(table)}</script>`;
+
+  const html = `<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${esc(page.title)} - Nymbot</title>
+    ${titleTag}
     <meta name="robots" content="noindex">
     <link rel="icon" type="image/svg+xml" href="${FAVICON}">
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -391,9 +475,27 @@ ${page.cards.map(card).join("\n")}
 ${parts.join("\n\n")}
     </main>
 
-${FOOTER}
+${footerHtml}
+
+${data}
+    <script>${runtime}</script>
 </body>
 
 </html>
 `;
+
+  return { html, strings };
+}
+
+/// Every English string the eight pages between them need translated.
+///
+/// Collected by rendering them, rather than by listing them, so a string can
+/// never be added to a page and forgotten here — the page that shows it is the
+/// page that declares it.
+export function errorStrings() {
+  const all = new Set();
+  for (const page of ERROR_PAGES) {
+    for (const string of renderErrorPage(page).strings) all.add(string);
+  }
+  return [...all];
 }

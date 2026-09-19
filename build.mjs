@@ -1,8 +1,9 @@
-import { build } from "esbuild";
+import { build, transform } from "esbuild";
+import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { TRANSLATED_LANGUAGES } from "./i18n/languages.mjs";
+import { isRtl, TRANSLATED_LANGUAGES } from "./i18n/languages.mjs";
 import { buildPacks, writePacks } from "./i18n/packs.mjs";
 import { appSources, flutterSources } from "./i18n/surfaces.mjs";
 import { loadCache } from "./i18n/translate.mjs";
@@ -88,8 +89,12 @@ const documents = site.documents.map((doc) => {
 const available = new Set();
 const partial = [];
 const caches = new Map();
+// The error pages are gated on their own strings rather than on the site's, so
+// they need every cache, not only the ones that cleared the site-wide bar.
+const everyCache = new Map();
 for (const lang of TRANSLATED_LANGUAGES) {
   const cache = await loadCache(lang.code);
+  everyCache.set(lang.code, cache);
   const have = sources.filter((s) => typeof cache[s] === "string").length;
   if (have === 0) continue;
   if (have < sources.length) {
@@ -169,13 +174,64 @@ for (const asset of staticAssets) {
 // unreachable, so it links to nothing and inlines its styling. See
 // errors/pages.mjs for which page covers which Cloudflare slot.
 const errorCss = await errorStyles();
+
+// The page's only executing script, minified here because these exact bytes are
+// what the policy below has to hash — a page and a `_headers` that disagree by
+// one character is a page whose script never runs.
+const errorRuntime = (await transform(await readFile("errors/runtime.js", "utf8"), {
+  loader: "js",
+  minify: true,
+})).code.trim();
+const errorHash = `sha256-${createHash("sha256").update(errorRuntime).digest("base64")}`;
+
+// A language rides along on an error page when the cache covers THAT PAGE's
+// strings. The site's own gate is site-wide on purpose — a translated home page
+// should not link to an untranslated terms of service as if it were translated
+// — but that reasoning does not reach here. An error page is self-contained and
+// is shown at the moment the rest of the site cannot be reached at all, so
+// holding its translation back until a docs page catches up helps nobody.
+const errorTranslations = (strings) => {
+  const t = {};
+  const rtl = [];
+  for (const [code, cache] of everyCache) {
+    const row = strings.map((s) => cache[s]);
+    if (row.some((value) => typeof value !== "string")) continue;
+    t[code] = row;
+    if (isRtl(code)) rtl.push(code);
+  }
+  return { t, rtl };
+};
+
 await mkdir(path.join(outDir, "errors"), { recursive: true });
+const errorLanguages = new Map();
 for (const page of ERROR_PAGES) {
-  await writeFile(
-    path.join(outDir, "errors", page.file),
-    renderErrorPage(page, errorCss)
+  let carried = 0;
+  const { html } = renderErrorPage(
+    page,
+    { css: errorCss, runtime: errorRuntime },
+    (strings) => {
+      const table = errorTranslations(strings);
+      carried = Object.keys(table.t).length;
+      return table;
+    }
   );
+  await writeFile(path.join(outDir, "errors", page.file), html);
+  errorLanguages.set(page.file, carried);
 }
+
+// The hash of the inline runtime, written into the copy of `_headers` that
+// ships rather than kept by hand in the source: it changes whenever that script
+// does, and nobody would remember.
+{
+  const headersFile = path.join(outDir, "_headers");
+  const headers = await readFile(headersFile, "utf8");
+  const placeholder = "'sha256-ERROR-PAGE-RUNTIME'";
+  if (!headers.includes(placeholder)) {
+    throw new Error(`_headers has no ${placeholder} for the error pages' script hash`);
+  }
+  await writeFile(headersFile, headers.replaceAll(placeholder, `'${errorHash}'`));
+}
+
 
 console.log("Build complete:");
 for (const asset of hashedAssets) {
@@ -201,6 +257,13 @@ console.log(`  ${markdownPages} markdown twins (<page>.md)`);
 console.log(
   `  ${ERROR_PAGES.length} error pages: ${ERROR_PAGES.map((p) => `errors/${p.file}`).join(", ")}`
 );
+{
+  const carried = [...errorLanguages.values()];
+  const low = Math.min(...carried);
+  const high = Math.max(...carried);
+  console.log(`    each carries its own translations: `
+    + `${low === high ? high : `${low}-${high}`} languages, + English`);
+}
 console.log(`  ${sources.length} translatable strings (${runtimeStrings.length} from script.js)`);
 console.log(`  languages published: ${available.size} (+ English at /)`);
 if (partial.length > 0) {

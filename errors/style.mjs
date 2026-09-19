@@ -110,10 +110,16 @@ const withoutFiles = (body) =>
     .filter((decl) => !decl.includes("url("))
     .join(";");
 
+// A translated error page can be right-to-left, so the `[dir='rtl']` overrides
+// count as part of the rule they correct: the prefix is stripped and what is
+// left is matched like any other selector.
+const RTL_PREFIX = /^\[dir=['"]rtl['"]\]\s+/;
+
 const wanted = (prelude) =>
-  selectors(prelude).some((sel) =>
-    KEEP.some((rule) => (rule instanceof RegExp ? rule.test(sel) : rule === sel))
-  );
+  selectors(prelude).some((sel) => {
+    const bare = sel.replace(RTL_PREFIX, "");
+    return KEEP.some((rule) => (rule instanceof RegExp ? rule.test(bare) : rule === bare));
+  });
 
 export async function errorStyles() {
   const source = (await readFile("styles.css", "utf8")).replace(
