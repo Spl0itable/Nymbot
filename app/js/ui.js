@@ -99,12 +99,12 @@
         models: null,
         balance: { standard: null, pro: null },
         anonBalance: { standard: null, pro: null },
-        sending: false,
         invoice: null,
         attachments: [],
-        // What was typed while a reply was still being written, in the order it
-        // was typed. Held rather than dropped.
-        queue: [],
+        turns: new Map(),
+        queues: new Map(),
+        get sending() { return this.sendingIn(this.conv && this.conv.id); },
+        get queue() { return this.queueFor(this.conv && this.conv.id); },
         quote: null,
         editing: null,
         convFilter: 'all',
@@ -301,9 +301,6 @@
             if (this.conv && !this.editing) Store.setDraft(this.conv.id, $('input') ? $('input').value : '');
             this.conv = conv;
             this.attachments = [];
-            // A queue belongs to the chat it was typed into, not to the app.
-            this.queue = [];
-            this.renderQueue();
             this.quote = null;
             this.editing = null;
             this.renderAttachments();
@@ -314,6 +311,7 @@
             this.closeFind();
             this.closeArtifact();
             this.renderMessages();
+            this.refreshComposer();
             this.renderList();
             this.refreshToolbar();
             this.renderArtifactStrip();
@@ -385,6 +383,7 @@
                 if (bits.length) main.appendChild(el('span', 'conv-sub', bits.join(' · ')));
                 btn.appendChild(main);
                 if (conv.anon) btn.appendChild(el('span', 'conv-badge', 'anon'));
+                if (this.sendingIn(conv.id)) btn.appendChild(this.busyMark());
                 btn.addEventListener('click', () => this.open(Store.conversation(conv.id)));
                 li.className = 'conv-row';
                 li.appendChild(btn);
@@ -450,6 +449,7 @@
                 }
                 this.appendMessage(m, true);
             }
+            this.mountTurn();
             this.scrollToBottom(true);
         },
 
@@ -757,6 +757,8 @@
             const { group, grouped } = this.groupFor(m);
             const node = this.messageNode(m, grouped);
             group.querySelector('.message-group-stack').appendChild(node);
+            const spinner = box.querySelector('#thinkingNode');
+            if (spinner) box.appendChild(spinner);
             if (!quiet) this.scrollToBottom();
             return node;
         },
@@ -794,9 +796,9 @@
         /// What is left of this chat's continuation budget. A budget of -1 is
         /// "whatever the balance holds", which is still a real ceiling — it is
         /// just the user's own balance rather than a number they typed.
-        continueBudget() {
+        continueBudget(turn) {
             const cap = Number(this.settings.autoContinue) || 0;
-            const spent = this.conv._continued || 0;
+            const spent = (turn && turn.continued) || 0;
             if (cap === 0) return 0;
             if (cap < 0) {
                 const have = this.balance.pro;
@@ -805,9 +807,9 @@
             return Math.max(0, cap - spent);
         },
 
-        async legPause(ms) {
+        async legPause(turn, ms) {
             const until = Date.now() + ms;
-            while (!this.stopped) {
+            while (!turn.stopped) {
                 const left = until - Date.now();
                 if (left <= 0) break;
                 await new Promise(r => setTimeout(r, Math.min(250, left)));
@@ -817,69 +819,66 @@
         /// A repo run stopped at its tool-call cap with work left. Spend the
         /// budget the user set on carrying it on, one leg at a time, and say
         /// what each leg cost as it goes — never silently.
-        async continueRun(res, firstReply) {
+        async continueRun(turn, res) {
+            const convId = turn.convId;
             let token = res.resumeToken;
             let reserve = res.nextReserve || 0;
             if (!token) {
-                this.note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'));
+                this.note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'), convId);
                 return;
             }
-            let left = this.continueBudget();
+            let left = this.continueBudget(turn);
             if (left <= 0) {
-                this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'));
+                this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'), convId);
                 return;
             }
             if (reserve && reserve > left) {
                 this.note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-                    { n: num(reserve - left) }));
+                    { n: num(reserve - left) }), convId);
                 return;
             }
 
-            const box = $('messages');
             let legs = 0;
             let stalls = 0;
-            while (token && left > 0 && !this.stopped) {
+            while (token && left > 0 && !turn.stopped) {
                 if (legs++) {
                     const gap = LEG_GAP_MS + Math.round(Math.random() * LEG_GAP_JITTER_MS);
-                    const waiting = this.thinkingNode(t('Pausing a moment so the next step does not crowd the last'));
-                    box.appendChild(waiting);
-                    this.scrollToBottom();
-                    await this.legPause(gap);
-                    waiting.remove();
-                    if (this.stopped) break;
+                    this.turnLabel(turn, t('Pausing a moment so the next step does not crowd the last'));
+                    await this.legPause(turn, gap);
+                    if (turn.stopped) break;
                 }
-                const pending = this.thinkingNode(t('Carrying on where it left off'));
-                box.appendChild(pending);
-                this.scrollToBottom();
+                this.turnLabel(turn, t('Carrying on where it left off'));
+                const conv = Store.conversation(convId);
+                if (!conv) return;
                 let next;
                 try {
-                    next = await Chat.send(this.conv, t('Continue.'), this.settings, {
+                    next = await Chat.send(conv, t('Continue.'), this.settings, {
                         resume: token,
-                        onTurn: (eventId, signer) => this.watchTurn(eventId, signer)
+                        controller: turn.controller,
+                        onStatus: (text) => this.turnStatus(turn, text),
+                        onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
                     });
                 } catch (e) {
-                    this.stopWatchingTurn();
-                    pending.remove();
+                    this.stopWatchingTurn(turn);
                     if (e && e.resumable && e.resumeToken && stalls < LEG_STALL_WAITS_MS.length
-                        && !this.stopped) {
+                        && !turn.stopped) {
                         const wait = LEG_STALL_WAITS_MS[stalls++];
                         token = e.resumeToken;
                         legs = 0;
                         this.note(t('That step could not go out — the gateway is busy. Nothing is lost; trying again in {n} seconds.',
-                            { n: Math.round(wait / 1000) }));
-                        await this.legPause(wait);
+                            { n: Math.round(wait / 1000) }), convId);
+                        await this.legPause(turn, wait);
                         continue;
                     }
                     if (e && e.resumable) {
-                        this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'));
+                        this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'), convId);
                         return;
                     }
-                    this.note((e && e.message) || t('Could not carry on from there.'));
+                    this.note((e && e.message) || t('Could not carry on from there.'), convId);
                     return;
                 }
                 stalls = 0;
-                this.stopWatchingTurn();
-                pending.remove();
+                this.stopWatchingTurn(turn);
 
                 const more = {
                     id: Store.uid(),
@@ -889,41 +888,39 @@
                     cost: next.cost || 0,
                     pro: !!next.pro,
                     model: next.modelLabel
-                        || (next.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null),
+                        || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: next.sources || null,
                     calls: next.modelCalls || 1,
                     task: next.taskType || null,
                     continued: true,
                     ts: Date.now()
                 };
-                Store.addMessage(this.conv.id, more);
-                Artifacts.harvest(this.conv.id, more);
-                this.appendMessage(more);
+                Store.addMessage(convId, more);
+                Artifacts.harvest(convId, more);
+                this.showMessage(convId, more);
                 Store.recordUsage(more.cost);
-                this.bumpStats(more.cost);
+                this.bumpStats(conv, more.cost);
 
-                const spent = (this.conv._continued || 0) + (more.cost || 0);
-                this.conv._continued = spent;
+                turn.continued = (turn.continued || 0) + (more.cost || 0);
                 this.creditBalance(next.pro,
                     next.balanceCredits != null ? next.balanceCredits : next.balance);
-                left = this.continueBudget();
+                left = this.continueBudget(turn);
                 token = next.truncated ? next.resumeToken : null;
                 reserve = next.nextReserve || 0;
 
                 if (token && reserve && reserve > left) {
                     this.note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-                        { n: num(reserve), left: num(left) }));
+                        { n: num(reserve), left: num(left) }), convId);
                     return;
                 }
                 if (token && left <= 0) {
                     this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-                        { n: creditAmount(spent) }));
+                        { n: creditAmount(turn.continued) }), convId);
                     return;
                 }
             }
-            if (this.conv._continued) {
-                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(this.conv._continued) }));
-                this.conv._continued = 0;
+            if (turn.continued) {
+                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(turn.continued) }), convId);
             }
         },
 
@@ -1011,15 +1008,15 @@
             }
         },
 
-        renderProgress(steps) {
-            const node = document.getElementById('thinkingNode');
-            if (!node || !this.settings.showProgress) return;
+        renderProgress(turn) {
+            const node = turn && turn.node;
+            if (!node || !node.isConnected || !this.settings.showProgress) return;
             const box = node.querySelector('.bot-progress');
             if (!box) return;
             box.innerHTML = '';
             // The last few only: this sits under a spinner, not in a log view.
             let last = '';
-            for (const step of this.trimProgress(steps).slice(-4)) {
+            for (const step of this.trimProgress(turn.steps).slice(-4)) {
                 const line = this.progressLine(step);
                 if (!line || line === last) continue;
                 last = line;
@@ -1032,21 +1029,21 @@
 
         /// Polls the worker for what the turn is doing. Stops the moment the
         /// turn is over, and never keeps the send waiting on it.
-        watchTurn(eventId, signer) {
-            this.stopWatchingTurn();
+        watchTurn(turn, eventId, signer) {
+            this.stopWatchingTurn(turn);
             if (!this.settings.showProgress) return;
-            const seen = [];
+            turn.steps = [];
             let after = 0;
             let alive = true;
-            this._turnWatch = () => { alive = false; };
+            turn.watch = () => { alive = false; };
             const tick = async () => {
                 while (alive) {
                     const steps = await Chat.progress(eventId, after, { signer });
                     if (!alive) return;
                     if (steps.length) {
                         after = steps[steps.length - 1].n || after;
-                        for (const s of steps) seen.push(s);
-                        this.renderProgress(seen);
+                        for (const s of steps) turn.steps.push(s);
+                        this.renderProgress(turn);
                     }
                     await new Promise(r => setTimeout(r, 2000));
                 }
@@ -1054,10 +1051,10 @@
             tick().catch(() => { });
         },
 
-        stopWatchingTurn() {
-            if (this._turnWatch) {
-                try { this._turnWatch(); } catch (_) { }
-                this._turnWatch = null;
+        stopWatchingTurn(turn) {
+            if (turn && turn.watch) {
+                try { turn.watch(); } catch (_) { }
+                turn.watch = null;
             }
         },
 
@@ -1113,33 +1110,36 @@
 
         // --- sending ----------------------------------------------------------
 
-        async send(override) {
+        async send(override, target) {
+            const conv = target || this.conv;
+            if (!conv) return;
             const input = $('input');
             const typed = override != null ? override : input.value.trim();
             if (!typed) return;
+            const here = () => !!(this.conv && this.conv.id === conv.id);
 
             // Commands run whatever else is happening: they are free, instant,
             // and one of them is how you stop the thing you are waiting on.
             if (override == null && await this.handleCommand(typed)) {
                 input.value = '';
-                Store.setDraft(this.conv.id, '');
+                Store.setDraft(conv.id, '');
                 this.autoGrow();
                 this.updateHints();
                 this.hideSuggest();
                 return;
             }
 
-            const text = this.withMediaModel(typed);
+            const text = this.withMediaModel(typed, conv);
 
             // Typing while it is still writing used to do nothing at all — the
             // message was dropped on the floor with no sign it had been. It
             // waits its turn instead, and says that it is waiting.
-            if (this.sending) {
-                this.queue.push(typed);
-                this.renderQueue();
+            if (this.sendingIn(conv.id)) {
+                this.queueFor(conv.id, true).push(typed);
+                if (here()) this.renderQueue();
                 if (override == null) {
                     input.value = '';
-                    Store.setDraft(this.conv.id, '');
+                    Store.setDraft(conv.id, '');
                     this.autoGrow();
                     this.updateHints();
                     this.hideSuggest();
@@ -1149,14 +1149,15 @@
 
             if (override == null) {
                 input.value = '';
-                Store.setDraft(this.conv.id, '');
+                Store.setDraft(conv.id, '');
                 this.autoGrow();
                 this.updateHints();
                 this.hideSuggest();
             }
 
-            const attachments = this.attachments.slice();
-            const quote = this.quote;
+            const composing = here();
+            const attachments = composing ? this.attachments.slice() : [];
+            const quote = composing ? this.quote : null;
 
             // One gift wrap carries about 23 KB once the standing context and
             // the attachments are counted. Checked before the message joins
@@ -1208,7 +1209,7 @@
                 }
             }
 
-            const cost = Chat.wireCost(this.conv, text, { attachments, quote });
+            const cost = Chat.wireCost(conv, text, { attachments, quote });
             if (cost.over > 0) {
                 if (override == null) {
                     $('input').value = typed;
@@ -1216,14 +1217,16 @@
                     this.updateHints();
                 }
                 this.toast(Chat.overLimitMessage(
-                    Chat.wireTextFor(this.conv, text, { attachments, quote })));
+                    Chat.wireTextFor(conv, text, { attachments, quote })));
                 return;
             }
 
-            this.attachments = [];
-            this.quote = null;
-            this.renderAttachments();
-            this.renderQuote();
+            if (composing) {
+                this.attachments = [];
+                this.quote = null;
+                this.renderAttachments();
+                this.renderQuote();
+            }
 
             const mine = {
                 id: Store.uid(),
@@ -1236,36 +1239,33 @@
                 })),
                 quote: quote ? quote.slice(0, 200) : null
             };
-            Store.addMessage(this.conv.id, mine);
-            this.appendMessage(mine);
+            Store.addMessage(conv.id, mine);
+            this.showMessage(conv.id, mine);
             // Read for standing facts before the reply comes back, so what is
             // remembered is offered while the message is still on screen.
-            this.noticeMemories(typed);
+            this.noticeMemories(typed, conv);
 
-            if (!this.conv.title) {
+            let live = conv;
+            if (!live.title) {
                 const title = Chat.titleFor(typed);
-                this.conv = Store.updateConversation(this.conv.id, { title });
-                $('chatTitle').textContent = title;
+                live = this.patchChat(live, { title }) || live;
+                if (here()) $('chatTitle').textContent = title;
                 this.renderList();
             }
 
-            this.stopped = false;
-            this.setSending(true);
-            const box = $('messages');
-            const repos = Chat.reposFor(this.conv);
-            const pending = this.thinkingNode(repos.length && (this.conv.proModel || this.settings.proModel)
+            const repos = Chat.reposFor(live);
+            const turn = this.beginTurn(live, repos.length && (live.proModel || this.settings.proModel)
                 ? t('Nymbot is reading your repositories')
                 : t('Nymbot is thinking'));
-            box.appendChild(pending);
-            this.scrollToBottom();
 
             try {
-                const res = await Chat.send(this.conv, text, this.settings, {
+                const res = await Chat.send(live, text, this.settings, {
                     attachments, quote,
-                    onTurn: (eventId, signer) => this.watchTurn(eventId, signer)
+                    controller: turn.controller,
+                    onStatus: (status) => this.turnStatus(turn, status),
+                    onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
                 });
-                this.stopWatchingTurn();
-                pending.remove();
+                this.stopWatchingTurn(turn);
                 const reply = {
                     id: Store.uid(),
                     role: 'bot',
@@ -1274,7 +1274,7 @@
                     cost: res.cost || 0,
                     pro: !!res.pro,
                     model: res.modelLabel
-                        || (res.pro ? ((this.conv.proModel || this.settings.proModel || {}).label || null) : null),
+                        || (res.pro ? ((live.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: res.sources || null,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
                     // Kept so the cost breakdown reports what the worker said
@@ -1286,15 +1286,15 @@
                     checkpoint: res.checkpoint || null,
                     ts: Date.now()
                 };
-                Store.addMessage(this.conv.id, reply);
-                const lifted = Artifacts.harvest(this.conv.id, reply);
-                const node = this.appendMessage(reply);
-                if (lifted.length) this.renderArtifactStrip();
-                if (this.settings.typewriter && reply.content.length < 12000) {
+                Store.addMessage(live.id, reply);
+                const lifted = Artifacts.harvest(live.id, reply);
+                const node = this.showMessage(live.id, reply);
+                if (node && lifted.length) this.renderArtifactStrip();
+                if (node && this.settings.typewriter && reply.content.length < 12000) {
                     await this.typeInto(node, reply);
                 }
                 Store.recordUsage(reply.cost);
-                this.bumpStats(reply.cost);
+                live = this.bumpStats(live, reply.cost) || live;
                 this.renderList();
                 this.notifyReply(reply);
 
@@ -1307,26 +1307,26 @@
                 }
                 this.creditBalance(res.pro,
                     res.balanceCredits != null ? res.balanceCredits : res.balance);
-                if (this.spendingAnon() && this.anonBalance.standard == null) {
+                if (live.anon && Anon.ready() && this.anonBalance.standard == null) {
                     this.refreshBalance().catch(() => { });
                 }
                 if (res.lowBalance) {
                     // In an anonymous chat a low balance is usually the
                     // throwaway key running dry rather than the nym, and that
                     // is exactly what the automatic transfer is for.
-                    const topped = this.conv.anon ? await this.runAutoTopUp() : null;
+                    const topped = live.anon ? await this.runAutoTopUp() : null;
                     if (!topped) {
                         this.note(res.pro
                             ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) })
-                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) }));
+                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) }),
+                            live.id);
                     }
                 }
-                if (res.truncated) await this.continueRun(res, reply);
+                if (res.truncated) await this.continueRun(turn, res);
             } catch (e) {
-                this.stopWatchingTurn();
-                pending.remove();
+                this.stopWatchingTurn(turn);
                 if (e && e.name === 'AbortError') {
-                    this.note(t('Stopped. That reply was not charged for unless it had already finished.'));
+                    this.note(t('Stopped. That reply was not charged for unless it had already finished.'), live.id);
                 } else if (e && e.noCredits) {
                     this.creditBalance(e.pro,
                         e.balanceCredits != null ? e.balanceCredits : e.balance);
@@ -1338,18 +1338,22 @@
                     }
                     this.renderBalance();
                     if (e.free && !e.pro) {
-                        this.offerUpgrade();
-                        this.openCredits();
+                        if (here()) {
+                            this.offerUpgrade();
+                            this.openCredits();
+                        }
                         return;
                     }
-                    const topped = this.conv.anon
+                    const topped = live.anon
                         ? await this.runAutoTopUp({ force: true })
                         : null;
                     if (topped) {
-                        this.note(t('Topped the throwaway key up. Send that again when you are ready.'));
+                        this.note(t('Topped the throwaway key up. Send that again when you are ready.'), live.id);
                     } else {
-                        this.note(e.message);
-                        if (this.conv.anon) this.openAnon(); else this.openCredits();
+                        this.note(e.message, live.id);
+                        if (here()) {
+                            if (live.anon) this.openAnon(); else this.openCredits();
+                        }
                     }
                 } else {
                     const err = {
@@ -1359,13 +1363,12 @@
                         retry: typed,
                         ts: Date.now()
                     };
-                    Store.addMessage(this.conv.id, err);
-                    this.appendMessage(err);
+                    Store.addMessage(live.id, err);
+                    this.showMessage(live.id, err);
                 }
             } finally {
-                this.setSending(false);
-                this.status(null);
-                this.sendQueued();
+                this.endTurn(turn);
+                this.sendQueued(live.id);
             }
         },
 
@@ -1395,40 +1398,137 @@
 
         /// Sends the next thing that was waiting. One at a time: they were
         /// typed as a conversation, so they have to arrive as one.
-        sendQueued() {
-            if (this.stopped || !this.queue.length || this.sending) return;
-            const next = this.queue.shift();
-            this.renderQueue();
-            setTimeout(() => this.send(next), 0);
+        sendQueued(convId) {
+            const queue = this.queues.get(convId);
+            if (!queue || !queue.length || this.sendingIn(convId)) return;
+            const next = queue.shift();
+            if (!queue.length) this.queues.delete(convId);
+            if (this.conv && this.conv.id === convId) this.renderQueue();
+            const conv = Store.conversation(convId);
+            if (!conv) return;
+            setTimeout(() => this.send(next, conv), 0);
         },
 
-        setSending(on) {
-            this.sending = on;
+        queueFor(convId, create) {
+            if (!convId) return [];
+            let queue = this.queues.get(convId);
+            if (!queue && create) {
+                queue = [];
+                this.queues.set(convId, queue);
+            }
+            return queue || [];
+        },
+
+        turnOf(convId) {
+            return (convId && this.turns.get(convId)) || null;
+        },
+
+        sendingIn(convId) {
+            return !!this.turnOf(convId);
+        },
+
+        beginTurn(conv, label, opts) {
+            const turn = {
+                convId: conv.id,
+                controller: new AbortController(),
+                label: label || t('Nymbot is thinking'),
+                quiet: !!(opts && opts.quiet),
+                status: null,
+                steps: [],
+                watch: null,
+                node: null,
+                stopped: false,
+                continued: 0
+            };
+            this.turns.set(conv.id, turn);
+            this.mountTurn();
+            this.refreshComposer();
+            this.renderList();
+            return turn;
+        },
+
+        endTurn(turn) {
+            if (!turn) return;
+            if (this.turns.get(turn.convId) === turn) this.turns.delete(turn.convId);
+            if (turn.node) {
+                turn.node.remove();
+                turn.node = null;
+            }
+            this.refreshComposer();
+            this.renderList();
+        },
+
+        mountTurn() {
+            const turn = this.turnOf(this.conv && this.conv.id);
+            if (!turn || turn.quiet) return;
+            if (turn.node && turn.node.isConnected) return;
+            turn.node = this.thinkingNode(turn.label);
+            $('messages').appendChild(turn.node);
+            this.renderProgress(turn);
+            this.scrollToBottom();
+        },
+
+        turnLabel(turn, label) {
+            turn.label = label;
+            const node = turn.node && turn.node.querySelector('.bot-thinking-label');
+            if (node) node.textContent = label;
+        },
+
+        turnStatus(turn, text) {
+            turn.status = text || null;
+            if (this.conv && this.conv.id === turn.convId) this.status(turn.status);
+        },
+
+        refreshComposer() {
+            const turn = this.turnOf(this.conv && this.conv.id);
+            const on = !!turn;
             $('sendBtn').hidden = on;
             $('stopBtn').hidden = !on;
             $('sendBtn').disabled = on;
+            this.status(turn ? turn.status : null);
+            this.renderQueue();
+        },
+
+        busyMark() {
+            const mark = el('span', 'conv-busy');
+            mark.setAttribute('aria-label', t('Nymbot is thinking'));
+            for (let i = 0; i < 3; i++) mark.appendChild(el('span', 'typing-dot'));
+            return mark;
+        },
+
+        showMessage(convId, m) {
+            if (!this.conv || this.conv.id !== convId) return null;
+            return this.appendMessage(m);
         },
 
         stop() {
             clearTimeout(this._typeTimer);
+            const conv = this.conv;
+            if (!conv) return;
             // Stop means stop: a run carrying itself on must not start another
             // leg after the one being aborted, and nothing that was waiting
             // behind it should go either.
-            this.stopped = true;
-            if (this.queue.length) {
-                this.queue = [];
+            const queue = this.queues.get(conv.id);
+            this.queues.delete(conv.id);
+            if (queue && queue.length) {
                 this.renderQueue();
                 this.note(t('Stopped. Anything waiting behind it was not sent.'));
             }
-            this.stopWatchingTurn();
-            if (!Chat.abort()) this.setSending(false);
+            const turn = this.turnOf(conv.id);
+            if (turn) {
+                turn.stopped = true;
+                this.stopWatchingTurn(turn);
+                try { turn.controller.abort(); } catch (_) { }
+                this.endTurn(turn);
+            }
+            Chat.abort();
         },
 
-        bumpStats(cost) {
-            const stats = Object.assign({ messages: 0, credits: 0 }, this.conv.stats || {});
+        bumpStats(conv, cost) {
+            const stats = Object.assign({ messages: 0, credits: 0 }, conv.stats || {});
             stats.messages += 1;
             stats.credits += cost || 0;
-            this.conv = Store.updateConversation(this.conv.id, { stats });
+            return this.patchChat(conv, { stats });
         },
 
         notifyReply(reply) {
@@ -1459,10 +1559,12 @@
             } catch (_) { }
         },
 
-        note(text) {
+        note(text, convId) {
+            const id = convId || (this.conv && this.conv.id);
+            if (!id) return;
             const m = { id: Store.uid(), role: 'note', content: text, ts: Date.now() };
-            Store.addMessage(this.conv.id, m);
-            this.appendMessage(m);
+            Store.addMessage(id, m);
+            this.showMessage(id, m);
         },
 
         message(id) {
@@ -2522,8 +2624,9 @@
             this.refreshToolbar();
         },
 
-        mediaModel() {
-            return (this.conv && this.conv.mediaModel) || this.settings.mediaModel || null;
+        mediaModel(conv) {
+            const scope = conv || this.conv;
+            return (scope && scope.mediaModel) || this.settings.mediaModel || null;
         },
 
         mediaNeedsPro(media) {
@@ -2580,8 +2683,8 @@
             this.refreshToolbar();
         },
 
-        withMediaModel(text) {
-            const media = this.mediaModel();
+        withMediaModel(text, conv) {
+            const media = this.mediaModel(conv);
             const command = media && media.command;
             if (!command) return text;
             const verb = (/^\?(\w+)/.exec(command) || [])[1] || '';
@@ -3469,11 +3572,11 @@
         /// Reads a message for standing facts and saves what it finds, saying
         /// so with a way to take it straight back. Nothing enters memory
         /// without the writer seeing it happen.
-        noticeMemories(text) {
+        noticeMemories(text, conv) {
             if (this.settings.memoryCapture === false) return;
             const Memory = window.NymbotMemory;
             if (!Memory) return;
-            const found = Memory.propose(text, this.conv);
+            const found = Memory.propose(text, conv || this.conv);
             if (!found.length) return;
             const saved = found.map(m => Store.saveMemory(m)).filter(Boolean);
             if (!saved.length) return;
@@ -5072,7 +5175,7 @@
             });
             if (!go) return;
 
-            this.setSending(true);
+            const turn = this.beginTurn(this.conv, null, { quiet: true });
             this.modalStatus('compareStatus', t('Waiting on both…'));
             $('compareGrid').hidden = false;
             $('compareGrid').innerHTML = '';
@@ -5082,15 +5185,15 @@
                     seed: this.compareSeed()
                 });
             } catch (e) {
-                this.setSending(false);
+                this.endTurn(turn);
                 this.modalStatus('compareStatus', (e && e.message) || t('The request failed.'), 'warn');
                 return;
             }
-            this.setSending(false);
+            this.endTurn(turn);
             this.compare = { prompt: text, runs: out };
             const spent = out.reduce((n, r) => n + ((r.result && r.result.cost) || 0), 0);
             Store.recordUsage(spent);
-            this.bumpStats(spent);
+            this.bumpStats(this.conv, spent);
             const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
             if (balance) {
                 this.creditBalance(balance.pro,
@@ -5614,14 +5717,65 @@
         async linkRoot() {
             const code = $('linkRoot').value.trim();
             if (!code) return;
+            if (!Identity.pubkey || !Identity.kemForCode(code, 0)) {
+                this.modalStatus('settingsStatus', t('That does not look like a recovery code.'), 'warn');
+                return;
+            }
+            const held = Identity.rootCode();
+            if (held && held === code && !Identity.rootLocked) {
+                this.modalStatus('settingsStatus', t('This device already uses that code.'), 'ok');
+                return;
+            }
+            this.modalStatus('settingsStatus', t('Checking the code against the account…'), '');
+            let stored = null;
+            let announced = null;
+            try { stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk)); } catch (_) { stored = null; }
+            try { announced = await PQ.resolve(Identity.pubkey); } catch (_) { announced = null; }
+            const record = (stored && stored.record) || null;
+            const rowPresent = !!(stored && stored.present);
+            const bytes = window.NymCrypto.pqRootDecode(code);
+            const fingerprint = window.NymCrypto.pqRootFingerprint(bytes);
+            let replace = false;
+            if (record && record.fp && record.fp !== fingerprint) {
+                const ok = await this.ask({
+                    title: t('Replace the recovery code?'),
+                    body: t('This code does not match the recovery code the account currently uses.\n\nIf the current code was created by mistake, you can replace it with this one. Every device on this account — Nymbot or Nymchat — will then need this code, and anything sealed to the current code stays readable only on devices that still hold it.'),
+                    confirm: t('Replace'),
+                    cancel: t('Keep the current code'),
+                    danger: true
+                });
+                if (!ok) {
+                    this.modalStatus('settingsStatus', t('That code does not match the root this account recorded. Check you copied it from the right account.'), 'warn');
+                    return;
+                }
+                replace = true;
+            }
+            let epoch = 0;
+            if (!replace && announced && announced.pk) {
+                const matched = this.epochMatching(code, announced.pk);
+                if (matched == null && !(record && record.fp)) {
+                    this.modalStatus('settingsStatus', t('That code does not match the key this account advertises. Check you copied it from the right account.'), 'warn');
+                    return;
+                }
+                if (matched != null) epoch = matched;
+            }
             try {
-                Identity.adoptRootCode(code);
-                await PQ.announce();
-                this.openSettings();
-                this.modalStatus('settingsStatus', t('Linked. This device now derives the same post-quantum key.'), 'ok');
+                Identity.adoptRootCode(code, epoch);
             } catch (e) {
                 this.modalStatus('settingsStatus', t('That does not look like a recovery code.'), 'warn');
+                return;
             }
+            Sync.blocked = false;
+            Sync._hashes = new Map();
+            if (replace || !rowPresent || !record) {
+                try { await Sync.publishRootRecord(); } catch (_) { }
+            }
+            try { await PQ.announce(replace ? { force: true } : undefined); } catch (_) { }
+            Sync.run().catch(() => { });
+            this.openSettings();
+            this.modalStatus('settingsStatus', replace
+                ? t('Replaced. This account now uses the code you pasted.')
+                : t('Linked. This device now derives the same post-quantum key.'), 'ok');
         },
 
         async transfer() {
@@ -6767,6 +6921,12 @@
             const fingerprint = Identity.rootFingerprint();
             if (!stored.present) {
                 if (fingerprint) { await Sync.publishRootRecord(); return; }
+                let announced = null;
+                try { announced = await PQ.resolve(Identity.pubkey); } catch (_) { announced = null; }
+                if (announced && announced.pk) {
+                    Identity.rootLocked = true;
+                    return;
+                }
                 // A sign-in that could not reach the worker left this device
                 // without a root rather than minting one blind. The account
                 // turns out to have none, so this is the moment to make it.

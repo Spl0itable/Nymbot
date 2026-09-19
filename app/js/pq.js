@@ -71,8 +71,8 @@
             const newest = verifiedNewest(events, pubkey);
             const parsed = newest ? parse(newest, Math.floor(Date.now() / 1000)) : null;
             if (!parsed) return null;
-            if (parsed.pk2) return { pk: parsed.pk2, fmt: 'pq2' };
-            if (parsed.pk1) return { pk: parsed.pk1, fmt: 'pq1' };
+            if (parsed.pk2) return { pk: parsed.pk2, fmt: 'pq2', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
+            if (parsed.pk1) return { pk: parsed.pk1, fmt: 'pq1', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
             return null;
         },
 
@@ -108,16 +108,22 @@
         /// key we cannot derive — that one belongs to another device holding a
         /// different root, and kind 30078 is replaceable, so publishing over it
         /// would strand every message sealed to it.
-        async announce() {
+        async announce(opts) {
             if (!Identity.pubkey || !Identity.kemPk) return false;
+            const force = !!(opts && opts.force);
             // Already known to be the wrong root — from the account's own D1
             // record, which the relays cannot contradict.
-            if (Identity.rootLocked) return false;
-            const mine = Identity.kemPk;
-            const existing = await this.resolve(Identity.pubkey);
+            if (Identity.rootLocked && !force) return false;
+            let mine = Identity.kemPk;
+            const existing = force ? null : await this.resolve(Identity.pubkey);
             if (existing && !sameBytes(existing.pk, mine)) {
-                Identity.rootLocked = true;
-                return false;
+                const epoch = Identity.epochMatching(existing.pk, existing.epoch);
+                if (epoch == null) {
+                    Identity.rootLocked = true;
+                    return false;
+                }
+                Identity.adoptEpoch(epoch);
+                mine = Identity.kemPk;
             }
             Identity.rootLocked = false;
 
@@ -153,6 +159,13 @@
         selfKeys() {
             if (!Identity._kem) return null;
             return { kemSk: Identity._kem.secretKey, kemPk: Identity._kem.publicKey };
+        },
+
+        selfCandidates() {
+            const all = typeof Identity.kemCandidates === 'function' ? Identity.kemCandidates() : [];
+            if (all.length) return all;
+            const one = this.selfKeys();
+            return one ? [one] : [];
         }
     };
 

@@ -484,6 +484,10 @@
 
         async send(conv, text, settings, options) {
             const opts = options || {};
+            const say = (line) => {
+                if (typeof opts.onStatus === 'function') opts.onStatus(line);
+                else this._say(line);
+            };
             if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
 
             const anon = !!conv.anon && Anon.ready();
@@ -563,6 +567,7 @@
             if (opts.resume) extra.resume = opts.resume;
             const announcement = anon ? Anon.announcement() : PQ.selfAnnouncement;
             if (announcement) extra.pqAnnouncement = announcement;
+            else if (!anon && (Identity.rootLocked || !PQ.selfKeys())) extra.pqClassical = true;
             if (settings.webSearch || opts.web) extra.web = true;
             if (attachments.length) {
                 extra.attachments = attachments.map(a => ({
@@ -599,7 +604,7 @@
                     }));
                     if (data && data.pending && held < 5 && !controller.signal.aborted) {
                         held++;
-                        this._say(t('Still working on that one…'));
+                        say(t('Still working on that one…'));
                         await pause(3000, controller.signal);
                         continue;
                     }
@@ -607,7 +612,7 @@
                     if (failed && !(data && data.noCredits) && waited < BUSY_WAITS.length
                         && Api.busy(status, data) && !controller.signal.aborted) {
                         const wait = BUSY_WAITS[waited++];
-                        this._say(t('Too many requests just now — waiting {n} seconds rather than asking again straight away.',
+                        say(t('Too many requests just now — waiting {n} seconds rather than asking again straight away.',
                             { n: Math.round(wait / 1000) }));
                         await pause(wait, controller.signal);
                         continue;

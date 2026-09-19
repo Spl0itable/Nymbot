@@ -510,6 +510,7 @@ kbd {
 .conv-badge { font-size: 0.62rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; flex: 0 0 auto; }
 .conv-badge.is-repo { color: var(--lightning); }
 .conv-badge.is-tag { color: var(--text-faint); }
+.conv-busy { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .conv-pin { color: var(--lightning); flex: 0 0 auto; display: inline-flex; }
 
 .side-links-head {

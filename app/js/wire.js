@@ -172,22 +172,30 @@
         async unwrap(event, recipient) {
             const T = NT();
             const NCx = NC();
-            const self = recipient || PQ.selfKeys();
+            const selves = recipient
+                ? [{ kemSk: recipient.kemSk, kemPk: recipient.kemPk }]
+                : PQ.selfCandidates();
             const sk = recipient ? recipient.sk : Identity._sk;
             if (sk) {
-                const got = NCx.unwrapGiftWrap(event, [{
-                    sk,
-                    kemSk: self ? self.kemSk : undefined,
-                    kemPk: self ? self.kemPk : undefined
-                }]);
+                const candidates = selves.length
+                    ? selves.map(s => ({ sk, kemSk: s.kemSk, kemPk: s.kemPk }))
+                    : [{ sk }];
+                const got = NCx.unwrapGiftWrap(event, candidates);
                 return got ? { seal: got.seal, rumor: got.rumor } : null;
             }
 
             try {
                 const open = async (content, senderPk) => {
                     if (NCx.isPq2Payload(content)) {
-                        if (!self) throw new Error('no kem key');
-                        const inner = NCx.pq2Open(content, senderPk, Identity.pubkey, self);
+                        const usable = selves.filter(s => s && s.kemSk && s.kemPk);
+                        if (!usable.length) throw new Error('no kem key');
+                        let inner = null;
+                        let lastErr = null;
+                        for (const self of usable) {
+                            try { inner = NCx.pq2Open(content, senderPk, Identity.pubkey, self); break; }
+                            catch (e) { lastErr = e; }
+                        }
+                        if (inner == null) throw lastErr || new Error('post-quantum layer did not open');
                         return Identity.decryptFrom(senderPk, inner);
                     }
                     // pq1 combines the ECDH output with the KEM secret, which a

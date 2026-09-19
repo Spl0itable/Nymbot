@@ -4268,6 +4268,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
   }
   var userPqPromise = suppliedPqRec ? Promise.resolve(suppliedPqRec) : null;
+  if (!suppliedPqRec && body.pqClassical === true) userPqPromise = Promise.resolve(null);
   function userPqKem() {
     if (!botPq) return Promise.resolve(null);
     if (!userPqPromise) {

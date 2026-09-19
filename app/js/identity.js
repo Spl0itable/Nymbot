@@ -26,6 +26,9 @@
         return out;
     }
 
+    const EPOCH_SCAN = 12;
+    const PREVIOUS_EPOCHS = 3;
+
     const Identity = {
         pubkey: null,
         method: null,     // 'local' | 'nip07'
@@ -137,6 +140,58 @@
             try { this._kem = NC().pqKeypairFromRoot(this._root, this._epoch || 0); } catch (_) { }
         },
 
+        kemAt(epoch) {
+            if (!this._root) return null;
+            try { return NC().pqKeypairFromRoot(this._root, Math.max(0, Math.floor(Number(epoch) || 0))).publicKey; }
+            catch (_) { return null; }
+        },
+
+        epochMatching(announcedPk, hint) {
+            if (!this._root || !announcedPk) return null;
+            const order = [];
+            if (hint != null && Number.isInteger(Number(hint)) && Number(hint) >= 0) order.push(Number(hint));
+            for (let e = 0; e <= EPOCH_SCAN; e++) order.push(e);
+            const tried = new Set();
+            for (const epoch of order) {
+                if (tried.has(epoch)) continue;
+                tried.add(epoch);
+                const pk = this.kemAt(epoch);
+                if (pk && sameBytes(pk, announcedPk)) return epoch;
+            }
+            return null;
+        },
+
+        adoptEpoch(epoch) {
+            const next = Math.max(0, Math.floor(Number(epoch) || 0));
+            if (next === this._epoch && this._kem) return;
+            this._epoch = next;
+            this._deriveKem();
+            this._persist();
+        },
+
+        kemCandidates() {
+            const out = [];
+            const epoch = this._epoch || 0;
+            const floor = Math.max(0, epoch - PREVIOUS_EPOCHS);
+            if (this._root) {
+                for (let e = epoch; e >= floor; e--) {
+                    try {
+                        const kp = NC().pqKeypairFromRoot(this._root, e);
+                        out.push({ kemSk: kp.secretKey, kemPk: kp.publicKey });
+                    } catch (_) { }
+                }
+            }
+            if (this._sk) {
+                for (let e = epoch; e >= floor; e--) {
+                    try {
+                        const kp = NC().pqKeypairFromPrivkey(this._sk, e);
+                        out.push({ kemSk: kp.secretKey, kemPk: kp.publicKey });
+                    } catch (_) { }
+                }
+            }
+            return out;
+        },
+
         // --- the post-quantum root -----------------------------------------
 
         rootCode() {
@@ -213,9 +268,16 @@
             this._sk = null;
             this._root = null;
             this._kem = null;
+            this._epoch = 0;
             this.rootLocked = false;
         }
     };
+
+    function sameBytes(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
 
     window.NymbotIdentity = Identity;
     window.NymbotHex = { hex, unhex };

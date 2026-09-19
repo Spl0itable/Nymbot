@@ -61,7 +61,7 @@
     /// would write rows the account's real devices could never read.
     function selfKem() {
         if (Identity.rootLocked) return null;
-        return (Identity._sk && Identity._kem) ? Identity.kemPk : null;
+        return Identity._kem ? Identity.kemPk : null;
     }
 
     async function seal(plaintext) {
@@ -73,26 +73,44 @@
             const T = NT();
             return T.nip44.encrypt(plaintext, T.nip44.getConversationKey(Identity._sk, Identity.pubkey));
         }
-        // An extension holds the key: it does the NIP-44 on our behalf, which is
-        // classical only.
-        return window.nostr.nip44.encrypt(Identity.pubkey, plaintext);
+        const inner = await window.nostr.nip44.encrypt(Identity.pubkey, plaintext);
+        if (kem) {
+            try { return NC().pq2Seal(inner, Identity.pubkey, Identity.pubkey, kem); } catch (_) { }
+        }
+        return inner;
+    }
+
+    function selfCandidates() {
+        const PQ = window.NymbotPQ;
+        if (PQ && typeof PQ.selfCandidates === 'function') return PQ.selfCandidates();
+        return Identity._kem ? [{ kemSk: Identity._kem.secretKey, kemPk: Identity._kem.publicKey }] : [];
     }
 
     async function open(blob) {
         const NCx = NC();
         if (Identity._sk) {
-            if (NCx.isPq2Payload(blob) && Identity._kem) {
-                return NCx.pq2Decrypt(blob, Identity.pubkey, {
-                    sk: Identity._sk,
-                    kemSk: Identity._kem.secretKey,
-                    kemPk: Identity._kem.publicKey
-                });
+            if (NCx.isPq2Payload(blob)) {
+                let lastErr = null;
+                for (const c of selfCandidates()) {
+                    try {
+                        return NCx.pq2Decrypt(blob, Identity.pubkey, { sk: Identity._sk, kemSk: c.kemSk, kemPk: c.kemPk });
+                    } catch (e) { lastErr = e; }
+                }
+                throw lastErr || new Error('no kem key');
             }
             const T = NT();
             return T.nip44.decrypt(blob, T.nip44.getConversationKey(Identity._sk, Identity.pubkey));
         }
-        // A signer login cannot open the hybrid layer: it never holds the KEM secret.
-        if (NCx.isPq2Payload(blob)) throw new Error('needs the local key');
+        if (NCx.isPq2Payload(blob)) {
+            let inner = null;
+            let lastErr = null;
+            for (const c of selfCandidates()) {
+                try { inner = NCx.pq2Open(blob, Identity.pubkey, Identity.pubkey, c); break; }
+                catch (e) { lastErr = e; }
+            }
+            if (inner == null) throw lastErr || new Error('needs the root');
+            return window.nostr.nip44.decrypt(Identity.pubkey, inner);
+        }
         return window.nostr.nip44.decrypt(Identity.pubkey, blob);
     }
 
