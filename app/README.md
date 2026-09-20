@@ -8,8 +8,8 @@ what makes it auditable — you can read exactly what happens to your key.
 
 ## Where it points
 
-`js/config.js` holds the whole answer: the worker is Nymchat's, on
-`web.nymchat.app`, and the relay list is the one that worker itself fetches
+`js/config.js` holds the whole answer: the worker is our own, on
+`nymbot.ai`, and the relay list is the one that worker itself fetches
 from. That is deliberate. Credits, conversation threads and the anonymous-mode
 throwaway key are all keyed to your public key, so signing in to either service
 with the same key gives you the same account.

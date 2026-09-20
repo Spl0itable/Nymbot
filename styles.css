@@ -3228,3 +3228,69 @@ footer {
 .nf .nf-box a {
     color: var(--secondary);
 }
+
+.footer-brand {
+    margin-top: 1rem;
+}
+
+.footer-legal {
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+}
+
+.footer-legal a,
+.protocol-lede a,
+.section-cta a {
+    color: var(--secondary);
+}
+
+.protocol-lede {
+    color: var(--primary);
+    margin-bottom: 1rem;
+}
+
+.protocol-text {
+    color: rgb(16 222 145 / 80%);
+}
+
+.section-cta {
+    text-align: center;
+    margin-top: 3rem;
+}
+
+.section-cta-text {
+    color: var(--secondary);
+    font-size: 1.1rem;
+}
+
+.protocol.cta-section {
+    padding: 4rem 2rem;
+}
+
+.cta-section-inner {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.cta-section-lede {
+    color: var(--secondary);
+    font-size: 1.2rem;
+    margin: 2rem 0;
+}
+
+.cta-buttons.is-centered {
+    justify-content: center;
+}
+
+.store-buttons.is-centered {
+    justify-content: center;
+    margin-top: 1.5rem;
+}
+
+.brand-swatch.is-primary { background: #00ff00; }
+.brand-swatch.is-secondary { background: #00d4ff; }
+.brand-swatch.is-accent { background: #ff00ff; }
+.brand-swatch.is-lightning { background: #f7931a; }
+.brand-swatch.is-surface { background: #0a0e1a; }
+.brand-swatch.is-background { background: #050810; }

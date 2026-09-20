@@ -18,10 +18,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/// web.nymchat.app, not nymchat.app. Only that deployment carries the bot
-/// worker, and therefore the AI binding the translate endpoint runs on — the
-/// apex host answers the request and fails every translation in it.
-const PROXY = process.env.NYM_TRANSLATE_PROXY || 'https://web.nymchat.app/api/proxy';
+const PROXY = process.env.NYM_TRANSLATE_PROXY || 'https://nymbot.ai/api/proxy';
 // Overridable so tests never touch the committed cache.
 const CACHE_DIR = process.env.NYM_I18N_CACHE_DIR || new URL('./cache/', import.meta.url).pathname;
 

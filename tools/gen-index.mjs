@@ -217,11 +217,11 @@ ${FEATURES.join('\n')}
         <p class="section-subtitle">Five steps, and none of them involve an account</p>
         <div class="protocol-content">
             <div class="protocol-box">
-                <p style="color: var(--primary); margin-bottom: 1rem;">Nymbot is built on <a href="https://nostr.com" target="_blank" rel="noopener" style="color: var(--secondary)">Nostr</a>. Messages are events, identities are keypairs, and delivery is a set of relays rather than a server you have to trust &mdash; which is why an identity from any other Nostr app works here unchanged.</p>
+                <p class="protocol-lede">Nymbot is built on <a href="https://nostr.com" target="_blank" rel="noopener">Nostr</a>. Messages are events, identities are keypairs, and delivery is a set of relays rather than a server you have to trust &mdash; which is why an identity from any other Nostr app works here unchanged.</p>
 
                 <div class="protocol-item">
                     <div class="protocol-label">1 &mdash; Sealed on your device</div>
-                    <p style="color: rgb(16 222 145 / 80%);">
+                    <p class="protocol-text">
                         <strong>Kinds 14, 13 and 1059:</strong> an unsigned rumor, a seal signed to the recipient, and a wrap under a single-use key.<br>
                         A relay sees an event from a key that exists for one message only, addressed to a key it cannot connect to anything else.
                     </p>
@@ -229,7 +229,7 @@ ${FEATURES.join('\n')}
 
                 <div class="protocol-item">
                     <div class="protocol-label">2 &mdash; Authenticated, not identified</div>
-                    <p style="color: rgb(16 222 145 / 80%);">
+                    <p class="protocol-text">
                         <strong>Kind 27235:</strong> a short-lived auth event, signed for one action and one endpoint.<br>
                         A captured signature cannot be replayed against a different request. Your message never travels as plaintext.
                     </p>
@@ -237,7 +237,7 @@ ${FEATURES.join('\n')}
 
                 <div class="protocol-item">
                     <div class="protocol-label">3 &mdash; The turn is claimed before it is charged</div>
-                    <p style="color: rgb(16 222 145 / 80%);">
+                    <p class="protocol-text">
                         Nothing is fetched, generated or billed until the turn is claimed.<br>
                         Resend the same message and you collect the answer you already bought, rather than paying for a second one.
                     </p>
@@ -245,7 +245,7 @@ ${FEATURES.join('\n')}
 
                 <div class="protocol-item">
                     <div class="protocol-label">4 &mdash; Opened, threaded, answered</div>
-                    <p style="color: rgb(16 222 145 / 80%);">
+                    <p class="protocol-text">
                         The wrap is opened, the seal's signer is checked against the authenticated key, and the thread is rebuilt from the previous wraps.<br>
                         Classification, routing, web search and repository tool calls all happen here.
                     </p>
@@ -253,7 +253,7 @@ ${FEATURES.join('\n')}
 
                 <div class="protocol-item">
                     <div class="protocol-label">5 &mdash; Sealed back to you</div>
-                    <p style="color: rgb(16 222 145 / 80%);">
+                    <p class="protocol-text">
                         <strong>Kind 30078:</strong> the post-quantum announcement carrying each side's ML-KEM key.<br>
                         The reply is sealed hybrid &mdash; classical and lattice &mdash; so capturing it today buys nothing later.
                     </p>
@@ -261,10 +261,10 @@ ${FEATURES.join('\n')}
 
             </div>
 
-            <div style="text-align: center; margin-top: 3rem;">
-                <p style="color: var(--secondary); font-size: 1.1rem;">
+            <div class="section-cta">
+                <p class="section-cta-text">
                     No user table. No password to leak. No transcript anyone can be compelled to hand over.<br>
-                    <a href="/docs/protocol/" style="color: var(--secondary)">The whole protocol, written down</a>.
+                    <a href="/docs/protocol/">The whole protocol, written down</a>.
                 </p>
             </div>
         </div>
@@ -276,10 +276,10 @@ ${FEATURES.join('\n')}
         <div class="commands-grid">
 ${COMMANDS}
         </div>
-        <div style="text-align: center; margin-top: 3rem;">
-            <p style="color: var(--secondary); font-size: 1.1rem;">
+        <div class="section-cta">
+            <p class="section-cta-text">
                 Games, unit conversion, maths, the Bitcoin price and more &mdash;
-                <a href="/docs/commands/" style="color: var(--secondary)">the full reference</a>.
+                <a href="/docs/commands/">the full reference</a>.
             </p>
         </div>
     </section>
@@ -294,20 +294,20 @@ ${FAQ}
         </div>
     </section>
 
-    <section class="protocol" style="padding: 4rem 2rem;">
-        <div style="max-width: 800px; margin: 0 auto; text-align: center;">
+    <section class="protocol cta-section">
+        <div class="cta-section-inner">
             <h2 class="section-title glitch">Start Talking</h2>
-            <p style="color: var(--secondary); font-size: 1.2rem; margin: 2rem 0;">
+            <p class="cta-section-lede">
                 No registration. No subscription. No name on the bill.<br>
                 A key on your device, and an assistant that answers to it.
             </p>
-            <div class="cta-buttons" style="justify-content: center;">
+            <div class="cta-buttons is-centered">
                 <a href="/app" class="btn">Open Nymbot</a>
                 <a href="https://github.com/Spl0itable/nymbot" class="btn btn-secondary" target="_blank"
                     rel="noopener">View on GitHub</a>
                 <a href="/docs/" class="btn btn-docs">Knowledge Base</a>
             </div>
-            <div class="store-buttons" style="justify-content: center; margin-top: 1.5rem;">
+            <div class="store-buttons is-centered">
                 <span class="store-badge is-pending" title="Coming soon">
                     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
                     <span class="store-badge-text">

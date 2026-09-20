@@ -363,7 +363,7 @@
         mount.appendChild(note);
     };
 
-    fetch('https://web.nymchat.app/api/bot', {
+    fetch('/api/bot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'models' })
