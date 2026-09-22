@@ -4,6 +4,7 @@
 
     const C = window.NymbotConfig;
     const Identity = window.NymbotIdentity;
+    const Edge = window.NymbotEdge;
 
     // The same hosts Nymchat mirrors across, so a blob uploaded in one app
     // resolves in the other.
@@ -47,7 +48,7 @@
 
     async function putTo(host, bytes, mime, header, signal) {
         const url = `${proxyBase()}?action=upload&server=${encodeURIComponent(host)}`;
-        const resp = await fetch(url, {
+        const resp = await Edge.fetch(url, {
             method: 'PUT',
             headers: { 'Authorization': header, 'Content-Type': mime || 'application/octet-stream' },
             body: bytes,

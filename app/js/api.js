@@ -9,6 +9,7 @@
 
     const C = window.NymbotConfig;
     const Identity = window.NymbotIdentity;
+    const Edge = window.NymbotEdge;
 
     const MONEY = new Set([
         'transfer-credits', 'create-invoice', 'claim-credits',
@@ -73,7 +74,7 @@
                 }
                 const timer = setTimeout(() => controller.abort(), options.timeout || 30000);
                 try {
-                    const resp = await fetch(url(), {
+                    const resp = await Edge.fetch(url(), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body),
@@ -104,7 +105,7 @@
         /// so it is the one call that needs no identity.
         async models() {
             try {
-                const resp = await fetch(url(), {
+                const resp = await Edge.fetch(url(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'models' })

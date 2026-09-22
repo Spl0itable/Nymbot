@@ -5,6 +5,7 @@
     const C = window.NymbotConfig;
     const Store = window.NymbotStore;
     const Identity = window.NymbotIdentity;
+    const Edge = window.NymbotEdge;
     const NT = () => window.NostrTools;
     const NC = () => window.NymCrypto;
 
@@ -151,7 +152,7 @@
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         try {
-            const resp = await fetch(url(), {
+            const resp = await Edge.fetch(url(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
@@ -178,7 +179,7 @@
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8000);
         try {
-            const resp = await fetch(url(), {
+            const resp = await Edge.fetch(url(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'profile-get', pubkeys: wanted }),
@@ -535,7 +536,7 @@
                 });
             } catch (_) { return false; }
             try {
-                await fetch(url(), {
+                await Edge.fetch(url(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body,

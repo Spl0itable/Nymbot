@@ -5,6 +5,7 @@
     'use strict';
 
     const C = window.NymbotConfig;
+    const Edge = window.NymbotEdge;
 
     function subId() {
         return 'nb' + Math.random().toString(36).slice(2, 10);
@@ -91,6 +92,7 @@
                 clearTimeout(bail);
                 if (this.sockets.get(url) === ws) this.sockets.delete(url);
                 this._upstream = [];
+                if (!up) Edge.nudge();
                 this._emit();
                 this._fallBack();
             });
