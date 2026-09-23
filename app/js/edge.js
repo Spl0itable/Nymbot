@@ -16,7 +16,7 @@
         async pending() {
             if (!C.apiHost) return false;
             try {
-                const resp = await fetch('/404.js?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' });
+                const resp = await fetch('/robots.txt?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' });
                 return resp.headers.get('cf-mitigated') === 'challenge';
             } catch (_) {
                 return false;

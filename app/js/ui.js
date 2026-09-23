@@ -4172,7 +4172,7 @@
                     icon.loading = 'lazy';
                     icon.referrerPolicy = 'no-referrer';
                     icon.addEventListener('load', () => mark.classList.add('has-icon'));
-                    icon.addEventListener('error', () => icon.remove());
+                    icon.addEventListener('error', () => { icon.remove(); window.NymbotEdge.nudge(); });
                     mark.appendChild(icon);
                 }
                 card.appendChild(mark);

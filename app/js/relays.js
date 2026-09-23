@@ -92,7 +92,7 @@
                 clearTimeout(bail);
                 if (this.sockets.get(url) === ws) this.sockets.delete(url);
                 this._upstream = [];
-                if (!up) Edge.nudge();
+                if (!up) Edge.recover().catch(() => { });
                 this._emit();
                 this._fallBack();
             });
