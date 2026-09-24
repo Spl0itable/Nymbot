@@ -8,29 +8,46 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../core/crypto/bech32_codec.dart';
 import '../core/crypto/keys.dart';
+import '../core/crypto/schnorr.dart' as schnorr;
 import '../features/i18n/i18n.dart';
 import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/compare.dart';
+import '../models/connector.dart';
+import '../models/invoice.dart';
 import '../models/conversation.dart';
 import '../models/memory.dart';
+import '../models/model_maker.dart';
 import '../models/schedule.dart';
 import '../models/nostr_event.dart';
 import '../models/notice.dart';
 import '../models/workspace.dart';
 import '../services/account_sync.dart';
 import '../services/anon.dart';
+import '../services/backup.dart';
 import '../services/blossom.dart';
 import '../services/chat_engine.dart';
+import '../services/connectors.dart';
+import '../services/doc_library.dart';
 import '../services/free_tier.dart';
+import '../services/gifts.dart';
+import '../services/git_review.dart';
 import '../services/memory_keeper.dart';
+import '../services/mentions.dart';
+import '../services/nickname.dart';
 import '../services/nostr/event_signer.dart';
+import '../services/nostr/nip46.dart';
+import '../services/nostr/signer_links.dart';
 import '../services/nymbot_api.dart';
 import '../core/crypto/pq.dart' as pq_crypto;
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
 import '../services/relay_pool.dart';
+import '../services/research.dart';
+import '../services/server_runs.dart';
+import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
+import '../services/team.dart';
 import 'identity.dart';
 import 'store.dart';
 
@@ -47,6 +64,17 @@ class RootLinkVerdict {
   final bool announcedOnly;
 }
 
+typedef ChatSnapshot = ({
+  Conversation conv,
+  String rootId,
+  String? seed,
+  int messageCount,
+  double creditsSpent,
+  double? satsSpent,
+  List<ChatMessage> messages,
+  List<String> thread,
+});
+
 typedef AccountRoot = ({
   bool read,
   bool present,
@@ -60,23 +88,31 @@ class AppController extends ChangeNotifier {
   AppController._(this.store, this.identity, this.relays, this.pq, this.api,
       this.anon, this.storage) {
     sync = AccountSync(store: store, identity: identity, storage: storage);
+    DocLibrary.bind(store);
   }
 
-  static Future<AppController> boot({http.Client? client}) async {
-    final store = await Store.open();
-    final identity = Identity(store);
+  static Future<AppController> boot(
+      {http.Client? client, Store? store, Nip46SocketFactory? signerSockets}) async {
+    store ??= await Store.open();
+    final identity = Identity(store,
+        restoreSigner: (session) =>
+            restoreRemoteSigner(session, sockets: signerSockets));
     final relays = RelayPool();
     final pq = PqAnnounce(relays, store: store);
     final api = NymbotApi(client: client);
     final anon = AnonMode(store, api, pq);
     final storage = StorageSync();
     final c = AppController._(store, identity, relays, pq, api, anon, storage);
+    c.signerSockets = signerSockets;
+    c.blossom = Blossom(client: client);
     c.profiles = Profiles(store, relays, storage);
     c.profiles.addListener(c.notifyListeners);
     await anon.load();
     c.signedIn = await identity.restore();
     c._loadSettings();
+    c.invoice = PendingInvoice.decode(store.getString(_invoiceKey));
     await c._loadRepos();
+    await c._loadConnectors();
     return c;
   }
 
@@ -92,7 +128,12 @@ class AppController extends ChangeNotifier {
 
   late final Profiles profiles;
 
-  late final Blossom blossom = Blossom();
+  late final Blossom blossom;
+
+  late final UploadLedger uploads = UploadLedger(
+    readRecords: () => store.secret('uploads'),
+    writeRecords: (json) => store.setSecret('uploads', json),
+  );
 
   late final ChatEngine chat = ChatEngine(
     identity: identity,
@@ -101,6 +142,8 @@ class AppController extends ChangeNotifier {
     api: api,
     anon: anon,
   );
+
+  Nip46SocketFactory? signerSockets;
 
   bool signedIn = false;
   bool _entered = false;
@@ -113,6 +156,7 @@ class AppController extends ChangeNotifier {
 
   final Map<String, ChatTurn> turns = {};
   final Map<String, List<String>> _queues = {};
+  final Map<String, int> _queueEdits = {};
 
   ChatTurn? turnOf(Conversation? conv) =>
       conv == null ? null : turns[conv.id];
@@ -125,12 +169,122 @@ class AppController extends ChangeNotifier {
 
   List<TurnStep> get progressSteps => turnOf(current)?.steps ?? const [];
 
+  bool researchNext = false;
+
+  bool get researching => turnOf(current)?.research != null;
+
+  bool get teaming => turnOf(current)?.team != null;
+
+  int get teamWorkers =>
+      (turnOf(current)?.team?['workers'] as num?)?.toInt() ?? 0;
+
+  Map<String, dynamic>? teamLeadOf(Conversation? conv) =>
+      mediaModelOf(conv) != null ? null : modelOf(conv);
+
+  String? teamModeOf(Conversation? conv) => conv == null
+      ? null
+      : Team.mode(
+          lead: teamLeadOf(conv),
+          research: researchNext,
+          repos: reposOf(conv).isNotEmpty);
+
+  bool get teamAvailable => teamModeOf(current) != null;
+
+  TeamSetting? get teamSetting => Team.settingOf(current?.team);
+
+  bool teamLeadTools(Conversation? conv, {String? mode}) =>
+      conv != null &&
+      ((!conv.anon && connectorsOf(conv).isNotEmpty) ||
+          ((mode ?? teamModeOf(conv)) != 'research' &&
+              conv.serverRuns &&
+              reposOf(conv).isNotEmpty));
+
+  Future<TeamEstimate> teamEstimate(Conversation conv,
+      {required int workers,
+      required String model,
+      required String mode,
+      Map<String, dynamic>? lead}) async {
+    final leader = lead ?? teamLeadOf(conv);
+    if (leader == null) return (max: 0, typical: 0.0, error: Team.needsPro());
+    final res = await api.teamEstimate(Team.estimateBody(
+        leader, workers, model, mode,
+        leadTools: teamLeadTools(conv, mode: mode)));
+    return Team.estimateOf(res.status, res.data);
+  }
+
+  Future<void> setTeam(Conversation conv, Map<String, dynamic>? team) async {
+    conv.team = team;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  bool toggleResearch() {
+    if (!researchNext && activeModel == null) return false;
+    researchNext = !researchNext;
+    if (researchNext) unawaited(ensurePricing());
+    notifyListeners();
+    return true;
+  }
+
+  String? researchHint(String text) => Research.hint(
+      text: text,
+      armed: researchNext,
+      model: activeModel,
+      pricing: catalogPricing);
+
   List<String> get queued => _queues[current?.id] ?? const [];
+
+  int? get editingQueued => _queueEdits[current?.id];
+
+  void editQueued(int at, {Conversation? target}) {
+    final conv = target ?? current;
+    final queue = conv == null ? null : _queues[conv.id];
+    if (queue == null || at < 0 || at >= queue.length) return;
+    _queueEdits[conv!.id] = at;
+    notifyListeners();
+  }
+
+  Future<void> saveQueued(String text, {Conversation? target}) async {
+    final conv = target ?? current;
+    if (conv == null) return;
+    final at = _queueEdits.remove(conv.id);
+    final queue = _queues[conv.id];
+    if (at != null && queue != null && at < queue.length) {
+      final body = text.trim();
+      if (body.isEmpty) {
+        queue.removeAt(at);
+        if (queue.isEmpty) _queues.remove(conv.id);
+      } else {
+        queue[at] = body;
+      }
+    }
+    notifyListeners();
+    await _sendQueued(conv);
+  }
+
+  Future<void> cancelQueuedEdit({Conversation? target}) async {
+    final conv = target ?? current;
+    if (conv == null || _queueEdits.remove(conv.id) == null) return;
+    notifyListeners();
+    await _sendQueued(conv);
+  }
+
+  @visibleForTesting
+  Future<void> carryOnForTest(Conversation conv, TurnResult first) =>
+      _carryOn(ChatTurn(conv), first);
 
   @visibleForTesting
   void holdForTest(Conversation conv) {
     turns[conv.id] = ChatTurn(conv);
     notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<void> releaseForTest(Conversation conv) async {
+    turns.remove(conv.id);
+    notifyListeners();
+    await _sendQueued(conv);
   }
 
   List<Conversation> conversations = [];
@@ -140,6 +294,7 @@ class AppController extends ChangeNotifier {
 
   AppSettings settings = AppSettings();
   List<GitRepo> repos = [];
+  List<McpConnector> connectors = [];
   Map<String, dynamic>? proModel;
   Map<String, dynamic>? mediaModel;
   double? standardBalance;
@@ -158,6 +313,10 @@ class AppController extends ChangeNotifier {
   List<int> dismissedNotices = [];
   String? quote;
   List<Attachment> attachments = [];
+
+  Future<String> Function(CapPrompt prompt)? onCapPrompt;
+  String? _capReturned;
+  String? _capWaive;
 
   String? pendingInput;
 
@@ -198,9 +357,34 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> resetSettings() async {
+    final kept = (name: settings.nickname, at: settings.nicknameAt);
     await store.resetSettings();
     settings = store.settings();
+    if (kept.at > 0) {
+      settings
+        ..nickname = kept.name
+        ..nicknameAt = kept.at;
+      await store.saveSettings(settings);
+    }
     notifyListeners();
+  }
+
+  String get nickname => Nickname.clean(settings.nickname);
+
+  Future<String> setNickname(String value) async {
+    final cleaned = Nickname.clean(value);
+    settings
+      ..nickname = cleaned
+      ..nicknameAt = DateTime.now().millisecondsSinceEpoch;
+    await store.saveSettings(settings);
+    notifyListeners();
+    return cleaned;
+  }
+
+  String selfNameIn(Conversation? conv, String? published) {
+    if (conv?.anon ?? false) return t('Anon');
+    final nick = nickname;
+    return nick.isNotEmpty ? nick : (published ?? '');
   }
 
   Future<void> setProModel(Map<String, dynamic>? model, {bool forChat = false}) async {
@@ -336,11 +520,50 @@ class AppController extends ChangeNotifier {
 
   Future<void> setAnonEnabled(bool on) async {
     await anon.setEnabled(on);
+    final conv = current;
+    if (conv != null && messages.isEmpty && conv.anon != on) {
+      conv.anon = on;
+      await store.saveConversations(conversations);
+    }
     if (on) {
       await anon.flush(identity: identity.signer);
       await autoTopUp();
     }
     notifyListeners();
+  }
+
+  bool get canFlipAnon =>
+      current != null &&
+      !messages.any((m) => m.role == ChatRole.self || m.role == ChatRole.bot);
+
+  Future<bool> setChatAnon(bool on) async {
+    final conv = current;
+    if (conv == null || !canFlipAnon) return false;
+    if (on && !anon.enabled) await setAnonEnabled(true);
+    conv.anon = on;
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return true;
+  }
+
+  Future<Conversation> newAnonConversation() async {
+    if (!anon.enabled) await setAnonEnabled(true);
+    final conv = await newConversation();
+    conv.anon = true;
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return conv;
+  }
+
+  Future<({String? text, String? error})> transcribe(Uint8List audio) async {
+    final signer = spendingAnon ? await anon.signer() : identity.signer;
+    final res = await api.call('transcribe', signer,
+        extra: {'audio': base64Encode(audio)},
+        timeout: const Duration(seconds: 60));
+    final error = res.data['error'];
+    if (error is String && error.isNotEmpty) return (text: null, error: error);
+    final said = '${res.data['text'] ?? ''}'.trim();
+    return (text: said, error: null);
   }
 
   /// Moves credits onto the throwaway key when it is running low, so
@@ -444,6 +667,7 @@ class AppController extends ChangeNotifier {
     for (final id in doomed) {
       if (!ghosts.contains(id)) await store.bury(id);
       await store.dropConversation(id);
+      await DocLibrary.instance.forget(id);
     }
     conversations.removeWhere((c) => doomed.contains(c.id));
     await store.saveConversations(conversations);
@@ -526,7 +750,9 @@ class AppController extends ChangeNotifier {
   /// Polls the worker for what the turn is doing. Stops the moment the turn is
   /// over, and never keeps the send waiting on it.
   void _watchTurn(ChatTurn turn, String eventId) {
-    if (!settings.showProgress) return;
+    if (!settings.showProgress && turn.research == null && turn.team == null) {
+      return;
+    }
     turn.watching = true;
     turn.steps = [];
     () async {
@@ -542,7 +768,8 @@ class AppController extends ChangeNotifier {
           turn.steps = [...turn.steps, ...steps];
           notifyListeners();
         }
-        await Future<void>.delayed(const Duration(seconds: 2));
+        await Future<void>.delayed(
+            Duration(seconds: signer.isRemote ? 5 : 2));
       }
     }()
         .catchError((_) {});
@@ -642,6 +869,12 @@ class AppController extends ChangeNotifier {
 
   Future<GitRepo> saveRepo(GitRepo repo, {bool useHere = true}) async {
     final at = repos.indexWhere((r) => r.id == repo.id);
+    final before = at == -1 ? '' : repos[at].token;
+    if (repo.token != before) {
+      repo.tokenAt = DateTime.now().millisecondsSinceEpoch;
+    } else if (at != -1 && repo.tokenAt == 0) {
+      repo.tokenAt = repos[at].tokenAt;
+    }
     if (at == -1) {
       repos = [...repos, repo];
     } else {
@@ -655,6 +888,16 @@ class AppController extends ChangeNotifier {
     }
     notifyListeners();
     return repo;
+  }
+
+  Future<void> disconnectRepo(String id) async {
+    final at = repos.indexWhere((r) => r.id == id);
+    if (at == -1 || repos[at].token.isEmpty) return;
+    repos[at]
+      ..token = ''
+      ..tokenAt = DateTime.now().millisecondsSinceEpoch;
+    await store.saveRepos(repos);
+    notifyListeners();
   }
 
   Future<void> deleteRepo(String id) async {
@@ -684,6 +927,323 @@ class AppController extends ChangeNotifier {
     conv.repoIds = ids;
     await store.saveConversations(conversations);
     notifyListeners();
+  }
+
+  RunnerInfo runner = const RunnerInfo();
+
+  bool get runnerAvailable => runner.available;
+
+  Future<RunnerInfo> refreshRunner() async {
+    final fresh = await api.runnerInfo();
+    final changed = fresh.available != runner.available || fresh.images.length != runner.images.length;
+    runner = fresh;
+    if (changed) notifyListeners();
+    return runner;
+  }
+
+  bool serverRunsOf(Conversation? conv) =>
+      conv != null && conv.serverRuns && runner.available && reposOf(conv).isNotEmpty;
+
+  Future<void> toggleServerRuns() async {
+    final conv = current;
+    if (conv == null) return;
+    conv.serverRuns = !conv.serverRuns;
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  String runnerLabel(String image) => runner.image(image)?.label ?? image;
+
+  Future<bool> serverRunCapGate(Conversation? conv, double credits) async {
+    if (conv == null || !SpendCaps.any(conv, botOf(conv))) return true;
+    final gate = await _capGate(conv, true, credits);
+    return gate == 'send' || gate == 'ok';
+  }
+
+  Future<ServerRunResponse> startServerRun(
+      Conversation? conv, Map<String, dynamic> body) async {
+    final useAnon = conv != null && conv.anon && anon.ready;
+    final signer = useAnon ? await anon.signer() : identity.signer;
+    return api.runnerRun(signer, body);
+  }
+
+  Future<void> serverRunCharged(Conversation? conv, ServerRunState state) async {
+    final credits = state.charged ?? 0;
+    _creditBalance(true, state.balance, anonKey: conv != null && conv.anon && anon.ready);
+    if (conv != null && credits > 0) {
+      _bumpSpent(conv, credits, true);
+      conv.creditsSpent += credits;
+      _touch(conv);
+      await store.saveConversations(conversations);
+      await store.recordUsage(credits);
+    }
+    notifyListeners();
+  }
+
+  Future<String> serverRunNoCredits(Conversation? conv, Map<String, dynamic> data) async {
+    final useAnon = conv != null && conv.anon && anon.ready;
+    final free = data['balanceCredits'] ?? data['balance'];
+    if (free is num) _creditBalance(true, free.toDouble(), anonKey: useAnon);
+    final topped = useAnon ? await autoTopUp(force: true) : null;
+    notifyListeners();
+    if (topped != null) {
+      return '${describeTopUp(topped)} ${t('Run it again when you are ready.')}';
+    }
+    return (data['error'] as String?) ?? t('You are out of Pro credits.');
+  }
+
+  Future<void> _loadConnectors() async {
+    connectors = await store.connectors();
+  }
+
+  List<McpConnector> get activeConnectors => connectorsOf(current);
+
+  List<McpConnector> connectorsOf(Conversation? conv) =>
+      Connectors.forChat(connectors, conv?.connectorIds ?? const []);
+
+  Future<McpConnector> saveConnector(McpConnector c, {bool useHere = true}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    c.updatedAt = now;
+    final at = connectors.indexWhere((x) => x.id == c.id);
+    if (at == -1 || !c.sameSecrets(connectors[at])) {
+      c.secretAt = now;
+    } else if (c.secretAt == 0) {
+      c.secretAt = connectors[at].secretAt;
+    }
+    if (at == -1) {
+      connectors = [...connectors, c];
+    } else {
+      connectors[at] = c;
+    }
+    await store.saveConnectors(connectors);
+    final conv = current;
+    if (useHere &&
+        conv != null &&
+        !conv.connectorIds.contains(c.id) &&
+        conv.connectorIds.length < McpConnector.maxPerChat) {
+      conv.connectorIds = [...conv.connectorIds, c.id];
+      await store.saveConversations(conversations);
+    }
+    notifyListeners();
+    return c;
+  }
+
+  Future<void> deleteConnector(String id) async {
+    await store.bury(id);
+    connectors = connectors.where((c) => c.id != id).toList();
+    await store.saveConnectors(connectors);
+    for (final c in conversations) {
+      c.connectorIds = c.connectorIds.where((x) => x != id).toList();
+    }
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Future<bool> toggleConnectorHere(String id) async {
+    final conv = current;
+    if (conv == null) return false;
+    if (!conv.connectorIds.contains(id) &&
+        conv.connectorIds.length >= McpConnector.maxPerChat) {
+      return false;
+    }
+    conv.connectorIds = conv.connectorIds.contains(id)
+        ? conv.connectorIds.where((x) => x != id).toList()
+        : [...conv.connectorIds, id];
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> setConnectorsHere(List<String> ids) async {
+    final conv = current;
+    if (conv == null) return;
+    conv.connectorIds = ids.take(McpConnector.maxPerChat).toList();
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Future<List<ConnectorTool>> probeConnector(McpConnector c) =>
+      Connectors.probe(api, identity.signer, c, before: c.tools);
+
+  Future<void> _settlePending(Conversation conv, ChatMessage m, String state) async {
+    final p = m.pendingTool;
+    if (p == null) return;
+    await _putPending(conv, m, {...p, 'state': state});
+  }
+
+  Future<void> _putPending(
+      Conversation conv, ChatMessage m, Map<String, dynamic> settled) async {
+    final list = conv.id == current?.id ? messages : store.messages(conv.id);
+    final next = list.map((x) => x.id == m.id ? x.copyWith(pendingTool: settled) : x).toList();
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+    notifyListeners();
+  }
+
+  McpConnector? connectorForPending(Map<String, dynamic>? p) =>
+      Connectors.connectorFor(connectors, p);
+
+  bool canAlwaysAllow(Map<String, dynamic>? p) =>
+      p != null &&
+      p['kind'] != 'server-run' &&
+      p['team'] != true &&
+      p['destructive'] != true &&
+      connectorForPending(p) != null;
+
+  Future<void> allowPendingToolAlways(ChatMessage m) async {
+    final p = m.pendingTool;
+    final c = connectorForPending(p);
+    if (p != null && c != null && canAlwaysAllow(p)) {
+      c.trust('${p['tool'] ?? ''}');
+      await saveConnector(c, useHere: false);
+    }
+    await allowPendingTool(m);
+  }
+
+  Future<void> denyPendingTool(ChatMessage m) async {
+    final conv = current;
+    if (conv == null) return;
+    if (m.pendingTool?['kind'] == 'server-run' || m.pendingTool?['team'] == true) {
+      return _resumePending(m, approve: false);
+    }
+    await _settlePending(conv, m, 'denied');
+  }
+
+  Future<void> allowPendingTool(ChatMessage m) => _resumePending(m, approve: true);
+
+  Future<void> _resumePending(ChatMessage m, {required bool approve}) async {
+    final conv = current;
+    final p = m.pendingTool;
+    if (conv == null || p == null || turns.containsKey(conv.id)) return;
+    final run = p['kind'] == 'server-run';
+    final runCredits = run && approve ? ((p['maxCredits'] as num?)?.toDouble() ?? 0) : 0.0;
+    final token = p['token'] as String? ?? '';
+    if (token.isEmpty) {
+      await _settlePending(conv, m, 'denied');
+      await note(t('That request has expired. Ask again and Nymbot will start it fresh.'), conv: conv);
+      return;
+    }
+    final model = modelOf(conv);
+    final text = t('Continue.');
+    double? maxCost;
+    final waived = _capWaive == conv.id;
+    _capWaive = null;
+    if (SpendCaps.any(conv, botOf(conv))) {
+      final est = ChatEngine.estimate(text, model,
+          conv: conv,
+          hasRepos: reposOf(conv).isNotEmpty,
+          pricing: catalogPricing);
+      if (!waived) {
+        final gate = await _capGate(conv, est.tier == 'pro' || run, est.high + runCredits);
+        if (gate != 'send' && gate != 'ok') return;
+        if (gate == 'ok') {
+          maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
+              pro: est.tier == 'pro' || run);
+        }
+      }
+    }
+    await _settlePending(conv, m, approve ? 'allowed' : 'denied');
+    final turn = ChatTurn(conv);
+    if (p['team'] == true) turn.team = <String, dynamic>{};
+    turns[conv.id] = turn;
+    turn.status = run
+        ? (approve ? t('Running on a Nymbot server…') : t('Continuing without the server run…'))
+        : approve
+            ? t('Running {tool} on {connector}', {'tool': '${p['tool']}', 'connector': '${p['connector']}'})
+            : t('Carrying on without {tool}', {'tool': '${p['tool']}'});
+    notifyListeners();
+    TurnResult? carry;
+    var resendWaived = false;
+    try {
+      final res = await chat.send(
+        conv: conv,
+        text: text,
+        maxCost: maxCost,
+        proModel: model,
+        repos: reposOf(conv),
+        connectors: connectorsOf(conv),
+        mcpApprove: !run && approve ? '${p['id']}' : null,
+        mcpDecline: !run && !approve ? '${p['id']}' : null,
+        serverRuns: serverRunsOf(conv),
+        runApprove: run && approve ? '${p['id']}' : null,
+        runDecline: run && !approve ? '${p['id']}' : null,
+        timeout: run && approve
+            ? NymbotConfig.pmTimeout +
+                Duration(seconds: ((p['timeoutSec'] as num?)?.toInt() ?? 0) + 180)
+            : null,
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
+        memories: store.memories(),
+        webSearch: settings.webSearch,
+        firstTurn: false,
+        resume: token,
+        onTurn: (eventId) => _watchTurn(turn, eventId),
+        onThreadIds: (ids) {
+          final thread = [...store.thread(conv.id), ...ids];
+          unawaited(store.setThread(conv.id, thread));
+        },
+        control: turn.control,
+      );
+      _stopWatching(turn);
+      final reply = ChatMessage(
+        id: bytesToHex(randomBytes(8)),
+        role: ChatRole.bot,
+        content: res.reply,
+        thinking: res.thinking,
+        cost: res.cost,
+        pro: res.pro,
+        model: res.pro ? (model?['label'] as String?) : null,
+        modelKey: res.pro ? _maker(model)?.key : null,
+        modelMaker: res.pro ? _maker(model)?.slug : null,
+        modelMakerName: res.pro ? _maker(model)?.name : null,
+        calls: res.modelCalls,
+        checkpoint: res.checkpoint,
+        pendingTool: res.pendingTool,
+        sources: res.sources,
+        followUps: res.followUps,
+        serverRunCredits: res.serverRunCredits,
+        serverRuns: res.serverRuns,
+        team: Team.normalize(res.team),
+      );
+      await _addTo(conv, reply);
+      await harvestArtifacts(reply, conv: conv);
+      _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
+      conv.messageCount += 1;
+      conv.creditsSpent += res.cost + res.serverRunCredits;
+      _touch(conv);
+      await store.saveConversations(conversations);
+      await store.recordUsage(res.cost);
+      _creditBalance(res.pro, res.balance, anonKey: conv.anon && anon.ready);
+      if (res.truncated) carry = res;
+    } on ChatFailure catch (e) {
+      _stopWatching(turn);
+      if (e.capExceeded) {
+        await _putPending(conv, m, p);
+        if (onCapPrompt == null) {
+          await note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
+              conv: conv);
+        } else {
+          final choice = await onCapPrompt!(
+              SpendCaps.refusal(e.required, e.pro, team: e.team));
+          resendWaived = choice == 'send';
+        }
+      } else {
+        await note(e.message, conv: conv);
+      }
+    } catch (_) {
+      _stopWatching(turn);
+      await note(t('Could not carry on from there.'), conv: conv);
+    } finally {
+      turn.status = null;
+      notifyListeners();
+    }
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry);
+    _endTurn(turn);
+    if (resendWaived) {
+      _capWaive = conv.id;
+      await _resumePending(m, approve: approve);
+    }
   }
 
   List<Persona> get personas => store.personas();
@@ -793,6 +1353,19 @@ class AppController extends ChangeNotifier {
     return accepted;
   }
 
+  static NostrEvent? newestBotEvent(
+      List<NostrEvent> events, String author, String identifier) {
+    NostrEvent? best;
+    for (final e in events) {
+      if (e.pubkey != author || e.kind != Bot.kind) continue;
+      if (!e.tags.any((tag) => tag.length > 1 && tag[0] == 'd' && tag[1] == identifier)) continue;
+      if (best != null && e.createdAt <= best.createdAt) continue;
+      if (!schnorr.verifyEvent(e)) continue;
+      best = e;
+    }
+    return best;
+  }
+
   /// Reads a published bot back off the relays. Returns null when no relay has
   /// it, which is what an unpublished or mistyped address looks like.
   Future<Bot?> fetchBot(String address) async {
@@ -808,11 +1381,10 @@ class AppController extends ChangeNotifier {
       '#d': [ref.identifier],
       'limit': 2,
     }, timeout: const Duration(seconds: 5));
-    final mine = events.where((e) => e.pubkey == ref.pubkey).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    if (mine.isEmpty) return null;
+    final newest = newestBotEvent(events, ref.pubkey, ref.identifier);
+    if (newest == null) return null;
     try {
-      final json = jsonDecode(mine.first.content);
+      final json = jsonDecode(newest.content);
       if (json is! Map<String, dynamic>) return null;
       return Bot.fromShared(json,
           id: bytesToHex(randomBytes(8)), author: ref.pubkey);
@@ -866,7 +1438,7 @@ class AppController extends ChangeNotifier {
     await store.saveSchedules(schedules);
     await note(t('Running “{name}”.',
         {'name': entry.title.isEmpty ? t('Untitled') : entry.title}));
-    await send(entry.prompt);
+    await send(entry.prompt, unattended: true);
   }
 
   List<Schedule> get dueSchedules => schedules.where((s) => s.due).toList();
@@ -915,6 +1487,58 @@ class AppController extends ChangeNotifier {
     await store.saveMessages(conv.id, messages);
     notifyListeners();
     return data;
+  }
+
+  Future<void> applyStaged(ChatMessage m) async {
+    final staged = m.staged;
+    final conv = current;
+    if (staged == null || conv == null) return;
+    final marks = <Map<String, dynamic>>[];
+    Object? failure;
+    for (final one in allStaged(staged)) {
+      final repo = activeRepos.where((r) => r.repo == one['repo']).firstOrNull;
+      if (repo == null) {
+        failure = ChatFailure(t('That repository is no longer connected.'));
+        break;
+      }
+      if (!repo.allowWrites) {
+        failure = ChatFailure(t('Writes are off for that repository.'));
+        break;
+      }
+      try {
+        final signer = conv.anon ? await anon.signer() : identity.signer;
+        final data = await chat.applyStaged(repo: repo, staged: one, signer: signer);
+        final mark = data['checkpoint'];
+        if (mark is Map<String, dynamic>) marks.add(mark);
+      } catch (e) {
+        failure = e;
+        break;
+      }
+    }
+    final mark = checkpointOfApplied(marks);
+    messages = messages
+        .map((x) => x.id == m.id
+            ? x.copyWith(
+                checkpoint: mark,
+                staged: failure == null ? settledStaged(staged, 'applied') : null)
+            : x)
+        .toList();
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
+    if (failure != null) throw failure;
+  }
+
+  Future<void> discardStaged(ChatMessage m) async {
+    final staged = m.staged;
+    final conv = current;
+    if (staged == null || conv == null) return;
+    messages = messages
+        .map((x) => x.id == m.id
+            ? x.copyWith(staged: settledStaged(staged, 'discarded'))
+            : x)
+        .toList();
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
   }
 
   List<Memory> get memories => store.memories();
@@ -1274,6 +1898,7 @@ class AppController extends ChangeNotifier {
     _syncTimer = Timer.periodic(
         const Duration(minutes: 5), (_) => unawaited(sync.run()));
     unawaited(refreshNotices());
+    unawaited(refreshRunner());
     _noticeTimer = Timer.periodic(
         const Duration(minutes: 15), (_) => unawaited(refreshNotices()));
 
@@ -1303,6 +1928,7 @@ class AppController extends ChangeNotifier {
         } catch (_) {}
       }
       await refreshBalance();
+      await resumeInvoice();
       await anon.flush(identity: identity.signer);
       startScheduler();
       await runDueSchedules();
@@ -1316,6 +1942,7 @@ class AppController extends ChangeNotifier {
   void _afterSync(List<String> touched) {
     if (touched.contains('settings')) _loadSettings();
     if (touched.contains('repos')) unawaited(_loadRepos());
+    if (touched.contains('connectors')) unawaited(_loadConnectors());
     if (touched.contains('favouriteModels')) {
       favouriteModels = store.favouriteModels();
     }
@@ -1342,6 +1969,7 @@ class AppController extends ChangeNotifier {
     _syncTimer?.cancel();
     _noticeTimer?.cancel();
     _scheduler?.cancel();
+    _invoicePoll?.cancel();
     sync.stop();
     relays.close();
     super.dispose();
@@ -1477,9 +2105,7 @@ class AppController extends ChangeNotifier {
       if (needle.isEmpty) return true;
       if (c.title.toLowerCase().contains(needle)) return true;
       if (c.tags.any((x) => x.toLowerCase().contains(needle))) return true;
-      return store
-          .messages(c.id)
-          .any((m) => m.content.toLowerCase().contains(needle));
+      return store.searchText(c.id).contains(needle);
     }).toList()
       ..sort((a, b) {
         if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
@@ -1502,7 +2128,7 @@ class AppController extends ChangeNotifier {
   Future<void> renameCurrent(String title, {Conversation? target}) async {
     final conv = target ?? current;
     if (conv == null) return;
-    conv.title = title.trim().isEmpty ? 'New chat' : title.trim();
+    conv.title = title.trim();
     conv.updatedAt = DateTime.now();
     await store.saveConversations(conversations);
     notifyListeners();
@@ -1541,6 +2167,7 @@ class AppController extends ChangeNotifier {
     conversations.removeWhere((c) => c.id == conv.id);
     await store.saveConversations(conversations);
     await store.dropConversation(conv.id);
+    await DocLibrary.instance.forget(conv.id);
     if (!wasOpen) {
       notifyListeners();
       return;
@@ -1558,7 +2185,7 @@ class AppController extends ChangeNotifier {
     final copy = Conversation(
       id: bytesToHex(randomBytes(8)),
       rootId: bytesToHex(randomBytes(32)),
-      title: '${conv.title.isEmpty ? 'New chat' : conv.title} ${t('(copy)')}',
+      title: '${conv.title.isEmpty ? t('New chat') : conv.title} ${t('(copy)')}',
       anon: conv.anon,
       folderId: conv.folderId,
       tags: [...conv.tags],
@@ -1595,7 +2222,7 @@ class AppController extends ChangeNotifier {
     final copy = Conversation(
       id: bytesToHex(randomBytes(8)),
       rootId: bytesToHex(randomBytes(32)),
-      title: '${conv.title.isEmpty ? 'New chat' : conv.title} ${t('(branch)')}',
+      title: '${conv.title.isEmpty ? t('New chat') : conv.title} ${t('(branch)')}',
       anon: conv.anon,
       ephemeral: conv.ephemeral,
       effort: conv.effort,
@@ -1637,19 +2264,46 @@ class AppController extends ChangeNotifier {
 
   /// A fresh root id is what actually resets the model's context: the worker
   /// scopes history to the marker, so a new one is a new thread.
-  Future<void> clearCurrent({Conversation? target}) async {
+  ChatSnapshot _snapshot(Conversation conv) => (
+        conv: conv,
+        rootId: conv.rootId,
+        seed: conv.seed,
+        messageCount: conv.messageCount,
+        creditsSpent: conv.creditsSpent,
+        satsSpent: conv.satsSpent,
+        messages: conv.id == current?.id
+            ? [...messages]
+            : store.messages(conv.id),
+        thread: store.thread(conv.id),
+      );
+
+  Future<ChatSnapshot?> clearCurrent({Conversation? target}) async {
     final conv = target ?? current;
-    if (conv == null) return;
+    if (conv == null) return null;
+    final before = _snapshot(conv);
     conv.rootId = bytesToHex(randomBytes(32));
     conv.messageCount = 0;
     conv.creditsSpent = 0;
-    if (conv.id == current?.id) {
-      messages = [];
-      artifacts = [];
-    }
-    await store.saveArtifacts(conv.id, const []);
+    conv.satsSpent = 0;
+    if (conv.id == current?.id) messages = [];
     await store.saveMessages(conv.id, const []);
     await store.setThread(conv.id, const []);
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return before;
+  }
+
+  Future<void> restore(ChatSnapshot before) async {
+    final conv = before.conv;
+    if (!conversations.any((c) => c.id == conv.id)) return;
+    conv.rootId = before.rootId;
+    conv.seed = before.seed;
+    conv.messageCount = before.messageCount;
+    conv.creditsSpent = before.creditsSpent;
+    conv.satsSpent = before.satsSpent;
+    if (conv.id == current?.id) messages = [...before.messages];
+    await store.saveMessages(conv.id, before.messages);
+    await store.setThread(conv.id, before.thread);
     await store.saveConversations(conversations);
     notifyListeners();
   }
@@ -1693,17 +2347,38 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteMessage(ChatMessage m) async {
+  Future<void> _rethread(Conversation conv) async {
+    conv.rootId = bytesToHex(randomBytes(32));
+    final seed = compareSeed();
+    conv.seed = seed.isEmpty ? null : seed;
+    await store.setThread(conv.id, const []);
+    await store.saveConversations(conversations);
+  }
+
+  Future<ChatSnapshot?> deleteMessage(ChatMessage m) async {
+    final conv = current;
+    if (conv == null) return null;
+    final before = _snapshot(conv);
     messages = messages.where((x) => x.id != m.id).toList();
-    await store.saveMessages(current!.id, messages);
+    await store.saveMessages(conv.id, messages);
+    if (m.role == ChatRole.self || m.role == ChatRole.bot) {
+      await _rethread(conv);
+    }
     notifyListeners();
+    return before;
   }
 
   Future<void> truncateFrom(ChatMessage m, {bool inclusive = true}) async {
+    final conv = current;
     final at = messages.indexWhere((x) => x.id == m.id);
-    if (at == -1) return;
-    messages = messages.sublist(0, inclusive ? at : at + 1);
-    await store.saveMessages(current!.id, messages);
+    if (conv == null || at == -1) return;
+    final cut = inclusive ? at : at + 1;
+    final dropped = messages.sublist(cut);
+    messages = messages.sublist(0, cut);
+    await store.saveMessages(conv.id, messages);
+    if (dropped.any((x) => x.role == ChatRole.self || x.role == ChatRole.bot)) {
+      await _rethread(conv);
+    }
     notifyListeners();
   }
 
@@ -1746,8 +2421,27 @@ class AppController extends ChangeNotifier {
   }
 
   void removeAttachment(String id) {
+    DocLibrary.instance.dropPending(id);
+    for (final a in attachments) {
+      final url = a.url;
+      if (a.id == id && url != null) unawaited(dropUpload(url));
+    }
     attachments = attachments.where((a) => a.id != id).toList();
     notifyListeners();
+  }
+
+  Future<bool> dropUpload(String url) async {
+    final placed = await uploads.lookup(url);
+    if (placed == null) return false;
+    var status = 0;
+    try {
+      status = await blossom.remove(
+          placed.host, placed.sha256, LocalSigner(hexToBytes(placed.sk)));
+    } catch (_) {
+      status = 0;
+    }
+    await uploads.forget(url);
+    return status >= 200 && status < 300;
   }
 
   /// A picture has to be somewhere the worker can fetch it before the model can
@@ -1761,12 +2455,11 @@ class AppController extends ChangeNotifier {
     a.uploadError = null;
     notifyListeners();
     try {
-      // An anonymous chat uploads under its throwaway key, so the blob is no more
-      // linkable to the account than the message carrying it.
-      final signer = (current?.anon ?? false) && anon.ready
-          ? await anon.signer()
-          : identity.signer;
-      a.url = await blossom.put(base64Decode(raw), a.mime, signer);
+      final placed = await blossom.placeUnlinked(base64Decode(raw), a.mime);
+      a.url = placed.url;
+      try {
+        await uploads.remember(placed);
+      } catch (_) {}
     } catch (e) {
       a.uploadError = e is BlossomFailure ? e.message : e.toString();
     } finally {
@@ -1791,6 +2484,7 @@ class AppController extends ChangeNotifier {
     // Stop means stop: a run carrying itself on must not start another leg
     // after the one being aborted, and nothing waiting behind it goes either.
     _queues.remove(conv.id);
+    _queueEdits.remove(conv.id);
     final turn = turns.remove(conv.id);
     if (turn != null) {
       turn.stopped = true;
@@ -1832,6 +2526,29 @@ class AppController extends ChangeNotifier {
     final body = text.trim();
     if (body.isEmpty) return const [];
 
+    final caps = List<double?>.filled(models.length, null);
+    if (SpendCaps.any(conv, botOf(conv))) {
+      final ests = [
+        for (final model in models)
+          ChatEngine.estimate(body, model,
+              conv: conv,
+              hasRepos: reposOf(conv).isNotEmpty,
+              pricing: catalogPricing),
+      ];
+      final pro = ests.any((e) => e.tier == 'pro');
+      final sats = ests.fold<double>(
+          0, (n, e) => n + SpendCaps.satsFor(e.high, e.tier == 'pro'));
+      final gate = await _capGate(conv, pro, sats / SpendCaps.rate(pro));
+      if (gate != 'send' && gate != 'ok') return const [];
+      if (gate == 'ok') {
+        for (var i = 0; i < models.length; i++) {
+          caps[i] = SpendCaps.maxCost(
+              conv, botOf(conv), _messagesOf(conv),
+              pro: ests[i].tier == 'pro', share: models.length);
+        }
+      }
+    }
+
     final turn = ChatTurn(conv);
     turns[conv.id] = turn;
     notifyListeners();
@@ -1842,7 +2559,7 @@ class AppController extends ChangeNotifier {
     final space = activeWorkspace;
     final bot = activeBot;
 
-    Future<CompareRun> once(Map<String, dynamic> model) async {
+    Future<CompareRun> once(Map<String, dynamic> model, double? maxCost) async {
       final scratch = Conversation(
         id: 'cmp-${bytesToHex(randomBytes(6))}',
         rootId: bytesToHex(randomBytes(32)),
@@ -1860,6 +2577,7 @@ class AppController extends ChangeNotifier {
         final res = await chat.send(
           conv: scratch,
           text: body,
+          maxCost: maxCost,
           proModel: model,
           repos: scoped,
           persona: persona,
@@ -1889,11 +2607,16 @@ class AppController extends ChangeNotifier {
       }
     }
 
-    final out = await Future.wait(models.map(once));
+    final out = await Future.wait(
+        [for (var i = 0; i < models.length; i++) once(models[i], caps[i])]);
     _endTurn(turn);
 
     final spent = out.fold<double>(0, (n, r) => n + r.cost);
     if (spent > 0) await store.recordUsage(spent);
+    if (spent > 0) {
+      _bumpSpent(conv, spent, true);
+      await store.saveConversations(conversations);
+    }
     notifyListeners();
     return out;
   }
@@ -1919,6 +2642,9 @@ class AppController extends ChangeNotifier {
       cost: run.cost,
       pro: true,
       model: run.label,
+      modelKey: _maker(run.model)?.key,
+      modelMaker: _maker(run.model)?.slug,
+      modelMakerName: _maker(run.model)?.name,
       sources: run.sources,
       followUps: run.followUps,
     );
@@ -1944,7 +2670,15 @@ class AppController extends ChangeNotifier {
     final queue = conv == null ? null : _queues[conv.id];
     if (queue == null || at < 0 || at >= queue.length) return;
     queue.removeAt(at);
-    if (queue.isEmpty) _queues.remove(conv!.id);
+    final editing = _queueEdits[conv!.id];
+    if (editing != null) {
+      if (editing == at) {
+        _queueEdits.remove(conv.id);
+      } else if (editing > at) {
+        _queueEdits[conv.id] = editing - 1;
+      }
+    }
+    if (queue.isEmpty) _queues.remove(conv.id);
     notifyListeners();
   }
 
@@ -1953,7 +2687,10 @@ class AppController extends ChangeNotifier {
   Future<void> _sendQueued(Conversation conv) async {
     final queue = _queues[conv.id];
     if (queue == null || queue.isEmpty || turns.containsKey(conv.id)) return;
+    final editing = _queueEdits[conv.id];
+    if (editing == 0) return;
     final next = queue.removeAt(0);
+    if (editing != null) _queueEdits[conv.id] = editing - 1;
     if (queue.isEmpty) _queues.remove(conv.id);
     notifyListeners();
     await send(next, target: conv);
@@ -1961,7 +2698,8 @@ class AppController extends ChangeNotifier {
 
   /// Returns false when the message was held for later rather than sent, so a
   /// caller does not go on to read out a reply that has not happened yet.
-  Future<bool> send(String text, {Conversation? target, bool bare = false}) async {
+  Future<bool> send(String text,
+      {Conversation? target, bool bare = false, bool unattended = false}) async {
     final conv = target ?? current;
     if (conv == null || text.trim().isEmpty) return false;
     if (turns.containsKey(conv.id)) {
@@ -1975,12 +2713,58 @@ class AppController extends ChangeNotifier {
     // keeps a count of its own and stops offering free replies once it is
     // spent, whichever key is signed in. A speed bump, never reported to the
     // worker: see AppController.freeAllows.
-    if (!freeAllows) {
+    final typed = text.trim();
+    MentionResult? mention;
+    final head = bare ? null : Mentions.parse(typed);
+    if (head != null) {
+      final catalog = await ensureMentionCatalog();
+      mention = catalog == null
+          ? MentionResult(unknown: head.name, text: typed)
+          : Mentions.apply(typed, catalog);
+      if (mention != null && mention.resolved && mention.text.isEmpty) {
+        await note(t('Say what to ask {name} after the mention.',
+            {'name': mention.model!['label']}), conv: conv);
+        if (conv.id == current?.id) _capReturned = typed;
+        return false;
+      }
+      final wallet = conv.anon && anon.ready ? anonProBalance : proBalance;
+      if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
+        await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
+            {'name': mention.model!['key']}), conv: conv);
+        if (conv.id == current?.id) _capReturned = typed;
+        return false;
+      }
+    }
+    final asked = mention != null && mention.resolved ? Mentions.pinned(mention.model!) : null;
+    if (asked == null && !freeAllows) {
       await note(freeSpentMessage(), conv: conv);
       return false;
     }
-    final typed = text.trim();
-    final body = bare ? typed : withMediaModel(typed, conv: conv);
+    final research = bare
+        ? null
+        : Research.claim(asked != null ? mention!.text : typed,
+            armed: researchNext,
+            model: asked ?? modelOf(conv),
+            pricing: catalogPricing);
+    if (research != null && researchNext) {
+      researchNext = false;
+      notifyListeners();
+    }
+    if (research?.blocked != null) {
+      await note(research!.blocked!, conv: conv);
+      return false;
+    }
+    final team = bare
+        ? null
+        : Team.claim(conv.team,
+            lead: asked ?? teamLeadOf(conv),
+            research: research != null,
+            repos: reposOf(conv).isNotEmpty);
+    final body = research != null
+        ? research.question
+        : asked != null
+            ? mention!.text
+        : (bare ? typed : withMediaModel(typed, conv: conv));
     final composing = !bare && conv.id == current?.id;
     final sent = composing ? [...attachments] : <Attachment>[];
     final quoted = composing ? quote : null;
@@ -2000,26 +2784,71 @@ class AppController extends ChangeNotifier {
       }
     }
 
+    double? maxCost;
+    if (SpendCaps.any(conv, botOf(conv))) {
+      final waived = _capWaive == conv.id;
+      _capWaive = null;
+      var est = _capEstimate(conv, body, model: asked);
+      if (!waived) {
+        if (team != null) {
+          final priced = await teamEstimate(conv,
+              workers: team['workers'] as int,
+              model: team['model'] as String,
+              mode: team['mode'] as String,
+              lead: asked);
+          if (priced.error == null) {
+            est = (
+              tier: 'pro',
+              low: priced.typical,
+              high: priced.max.toDouble(),
+              metered: true
+            );
+          }
+        }
+        final gate = await _capGate(conv, est.tier == 'pro', est.high,
+            unattended: unattended);
+        if (gate != 'send' && gate != 'ok') {
+          if (composing) _capReturned = typed;
+          return false;
+        }
+        if (gate == 'ok') {
+          maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
+              pro: est.tier == 'pro');
+        }
+      }
+    }
+
     if (composing) {
       attachments = [];
       quote = null;
     }
 
-    await _addTo(conv, ChatMessage(
-      id: bytesToHex(randomBytes(8)),
+    final selfId = bytesToHex(randomBytes(8));
+    final docsUsed = DocLibrary.instance.usageFor(conv.id, body, sent);
+    final mine = ChatMessage(
+      id: selfId,
       role: ChatRole.self,
       content: typed,
       attachments: sent,
       quote: quoted,
-    ));
+    );
+    await _addTo(conv, mine);
+    unawaited(DocLibrary.instance.recordUsage(selfId, docsUsed));
+    unawaited(DocLibrary.instance.keep(conv.id, sent));
 
     if (conv.title.isEmpty) {
       conv.title = ChatEngine.titleFor(typed);
       _touch(conv);
       await store.saveConversations(conversations);
     }
+    if (mention?.unknown != null) {
+      await note(t('No model called @{name}, so that went as an ordinary message. Type @ to pick one.',
+          {'name': mention!.unknown}), conv: conv);
+    }
 
     final turn = ChatTurn(conv);
+    turn.research = research?.payload;
+    turn.team = team;
     turns[conv.id] = turn;
     notifyListeners();
     turn.control.onStatus = (s) {
@@ -2028,14 +2857,18 @@ class AppController extends ChangeNotifier {
     };
 
     final scoped = reposOf(conv);
-    final model = modelOf(conv);
+    final model = asked ?? modelOf(conv);
     TurnResult? carry;
+    var resendWaived = false;
     try {
       final res = await chat.send(
         conv: conv,
         text: body,
-        proModel: proModelForTurnOf(conv),
+        maxCost: maxCost,
+        proModel: asked ?? proModelForTurnOf(conv),
         repos: scoped,
+        connectors: connectorsOf(conv),
+        serverRuns: serverRunsOf(conv),
         persona: personaOf(conv),
         workspace: workspaceOf(conv),
         bot: botOf(conv),
@@ -2044,6 +2877,8 @@ class AppController extends ChangeNotifier {
         quote: quoted,
         webSearch: settings.webSearch,
         firstTurn: store.thread(conv.id).isEmpty,
+        research: research?.payload,
+        team: team,
         onTurn: (eventId) => _watchTurn(turn, eventId),
         onThreadIds: (ids) {
           final thread = [...store.thread(conv.id), ...ids];
@@ -2060,19 +2895,28 @@ class AppController extends ChangeNotifier {
         cost: res.cost,
         pro: res.pro,
         model: res.pro ? (model?['label'] as String?) : null,
+        modelKey: res.pro ? _maker(model)?.key : null,
+        modelMaker: res.pro ? _maker(model)?.slug : null,
+        modelMakerName: res.pro ? _maker(model)?.name : null,
         calls: res.modelCalls,
         // What it changed in a repository, and where the branch stood before
         // it did — so the run can be put back.
         checkpoint: res.checkpoint,
+        pendingTool: res.pendingTool,
+        staged: res.staged,
         repos: res.repos.length > 1 ? res.repos : const [],
         sources: res.sources,
         followUps: res.followUps,
+        serverRunCredits: res.serverRunCredits,
+        serverRuns: res.serverRuns,
+        team: Team.normalize(res.team),
       );
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       if (conv.seed != null) conv.seed = null;
+      _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
       conv.messageCount += 1;
-      conv.creditsSpent += res.cost;
+      conv.creditsSpent += res.cost + res.serverRunCredits;
       _touch(conv);
       await store.saveConversations(conversations);
       await store.recordUsage(res.cost);
@@ -2109,6 +2953,32 @@ class AppController extends ChangeNotifier {
       if (e.cancelled) {
         await note(t('Stopped. That reply was not charged for unless it had already finished.'),
             conv: conv);
+      } else if (e.capExceeded) {
+        await _dropMessage(conv, mine);
+        if (unattended || onCapPrompt == null) {
+          await note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
+              conv: conv);
+        } else {
+          final choice = await onCapPrompt!(
+              SpendCaps.refusal(e.required, e.pro, team: e.team));
+          if (choice == 'send') {
+            resendWaived = true;
+          } else if (composing) {
+            _capReturned = typed;
+          }
+          if (composing) {
+            attachments = sent;
+            quote = quoted;
+          }
+        }
+      } else if (e.team && !e.noCredits) {
+        await _dropMessage(conv, mine);
+        await note(Team.refusal(e), conv: conv);
+        if (composing) {
+          _capReturned = typed;
+          attachments = sent;
+          quote = quoted;
+        }
       } else if (e.noCredits) {
         _creditBalance(e.pro, e.balance, anonKey: conv.anon && anon.ready);
         // The worker says the day is spent. Believe it over the device's own
@@ -2127,7 +2997,7 @@ class AppController extends ChangeNotifier {
             await note('${describeTopUp(topped)} '
                 '${t('Send that again when you are ready.')}', conv: conv);
           } else {
-            await note(e.message, conv: conv);
+            await note(e.team ? Team.refusal(e) : e.message, conv: conv);
           }
         }
       } else {
@@ -2150,10 +3020,88 @@ class AppController extends ChangeNotifier {
       turn.status = null;
       notifyListeners();
     }
-    if (carry != null && !turn.stopped) await _carryOn(turn, carry);
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry, asked: asked);
     _endTurn(turn);
+    if (resendWaived) {
+      _capWaive = conv.id;
+      return send(typed, target: conv, bare: bare);
+    }
     await _sendQueued(conv);
     return true;
+  }
+
+  List<ChatMessage> _messagesOf(Conversation conv) =>
+      conv.id == current?.id ? messages : store.messages(conv.id);
+
+  CostEstimate _capEstimate(Conversation conv, String body,
+      {Map<String, dynamic>? model}) {
+    if (model == null && conv.id == current?.id) return estimate(body);
+    return ChatEngine.estimate(body, model ?? modelOf(conv),
+        conv: conv,
+        hasRepos: reposOf(conv).isNotEmpty,
+        pricing: catalogPricing);
+  }
+
+  void _bumpSpent(Conversation conv, double cost, bool pro) {
+    conv.satsSpent = SpendCaps.nextSpent(conv, _messagesOf(conv), cost, pro);
+  }
+
+  Future<void> _dropMessage(Conversation conv, ChatMessage m) async {
+    if (conv.id == current?.id) {
+      messages = messages.where((x) => x.id != m.id).toList();
+      await store.saveMessages(conv.id, messages);
+    } else {
+      await store.saveMessages(conv.id,
+          store.messages(conv.id).where((x) => x.id != m.id).toList());
+    }
+    notifyListeners();
+  }
+
+  Future<String> _capGate(Conversation conv, bool pro, double high,
+      {bool unattended = false}) async {
+    final check = SpendCaps.check(conv, botOf(conv), _messagesOf(conv),
+        pro: pro, high: high);
+    if (check.state == 'ok') return 'ok';
+    if (unattended || onCapPrompt == null) {
+      await note(
+          check.state == 'block'
+              ? t('Not sent: this chat has reached its spending cap.')
+              : t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
+          conv: conv);
+      return 'cancel';
+    }
+    final choice = await onCapPrompt!(SpendCaps.prompt(check, credits: high));
+    return check.state == 'block' && choice == 'send' ? 'cancel' : choice;
+  }
+
+  String? takeCapReturned() {
+    final back = _capReturned;
+    _capReturned = null;
+    return back;
+  }
+
+  CapLimits capLimitsOf(Conversation conv) =>
+      SpendCaps.limits(conv, botOf(conv));
+
+  double capSpentOf(Conversation conv) =>
+      SpendCaps.spent(conv, _messagesOf(conv));
+
+  String capUsedLineOf(Conversation conv) =>
+      SpendCaps.usedLine(conv, botOf(conv), _messagesOf(conv));
+
+  String get capRoomLine {
+    final conv = current;
+    return conv == null
+        ? ''
+        : SpendCaps.roomLine(conv, botOf(conv), _messagesOf(conv));
+  }
+
+  Future<void> setCaps(Conversation conv, {int? total, int? perReply}) async {
+    conv.capSats = SpendCaps.positive(total);
+    conv.askAboveSats = SpendCaps.positive(perReply);
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
   }
 
   static const _legGapMs = 3500;
@@ -2180,66 +3128,145 @@ class AppController extends ChangeNotifier {
   /// A repo run stopped at its tool-call cap with work left. Spend the budget
   /// the user set on carrying it on, one leg at a time, saying what each leg
   /// cost as it goes — never silently.
-  Future<void> _carryOn(ChatTurn turn, TurnResult first) async {
+  Future<void> _carryOn(ChatTurn turn, TurnResult first,
+      {Map<String, dynamic>? asked}) {
     final conv = turn.conv;
+    final research = turn.research;
+    final model = asked ?? modelOf(conv);
+    return _carryOnWith(
+        turn,
+        first,
+        (token) => chat.send(
+              conv: conv,
+              text: t('Continue.'),
+              maxCost: SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
+                  pro: true),
+              proModel: model,
+              repos: reposOf(conv),
+              connectors: connectorsOf(conv),
+              serverRuns: serverRunsOf(conv),
+              persona: personaOf(conv),
+              workspace: workspaceOf(conv),
+              bot: botOf(conv),
+              memories: store.memories(),
+              webSearch: settings.webSearch,
+              firstTurn: false,
+              resume: token,
+              research: research,
+              onTurn: (eventId) => _watchTurn(turn, eventId),
+              onThreadIds: (ids) {
+                final thread = [...store.thread(conv.id), ...ids];
+                unawaited(store.setThread(conv.id, thread));
+              },
+              control: turn.control,
+            ),
+        model: model);
+  }
+
+  @visibleForTesting
+  Future<void> carryOnWithForTest(ChatTurn turn, TurnResult first,
+          Future<TurnResult> Function(String token) leg) =>
+      _carryOnWith(turn, first, leg);
+
+  Future<void> _stallPause(ChatTurn turn, Duration wait, int attempt) async {
+    final until = DateTime.now().add(wait);
+    while (!turn.stopped) {
+      final left = until.difference(DateTime.now());
+      if (left <= Duration.zero) break;
+      turn.status = stallLine(left, attempt);
+      notifyListeners();
+      await Future<void>.delayed(
+          left > const Duration(milliseconds: 250)
+              ? const Duration(milliseconds: 250)
+              : left);
+    }
+    turn.status = null;
+    notifyListeners();
+  }
+
+  Future<void> _carryOnWith(ChatTurn turn, TurnResult first,
+      Future<TurnResult> Function(String token) leg,
+      {Map<String, dynamic>? model}) async {
+    final conv = turn.conv;
+    final research = turn.research;
     var token = first.resumeToken;
     var reserve = first.nextReserve;
+    var stall = stallWait(
+        stalled: first.stalled,
+        truncated: first.truncated,
+        resumeToken: first.resumeToken,
+        retryAfterMs: first.retryAfterMs);
+    var stallResumes = 0;
+    if ((token == null || token.isEmpty) && first.capStopped) {
+      await note(t('That answer stopped early to stay inside this chat\'s spending cap.'),
+          conv: conv);
+      return;
+    }
     if (token == null || token.isEmpty) {
       await note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'),
           conv: conv);
       return;
     }
-    var left = continueBudgetAfter(turn.continuedSpend);
-    if (left <= 0) {
+    var left = research != null
+        ? double.infinity
+        : continueBudgetAfter(turn.continuedSpend);
+    if (stall == null && left <= 0) {
       await note(t('That answer stopped early — the task needs more steps than one '
           'turn holds. Set “When a repo task runs out of room” in Settings and '
           'Nymbot will carry on by itself.'), conv: conv);
       return;
     }
-    if (reserve > left) {
+    if (stall == null && reserve > left) {
       await note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
           {'n': reserve - left}), conv: conv);
       return;
     }
 
-    final model = modelOf(conv);
+    final answered = model ?? modelOf(conv);
     var legs = 0;
     var stalls = 0;
-    while (token != null && token.isNotEmpty && left > 0 && !turn.stopped) {
-      if (legs++ > 0) {
+    while (token != null &&
+        token.isNotEmpty &&
+        !turn.stopped &&
+        (stall != null ? stallResumes < maxStallResumes : left > 0)) {
+      if (stall != null) {
+        stallResumes++;
+        legs = 1;
+        await _stallPause(turn, stall, stallResumes);
+        if (turn.stopped) break;
+      } else if (legs++ > 0) {
         final gap = _legGapMs + _rng.nextInt(_legGapJitterMs);
         turn.status = t('Pausing a moment so the next step does not crowd the last');
         notifyListeners();
         await _legPause(turn, Duration(milliseconds: gap));
         if (turn.stopped) break;
       }
+      if (SpendCaps.any(conv, botOf(conv)) &&
+          SpendCaps.check(conv, botOf(conv), _messagesOf(conv),
+                      pro: true, high: 0)
+                  .state ==
+              'block') {
+        await note(t('Stopped: this chat has reached its spending cap.'),
+            conv: conv);
+        return;
+      }
       turn.status = t('Carrying on where it left off');
       notifyListeners();
       TurnResult next;
       try {
-        next = await chat.send(
-          conv: conv,
-          text: t('Continue.'),
-          proModel: model,
-          repos: reposOf(conv),
-          persona: personaOf(conv),
-          workspace: workspaceOf(conv),
-          bot: botOf(conv),
-          memories: store.memories(),
-          webSearch: settings.webSearch,
-          firstTurn: false,
-          resume: token,
-          onTurn: (eventId) => _watchTurn(turn, eventId),
-          onThreadIds: (ids) {
-            final thread = [...store.thread(conv.id), ...ids];
-            unawaited(store.setThread(conv.id, thread));
-          },
-          control: turn.control,
-        );
+        next = await leg(token);
       } on ChatFailure catch (e) {
         _stopWatching(turn);
         turn.status = null;
         final again = e.resumeToken;
+        if (stall != null &&
+            again != null &&
+            again.isNotEmpty &&
+            !turn.stopped &&
+            stallResumes < maxStallResumes) {
+          token = again;
+          continue;
+        }
         if (again != null &&
             again.isNotEmpty &&
             stalls < _legStallWaits.length &&
@@ -2256,6 +3283,11 @@ class AppController extends ChangeNotifier {
         if (again != null && again.isNotEmpty) {
           await note(t('Stopped there — the gateway stayed busy. The work so '
               'far is saved, so ask it to carry on later.'), conv: conv);
+          return;
+        }
+        if (e.capExceeded) {
+          await note(t('Stopped: carrying on could go past this chat\'s spending cap.'),
+              conv: conv);
           return;
         }
         await note(e.message, conv: conv);
@@ -2277,15 +3309,25 @@ class AppController extends ChangeNotifier {
         thinking: next.thinking,
         cost: next.cost,
         pro: next.pro,
-        model: next.pro ? (model?['label'] as String?) : null,
+        model: next.pro ? (answered?['label'] as String?) : null,
+        modelKey: next.pro ? _maker(answered)?.key : null,
+        modelMaker: next.pro ? _maker(answered)?.slug : null,
+        modelMakerName: next.pro ? _maker(answered)?.name : null,
         calls: next.modelCalls,
+        pendingTool: next.pendingTool,
+        checkpoint: next.checkpoint,
+        staged: next.staged,
         sources: next.sources,
         followUps: next.followUps,
+        serverRunCredits: next.serverRunCredits,
+        serverRuns: next.serverRuns,
+        team: Team.normalize(next.team),
       );
       await _addTo(conv, more);
       await harvestArtifacts(more, conv: conv);
+      _bumpSpent(conv, next.cost + next.serverRunCredits, next.pro);
       conv.messageCount += 1;
-      conv.creditsSpent += next.cost;
+      conv.creditsSpent += next.cost + next.serverRunCredits;
       _touch(conv);
       await store.saveConversations(conversations);
       await store.recordUsage(next.cost);
@@ -2293,10 +3335,27 @@ class AppController extends ChangeNotifier {
       _creditBalance(next.pro, next.balance,
           anonKey: conv.anon && anon.ready);
 
-      left = continueBudgetAfter(turn.continuedSpend);
+      left = research != null
+          ? double.infinity
+          : continueBudgetAfter(turn.continuedSpend);
       token = next.truncated ? next.resumeToken : null;
       reserve = next.nextReserve;
+      stall = stallWait(
+          stalled: next.stalled,
+          truncated: next.truncated,
+          resumeToken: next.resumeToken,
+          retryAfterMs: next.retryAfterMs);
+      if (stall != null) continue;
 
+      if (token != null &&
+          token.isNotEmpty &&
+          research == null &&
+          settings.autoContinue == 0) {
+        await note(t('That answer stopped early — the task needs more steps than one '
+            'turn holds. Set “When a repo task runs out of room” in Settings and '
+            'Nymbot will carry on by itself.'), conv: conv);
+        return;
+      }
       if (token != null && token.isNotEmpty && reserve > left) {
         await note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
             {'n': reserve, 'left': left}), conv: conv);
@@ -2308,7 +3367,12 @@ class AppController extends ChangeNotifier {
         return;
       }
     }
-    if (turn.continuedSpend > 0) {
+    if (token != null && token.isNotEmpty && stall != null && !turn.stopped) {
+      await note(t('Stopped there — the gateway stayed busy. The work so '
+          'far is saved, so ask it to carry on later.'), conv: conv);
+      return;
+    }
+    if (turn.continuedSpend > 0 && (token == null || token.isEmpty)) {
       await note(t('Finished. Carrying on cost {n} extra credits.', {'n': turn.continuedSpend}),
           conv: conv);
     }
@@ -2335,6 +3399,290 @@ class AppController extends ChangeNotifier {
     } else {
       standardBalance = value;
     }
+  }
+
+  static const _invoiceKey = 'pendingInvoice';
+
+  PendingInvoice? invoice;
+  String? invoiceStatus;
+  bool invoiceWarn = false;
+  bool invoiceBusy = false;
+  bool _claiming = false;
+  Timer? _invoicePoll;
+
+  Future<EventSigner> _invoiceSigner(PendingInvoice inv) async =>
+      inv.anon ? await anon.signer() : identity.signer;
+
+  void _invoiceSay(String? text, {bool warn = false}) {
+    invoiceStatus = text;
+    invoiceWarn = warn;
+    notifyListeners();
+  }
+
+  Future<void> _keepInvoice(PendingInvoice? inv) async {
+    invoice = inv;
+    if (inv == null) {
+      _invoicePoll?.cancel();
+      _invoicePoll = null;
+      await store.remove(_invoiceKey);
+    } else {
+      await store.setString(_invoiceKey, inv.encode());
+    }
+  }
+
+  Future<bool> createInvoice(int credits, String tier) async {
+    if (invoiceBusy) return false;
+    if (credits <= 0) {
+      _invoiceSay(t('Enter how many credits to buy.'), warn: true);
+      return false;
+    }
+    final sats = credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
+    invoiceBusy = true;
+    _invoiceSay(t('Creating an invoice…'));
+    final useAnon = (current?.anon ?? false) && anon.ready;
+    final signer = useAnon ? await anon.signer() : identity.signer;
+    ApiResult res;
+    try {
+      res = await api.createInvoice(signer, amountSats: sats, tier: tier);
+    } finally {
+      invoiceBusy = false;
+    }
+    final pr = res.data['pr'];
+    final id = res.data['invoiceId'];
+    if (pr is! String || pr.isEmpty || id is! String || id.isEmpty) {
+      _invoiceSay(
+          (res.data['error'] as String?) ?? t('Could not create an invoice.'),
+          warn: true);
+      return false;
+    }
+    await _keepInvoice(PendingInvoice(
+      id: id,
+      pr: pr,
+      tier: tier,
+      anon: useAnon,
+      credits: credits,
+      sats: sats,
+    ));
+    _invoiceSay(t('Pay {sats} sats. This updates the moment it settles.',
+        {'sats': figure(sats)}));
+    _pollInvoice();
+    return true;
+  }
+
+  void _pollInvoice() {
+    _invoicePoll?.cancel();
+    final inv = invoice;
+    if (inv == null) return;
+    var ticks = 0;
+    _invoicePoll = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (invoice != inv) {
+        timer.cancel();
+        return;
+      }
+      if (++ticks > 60) {
+        timer.cancel();
+        if (_invoicePoll == timer) _invoicePoll = null;
+        _invoiceSay(
+            inv.paid
+                ? t('Your payment arrived but the credits are not added yet. '
+                    'Tap Add my credits to try again.')
+                : t('Still waiting on this payment. If you have paid, tap '
+                    'I\u2019ve paid — otherwise create a new invoice.'),
+            warn: true);
+        return;
+      }
+      if (invoiceBusy || _claiming) return;
+      await checkInvoice();
+      if (invoice != inv) timer.cancel();
+    });
+  }
+
+  Future<void> checkInvoice({bool manual = false}) async {
+    final inv = invoice;
+    if (inv == null || _claiming || (manual && invoiceBusy)) return;
+    if (!inv.paid) {
+      if (manual) {
+        invoiceBusy = true;
+        _invoiceSay(t('Checking your payment…'));
+      }
+      ApiResult check;
+      try {
+        check = await api.checkInvoice(await _invoiceSigner(inv), inv.id);
+      } finally {
+        if (manual) invoiceBusy = false;
+      }
+      if (invoice != inv) return;
+      if (check.data['paid'] != true) {
+        if (inv.stale) {
+          await _keepInvoice(null);
+          _invoiceSay(null);
+          return;
+        }
+        if (manual) {
+          _invoiceSay(
+              (check.data['error'] as String?) ??
+                  t('Not paid yet. Finish paying in your wallet, then tap it '
+                      'again.'),
+              warn: true);
+        }
+        return;
+      }
+      inv.paid = true;
+      await _keepInvoice(inv);
+    }
+    await _claimInvoice(inv);
+  }
+
+  Future<void> _claimInvoice(PendingInvoice inv) async {
+    if (_claiming || invoice != inv) return;
+    _claiming = true;
+    invoiceBusy = true;
+    _invoiceSay(t('Adding your credits…'));
+    try {
+      final claim =
+          await api.claimCredits(await _invoiceSigner(inv), inv.id);
+      final error = claim.data['error'] as String?;
+      if (error == null) {
+        await _keepInvoice(null);
+        _invoiceSay(t('Credited. Balance: {balance}.',
+            {'balance': figure(claim.data['balance'])}));
+        await refreshBalance();
+      } else if (error.toLowerCase().contains('already claimed')) {
+        await _keepInvoice(null);
+        _invoiceSay(t('That payment was already credited. Create a new '
+            'invoice to buy more.'));
+      } else {
+        _invoiceSay(error, warn: true);
+      }
+    } catch (_) {
+      _invoiceSay(t('Your payment could not be credited yet.'), warn: true);
+    } finally {
+      _claiming = false;
+      invoiceBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> resumeInvoice() async {
+    final inv = invoice;
+    if (inv == null) return;
+    if (inv.stale) {
+      await _keepInvoice(null);
+      notifyListeners();
+      return;
+    }
+    await checkInvoice();
+    if (invoice == inv && _invoicePoll == null && !inv.paid) _pollInvoice();
+  }
+
+  Future<int> importBackup(Object? payload, {required bool merge}) async {
+    final count = await Backup.restore(store, payload, merge: merge);
+    conversations = store.conversations();
+    schedules = store.schedules();
+    final live = conversations.where((c) => !c.archived).toList();
+    if (live.isEmpty) {
+      await newConversation();
+    } else {
+      await open(live.first);
+    }
+    notifyListeners();
+    return count;
+  }
+
+  Future<void> resumed() async {
+    if (!signedIn || identity.pubkey.isEmpty) return;
+    if (_entered) relays.wake();
+    await refreshNotices();
+    await refreshBalance();
+    await resumeInvoice();
+    if (_entered) await runDueSchedules();
+  }
+
+  Future<void> dropInvoice() async {
+    await _keepInvoice(null);
+    _invoiceSay(null);
+  }
+
+  Map<String, int> giftMinimum = Map.of(Gifts.minimum);
+  int giftTtlDays = 30;
+
+  Future<Map<String, String>> giftCodes() async =>
+      Gifts.keptFrom(await store.secret(Gifts.keptKey));
+
+  String _giftError(ApiResult res, String fallback) {
+    final said = res.data['error'];
+    return said is String && said.isNotEmpty ? said : fallback;
+  }
+
+  Future<({GiftRecord? gift, String? error})> makeGift(
+      {required String tier, required int amount, required String code}) async {
+    final res = await api.giftCreate(identity.signer,
+        tier: tier, amount: amount, code: code);
+    final gift = GiftRecord.fromJson(res.data['gift']);
+    if (res.status != 200 || res.data['ok'] != true || gift == null) {
+      return (
+        gift: null,
+        error: _giftError(res, t('The gift could not be made. Nothing left your balance.')),
+      );
+    }
+    await store.setSecret(Gifts.keptKey, Gifts.keptWith(await giftCodes(), gift.id, code));
+    await refreshBalance();
+    return (gift: gift, error: null);
+  }
+
+  Future<List<GiftRecord>?> listGifts() async {
+    final res = await api.giftList(identity.signer);
+    final list = res.data['gifts'];
+    if (res.status != 200 || list is! List) return null;
+    final min = res.data['min'];
+    if (min is Map) {
+      giftMinimum = {
+        for (final tier in const ['standard', 'pro'])
+          tier: (min[tier] as num?)?.toInt() ?? Gifts.minimum[tier]!,
+      };
+    }
+    final days = (res.data['ttlDays'] as num?)?.toInt() ?? 0;
+    if (days > 0) giftTtlDays = days;
+    return list.map(GiftRecord.fromJson).whereType<GiftRecord>().toList();
+  }
+
+  Future<({bool ok, String message})> cancelGift(GiftRecord g) async {
+    final res = await api.giftCancel(identity.signer, g.id);
+    if (res.status != 200 || res.data['ok'] != true) {
+      return (ok: false, message: _giftError(res, t('The gift could not be canceled.')));
+    }
+    await refreshBalance();
+    final back = (res.data['refunded'] as num?)?.toInt() ?? 0;
+    return (
+      ok: true,
+      message: back > 0
+          ? t('Canceled. {what} are back on your balance.',
+              {'what': Gifts.credits(res.data['tier'] == 'pro' ? 'pro' : 'standard', back)})
+          : t('That gift was already closed.'),
+    );
+  }
+
+  Future<({GiftRecord? gift, String? error})> peekGift(String code) async {
+    final res = await api.giftPeek(identity.signer, code);
+    final gift = GiftRecord.fromJson(res.data['gift']);
+    if (res.status != 200 || gift == null) {
+      return (gift: null, error: _giftError(res, t('That gift could not be looked up.')));
+    }
+    return (gift: gift, error: null);
+  }
+
+  Future<({bool ok, String message})> redeemGift(String code) async {
+    final res = await api.giftRedeem(identity.signer, code);
+    if (res.status != 200 || res.data['ok'] != true) {
+      return (ok: false, message: _giftError(res, t('The gift could not be claimed.')));
+    }
+    await refreshBalance();
+    final got = (res.data['credited'] as num?)?.toInt() ?? 0;
+    return (
+      ok: true,
+      message: t('Added {what} to your balance.',
+          {'what': Gifts.credits(res.data['tier'] == 'pro' ? 'pro' : 'standard', got)}),
+    );
   }
 
   Future<void> refreshBalance({bool announce = false}) async {
@@ -2485,6 +3833,27 @@ class AppController extends ChangeNotifier {
 
   Map<String, dynamic>? catalogPricing;
 
+  Map<String, dynamic>? mentionCatalog;
+
+  ModelMaker? _maker(Map<String, dynamic>? model) => ModelMaker.of(model, mentionCatalog);
+  Future<Map<String, dynamic>?>? _mentionLoad;
+
+  Future<Map<String, dynamic>?> ensureMentionCatalog() {
+    if (mentionCatalog != null) return Future.value(mentionCatalog);
+    return _mentionLoad ??= api.models().then((catalog) {
+      if (catalog != null && catalog['models'] is List) {
+        mentionCatalog = catalog;
+        notePricing(catalog);
+      }
+      _mentionLoad = null;
+      notifyListeners();
+      return mentionCatalog;
+    }).catchError((_) {
+      _mentionLoad = null;
+      return null;
+    });
+  }
+
   void notePricing(Map<String, dynamic>? catalog) {
     if (catalog == null) return;
     final usd = (catalog['usdPerCredit'] as num?)?.toDouble() ?? 0;
@@ -2496,6 +3865,7 @@ class AppController extends ChangeNotifier {
       'btcUsd': catalog['btcUsd'],
       'minChargeCredits': catalog['minChargeCredits'],
       'bulkBonus': catalog['bulkBonus'],
+      'researchByKey': Research.researchByKey(catalog),
     };
     notifyListeners();
   }
@@ -2530,7 +3900,8 @@ class AppController extends ChangeNotifier {
     final head = ChatEngine.preamble(conv, activeRepos, activePersona,
         activeWorkspace, activeBot, text, store.memories());
     final attached = attachments.map((a) => a.wireBlock).join();
-    return '$head$text$attached';
+    final searched = DocLibrary.instance.wireFor(conv.id, text, attachments);
+    return '$head$text$attached$searched';
   }
 
   /// Normal, careful, deep and back. Each step is another model call the reply
@@ -2550,21 +3921,61 @@ class AppController extends ChangeNotifier {
     return next;
   }
 
-  ({int sent, int replies, double credits, int words}) currentStats() {
+  static ({double standard, double pro}) _spent(Iterable<ChatMessage> list) {
+    var standard = 0.0;
+    var pro = 0.0;
+    for (final m in list) {
+      if (m.role != ChatRole.bot) continue;
+      if (m.pro ?? (m.model != null)) {
+        pro += m.cost;
+      } else {
+        standard += m.cost;
+      }
+      pro += m.serverRunCredits;
+    }
+    return (standard: standard, pro: pro);
+  }
+
+  ({int sent, int replies, double standard, double pro, int words})
+      currentStats() {
     var sent = 0;
     var replies = 0;
-    var credits = 0.0;
     var words = 0;
     for (final m in messages) {
       if (m.role == ChatRole.self) sent++;
       if (m.role == ChatRole.bot) replies++;
-      credits += m.cost;
       words += m.content.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
     }
-    return (sent: sent, replies: replies, credits: credits, words: words);
+    final spent = _spent(messages);
+    return (
+      sent: sent,
+      replies: replies,
+      standard: spent.standard,
+      pro: spent.pro,
+      words: words,
+    );
   }
 
-  Future<void> wipe() async {
+  ({int replies, double standard, double pro}) deviceStats() {
+    var replies = 0;
+    var standard = 0.0;
+    var pro = 0.0;
+    for (final conv in conversations) {
+      final list =
+          conv.id == current?.id ? messages : store.messages(conv.id);
+      replies += list.where((m) => m.role == ChatRole.bot).length;
+      final spent = _spent(list);
+      standard += spent.standard;
+      pro += spent.pro;
+    }
+    return (replies: replies, standard: standard, pro: pro);
+  }
+
+  Future<void> wipe() => _leave(purge: true);
+
+  Future<void> disconnectSigner() => _leave(purge: false);
+
+  Future<void> _leave({required bool purge}) async {
     _bootWork?.cancel();
     _syncTimer?.cancel();
     _noticeTimer?.cancel();
@@ -2572,7 +3983,7 @@ class AppController extends ChangeNotifier {
     sync.forget();
     // Signed while the key is still here; bounded so a signer that never
     // answers cannot hold the wipe up.
-    if (signedIn) {
+    if (purge && signedIn) {
       await api.purgeAccount(identity.signer).timeout(
             const Duration(seconds: 3),
             onTimeout: () => false,
@@ -2584,11 +3995,13 @@ class AppController extends ChangeNotifier {
     conversations = [];
     messages = [];
     repos = [];
+    connectors = [];
     notices = [];
     dismissedNotices = [];
     current = null;
     turns.clear();
     _queues.clear();
+    _queueEdits.clear();
     signedIn = false;
     _entered = false;
     notifyListeners();
@@ -2607,6 +4020,9 @@ class ChatTurn {
   List<TurnStep> steps = [];
   bool watching = false;
   bool stopped = false;
+
+  Object? research;
+  Map<String, dynamic>? team;
 
   /// Credits already spent carrying the current chat's run on, so a budget is
   /// a budget for the task rather than for each leg of it.

@@ -66,6 +66,9 @@
                 moves the whole conversation onto it. From then on the rumor, the seal and the request
                 signature are all that key &mdash; your identity key signs nothing in this conversation at
                 all.</p>
+            <p>A conversation stays under the key it started with. In the web app, the chip shows whether
+                the chat on screen is anonymous; turning it on in an empty chat makes that chat anonymous,
+                and turning it on in a chat that already has messages opens a new anonymous chat instead.</p>
             <p>Replies stay <a href="/docs/encryption/#post-quantum">hybrid post-quantum</a>: the throwaway
                 key carries its own KEM key, derived from a root generated independently of the signing key,
                 so publishing one does not weaken the other.</p>
@@ -116,13 +119,13 @@
                     context.</li>
                 <li><strong>What you write can identify you.</strong> No amount of key hygiene helps if the
                     question names your employer.</li>
-                <li><code>?gift</code> and <code>?transfer</code> stay on your real nym, because both are
-                    about a named account.</li>
+                <li><code>?gift</code> and <code>?transfer</code> stay on your real nym: a gift is made
+                    from its balance and a redeemed gift lands on it, never on the throwaway key.</li>
             </ul>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Careful</span>
                 <p>Credits on a throwaway key live and die with that key. A
-                    <a href="/docs/identity/#panic">panic wipe</a> takes it and anything left on it.</p>
+                    <a href="/docs/identity/#panic">device wipe</a> takes it and anything left on it.</p>
             </div>
         <!--DOCS-PAGER-->
         </main>

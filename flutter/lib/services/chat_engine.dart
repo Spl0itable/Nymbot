@@ -4,21 +4,28 @@ import 'dart:typed_data';
 
 import '../config.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
-import '../core/crypto/pq.dart' as pqc;
 import '../core/crypto/keys.dart';
+import '../core/crypto/schnorr.dart' as schnorr;
 import '../models/bot.dart';
+import '../models/connector.dart';
 import '../models/conversation.dart';
 import '../models/memory.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
+import 'connectors.dart';
+import 'doc_library.dart';
 import 'memory_keeper.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
 import 'pq_announce.dart';
 import 'free_tier.dart';
+import 'git_review.dart';
 import 'relay_pool.dart';
+import 'research.dart';
+import 'server_runs.dart';
+import 'team.dart';
 import 'wire_limits.dart';
 import '../features/i18n/i18n.dart';
 
@@ -29,7 +36,10 @@ class ChatFailure implements Exception {
       this.balance = 0,
       this.cancelled = false,
       this.resumeToken,
-      this.free});
+      this.free,
+      this.capExceeded = false,
+      this.required = 0,
+      this.team = false});
 
   final String message;
   final bool noCredits;
@@ -42,6 +52,10 @@ class ChatFailure implements Exception {
   /// Present when it was the day's free allowance that ran out rather than a
   /// balance, which is a time rather than a wall.
   final FreeAllowance? free;
+
+  final bool capExceeded;
+  final double required;
+  final bool team;
 
   @override
   String toString() => message;
@@ -64,12 +78,20 @@ typedef TurnResult = ({
   // Set when the run stopped at its tool-call cap with work left. The token
   // buys one more leg; the caller decides whether to spend it.
   bool truncated,
+  bool capStopped,
   String? resumeToken,
   int nextReserve,
   /// What this reply changed in a repository, and where the branch stood
   /// before it did, so the run can be put back.
   Map<String, dynamic>? checkpoint,
+  Map<String, dynamic>? pendingTool,
+  Map<String, dynamic>? staged,
+  bool stalled,
+  int retryAfterMs,
   String eventId,
+  double serverRunCredits,
+  List<Map<String, dynamic>> serverRuns,
+  Map<String, dynamic>? team,
 });
 
 /// One thing the running turn reported doing.
@@ -106,8 +128,10 @@ class ChatEngine {
     required this.pq,
     required this.api,
     required this.anon,
+    this.botPubkey = NymbotConfig.botPubkey,
   });
 
+  final String botPubkey;
   final Identity identity;
   final RelayPool relays;
   final PqAnnounce pq;
@@ -194,6 +218,13 @@ class ChatEngine {
     final lo = low < floor ? floor : low;
     return (lo, high < lo ? lo : high);
   }
+
+  static bool fromBot(NostrEvent seal, Map<String, dynamic> rumor,
+          {String bot = NymbotConfig.botPubkey}) =>
+      seal.pubkey == bot &&
+      seal.kind == 13 &&
+      rumor['pubkey'] == seal.pubkey &&
+      schnorr.verifyEvent(seal);
 
   static CostEstimate estimate(String text, Map<String, dynamic>? model,
       {Conversation? conv,
@@ -444,6 +475,22 @@ class ChatEngine {
     return data;
   }
 
+  Future<Map<String, dynamic>> applyStaged({
+    required GitRepo repo,
+    required Map<String, dynamic> staged,
+    required EventSigner signer,
+  }) async {
+    final res = await api.call('git-apply', signer, extra: {
+      'git': repo.toPayload(),
+      'staged': stagedRequest(staged),
+    });
+    final data = res.data;
+    if (data['error'] != null) {
+      throw ChatFailure(data['error'] as String);
+    }
+    return data;
+  }
+
   /// The passages of the workspace's files that bear on this question, plus the
   /// names of every file so the model knows what else it could be told about.
   /// When nothing matches, the opening of each file goes instead — enough to
@@ -618,6 +665,13 @@ class ChatEngine {
     required String text,
     Map<String, dynamic>? proModel,
     List<GitRepo> repos = const [],
+    List<McpConnector> connectors = const [],
+    String? mcpApprove,
+    String? mcpDecline,
+    bool serverRuns = false,
+    String? runApprove,
+    String? runDecline,
+    Duration? timeout,
     Persona? persona,
     Workspace? workspace,
     Bot? bot,
@@ -626,6 +680,7 @@ class ChatEngine {
     List<Memory> memories = const [],
     /// Continues a run parked by an earlier truncated turn.
     String? resume,
+    double? maxCost,
     /// Called with the turn's own event id as soon as it is published, so a
     /// watcher can start before the answer comes back.
     void Function(String eventId)? onTurn,
@@ -635,6 +690,8 @@ class ChatEngine {
     bool firstTurn = true,
     /// Answers the message outside the conversation, the way a '!' question is answered.
     bool fresh = false,
+    Object? research,
+    Map<String, dynamic>? team,
     required void Function(List<String> ids) onThreadIds,
     TurnControl? control,
   }) async {
@@ -650,8 +707,7 @@ class ChatEngine {
     // request, and the reply comes back to it. The account key signs nothing in
     // this conversation at all.
     final useAnon = anonymous && anon.ready;
-    final signer = useAnon ? await anon.signer() : identity.signer;
-    final senderSk = signer.privkey;
+    final EventSigner signer = useAnon ? await anon.signer() : identity.signer;
     final selfKem = useAnon
         ? anon.kemOf(await anon.ensure())?.publicKey
         : identity.kemPublicKey;
@@ -663,7 +719,8 @@ class ChatEngine {
         ? ''
         : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
     final attached = attachments.map((a) => a.wireBlock).join();
-    final wireText = '$head$quoted$text$attached';
+    final searched = DocLibrary.instance.wireFor(conv.id, text, attachments);
+    final wireText = '$head$quoted$text$attached$searched';
 
     // NIP-44 refuses a plaintext over 65535 bytes, and a gift wrap nests two
     // of them, so a long question does not fit in one event. It travels as
@@ -690,7 +747,7 @@ class ChatEngine {
         createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         kind: 14,
         tags: [
-          ['p', NymbotConfig.botPubkey],
+          ['p', botPubkey],
           ['x', msgId],
           ['ms', '${DateTime.now().millisecondsSinceEpoch}'],
           if (bodies.length > 1) ['part', '${i + 1}', '${bodies.length}'],
@@ -698,7 +755,7 @@ class ChatEngine {
         ],
         content: bodies[i],
       );
-      wrap = await _wrap(rumor, senderSk, NymbotConfig.botPubkey, botKem);
+      wrap = await _wrap(rumor, signer, botPubkey, botKem);
       unawaited(relays.publish(wrap, timeout: const Duration(seconds: 5)));
       partIds.add(wrap.id);
       partWraps.add(wrap);
@@ -706,7 +763,7 @@ class ChatEngine {
       // Our own copy, so the conversation restores on another device.
       if (!ghost) {
         try {
-          final selfWrap = await _wrap(rumor, senderSk, signer.pubkey, selfKem);
+          final selfWrap = await _wrap(rumor, signer, signer.pubkey, selfKem);
           unawaited(relays.publish(selfWrap, timeout: const Duration(seconds: 3)));
         } catch (_) {
           // The archive copy is best effort.
@@ -735,6 +792,7 @@ class ChatEngine {
       if (partIds.length > 1)
         'wraps': [for (final w in partWraps) w.toJson()],
       if (resume != null && resume.isNotEmpty) 'resume': resume,
+      if (maxCost != null && maxCost > 0) 'maxCost': maxCost,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (announcement == null &&
           !useAnon &&
@@ -746,11 +804,23 @@ class ChatEngine {
       if (proModel != null) 'proModel': proModel['key'],
       // How hard this chat asked the reply to think. Only meaningful on Pro,
       // and only outside a repo task, which loops on a budget of its own.
-      if (proModel != null && repos.isEmpty && effortOf(conv) != 'normal')
+      if (proModel != null &&
+          repos.isEmpty &&
+          connectors.isEmpty &&
+          effortOf(conv) != 'normal')
         'effort': effortOf(conv),
       if (proModel != null && repos.isNotEmpty) 'git': repos.first.toPayload(),
       if (proModel != null && repos.isNotEmpty)
         'repos': repos.map((r) => r.toPayload()).toList(),
+      if (proModel != null && research != null) 'research': research,
+      if (proModel != null && team != null) 'team': team,
+      if (connectors.isNotEmpty)
+        'mcp': connectors.map((c) => c.toPayload()).toList(),
+      if (mcpApprove != null && mcpApprove.isNotEmpty) 'mcpApprove': mcpApprove,
+      if (mcpDecline != null && mcpDecline.isNotEmpty) 'mcpDecline': mcpDecline,
+      if (proModel != null && repos.isNotEmpty && serverRuns) 'serverRuns': true,
+      if (runApprove != null && runApprove.isNotEmpty) 'runApprove': runApprove,
+      if (runDecline != null && runDecline.isNotEmpty) 'runDecline': runDecline,
     };
 
     // `pending` means an earlier attempt at this same message is still
@@ -762,7 +832,7 @@ class ChatEngine {
     while (true) {
       if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
       res = await api.call('pm', signer,
-          extra: extra, timeout: NymbotConfig.pmTimeout);
+          extra: extra, timeout: timeout ?? NymbotConfig.pmTimeout);
       if (res.data['pending'] == true && held++ < 5) {
         turn.say(t('Still working on that one…'));
         await _wait(const Duration(seconds: 3), turn);
@@ -800,13 +870,19 @@ class ChatEngine {
         balance: (data['balanceCredits'] as num?)?.toDouble()
             ?? (data['balance'] as num?)?.toDouble() ?? 0,
         free: FreeAllowance.fromJson(data['free']),
+        team: data['team'] == true,
+        required: (data['required'] as num?)?.toDouble() ?? 0,
       );
     }
     if (res.status >= 400 || data['error'] != null) {
       throw ChatFailure((data['error'] as String?) ?? 'The request failed.',
           resumeToken: data['resumable'] == true
               ? data['resumeToken'] as String?
-              : null);
+              : null,
+          capExceeded: data['capExceeded'] == true,
+          pro: data['pro'] == true,
+          required: (data['required'] as num?)?.toDouble() ?? 0,
+          team: data['team'] == true);
     }
     final eventJson = data['event'];
     if (eventJson is! Map<String, dynamic>) {
@@ -829,22 +905,19 @@ class ChatEngine {
       }
     }
 
-    final recipients = useAnon
-        ? [await anon.recipient()]
-        : (identity.pqCandidates().isEmpty
-            ? <pqc.PqIdentity?>[null]
-            : identity.pqCandidates());
-    final opened = await giftwrap.unwrapGiftWrap(replyEvent, [
-      for (final recipient in recipients)
-        (
-          sk: senderSk,
-          bitchat: false,
-          kemSk: recipient?.kemSecretKey,
-          kemPk: recipient?.kemPublicKey,
-        ),
-    ]);
+    final anonKem = useAnon ? anon.kemOf(await anon.ensure()) : null;
+    final kems = useAnon
+        ? <giftwrap.KemPair>[
+            if (anonKem != null)
+              (kemSk: anonKem.secretKey, kemPk: anonKem.publicKey),
+          ]
+        : identity.kemCandidates();
+    final opened = await giftwrap.unwrapWith(replyEvent, signer, kems);
     if (opened == null) {
       throw ChatFailure(t('Nymbot replied, but this device could not decrypt it.'));
+    }
+    if (!fromBot(opened.seal, opened.rumor, bot: botPubkey)) {
+      throw ChatFailure(t('A reply arrived that Nymbot did not sign, so it was not shown.'));
     }
 
     // A '!' question is answered without the conversation and stays out of it,
@@ -871,10 +944,22 @@ class ChatEngine {
           const <Map<String, dynamic>>[],
       followUps: ChatMessage.followUpsOf(data['followUps']),
       truncated: data['truncated'] == true,
+      capStopped: data['capStopped'] == true,
       resumeToken: data['resumeToken'] as String?,
       nextReserve: (data['nextReserve'] as num?)?.toInt() ?? 0,
       checkpoint: data['checkpoint'] as Map<String, dynamic>?,
+      pendingTool: Connectors.pendingFrom(data),
+      staged: data['staged'] is Map<String, dynamic>
+          ? data['staged'] as Map<String, dynamic>
+          : null,
+      stalled: data['stalled'] == true,
+      retryAfterMs: (data['retryAfterMs'] as num?)?.toInt() ?? 0,
       eventId: wrap.id,
+      serverRunCredits: (data['serverRunCredits'] as num?)?.toDouble() ?? 0,
+      serverRuns: ServerRuns.runsOf(data['serverRuns']),
+      team: data['team'] is Map && (data['team'] as Map)['workers'] is List
+          ? (data['team'] as Map).cast<String, dynamic>()
+          : null,
     );
   }
 
@@ -893,7 +978,7 @@ class ChatEngine {
         timeout: const Duration(seconds: 8),
       );
       final steps = (res.data['steps'] as List?) ?? const [];
-      return steps.whereType<Map<String, dynamic>>().map((s) => (
+      return steps.whereType<Map<String, dynamic>>().map((s) => s['kind'] == 'research' ? Research.stepOf(s) : s['kind'] == 'team' ? Team.stepOf(s) : Connectors.step(s) ?? (
             n: (s['n'] as num?)?.toInt() ?? 0,
             kind: s['kind'] as String? ?? '',
             // One field for "the thing this step is about", whichever name the
@@ -913,7 +998,7 @@ class ChatEngine {
                 (s['images'] as num?)?.toInt() ??
                 (s['turns'] as num?)?.toInt() ??
                 0,
-            of: (s['of'] as num?)?.toInt() ?? 0,
+            of: (s['of'] as num?)?.toInt() ?? (s['team'] as num?)?.toInt() ?? 0,
             flag: s['seeing'] == true,
           )).toList();
     } catch (_) {
@@ -921,20 +1006,12 @@ class ChatEngine {
     }
   }
 
-  Future<NostrEvent> _wrap(UnsignedEvent rumor, Uint8List senderSk,
-      String recipientPubkey, Uint8List? kemPk) {
-    if (kemPk == null) {
-      return Future.value(giftwrap.nip59Wrap(
+  Future<NostrEvent> _wrap(UnsignedEvent rumor, EventSigner signer,
+          String recipientPubkey, Uint8List? kemPk) =>
+      giftwrap.sealAndWrap(
         rumor: rumor,
-        senderPrivkey: senderSk,
+        signer: signer,
         recipientPubkey: recipientPubkey,
-      ));
-    }
-    return giftwrap.pq2Nip59Wrap(
-      rumor: rumor,
-      senderPrivkey: senderSk,
-      recipientPubkey: recipientPubkey,
-      recipientKemPublicKey: kemPk,
-    );
-  }
+        recipientKemPublicKey: kemPk,
+      );
 }

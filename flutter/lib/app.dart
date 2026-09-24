@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/theme/theme.dart';
 import 'features/gate_screen.dart';
 import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
+import 'features/signer_wait.dart';
 import 'models/workspace.dart';
 import 'state/app_controller.dart';
 import 'features/i18n/language_select.dart';
@@ -48,37 +50,83 @@ class NymbotApp extends StatelessWidget {
 
   Widget _app(BuildContext context) {
     final settings = controller.settings;
-    final palette = switch (settings.theme) {
-      ChatTheme.terminal => NymbotPalette.terminal,
-      ChatTheme.midnight => NymbotPalette.midnight,
-      _ => NymbotPalette.standard,
-    };
-    final mode = switch (settings.theme) {
-      ChatTheme.light => ThemeMode.light,
-      ChatTheme.dark || ChatTheme.terminal || ChatTheme.midnight => ThemeMode.dark,
-      ChatTheme.system => ThemeMode.system,
-    };
+    final palette = paletteFor(settings);
+    final mode = themeModeFor(settings);
 
     return MaterialApp(
         title: 'Nymbot',
         navigatorKey: navigatorKey,
         debugShowCheckedModeBanner: false,
         scrollBehavior: const NymScrollBehavior(),
-        theme: nymbotTheme(Brightness.light, fontScale: settings.fontScale),
-        darkTheme: nymbotTheme(Brightness.dark,
-            palette: palette, fontScale: settings.fontScale),
+        theme: nymbotTheme(Brightness.light),
+        darkTheme: nymbotTheme(Brightness.dark, palette: palette),
         themeMode: mode,
-        // The packs are plain strings with no locale machinery behind them, so
-        // the writing direction is set here rather than inferred from a Locale
-        // the app never declares.
-        builder: (context, child) => Directionality(
-          textDirection: I18n.isRtl ? TextDirection.rtl : TextDirection.ltr,
-          child: child ?? const SizedBox.shrink(),
-        ),
+        themeAnimationDuration: settings.reduceMotion
+            ? Duration.zero
+            : kThemeAnimationDuration,
+        locale: appLocale(),
+        supportedLocales: appLocales(),
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        builder: (context, child) => appFrame(
+            context,
+            SignerWait(waiting: controller.identity.waiting, child: child),
+            settings),
         home: const _Root(),
       );
   }
 }
+
+Widget appFrame(BuildContext context, Widget? child, AppSettings settings) {
+  final media = MediaQuery.of(context);
+  final scale = settings.fontScale <= 0 ? 1.0 : settings.fontScale;
+  return MediaQuery(
+    data: media.copyWith(
+      disableAnimations: media.disableAnimations || settings.reduceMotion,
+      textScaler: scale == 1
+          ? media.textScaler
+          : TextScaler.linear(media.textScaler.scale(14) / 14 * scale),
+    ),
+    child: Directionality(
+      textDirection: I18n.isRtl ? TextDirection.rtl : TextDirection.ltr,
+      child: child ?? const SizedBox.shrink(),
+    ),
+  );
+}
+
+Locale _localeOf(String code) {
+  final parts = code.split(RegExp('[-_]'));
+  return parts.length > 1 && parts[1].isNotEmpty
+      ? Locale(parts[0], parts[1].toUpperCase())
+      : Locale(parts[0]);
+}
+
+bool _materialSpeaks(Locale locale) =>
+    GlobalMaterialLocalizations.delegate.isSupported(locale) &&
+    GlobalCupertinoLocalizations.delegate.isSupported(locale);
+
+List<Locale> appLocales() => [
+      const Locale('en'),
+      for (final option in I18n.available)
+        if (option.code != 'en' && _materialSpeaks(_localeOf(option.code)))
+          _localeOf(option.code),
+    ];
+
+Locale appLocale() {
+  final locale = _localeOf(I18n.lang);
+  return _materialSpeaks(locale) ? locale : const Locale('en');
+}
+
+NymbotPalette paletteFor(AppSettings settings) => switch (settings.theme) {
+      ChatTheme.terminal => NymbotPalette.terminal,
+      ChatTheme.midnight => NymbotPalette.midnight,
+      _ => NymbotPalette.standard,
+    };
+
+ThemeMode themeModeFor(AppSettings settings) => switch (settings.theme) {
+      ChatTheme.light => ThemeMode.light,
+      ChatTheme.dark || ChatTheme.terminal || ChatTheme.midnight => ThemeMode.dark,
+      ChatTheme.system => ThemeMode.system,
+    };
 
 class NymScrollBehavior extends MaterialScrollBehavior {
   const NymScrollBehavior();

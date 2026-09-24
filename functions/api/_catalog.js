@@ -329,6 +329,7 @@ export async function catalogMediaParams(env, opts) {
 
 var GENERATOR_TASKS = {
   "text-to-image": "image",
+  "image-to-image": "image",
   "text-to-video": "video",
   "image-to-video": "video",
   "text-to-speech": "speech"
@@ -413,7 +414,8 @@ export async function catalogGenerators(env, opts) {
       family: patch.family || catalogGeneratorFamily(kind, r.id),
       credits: Number.isFinite(credits) && credits > 0 ? Math.ceil(credits) : null,
       priced: !!(priced && credits > 0),
-      needsImage: r.task_slug === "image-to-video",
+      needsImage: r.task_slug === "image-to-video" || r.task_slug === "image-to-image",
+      edit: r.task_slug === "image-to-image" || patch.edit === true,
       taskSlug: r.task_slug || "",
       author: patch.author || r.author || "",
       authorSlug: r.author_slug || vendor,
@@ -445,7 +447,8 @@ export function catalogMergeGenerators(builtin, live, defaults) {
       var held = byModel[m.model] ? table[byModel[m.model]] : null;
       if (held) {
         if (!held.description && m.description) held.description = m.description;
-        if (held.needsImage == null && m.needsImage != null) held.needsImage = m.needsImage;
+        if (held.needsImage == null && m.needsImage != null && !m.edit) held.needsImage = m.needsImage;
+        if (!held.edit && m.edit) held.edit = true;
         if (!held.author && m.author) held.author = m.author;
         return;
       }

@@ -85,9 +85,9 @@ List<HelpTopic> helpTopics() => [
             'repositories you want rather than typing each name exactly right. '
             'Pro replies read their code and, with writes on, commit, branch '
             'and open pull requests. The list is asked for by this device, '
-            'straight from the forge; access tokens are stored only here and '
-            'sent per request — never stored server-side or published to '
-            'relays.'),
+            'straight from the forge; access tokens are sent per request and '
+            'never stored server-side or published to relays. With sync on they '
+            'travel to your other devices sealed to your own key.'),
       ),
       HelpTopic(
         t('Memory'),
@@ -171,6 +171,14 @@ List<HelpTopic> helpTopics() => [
             'a deep reply about three times — the toolbar says the range '
             'before you send. A repo task ignores it: it already loops on a '
             'budget of its own.'),
+      ),
+      HelpTopic(
+        t('Deep research'),
+        t('Turn on the Research chip, or start a message with ?research, and the next message becomes a research task for the pinned Pro model. It plans the questions to answer, searches the web in several rounds with different phrasings, reads the most promising pages, and writes a long report with numbered sources you can open. The composer says what it will probably cost and the most it can cost before you send; it is charged on the tokens it actually uses and nothing if it fails. The chip turns itself off after one message. A long run may pause and carry on in a second step within the same ceiling.'),
+      ),
+      HelpTopic(
+        t('Team mode'),
+        t('With a Pro model pinned, the Team chip appears when Research is on or a repository is connected. Tap it to pick how many workers run (2 to 4) and which model they run on, and it shows the most the turn can cost and what it usually costs. The model you pinned leads: it splits the task, the workers run at the same time, and the lead checks and combines their work. While it runs you see one lane for the lead and one for each worker, and the reply lists what each part cost. The lead can also use this chat\'s connectors and server runs; the workers cannot. Every connector call and server run the lead wants waits for you to allow it, even a tool you always allow elsewhere, and the team carries on from there.'),
       ),
       HelpTopic(
         t('Typing while it is still writing'),

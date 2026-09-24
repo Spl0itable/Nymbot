@@ -12,8 +12,9 @@
 
 import { routeStorageAction } from './api/storage.js';
 import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
-import { verifyClientAuth, getPublicKey } from './api/_shared.js';
+import { verifyClientAuth, getPublicKey, AUTH_REPLAY_TTL_S } from './api/_shared.js';
 import { isNymchatClient } from './api/_client.js';
+import { ledgerCall } from './api/_ledger.js';
 
 // Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
 const BOT_ACTIONS = {
@@ -21,6 +22,27 @@ const BOT_ACTIONS = {
   'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1,
   'voucher-keys': 1, 'voucher-issue': 1
 };
+
+export function wsAuthHostOk(auth, reqUrl) {
+  const tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
+  const tag = tags.find((t) => Array.isArray(t) && t[0] === 'u');
+  if (!tag) return true;
+  try {
+    return new URL(String(tag[1])).host === new URL(reqUrl).host;
+  } catch {
+    return false;
+  }
+}
+
+export async function wsAuthFresh(env, auth) {
+  try {
+    const rp = await ledgerCall(env, { op: 'replay', id: auth && auth.id, ttl: AUTH_REPLAY_TTL_S });
+    if (rp && rp._noLedger) return true;
+    return !!(rp && rp.fresh);
+  } catch {
+    return false;
+  }
+}
 
 async function forwardResponse(id, resp, send) {
   const status = resp.status || 200;
@@ -85,7 +107,8 @@ export async function onRequest(context) {
     if (type === 'AUTH') {
       const auth = msg[1];
       if (!auth || typeof auth.pubkey !== 'string' ||
-        !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' })) {
+        !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' }) ||
+        !wsAuthHostOk(auth, reqUrl) || !(await wsAuthFresh(env, auth))) {
         send(['AUTH_ERR', 'Authentication failed']);
         try { server.close(4001, 'auth'); } catch { /* noop */ }
         return;

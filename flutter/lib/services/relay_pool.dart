@@ -29,6 +29,10 @@ class _Relay {
 /// The relay set is the one the Nymbot worker itself reads from, because a wrap
 /// published anywhere else is one it can never fetch and open.
 class RelayPool {
+  RelayPool({WebSocketChannel Function(Uri uri)? connect})
+      : _connect = connect ?? WebSocketChannel.connect;
+
+  final WebSocketChannel Function(Uri uri) _connect;
   final Map<String, _Relay> _relays = {};
   final Map<String,
           ({Map<String, dynamic> filter, void Function(NostrEvent) onEvent})>
@@ -74,6 +78,22 @@ class RelayPool {
     _connectDirect();
   }
 
+  int get backoffTries => _tries;
+
+  void wake() {
+    if (_closed) return;
+    _tries = 0;
+    if (pooled) return;
+    if (_pool == null) {
+      _poolTimer?.cancel();
+      _poolTimer = null;
+      _direct = false;
+      if (_openPool()) return;
+      _direct = true;
+    }
+    _connectDirect();
+  }
+
   void _connectDirect() {
     for (final url in NymbotConfig.relays) {
       _open(url);
@@ -87,7 +107,7 @@ class RelayPool {
     if (url == null || _closed || _pool != null) return _pool != null;
     WebSocketChannel channel;
     try {
-      channel = WebSocketChannel.connect(Uri.parse(url));
+      channel = _connect(Uri.parse(url));
     } catch (_) {
       return false;
     }
@@ -128,7 +148,9 @@ class RelayPool {
       }
       _retireDirect();
       _emit();
-    }).catchError((_) => _poolDown(pool));
+    }).catchError((_) {
+      _poolDown(pool);
+    });
     return true;
   }
 
@@ -195,7 +217,7 @@ class RelayPool {
     if (_closed || _poolUp || _relays.containsKey(url)) return;
     WebSocketChannel channel;
     try {
-      channel = WebSocketChannel.connect(Uri.parse(url));
+      channel = _connect(Uri.parse(url));
     } catch (_) {
       return;
     }
@@ -324,18 +346,16 @@ class RelayPool {
   Future<List<NostrEvent>> fetchFrom(
       List<String> urls, Map<String, dynamic> filter,
       {Duration? timeout}) {
-    final list = urls
-        .where((u) => u.startsWith('wss://') || u.startsWith('ws://'))
-        .toSet()
-        .take(8)
-        .toList();
+    if (NymbotConfig.apiHost.isEmpty) return Future.value(const []);
+    final list =
+        urls.where((u) => u.startsWith('wss://')).toSet().take(8).toList();
     if (list.isEmpty) return Future.value(const []);
     final id = _subId();
     final found = <String, NostrEvent>{};
     final done = Completer<List<NostrEvent>>();
     final channels = <WebSocketChannel>[];
     final taps = <StreamSubscription>[];
-    var closed = 0;
+    var ended = 0;
 
     void finish() {
       if (done.isCompleted) return;
@@ -350,30 +370,28 @@ class RelayPool {
       done.complete(found.values.toList());
     }
 
-    // Through the proxy while it is carrying us, so a relay we have never spoken
-    // to does not learn the reader's address.
-    late void Function(String, bool) dial;
-    void give(String url, bool viaProxy) {
-      if (viaProxy) {
-        dial(url, false);
-      } else if (++closed >= list.length) {
-        finish();
-      }
+    void give() {
+      if (++ended >= list.length) finish();
     }
 
-    dial = (String url, bool viaProxy) {
-      final target = viaProxy
-          ? 'wss://${NymbotConfig.apiHost}/api/relay?relay=${Uri.encodeComponent(url)}'
-          : url;
+    for (final url in list) {
+      final target =
+          'wss://${NymbotConfig.apiHost}/api/relay?relay=${Uri.encodeComponent(url)}';
       WebSocketChannel channel;
       try {
-        channel = WebSocketChannel.connect(Uri.parse(target));
+        channel = _connect(Uri.parse(target));
       } catch (_) {
-        give(url, viaProxy);
-        return;
+        give();
+        continue;
       }
       channels.add(channel);
-      var spoke = false;
+      var over = false;
+      void end() {
+        if (over) return;
+        over = true;
+        give();
+      }
+
       taps.add(channel.stream.listen((raw) {
         List<dynamic> frame;
         try {
@@ -382,32 +400,19 @@ class RelayPool {
           return;
         }
         if (frame.length < 2 || frame[1] != id) return;
-        spoke = true;
         if (frame[0] == 'EVENT' && frame.length >= 3) {
           try {
             final evt = NostrEvent.fromJson(frame[2] as Map<String, dynamic>);
             found[evt.id] = evt;
           } catch (_) {}
         } else if (frame[0] == 'EOSE') {
-          if (++closed >= list.length) finish();
+          end();
         }
-      }, onError: (_) {
-        if (spoke || done.isCompleted) return;
-        spoke = true;
-        give(url, viaProxy);
-      }, onDone: () {
-        if (spoke || done.isCompleted) return;
-        spoke = true;
-        give(url, viaProxy);
-      }, cancelOnError: true));
+      }, onError: (_) => end(), onDone: end, cancelOnError: true));
+      channel.ready.then((_) {}, onError: (_) => end());
       try {
         channel.sink.add(jsonEncode(['REQ', id, filter]));
       } catch (_) {}
-    };
-
-    final proxy = pooled && NymbotConfig.apiHost.isNotEmpty;
-    for (final url in list) {
-      dial(url, proxy);
     }
     _track(Timer(timeout ?? const Duration(seconds: 6), finish));
     return done.future;

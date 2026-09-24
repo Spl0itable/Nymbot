@@ -6,14 +6,16 @@ import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
 
-Future<String?> showPromptsSheet(BuildContext context) =>
+Future<String?> showPromptsSheet(BuildContext context, {String filter = ''}) =>
     showNymSheet<String>(
       context,
-      (_) => const _PromptsSheet(),
+      (_) => _PromptsSheet(filter: filter),
     );
 
 class _PromptsSheet extends StatefulWidget {
-  const _PromptsSheet();
+  const _PromptsSheet({this.filter = ''});
+
+  final String filter;
 
   @override
   State<_PromptsSheet> createState() => _PromptsSheetState();
@@ -25,7 +27,13 @@ class _PromptsSheetState extends State<_PromptsSheet> {
   final _body = TextEditingController();
   String? _editingId;
   String? _error;
-  String _term = '';
+  late String _term = widget.filter.trim();
+
+  @override
+  void initState() {
+    super.initState();
+    _search.text = _term;
+  }
 
   @override
   void dispose() {

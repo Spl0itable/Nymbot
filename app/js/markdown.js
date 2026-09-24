@@ -9,9 +9,37 @@
             .replace(/"/g, '&quot;');
     }
 
+    function unesc(s) {
+        return String(s)
+            .replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+    }
+
     function safeUrl(href) {
         const u = String(href || '').trim();
-        return /^(https?:\/\/|mailto:|lightning:|bitcoin:|nostr:)/i.test(u) ? u : '';
+        return /^(https?:\/\/|mailto:|nostr:)/i.test(u) ? u : '';
+    }
+
+    function trustedHosts() {
+        const C = window.NymbotConfig || {};
+        const B = window.NymbotBlossom;
+        const hosts = new Set();
+        if (C.apiHost) hosts.add(String(C.apiHost).toLowerCase());
+        for (const h of (B && Array.isArray(B.HOSTS) ? B.HOSTS : [])) {
+            try { hosts.add(new URL(h).hostname.toLowerCase()); } catch (_) { }
+        }
+        return hosts;
+    }
+
+    function mediaSrc(raw) {
+        let u;
+        try { u = new URL(String(raw || '').trim()); } catch (_) { return ''; }
+        if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
+        if (u.protocol === 'https:' && !u.username && !u.password && !u.port
+            && trustedHosts().has(u.hostname.toLowerCase())) {
+            return u.href;
+        }
+        const C = window.NymbotConfig || {};
+        return C.apiHost ? `https://${C.apiHost}/api/proxy?url=${encodeURIComponent(u.href)}` : '';
     }
 
     function inline(text) {
@@ -24,15 +52,15 @@
         });
 
         out = out.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, alt, href) => {
-            const u = safeUrl(href);
-            return u ? `<img class="msg-media" src="${esc(u)}" alt="${alt}" loading="lazy">` : m;
+            const u = /^https?:\/\//i.test(unesc(href).trim()) ? mediaSrc(unesc(href)) : '';
+            return u ? `<img class="msg-media" src="${esc(u)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">` : m;
         });
         out = out.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, label, href) => {
-            const u = safeUrl(href);
+            const u = safeUrl(unesc(href));
             return u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${label}</a>` : m;
         });
         out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (m, pre, u) =>
-            `${pre}<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`);
+            `${pre}<a href="${esc(unesc(u))}" target="_blank" rel="noopener noreferrer">${u}</a>`);
 
         out = out.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>');
         out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -69,14 +97,16 @@
 
     function mediaFor(url, kind) {
         const bare = !/\.[a-z0-9]{2,5}(\?|$)/i.test(url);
+        const src = mediaSrc(url);
+        if (!src) return null;
         if (/\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)/i.test(url) || (bare && kind === 'image')) {
-            return mediaBox(`<img class="msg-media" src="${esc(url)}" alt="" loading="lazy">`, url, true);
+            return mediaBox(`<img class="msg-media" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">`, url, true);
         }
         if (/\.(mp3|wav|ogg|m4a|opus|flac)(\?|$)/i.test(url) || (bare && kind === 'speak')) {
-            return mediaBox(`<audio class="msg-media" controls preload="none" src="${esc(url)}"></audio>`, url);
+            return mediaBox(`<audio class="msg-media" controls preload="none" referrerpolicy="no-referrer" src="${esc(src)}"></audio>`, url);
         }
         if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || (bare && kind === 'video')) {
-            return mediaBox(`<video class="msg-media" controls preload="metadata" src="${esc(url)}"></video>`, url, true);
+            return mediaBox(`<video class="msg-media" controls preload="metadata" referrerpolicy="no-referrer" src="${esc(src)}"></video>`, url, true);
         }
         return null;
     }
@@ -408,5 +438,13 @@
             .trim();
     }
 
-    window.NymbotMarkdown = { render, escape: esc, plain, inline, diffFiles };
+    window.NymbotMarkdown = {
+        render,
+        code: (body, lang, options) => codeBlock(String(body || ''), lang || '', options),
+        mediaSrc,
+        escape: esc,
+        plain,
+        inline,
+        diffFiles
+    };
 })();

@@ -53,7 +53,6 @@ class DisplayIdentity {
   const DisplayIdentity({
     required this.pubkey,
     required this.name,
-    required this.suffix,
     required this.nip05,
     required this.picture,
     required this.hasProfile,
@@ -61,7 +60,6 @@ class DisplayIdentity {
 
   final String pubkey;
   final String name;
-  final String suffix;
   final String nip05;
   final String picture;
   final bool hasProfile;
@@ -105,7 +103,6 @@ class Profiles extends ChangeNotifier {
     return DisplayIdentity(
       pubkey: pubkey,
       name: (hit != null && hit.name.isNotEmpty) ? hit.name : NymIdentity.name(pubkey),
-      suffix: NymIdentity.suffix(pubkey),
       nip05: hit?.nip05 ?? '',
       picture: hit?.picture ?? '',
       hasProfile: hit != null && !hit.isEmpty,
@@ -125,9 +122,14 @@ class Profiles extends ChangeNotifier {
       return null;
     }
     final event = events?[pubkey];
-    if (event == null || event.kind != 0 || event.pubkey != pubkey) return null;
-    if (!schnorr.verifyEvent(event)) return null;
+    if (event == null || !_authentic(event, pubkey)) return null;
     return _read(event.content);
+  }
+
+  bool _authentic(NostrEvent event, String pubkey) {
+    if (event.kind != 0 || event.pubkey != pubkey) return false;
+    if (event.id.isEmpty) return false;
+    return schnorr.verifyEvent(event);
   }
 
   /// Waits for the pool to have a socket. Only the relay half needs it: the
@@ -167,7 +169,7 @@ class Profiles extends ChangeNotifier {
           {'kinds': [0], 'authors': [pubkey], 'limit': 4},
           timeout: const Duration(seconds: 4),
         );
-        final mine = events.where((e) => e.pubkey == pubkey).toList()
+        final mine = events.where((e) => _authentic(e, pubkey)).toList()
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
         parsed = mine.isEmpty ? null : _read(mine.first.content);
       }

@@ -728,8 +728,8 @@ function fetchPqAnnouncementKey(userPubkey, relays, timeoutMs) {
 
 // D1-first announcement lookup. Clients publish their `nym-pq` announcement
 // through the relay proxy, which archives it into the channel events table
-// (relay-pool.js keeps kind-30078 `d=nym-pq` rows), and they resolve peers'
-// keys from that archive first — the worker's own relay list may never carry
+// (archiveVerifiedPqAnnouncement keeps one verified row per pubkey), and they
+// resolve peers' keys from that archive first — the worker's own relay list may never carry
 // the event at all. `db` is the (replica'd) DB_CHANNELS binding, or null to
 // skip straight to the caller's relay fallback. Rows are only a transport:
 // userPqRecordFromEvents still verifies id + signature before any key is
@@ -748,6 +748,69 @@ async function pqAnnouncementEventsFromD1(db, pubkey) {
     return events.length ? events : null;
   } catch (e) {
     return null;
+  }
+}
+
+var PQ_ARCHIVE_SKEW_SEC = 600;
+var PQ_ARCHIVE_MAX_JSON = 16384;
+
+function pqArchiveCandidate(evt, nowSec) {
+  if (!evt || typeof evt !== "object" || Array.isArray(evt)) return null;
+  if (evt.kind !== 30078) return null;
+  if (typeof evt.id !== "string" || !/^[0-9a-f]{64}$/.test(evt.id)) return null;
+  if (typeof evt.pubkey !== "string" || !/^[0-9a-f]{64}$/.test(evt.pubkey)) return null;
+  if (typeof evt.sig !== "string" || !/^[0-9a-f]{128}$/.test(evt.sig)) return null;
+  if (typeof evt.content !== "string" || !Array.isArray(evt.tags)) return null;
+  if (!Number.isSafeInteger(evt.created_at) || evt.created_at < 0) return null;
+  var now = nowSec || Math.floor(Date.now() / 1000);
+  if (evt.created_at > now + PQ_ARCHIVE_SKEW_SEC) return null;
+  var dTag = null;
+  for (var i = 0; i < evt.tags.length; i++) {
+    var t = evt.tags[i];
+    if (!Array.isArray(t) || t.some(function (v) { return typeof v !== "string"; })) return null;
+    if (t[0] === "d" && dTag === null) dTag = t[1];
+  }
+  if (dTag !== PQ_D_TAG) return null;
+  var clean = {
+    id: evt.id,
+    pubkey: evt.pubkey,
+    created_at: evt.created_at,
+    kind: evt.kind,
+    tags: evt.tags,
+    content: evt.content,
+    sig: evt.sig
+  };
+  var json = JSON.stringify(clean);
+  if (json.length > PQ_ARCHIVE_MAX_JSON) return null;
+  try {
+    if (getEventHash(clean) !== clean.id) return null;
+    if (!schnorr.verify(clean.sig, clean.id, clean.pubkey)) return null;
+  } catch (e) {
+    return null;
+  }
+  return { evt: clean, json: json, now: now };
+}
+
+async function archiveVerifiedPqAnnouncement(db, evt, nowSec) {
+  if (!db || typeof db.prepare !== "function") return false;
+  var c = pqArchiveCandidate(evt, nowSec);
+  if (!c) return false;
+  var e = c.evt;
+  var ceiling = c.now + PQ_ARCHIVE_SKEW_SEC;
+  try {
+    await db.batch([
+      db.prepare(
+        "DELETE FROM events WHERE channel = ? AND pubkey = ? AND id != ? AND (created_at <= ? OR created_at > ?)"
+      ).bind(PQ_D_TAG, e.pubkey, e.id, e.created_at, ceiling),
+      db.prepare(
+        "INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) " +
+        "SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM events WHERE channel = ? AND pubkey = ? AND created_at > ? AND created_at <= ?)"
+      ).bind(e.id, PQ_D_TAG, 30078, e.pubkey, e.created_at, c.json, Date.now(),
+        PQ_D_TAG, e.pubkey, e.created_at, ceiling)
+    ]);
+    return true;
+  } catch (err) {
+    return false;
   }
 }
 
@@ -927,6 +990,8 @@ export {
   userPqRecordFromEvents,
   fetchPqAnnouncementKey,
   pqAnnouncementEventsFromD1,
+  pqArchiveCandidate,
+  archiveVerifiedPqAnnouncement,
   buildBotPqAnnouncement,
   rumorTagValue,
   rumorInThreadScope,

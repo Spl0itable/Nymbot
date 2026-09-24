@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../config.dart';
 import '../../models/conversation.dart';
+import '../../services/team.dart';
 import '../i18n/i18n.dart';
 import 'credits_sheet.dart';
 import 'sheet.dart';
@@ -9,7 +10,8 @@ import 'sheet.dart';
 /// Everything the device actually knows about one reply's price. Deliberately
 /// not an estimate re-run after the fact: what is shown is what the worker
 /// charged and what it said it did to earn it.
-List<(String, String)> costRows(BuildContext context, ChatMessage m) {
+List<(String, String)> costRows(BuildContext context, ChatMessage m,
+    {Map<String, dynamic>? catalog}) {
   final pro = m.model != null;
   final sats = m.cost * (NymbotConfig.satsPerCredit[pro ? 'pro' : 'standard'] ?? 1);
   final rows = <(String, String)>[
@@ -26,6 +28,7 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m) {
   if (m.sources.isNotEmpty) {
     rows.add((t('Sources read'), '${m.sources.length}'));
   }
+  rows.addAll(Team.costRows(m.team, catalog));
   final at = m.at.toLocal();
   String two(int n) => n.toString().padLeft(2, '0');
   rows.add((t('When'), '${at.year}-${two(at.month)}-${two(at.day)} '
@@ -33,21 +36,23 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m) {
   return rows;
 }
 
-Future<void> showCostSheet(BuildContext context, ChatMessage m) =>
+Future<void> showCostSheet(BuildContext context, ChatMessage m,
+        {Map<String, dynamic>? catalog}) =>
     showNymSheet<void>(
       context,
-      (_) => _CostSheet(message: m),
+      (_) => _CostSheet(message: m, catalog: catalog),
     );
 
 class _CostSheet extends StatelessWidget {
-  const _CostSheet({required this.message});
+  const _CostSheet({required this.message, this.catalog});
 
   final ChatMessage message;
+  final Map<String, dynamic>? catalog;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final rows = costRows(context, message);
+    final rows = costRows(context, message, catalog: catalog);
 
     return Padding(
       padding: EdgeInsets.only(

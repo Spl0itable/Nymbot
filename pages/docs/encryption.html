@@ -82,7 +82,7 @@
                 retroactively &mdash; traffic captured today, decrypted years later. So the encryption is
                 <em>hybrid</em>: an ML-KEM key encapsulation is combined with the classical exchange, and an
                 attacker has to break both to read anything.</p>
-            <p>ML-KEM is the NIST-standardised lattice KEM. Combining rather than replacing is deliberate:
+            <p>ML-KEM is the NIST-standardized lattice KEM. Combining rather than replacing is deliberate:
                 if the lattice assumption turns out to be wrong, you still have the elliptic curve, and the
                 other way round.</p>
             <p>Nymbot publishes a signed capability announcement carrying its KEM key, so your app can seal
@@ -100,7 +100,9 @@
                         <tr><td>Which key is charged</td><td>Your nym</td><td>The throwaway key</td></tr>
                         <tr><td>Your conversation title</td><td>Never sent</td><td>Never sent</td></tr>
                         <tr><td>Your private key</td><td>Never leaves the device</td><td>Never leaves the device</td></tr>
-                        <tr><td>Your <a href="/docs/git/#token-safety">git token</a></td><td>Passed per request, never stored</td><td>Same</td></tr>
+                        <tr><td>Your <a href="/docs/git/#token-safety">repository</a> and <a href="/docs/connectors/#secrets">connector</a> tokens</td><td>Passed with the requests that use them, never stored readable; synced only inside your sealed settings</td><td>Same</td></tr>
+                        <tr><td>Pictures you attach</td><td>Uploaded to a public media host, signed by a throwaway key made for that picture</td><td>Same</td></tr>
+                        <tr><td>Code you <a href="/docs/server-runs/">run on a server</a></td><td>The code and any files you chose, run in a container destroyed afterward</td><td>Same, paid by the throwaway key</td></tr>
                         <tr><td>Your IP address</td><td>Seen by the worker; relays see the worker, not you, whenever it can be reached</td><td>Same &mdash; use Tor or a VPN if that matters</td></tr>
                     </tbody>
                 </table>

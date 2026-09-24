@@ -11,19 +11,23 @@ class GitRepo {
     this.paths = '',
     this.label = '',
     this.allowWrites = false,
+    this.approve = false,
     this.enabled = true,
     this.ngit,
+    this.tokenAt = 0,
   });
 
   final String id;
   String repo;
   String token;
+  int tokenAt;
   String provider;
   String host;
   String branch;
   String paths;
   String label;
   bool allowWrites;
+  bool approve;
   bool enabled;
 
   /// Where this repository announced itself, when it did (NIP-34).
@@ -52,8 +56,10 @@ class GitRepo {
         'paths': paths,
         'label': label,
         'allowWrites': allowWrites,
+        if (approve) 'approve': approve,
         'enabled': enabled,
         if (ngit != null) 'ngit': ngit!.toJson(),
+        if (tokenAt > 0) 'tokenAt': tokenAt,
       };
 
   Map<String, dynamic> toPayload() => {
@@ -63,6 +69,7 @@ class GitRepo {
         'repo': repo,
         'branch': branch,
         'allowWrites': allowWrites,
+        'approve': approve,
         'paths': paths,
         'label': display,
         if (ngit != null) 'ngit': ngit!.toJson(),
@@ -78,8 +85,10 @@ class GitRepo {
         paths: j['paths'] as String? ?? '',
         label: j['label'] as String? ?? '',
         allowWrites: j['allowWrites'] == true,
+        approve: j['approve'] == true,
         enabled: j['enabled'] != false,
         ngit: NgitOrigin.fromJson(j['ngit']),
+        tokenAt: (j['tokenAt'] as num?)?.toInt() ?? 0,
       );
 
   static String encodeList(List<GitRepo> list) =>
@@ -493,10 +502,14 @@ class Attachment {
     this.url,
     this.uploadError,
     this.uploading = false,
+    this.searched = false,
+    this.label,
   });
 
   final String id;
   final AttachmentKind kind;
+  final bool searched;
+  final String? label;
   final String name;
   final String mime;
   final int size;
@@ -518,7 +531,7 @@ class Attachment {
   final int lines;
 
   /// What to put on the chip: lines for something pasted, bytes for a file.
-  String get measure => lines > 0 ? '$lines lines' : humanSize;
+  String get measure => label ?? (lines > 0 ? '$lines lines' : humanSize);
 
   String get humanSize {
     if (size < 1024) return '$size B';
@@ -528,6 +541,7 @@ class Attachment {
 
   /// What an attachment looks like inside the message.
   String get wireBlock {
+    if (searched) return '';
     if (kind == AttachmentKind.text) {
       return '\n\n--- attached file: $name ---\n```$lang\n${text ?? ''}\n```';
     }
@@ -551,6 +565,7 @@ class Attachment {
         if (text != null) 'text': text,
         if (bytesBase64 != null) 'bytesBase64': bytesBase64,
         if (url != null) 'url': url,
+        if (searched) 'searched': true,
       };
 
   Map<String, dynamic> toPayload() => {
@@ -574,6 +589,7 @@ class Attachment {
         bytesBase64: j['bytesBase64'] as String?,
         lines: (j['lines'] as num?)?.toInt() ?? 0,
         url: j['url'] as String?,
+        searched: j['searched'] == true,
       );
 }
 
@@ -597,8 +613,11 @@ class AppSettings {
     this.hapticOnReply = true,
     this.autoSpeak = false,
     this.speechRate = 1,
+    this.voiceUri,
     this.showReasoningByDefault = false,
     this.monospaceReplies = false,
+    this.lineNumbers = false,
+    this.codeWrap = false,
     this.reduceMotion = false,
     this.webSearch = false,
     this.showCostEstimate = true,
@@ -615,6 +634,8 @@ class AppSettings {
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
+    this.nickname = '',
+    this.nicknameAt = 0,
   });
 
   ChatTheme theme;
@@ -629,8 +650,11 @@ class AppSettings {
   bool hapticOnReply;
   bool autoSpeak;
   double speechRate;
+  String? voiceUri;
   bool showReasoningByDefault;
   bool monospaceReplies;
+  bool lineNumbers;
+  bool codeWrap;
   bool reduceMotion;
   bool webSearch;
   bool showCostEstimate;
@@ -658,6 +682,8 @@ class AppSettings {
   SidebarGrouping grouping;
   String? defaultPersonaId;
   List<String> defaultRepoIds;
+  String nickname;
+  int nicknameAt;
 
   Map<String, dynamic> toJson() => {
         'theme': theme.name,
@@ -672,8 +698,11 @@ class AppSettings {
         'hapticOnReply': hapticOnReply,
         'autoSpeak': autoSpeak,
         'speechRate': speechRate,
+        'voiceUri': voiceUri,
         'showReasoningByDefault': showReasoningByDefault,
         'monospaceReplies': monospaceReplies,
+        'lineNumbers': lineNumbers,
+        'codeWrap': codeWrap,
         'reduceMotion': reduceMotion,
         'webSearch': webSearch,
         'showCostEstimate': showCostEstimate,
@@ -690,6 +719,8 @@ class AppSettings {
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
+        'nickname': nickname,
+        'nicknameAt': nicknameAt,
       };
 
   static T _enumOf<T>(List<T> values, Object? name, T fallback) {
@@ -712,8 +743,13 @@ class AppSettings {
         hapticOnReply: j['hapticOnReply'] != false,
         autoSpeak: j['autoSpeak'] == true,
         speechRate: (j['speechRate'] as num?)?.toDouble() ?? 1,
+        voiceUri: j['voiceUri'] is String && (j['voiceUri'] as String).isNotEmpty
+            ? j['voiceUri'] as String
+            : null,
         showReasoningByDefault: j['showReasoningByDefault'] == true,
         monospaceReplies: j['monospaceReplies'] == true,
+        lineNumbers: j['lineNumbers'] == true,
+        codeWrap: j['codeWrap'] == true,
         reduceMotion: j['reduceMotion'] == true,
         webSearch: j['webSearch'] == true,
         showCostEstimate: j['showCostEstimate'] != false,
@@ -731,5 +767,7 @@ class AppSettings {
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:
             (j['defaultRepoIds'] as List?)?.map((e) => '$e').toList() ?? const [],
+        nickname: j['nickname'] is String ? j['nickname'] as String : '',
+        nicknameAt: (j['nicknameAt'] as num?)?.toInt() ?? 0,
       );
 }

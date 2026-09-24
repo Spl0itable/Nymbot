@@ -126,6 +126,30 @@ class _AnonSheetState extends State<_AnonSheet> {
               'seeing, so its own records cannot link the two.'),
               style: TextStyle(fontSize: 12),
             ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                (app.current?.anon ?? false)
+                    ? t('This chat travels under the throwaway key.')
+                    : t('This chat uses your own key. The switch below applies '
+                        'to chats started after it is turned on, and to this '
+                        'one only while nothing has been sent in it.'),
+                key: const ValueKey('anon-this-chat'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (!(app.current?.anon ?? false) && !app.canFlipAnon)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton(
+                  onPressed: () async {
+                    final navigator = Navigator.of(context);
+                    await app.newAnonConversation();
+                    navigator.pop();
+                  },
+                  child: Text(t('Start an anonymous chat')),
+                ),
+              ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: app.anon.enabled,
@@ -195,6 +219,7 @@ class _AnonSheetState extends State<_AnonSheet> {
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 // ignore: deprecated_member_use
                 value: app.settings.anonAutoTopTier,
                 decoration: InputDecoration(labelText: t('Which balance')),
@@ -234,17 +259,23 @@ class _AnonSheetState extends State<_AnonSheet> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                DropdownButton<String>(
-                  value: _tier,
-                  items: [
-                    DropdownMenuItem(value: 'standard', child: Text(t('Standard'))),
-                    DropdownMenuItem(value: 'pro', child: Text(t('Pro'))),
-                  ],
-                  onChanged: (v) => setState(() => _tier = v ?? 'standard'),
+                Expanded(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _tier,
+                    items: [
+                      DropdownMenuItem(
+                          value: 'standard', child: Text(t('Standard'))),
+                      DropdownMenuItem(value: 'pro', child: Text(t('Pro'))),
+                    ],
+                    onChanged: (v) => setState(() => _tier = v ?? 'standard'),
+                  ),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(onPressed: _move, child: Text(t('Move'))),
               ],
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: FilledButton(onPressed: _move, child: Text(t('Move'))),
             ),
             const SizedBox(height: 6),
             Text(

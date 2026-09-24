@@ -6,7 +6,7 @@ await docsPage({
   file: 'pages/docs/credits.html',
   slug: 'docs/credits',
   title: 'Credits and pricing - Nymbot Knowledge Base',
-  description: 'How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, gifting and refunds.',
+  description: 'How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, server runs and research, spending caps, gifting and refunds.',
   body: `            <h1>Credits and pricing</h1>
             <p class="docs-lede">You buy credits with Bitcoin and spend them a reply at a time. No
                 subscription, no card, no minimum, and nothing that has to know your name.</p>
@@ -19,8 +19,9 @@ ${NOTE}
                 at midnight UTC.</p>
             <p>What the allowance does not cover is anything with a bill of its own: the frontier
                 <a href="/docs/models/#pro">Pro models</a>, <a href="/docs/git/">repositories</a>,
-                <a href="/docs/media/">pictures, video and speech</a>, and live web search. Those are what
-                credits are for.</p>
+                <a href="/docs/media/">pictures, video and speech</a>, live web search,
+                <a href="/docs/research/">deep research</a> and <a href="/docs/server-runs/">server runs</a>.
+                Those are what credits are for.</p>
 
             <h2 id="two-balances">Two balances</h2>
             <div class="docs-table-wrap">
@@ -36,7 +37,8 @@ ${NOTE}
             </div>
             <p>They are separate and neither converts into the other. The <strong>Standard / Pro</strong>
                 switch in the toolbar decides which one the conversation is spending;
-                <code>?balance</code> shows both, and so does the chat header.</p>
+                <code>?balance</code> shows both, and so does the credits sheet. In the web app the Buy chip
+                in the toolbar shows the one the conversation is spending.</p>
 
             <h2 id="buying">Buying over Lightning</h2>
             <p><code>?buy</code>, or the <strong>Buy</strong> button, opens a Lightning invoice with a
@@ -62,6 +64,41 @@ ${NOTE}
             <p>A <a href="/docs/git/#cost">repository task</a> can use up to six model calls for one message,
                 each billed at the pinned model's price. Only the calls actually made are charged.</p>
 
+            <h2 id="server-time">Server runs, research and Team mode</h2>
+            <p>Some work is paid from your Pro balance but priced differently from a single reply:</p>
+            <ul>
+                <li><strong><a href="/docs/server-runs/">Server runs</a></strong> are billed for server time,
+                    in steps of 10 seconds, at what the server costs plus a margin, converted to Pro credits
+                    at the current Bitcoin price. A run is charged separately from any reply that asked for
+                    it.</li>
+                <li><strong><a href="/docs/research/">Deep research</a></strong> is metered on the tokens it
+                    uses across every step.</li>
+                <li><strong><a href="/docs/team-mode/">Team mode</a></strong> is the metered total of the
+                    overseer and every worker.</li>
+            </ul>
+            <p>In all three you see the most it can cost before it starts. That maximum is held from your Pro
+                balance while the work runs, and only what was actually used is charged.</p>
+
+            <h2 id="caps">Spending caps</h2>
+            <p>A chat can have two limits, in sats, set from <strong>Spending caps</strong> in its header
+                menu:</p>
+            <ul>
+                <li><strong>A total to stop at.</strong> Once the chat has spent that much, nothing more is
+                    sent from it until you raise the cap.</li>
+                <li><strong>A reply to ask about.</strong> Before sending, the app compares the most a reply
+                    could cost with this amount, and if it could cost more, asks first: send it anyway, raise
+                    the cap, or cancel.</li>
+            </ul>
+            <p>Caps count both balances, each at its own price per credit, so they work the same whichever
+                tier answers. The chat header and the chat's statistics show how much of the cap is used, and
+                caps sync with the chat to your other devices.</p>
+            <p>A <a href="/docs/workspaces/#bots">bot</a> can carry caps too, for every chat that uses it.
+                When a chat and its bot both have them, the stricter one applies.</p>
+            <p>The server enforces the cap as well. A reply is never charged more than the cap allows, and a
+                repository task, research task or server run that would go past it stops instead. Work that
+                carries on with nobody there to ask, such as a task continuing by itself or a scheduled
+                prompt, stops rather than going over.</p>
+
             <h2 id="every-model">Every model and what it costs</h2>
             <p>The same sheet the app shows under <code>?model</code>, read from the same catalog, so you
                 can check a price without opening anything. A range is the base and what a
@@ -79,19 +116,58 @@ ${NOTE}
 
             <h2 id="gifting">Gifting and transferring</h2>
             <ul>
-                <li><code>?gift @nym#abcd</code> buys credits and puts them straight onto someone else's
-                    nym.</li>
-                <li><code>?transfer @nym#abcd</code> moves <em>your whole balance</em>, standard and Pro, to
-                    another nym. Useful when you rotate keys; irreversible once it lands.</li>
+                <li><code>?gift</code> opens <strong>Gift an amount</strong>: you give some of your credits
+                    as a link, a code and a QR code that anyone can redeem once. In Nymchat you can also tap
+                    someone's nym and choose <em>Gift Nymbot Credits</em>.</li>
+                <li><code>?transfer</code> moves <em>your whole balance</em>, standard and Pro, to another
+                    key. Useful when you rotate keys; irreversible once it lands.</li>
             </ul>
-            <p>Both stay on your real nym, because both are about a named account. Moving credits onto a
+            <p>Both are also under Identity in Settings, as <strong>Gift an amount&hellip;</strong> and
+                <strong>Move my whole balance&hellip;</strong>.</p>
+
+            <h3 id="gift-an-amount">Gift an amount</h3>
+            <ol>
+                <li>Pick <strong>Standard</strong> or <strong>Pro</strong>, then a preset or your own
+                    number. A gift is a whole number of credits: at least 10 standard credits or 1 Pro
+                    credit, and at most what you have free to give. Credits a reply is still using are not
+                    free until it finishes.</li>
+                <li>Tap <strong>Make the gift</strong> and confirm. The credits leave your balance at
+                    once.</li>
+                <li>You get a link, a code that starts with <code>GIFT-</code> and a QR code. Copy or share
+                    whichever suits, and send it only to the person it is for: whoever uses it first gets
+                    the credits.</li>
+            </ol>
+            <p>The person you send it to opens the link, or types <code>?gift</code> followed by the link
+                or the code, or taps <strong>Redeem a gift&hellip;</strong> on the Gift an amount screen.
+                The app shows what the gift is before anything moves, and <strong>Add to my
+                balance</strong> adds the credits to the key they are signed in with. Standard credits
+                arrive as standard credits and Pro credits as Pro credits.</p>
+            <ul>
+                <li>A gift can be claimed once. A second attempt, from anyone, is refused.</li>
+                <li><strong>Your gifts</strong>, on the same screen, lists what you have made and whether it
+                    was claimed. <strong>Cancel gift</strong> on one nobody has claimed puts the credits back
+                    on your balance and the link and code stop working.</li>
+                <li>A gift nobody claims within 30 days expires, and the credits go back to you by
+                    themselves.</li>
+                <li>You cannot redeem your own gift; cancel it instead.</li>
+                <li>Nymbot keeps only a fingerprint of the code, not the code itself. The app that made the
+                    gift keeps the code so <strong>Show</strong> can bring the link back up; on another
+                    device you can still see and cancel the gift, but not show its link again.</li>
+            </ul>
+
+            <h3 id="transfer">Moving your whole balance</h3>
+            <p><code>?transfer</code> takes no name typed after it in the app. It opens the transfer
+                screen, where you paste the other key as an npub or in hex and confirm before anything
+                moves.</p>
+            <p>Gifts and transfers both use your real nym's balance. Moving credits onto a
                 <a href="/docs/anonymous/">throwaway key</a> works differently and deliberately &mdash; as
                 blind vouchers, so the move cannot be used to link the two.</p>
 
             <h2 id="refunds">When nothing is charged</h2>
             <p>You are charged for an answer, not an attempt.</p>
             <ul>
-                <li>A generation that fails costs nothing.</li>
+                <li>A generation that fails costs nothing, and so does a research task that fails.</li>
+                <li>A server run that fails to start costs nothing, and one you decline never runs.</li>
                 <li>A reply that never reaches you costs nothing &mdash; ask again and the turn is
                     replayed, not regenerated. Resending the same message never buys a second answer.</li>
                 <li>Local commands &mdash; <code>?help</code>, <code>?balance</code>, <code>?buy</code>,
@@ -106,7 +182,7 @@ await docsPage({
   file: 'pages/docs/models.html',
   slug: 'docs/models',
   title: 'Models and routing - Nymbot Knowledge Base',
-  description: 'Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.',
+  description: 'Standard auto-routing, pinning a Pro model, asking one model with an @mention, the live model catalog, and reasoning and vision support.',
   body: `            <h1>Models and routing</h1>
             <p class="docs-lede">Two ways to get an answer: let Nymbot choose the model, or choose it
                 yourself.</p>
@@ -125,12 +201,24 @@ ${NOTE}
             <p><code>?model &lt;name&gt;</code>, or the model chip in the toolbar, pins every reply in the
                 conversation to one specific frontier model. <code>?model off</code> returns you to standard
                 routing.</p>
-            <p>Pin one when you want a particular model's judgement, when you are working in a
+            <p>Pin one when you want a particular model's judgment, when you are working in a
                 <a href="/docs/git/">repository</a> &mdash; which needs Pro &mdash; or when you want the same
                 model's voice across a long piece of work.</p>
             <p>Currently available: Claude Fable 5, Claude Opus 5, Claude Sonnet 5, Claude Haiku 4.5,
                 GPT-5.6 Sol, GPT-5.4 mini, Gemini 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5 and
                 MiniMax M3.</p>
+
+            <h2 id="mentions">Asking one model with @</h2>
+            <p>Start a message with <code>@</code> and a model's name, as in
+                <code>@opus is this proof right?</code>, and that model answers that one message. Typing
+                <code>@</code> opens a list of models to pick from. The chat's own model stays as it was,
+                so the next message goes back to it.</p>
+            <p>A mentioned model is a Pro model, so the answer is paid from your Pro balance, and the
+                composer says which model will answer and from which balance before you send. If your Pro
+                balance is empty, it says so and sends nothing.</p>
+            <p>Add <code>!</code> to ask without the chat's history, as either <code>!@opus</code> or
+                <code>@opus !</code>. A name that matches no model is sent as ordinary text, with a note
+                saying so.</p>
 
             <h2 id="catalog">The model catalog</h2>
             <p>The picker is generated from a live catalog rather than hard-coded, so the list you see is
@@ -166,7 +254,7 @@ ${NOTE}
                 <strong>&#128173; Reasoning</strong> section above the answer. Tap to read it; it is not
                 charged separately from the reply it belongs to.</p>
             <p>Every Claude, GPT, Gemini, Grok and Kimi Pro model can see images, as can the creative and
-                translation routes on standard. Put a picture's link in your message and ask about it
+                translation routes on standard. Attach a picture, or put its link in your message, and ask about it
                 &mdash; see <a href="/docs/chats/#attachments">sending pictures</a>.</p>`,
 });
 
@@ -187,7 +275,7 @@ ${NOTE}
                 <a href="#ngit">announces itself on Nostr</a> can be pasted in as its address instead.</p>
             <p>You do not have to type the repository's name. Paste the token and choose
                 <strong>List what this token can reach</strong>: Nymbot asks the forge what that token can
-                see and shows the answer as a list you tick. Ticking connects each one with its default
+                see and shows the answer as a list you check. Checking connects each one with its default
                 branch already filled in, and puts them all in this chat. Anything already connected is
                 shown as such rather than offered a second time. That request goes from your device
                 straight to the forge &mdash; not through the Nymbot worker &mdash; so the token does not
@@ -196,7 +284,9 @@ ${NOTE}
                 works the same.</p>
             <p>Once connected, the chip shows the repository name, and messages sent with a
                 <a href="/docs/models/#pro">Pro model</a> selected run in that repository's context.
-                <code>?git disconnect</code> removes it.</p>
+                <code>?git disconnect</code> removes it. <strong>Disconnect</strong> in the repository list
+                forgets the token but keeps the repository there, marked as having no token, so you can add
+                a new one later.</p>
 
             <h2 id="ngit">Repositories announced on Nostr</h2>
             <p>Some repositories announce themselves on Nostr rather than only on a forge, using
@@ -224,6 +314,9 @@ ${NOTE}
                 found &mdash; so "why does the retry loop give up early" is answered from your code, not
                 from a guess about code that looks like yours.</p>
             <p>It sees the branch you connected, at its current head.</p>
+            <p>With <a href="/docs/server-runs/#in-a-repository">server runs</a> turned on for the chat, it
+                can also ask to run a command against your code, such as the tests, on a Nymbot server. Every
+                run waits for you to allow it.</p>
 
             <h2 id="writes">Turning writes on</h2>
             <p><code>?git writes on</code> adds the ability to commit files, create branches and open pull
@@ -231,6 +324,11 @@ ${NOTE}
             <p>With writes on, ask for a change and you get a branch and a pull request to review rather
                 than a patch pasted into chat. Nothing is pushed to your default branch unless that is the
                 branch you connected and you asked for it.</p>
+            <p>A run's edits go in as one commit per repository, at the end of the run or when the model
+                decides a piece of work is done. If you would rather see them first, turn on <strong>Ask
+                before committing</strong> for that repository. The run then holds its changes back, the
+                reply shows them as a diff, and <strong>Apply</strong> commits them while
+                <strong>Discard</strong> throws them away. Applying costs nothing.</p>
 
             <h2 id="undo">Undoing what a run changed</h2>
             <p>A reply that wrote to your repository says what it touched: the repository, the branch, and
@@ -278,14 +376,16 @@ ${NOTE}
             <h2 id="token-safety">About that token</h2>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">About that token</span>
-                <p>The access token is stored only on your device and is wiped by a
-                    <a href="/docs/identity/#panic">panic wipe</a>. It travels to the Nymbot worker with each
-                    request, and is never stored server-side or published to relays. Scope it to the one
+                <p>The access token is kept on your devices and syncs between them inside your end-to-end
+                    encrypted settings, so the server holds only a sealed copy it cannot read. It is wiped by a
+                    <a href="/docs/identity/#panic">device wipe</a>, travels to the Nymbot worker with each
+                    request, and is never stored readable server-side or published to relays. Scope it to the one
                     repository you mean to use, and revoke it at your provider when you are done.</p>
             </div>
-            <p>Because it is device-local, it does not sync: connect the repository again on a second
-                device, with a token scoped for that device if you would rather be able to revoke them
-                separately.</p>`,
+            <p>Because it syncs, a chat that uses the repository works on every device you sign in on
+                without connecting it again. Disconnecting the repository on one device clears the token on
+                the others too. The token never enters a <a href="/docs/server-runs/#isolation">server
+                run</a>'s container.</p>`,
 });
 
 console.log('docs batch 3 written');

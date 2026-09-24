@@ -169,7 +169,28 @@
         /// Opens a wrap addressed to us. Returns { seal, rumor } or null.
         /// `recipient` is { sk, kemSk, kemPk } when the wrap was addressed to a
         /// key other than the identity's.
-        async unwrap(event, recipient) {
+        async unwrap(event, recipient, options) {
+            const opened = await this.openWrap(event, recipient);
+            const from = options && options.from;
+            if (!opened || !from) return opened;
+            return this.sealedBy(opened, from) ? opened : null;
+        },
+
+        sealedBy(opened, author) {
+            const T = NT();
+            const seal = opened && opened.seal;
+            const rumor = opened && opened.rumor;
+            if (!seal || !rumor || typeof seal !== 'object' || typeof rumor !== 'object') return false;
+            if (seal.kind !== 13 || seal.pubkey !== author || rumor.pubkey !== seal.pubkey) return false;
+            try {
+                if (T.getEventHash(seal) !== seal.id) return false;
+                return !!T.verifyEvent(seal);
+            } catch (_) {
+                return false;
+            }
+        },
+
+        async openWrap(event, recipient) {
             const T = NT();
             const NCx = NC();
             const selves = recipient

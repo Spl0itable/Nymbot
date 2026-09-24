@@ -6,7 +6,7 @@ await docsPage({
   file: 'pages/docs.html',
   slug: 'docs',
   title: 'Nymbot Knowledge Base',
-  description: 'How Nymbot works: an anonymous AI chat with no account \u2014 conversations, credits, models, the git integration, anonymous mode and the encryption underneath.',
+  description: 'How Nymbot works: a private AI chat with no account \u2014 conversations, credits, models, the git integration, anonymous mode and the encryption underneath.',
   body: `            <h1>Nymbot knowledge base</h1>
             <p class="docs-lede">Nymbot is a private AI assistant. Every message is end-to-end encrypted,
                 every reply is paid for in Bitcoin, and there is no account to make &mdash; a key on your
@@ -52,8 +52,13 @@ ${NOTE}
                 are most likely to want are <a href="/docs/credits/">Credits and pricing</a>,
                 <a href="/docs/models/">Models and routing</a> and the
                 <a href="/docs/commands/">command reference</a>.</p>
+            <p>For longer work there is <a href="/docs/research/">deep research</a>,
+                <a href="/docs/connectors/">connectors</a> to other services, and
+                <a href="/docs/team-mode/">Team mode</a>. For code, you can run it
+                <a href="/docs/sandbox/">on your device</a> or <a href="/docs/server-runs/">on a server</a>,
+                and for files there is <a href="/docs/documents/">PDFs and long documents</a>.</p>
             <p>Every page also exists as markdown &mdash; add <code>.md</code> to its address &mdash; and the
-                whole site is summarised for agents at <a href="/llms.txt">/llms.txt</a>.</p>
+                whole site is summarized for agents at <a href="/llms.txt">/llms.txt</a>.</p>
 
             <h2 id="the-short-version">The short version</h2>
             <div class="docs-table-wrap">
@@ -67,6 +72,10 @@ ${NOTE}
                         <tr><td>Top up</td><td><code>?buy</code>, or the <strong>Buy</strong> button in the toolbar.</td></tr>
                         <tr><td>Use a specific frontier model</td><td><code>?model</code>, or the model chip in the toolbar.</td></tr>
                         <tr><td>Work in your code</td><td><code>?git</code> &mdash; see <a href="/docs/git/">the repository page</a>.</td></tr>
+                        <tr><td>Run code from a reply</td><td><strong>Run</strong> on the code block, or <strong>Run on server</strong> &mdash; see <a href="/docs/server-runs/">server runs</a>.</td></tr>
+                        <tr><td>Research something in depth</td><td><code>?research</code>, or the <strong>Research</strong> chip &mdash; see <a href="/docs/research/">deep research</a>.</td></tr>
+                        <tr><td>Share a conversation</td><td><strong>Share a link</strong> in the chat's menu &mdash; see <a href="/docs/chats/#sharing">sharing a chat</a>.</td></tr>
+                        <tr><td>Limit what a chat can spend</td><td><strong>Spending caps</strong> in the chat's menu &mdash; see <a href="/docs/credits/#caps">spending caps</a>.</td></tr>
                         <tr><td>Make a picture</td><td><code>?image a lighthouse at dusk</code></td></tr>
                         <tr><td>Hide your nym from the server</td><td><code>?anon</code> &mdash; see <a href="/docs/anonymous/">anonymous mode</a>.</td></tr>
                         <tr><td>Check what you have left</td><td><code>?balance</code></td></tr>
@@ -169,7 +178,7 @@ ${NOTE}
             <h2 id="mobile">Android and iOS</h2>
             <p>The mobile app is the same product built natively, so the keystore, the share sheet and the
                 system theme behave the way the platform expects. It talks to exactly the same service, and a
-                conversation started on a phone is readable on the web and the other way round.</p>
+                conversation started on a phone is readable on the web and the other way around.</p>
             <div class="docs-note">
                 <span class="docs-note-label">Not in the stores yet</span>
                 <p>The Android and iOS app is in the
@@ -182,13 +191,22 @@ ${NOTE}
                 long Pro reply finishes when you come back to the app rather than while it is buried.</p>
 
             <h2 id="one-account">One account everywhere</h2>
-            <p>There is nothing to sync, because there is nothing per-device to sync. Your key is the
-                account; point a second device at the same <code>nsec</code> and it is the same account,
-                with the same balance and the same conversations restored from the relays.</p>
-            <p>What does not travel is anything deliberately device-local: the
-                <a href="/docs/git/#token-safety">git access token</a>, and whatever unlock factor you chose
-                for <a href="/docs/identity/#encryption-at-rest">identity encryption</a>. Both are set up per
-                device on purpose.</p>
+            <p>Your key is the account. Point a second device at the same <code>nsec</code> and it is the
+                same account, with the same balance and the same conversations restored from the relays.</p>
+            <p>Your settings come along too, in a record end-to-end encrypted with your key: workspaces,
+                bots, memory and the rest, including your repository and connector tokens, so a chat that
+                uses them works on the new device right away. See
+                <a href="/docs/identity/#synced-settings">what syncs between your devices</a>.</p>
+            <p>What does not travel is whatever unlock method you chose for
+                <a href="/docs/identity/#encryption-at-rest">identity encryption</a>. That is set up per device
+                on purpose.</p>
+
+            <h2 id="notices">Announcements</h2>
+            <p>Now and then the app shows a short notice at the top of the chat: a new model, a change worth
+                knowing about, or something going wrong. It can carry a link to read more, and a notice about
+                a new model can have a <strong>Try it</strong> button.</p>
+            <p>Dismiss one and it stays dismissed. To stop seeing them altogether, turn off
+                <strong>Show announcements</strong> in Settings.</p>
 
             <h2 id="nymchat">Nymbot inside Nymchat</h2>
             <p><a href="https://nymchat.app">Nymchat</a> is a full messenger &mdash; public channels, group

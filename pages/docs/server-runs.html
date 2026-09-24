@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Running code on a server - Nymbot Knowledge Base</title>
+    <meta name="description" content="Server runs in Nymbot: run a code block or a repository command in a fresh, isolated container, priced up front and billed per 10 seconds in Pro credits.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Running code on a server - Nymbot Knowledge Base">
+    <meta property="og:description" content="Server runs in Nymbot: run a code block or a repository command in a fresh, isolated container, priced up front and billed per 10 seconds in Pro credits.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/server-runs/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Running code on a server - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Server runs in Nymbot: run a code block or a repository command in a fresh, isolated container, priced up front and billed per 10 seconds in Pro credits.">
+    <link rel="canonical" href="https://nymbot.ai/docs/server-runs/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Running code on a server</h1>
+            <p class="docs-lede">When code needs more than your device can give it &mdash; another
+                language, packages from the internet, more time &mdash; Nymbot can run it on a server of its
+                own, in a container made for that one run.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-it-is">What a server run is</h2>
+            <p>A server run starts a fresh container, puts your code in it, runs it, sends back what it
+                printed and destroys the container. You see the most it can cost before it starts, and you
+                pay from your <a href="/docs/credits/#two-balances">Pro balance</a> for the time it actually
+                ran.</p>
+            <p>There are two ways in: <strong>Run on server</strong> on a code block, and server runs that
+                Nymbot asks for while it works in a
+                <a href="#in-a-repository">repository</a>.</p>
+            <p>For quick Python or JavaScript that needs nothing from the internet, the free
+                <a href="/docs/sandbox/">sandbox on your device</a> is usually enough.</p>
+
+            <h2 id="code-blocks">Running a code block</h2>
+            <p>Python, JavaScript, TypeScript, shell, Go, Rust, Java and Dart code blocks in a reply have a
+                <strong>Run on server</strong> button, whenever server runs are available. It opens a sheet
+                showing:</p>
+            <ul>
+                <li>the <a href="#images">image</a> the code will run on,</li>
+                <li>a time limit to choose: 1, 5 or 15 minutes,</li>
+                <li>the most the run can cost, in Pro credits, for that time limit,</li>
+                <li>and, if the chat has files attached, a box to include them. They go only if you check
+                    it.</li>
+            </ul>
+            <p>Press <strong>Run</strong> and the output streams in under the code block as it arrives:
+                what it printed, the exit code, how long it ran, any files it wrote (each with a
+                <strong>Save</strong> button), and what it was charged.</p>
+            <p><strong>Stop</strong> ends the run at any point. The server is shut down right away and you
+                pay only for the time it ran. Stopped before the server started, it costs nothing.</p>
+            <p>In an <a href="/docs/anonymous/">Anonymous Mode</a> chat the run is paid from the throwaway
+                key's Pro credits, and attached files are never included.</p>
+
+            <h2 id="images">Languages and images</h2>
+            <p>Each language runs on an image, a ready-made system with the tools that language needs.
+                Bigger images run on bigger servers and cost more per minute.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead><tr><th>Image</th><th>Used for</th><th>What it contains</th><th>Server</th></tr></thead>
+                    <tbody>
+                        <tr><td>Python</td><td>Python</td><td>Python 3.12 with pip, venv, build tools and git; numpy, pandas and pytest already installed</td><td>0.5 CPU, 4 GB memory</td></tr>
+                        <tr><td>Node.js</td><td>JavaScript, TypeScript</td><td>Node.js 22 with npm, pnpm and yarn, plus Python 3, make and a C++ compiler</td><td>0.5 CPU, 4 GB memory</td></tr>
+                        <tr><td>Polyglot</td><td>Shell, Go, Rust, Java</td><td>bash, C and C++ build tools, Python 3, Node.js, Go, Rust with cargo, and Java 17</td><td>1 CPU, 6 GB memory</td></tr>
+                        <tr><td>Flutter</td><td>Dart</td><td>Flutter 3.32 and Dart</td><td>2 CPUs, 8 GB memory</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h2 id="price">What it costs</h2>
+            <p>Server time is billed in steps of 10 seconds, from asking for the server to shutting it down,
+                with 10 seconds as the least a run can cost. The rate is what the server of that size costs
+                Nymbot, plus a margin, converted to Pro credits at the current Bitcoin price.</p>
+            <ul>
+                <li><strong>The price is shown up front, as a maximum.</strong> It is the whole time limit at
+                    that rate. You are never charged more, and a run that finishes early costs less.</li>
+                <li><strong>The maximum is held while the run is going.</strong> When it ends, the actual
+                    charge is taken and the rest is released.</li>
+                <li><strong>A run that fails to start is free.</strong></li>
+                <li><strong>Spending caps apply.</strong> A run that could go past a chat's
+                    <a href="/docs/credits/#caps">spending cap</a> asks first, the same way a reply does.</li>
+            </ul>
+            <p>Because the price follows the Bitcoin price, it can move between the moment you see it and the
+                moment you press Run. If it went up, nothing runs: the sheet opens again with the new price
+                for you to check.</p>
+
+            <h2 id="in-a-repository">Server runs in a repository</h2>
+            <p>In a chat with a <a href="/docs/git/">repository</a> connected, the <strong>Server
+                runs</strong> chip lets Nymbot ask to run commands against your code, such as installing
+                the dependencies and running the tests after a change. It is off until you turn it on, per
+                chat.</p>
+            <p>Each time the model wants to run something, the reply pauses and shows a card with the image,
+                the full command, the time limit and the most it can cost, plus which repository when the
+                chat has several. Nothing runs until you answer:</p>
+            <ul>
+                <li><strong>Allow once</strong> runs that one command. It runs against the repository with the
+                    edits the reply has made so far, and the model gets back the exit code, the end of the
+                    output and the list of files the command changed. Then the reply carries on.</li>
+                <li><strong>Decline</strong> runs nothing and costs nothing. The reply carries on without
+                    it.</li>
+            </ul>
+            <p>Every run asks. Each one is charged separately from the reply, and the reply lists the runs it
+                made and what each cost. If a run could go past the chat's
+                <a href="/docs/credits/#caps">spending cap</a>, it is refused before you are asked.</p>
+            <p>Files a command changes on the server stay there and are thrown away with the container. They
+                are not written to your repository. Changes to the repository come only from the reply's own
+                edits.</p>
+
+            <h2 id="isolation">What is isolated</h2>
+            <ul>
+                <li><strong>A fresh container for every run.</strong> Nothing is shared with another run or
+                    another person, and the container is destroyed when the run ends, whether it succeeded or
+                    failed.</li>
+                <li><strong>No internet except package registries.</strong> The container can download from
+                    the places packages come from: PyPI, npm and yarn, pub.dev and Google's storage for
+                    Flutter and Dart, the Go module proxy, crates.io, Maven Central, and GitHub for git
+                    dependencies and release downloads. It can only download. It cannot send anything to them
+                    or reach any other address.</li>
+                <li><strong>Only what you chose goes in.</strong> The code, the files you included, or the
+                    repository's files. Your keys, your git token and your chats never enter the
+                    container.</li>
+                <li><strong>Output is treated as untrusted.</strong> In a repository, what a run prints is
+                    shown to the model marked as outside data, and it is told never to follow instructions
+                    inside it.</li>
+            </ul>
+
+            <h2 id="limits">Limits</h2>
+            <ul>
+                <li>One server run at a time for each key. Starting a second one while the first is still
+                    going is refused.</li>
+                <li>Time limits of 1, 5 or 15 minutes for a code block. A repository run can ask for up to
+                    15 minutes, or 20 on the Flutter image.</li>
+                <li>Up to 1 MB of code, and up to 200 attached files totaling 20 MB.</li>
+                <li>A repository of up to 60 MB, packed.</li>
+                <li>Up to 256 KB of output. Anything past that is dropped, and the run says so.</li>
+                <li>Up to 200 files, 8 MB in all, handed back to save.</li>
+            </ul>
+            <p>Server runs can be switched off for maintenance, as a whole or one image at a time. When they
+                are off, the <strong>Run on server</strong> button and the chip are not shown.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

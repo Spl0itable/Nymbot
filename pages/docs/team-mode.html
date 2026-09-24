@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Team mode - Nymbot Knowledge Base</title>
+    <meta name="description" content="Team mode in Nymbot: your pinned Pro model oversees two to four worker models on deep research and repository tasks, billed as one metered total.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Team mode - Nymbot Knowledge Base">
+    <meta property="og:description" content="Team mode in Nymbot: your pinned Pro model oversees two to four worker models on deep research and repository tasks, billed as one metered total.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/team-mode/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Team mode - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Team mode in Nymbot: your pinned Pro model oversees two to four worker models on deep research and repository tasks, billed as one metered total.">
+    <link rel="canonical" href="https://nymbot.ai/docs/team-mode/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Team mode</h1>
+            <p class="docs-lede">For a big research question or a large change to a repository, Nymbot can
+                split the work between several models at once, with your own model in charge.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-it-is">What Team mode is</h2>
+            <p>In Team mode, your pinned <a href="/docs/models/#pro">Pro model</a> becomes the
+                <em>overseer</em>. It splits the task, hands the parts to two to four <em>workers</em>, and
+                puts their work together. The workers all run on one model that you choose, which can be a
+                cheaper one than the overseer.</p>
+            <p>Team mode is for two kinds of work only: <a href="/docs/research/">deep research</a> and
+                tasks in a <a href="/docs/git/">connected repository</a>. A message that is neither is not
+                sent; turn Research on or connect a repository, or send it without Team mode.</p>
+            <p>Without a Pro model pinned to act as the overseer, Team mode is refused and nothing is
+                sent.</p>
+
+            <p>Team mode is set per chat. With a Pro model pinned, a <strong>Team</strong> chip appears in
+                the chat's toolbar whenever the next message would be deep research (the
+                <strong>Research</strong> chip is on) or a repository task (a repository is connected to the
+                chat). It is off until you set it up. Tap it to open the <strong>Team mode</strong> sheet:</p>
+            <ul>
+                <li><strong>Number of workers</strong>: 2, 3 or 4. The default is 3.</li>
+                <li><strong>Worker model</strong>: the model every worker runs on. The app suggests a cheaper,
+                    faster one, the lowest-priced metered model from the same maker as your pinned model when
+                    there is one. Tap <strong>Change</strong> to pick another from the model list.</li>
+                <li>A price line that updates as you change either one: <strong>Up to N Pro credits ·
+                    usually about M</strong>. The first number is the most the message can cost, and the
+                    second is what a team like this usually costs.</li>
+            </ul>
+            <p>Tap <strong>Save</strong> and the chip lights up and reads <strong>Team of 3</strong> (or
+                however many workers you chose). From then on, research messages and repository tasks in
+                that chat are sent to a team. Open the sheet again and tap <strong>Turn off</strong> to go
+                back to a single model. If the chat has connectors or server runs on, the sheet says the
+                overseer can use them and that each call waits for you to allow it.</p>
+
+            <h2 id="research">A team on deep research</h2>
+            <p>The overseer breaks the question into sub-questions and gives each worker its own share. The
+                workers research them in parallel, each running a few searches of its own and reading what
+                they find.</p>
+            <p>The overseer then reconciles what they found and checks where they contradict each other. If
+                one sub-question came back weak, it can send that one back to be researched again, once.
+                Then it writes the report itself, with sources, as in an ordinary
+                <a href="/docs/research/#the-report">research report</a>.</p>
+
+            <h2 id="repositories">A team in a repository</h2>
+            <p>The overseer first looks around the repository, reading without changing anything. It then
+                splits the change into parts, each with its own files, so no two workers touch the same file.
+                A worker can only list, read and search the repository and edit or write its own files; it
+                cannot commit, open branches or pull requests, or use anything else.</p>
+            <p>When the workers are done, the overseer reviews the combined change. If one part is not right,
+                it can send that part back to be redone, once. A worker that fails has its edits rolled
+                back.</p>
+            <p>From there it is the same as any repository task: the overseer commits the usual way, or the
+                changes are held for you to review first if the repository
+                <a href="/docs/git/#writes">asks before committing</a>.</p>
+
+            <h2 id="approvals">Connectors and server runs</h2>
+            <p>The overseer can use the chat's <a href="/docs/connectors/">connectors</a> and, in a
+                repository task with <a href="/docs/server-runs/">server runs</a> on, run commands on a Nymbot
+                server. It can do this while it plans, while it reviews the workers' change, and before it
+                splits a research question. Workers never get connectors or server runs.</p>
+            <p>Every connector call and every server run the overseer wants stops the team and shows the
+                usual approval card in the reply, marked as coming from the team lead. This happens every
+                time, even for a connector tool you set to <strong>Always allow</strong> in other chats, so
+                that card has no <strong>Always allow this tool</strong> button. Allow it and the team
+                carries on from exactly where it stopped; deny or decline it and the overseer is told and
+                carries on without it. Either way, the workers' finished work is kept, nothing is run twice,
+                and you are not charged again for what already ran.</p>
+            <p>A server run is charged on its own, for the time it actually runs, on top of the team's
+                cost. When a chat has a spending cap, a run is only offered if it fits in what the cap leaves
+                after the team's maximum.</p>
+            <p>Letting the overseer use tools adds a few of its steps to the maximum shown on the Team mode
+                sheet.</p>
+
+            <h2 id="cost">What it costs</h2>
+            <p>A team costs the metered total of every model involved: the overseer plus every worker, each
+                metered at its own model's <a href="/docs/credits/#what-a-reply-costs">Pro price</a>. Before you send, the
+                app shows the most the task can cost: the overseer's budget plus each worker's. That maximum
+                is held from your Pro balance, you are charged only for what was actually used, and the rest
+                is released.</p>
+            <ul>
+                <li>If your Pro balance cannot cover the maximum, nothing is sent.</li>
+                <li>If the maximum is more than a chat's <a href="/docs/credits/#caps">spending cap</a>
+                    allows for one reply, nothing is sent and nothing is charged.</li>
+                <li>Each worker has its own budget. One that reaches it stops and hands back what it has so
+                    far.</li>
+                <li>A worker that fails is not charged, and a team task that fails is not charged at
+                    all.</li>
+                <li>A long task can pause and carry on in another step, within the same maximum.</li>
+            </ul>
+            <p>If a chat has a spending cap, the app checks the team's maximum against it before sending, and
+                asks first if it could go over, just as it does for any other message. When a team is
+                refused, the chat says <strong>Team mode did not start</strong> and why, gives your message
+                back, and nothing is charged.</p>
+
+            <h2 id="progress">Watching the team work</h2>
+            <p>While a team works, the reply shows a lane for the overseer, labeled <strong>Lead</strong>, and
+                one for each worker, labeled <strong>Worker 1</strong>, <strong>Worker 2</strong> and so on,
+                so you can follow what each of them is doing: searching, reading, editing, finished, stopped
+                at its own budget, or failed.</p>
+            <p>If the model provider starts limiting how fast the team can go, the remaining workers run one
+                at a time instead of all at once, which takes longer.</p>
+            <p>Under the finished reply, a short <strong>Team</strong> summary lists the Lead and each worker,
+                with the model it ran on, the Pro credits it used, and whether it was <strong>done</strong>,
+                <strong>stopped</strong> or <strong>failed</strong>. It also says when the workers had to run
+                one at a time. The price on the reply is the total for the whole team; tap it to see the
+                breakdown, with a <strong>Team lead</strong> row and one row for each worker.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

@@ -8,6 +8,18 @@
 
     const MAX_AGE_MS = 6 * 3600 * 1000;
     const SAFE_IMAGE = /^https:\/\/[^\s"'<>]+$/i;
+    const NICKNAME_MAX = 32;
+    const INVISIBLE = /[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFEFF\uFFA0\uFFF9-\uFFFB\u{E0000}-\u{E007F}]/gu;
+
+    function cleanNickname(value) {
+        const text = String(value == null ? '' : value)
+            .normalize('NFC')
+            .replace(/[\t\n\v\f\r\u0085\u2028\u2029]/g, ' ')
+            .replace(INVISIBLE, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return Array.from(text).slice(0, NICKNAME_MAX).join('').trim();
+    }
 
     function cached(pubkey) {
         const all = Store.read('profiles', {}) || {};
@@ -89,6 +101,8 @@
     }
 
     const Profile = {
+        NICKNAME_MAX,
+        cleanNickname,
         onChange: null,
         _inflight: new Map(),
 
@@ -99,11 +113,9 @@
             const key = String(pubkey || '');
             const hit = cached(key);
             const fallbackName = Avatar.nymName(key);
-            const suffix = Avatar.suffix(key);
             return {
                 pubkey: key,
                 name: (hit && hit.name) || fallbackName,
-                suffix,
                 nip05: (hit && hit.nip05) || '',
                 about: (hit && hit.about) || '',
                 avatar: (hit && hit.picture) || Avatar.identicon(key),
@@ -137,7 +149,7 @@
                         return hit;
                     }
                     const newest = events
-                        .filter(e => e && e.pubkey === key)
+                        .filter(e => authentic(e, key))
                         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
                     profile = newest ? readMetadata(newest) : null;
                 }

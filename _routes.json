@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "include": ["/api", "/api/*", "/pyodide/*", "/app/sandbox", "/app/sandbox.html", "/app/js/sandbox-worker.js"],
+  "exclude": []
+}

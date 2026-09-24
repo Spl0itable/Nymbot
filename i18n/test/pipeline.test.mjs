@@ -88,7 +88,7 @@ ok(pathFor('en', 'terms') === '/terms/' && pathFor('es', 'terms') === '/es/terms
 {
   const hostile = '" onload="alert(1)" x="';
   const withQuote = applyTranslations(html, (v) =>
-    v.startsWith('Anonymous AI chat with no account') ? hostile : v);
+    v.startsWith('Private AI chat with no account') ? hostile : v);
   ok(!withQuote.includes('onload="alert(1)"'),
      'a quote in a translated meta description cannot break out of the attribute');
   ok(withQuote.includes('&quot; onload=&quot;alert(1)&quot;'), 'it is escaped instead');

@@ -446,3 +446,89 @@ Future<
   }
   return null;
 }
+
+Future<NostrEvent> sealAndWrap({
+  required UnsignedEvent rumor,
+  required EventSigner signer,
+  required String recipientPubkey,
+  Uint8List? recipientKemPublicKey,
+  int? expiration,
+}) async {
+  final senderPub = signer.pubkey;
+  final rumorJson = jsonEncode(_buildRumorMap(rumor, senderPub));
+  final kem = recipientKemPublicKey;
+  final inner = await signer.nip44Encrypt(recipientPubkey, rumorJson);
+  final seal = await signer.sign(
+    UnsignedEvent(
+      pubkey: senderPub,
+      createdAt: randomNow(),
+      kind: 13,
+      tags: const [],
+      content: kem == null
+          ? inner
+          : await pq.pq2Seal(inner, senderPub, recipientPubkey, kem),
+    ),
+  );
+
+  final ephSk = generatePrivateKey();
+  final tags = <List<String>>[
+    ['p', recipientPubkey],
+    if (expiration != null && expiration != 0) ['expiration', '$expiration'],
+  ];
+  final sealJson = jsonEncode(seal.toJson());
+  return finalizeEvent(
+    UnsignedEvent(
+      pubkey: getPublicKeyHex(ephSk),
+      createdAt: randomNow(),
+      kind: 1059,
+      tags: tags,
+      content: kem == null
+          ? nip44.encrypt(
+              sealJson, nip44.getConversationKey(ephSk, recipientPubkey))
+          : await pq.pq2Encrypt(sealJson, ephSk, recipientPubkey, kem),
+    ),
+    ephSk,
+  );
+}
+
+typedef KemPair = ({Uint8List kemSk, Uint8List kemPk});
+
+Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isPq})?> unwrapWith(
+    NostrEvent wrap, EventSigner signer, List<KemPair> kems) async {
+  if (signer is LocalSigner) {
+    final opened = await unwrapGiftWrap(wrap, [
+      for (final k in kems)
+        (sk: signer.privkey, bitchat: false, kemSk: k.kemSk, kemPk: k.kemPk),
+      if (kems.isEmpty) classicalCandidate(signer.privkey),
+    ]);
+    return opened == null
+        ? null
+        : (seal: opened.seal, rumor: opened.rumor, isPq: opened.isPq);
+  }
+  Future<String> open(String content, String senderPk) async {
+    if (pq.isPq2Payload(content)) {
+      String? inner;
+      for (final k in kems) {
+        try {
+          inner = await pq.pq2Open(
+              content, senderPk, signer.pubkey, k.kemSk, k.kemPk);
+          break;
+        } catch (_) {}
+      }
+      if (inner == null) throw StateError('no kem key opened it');
+      return signer.nip44Decrypt(senderPk, inner);
+    }
+    if (pq.isPqPayload(content)) throw StateError('pq1 needs a local key');
+    return signer.nip44Decrypt(senderPk, content);
+  }
+
+  try {
+    final seal = NostrEvent.fromJson(
+        jsonDecode(await open(wrap.content, wrap.pubkey)) as Map<String, dynamic>);
+    final rumor =
+        jsonDecode(await open(seal.content, seal.pubkey)) as Map<String, dynamic>;
+    return (seal: seal, rumor: rumor, isPq: pq.isPq2Payload(wrap.content));
+  } catch (_) {
+    return null;
+  }
+}

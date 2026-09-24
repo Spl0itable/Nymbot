@@ -29,6 +29,8 @@ class _BotsSheetState extends State<_BotsSheet> {
   final _tagline = TextEditingController();
   final _body = TextEditingController();
   final _starters = TextEditingController();
+  final _capTotal = TextEditingController();
+  final _capReply = TextEditingController();
   String? _editingId;
   String _icon = 'robot';
   String _status = '';
@@ -47,6 +49,8 @@ class _BotsSheetState extends State<_BotsSheet> {
     _tagline.dispose();
     _body.dispose();
     _starters.dispose();
+    _capTotal.dispose();
+    _capReply.dispose();
     super.dispose();
   }
 
@@ -69,6 +73,8 @@ class _BotsSheetState extends State<_BotsSheet> {
         _tagline.clear();
         _body.clear();
         _starters.clear();
+        _capTotal.clear();
+        _capReply.clear();
       });
 
   void _edit(Bot bot) => setState(() {
@@ -80,6 +86,8 @@ class _BotsSheetState extends State<_BotsSheet> {
         _tagline.text = bot.tagline;
         _body.text = bot.instructions;
         _starters.text = bot.starters.join('\n');
+        _capTotal.text = bot.capSats == null ? '' : '${bot.capSats}';
+        _capReply.text = bot.askAboveSats == null ? '' : '${bot.askAboveSats}';
       });
 
   Future<void> _save() async {
@@ -87,6 +95,12 @@ class _BotsSheetState extends State<_BotsSheet> {
     final name = _name.text.trim();
     if (name.isEmpty) {
       setState(() => _status = t('Give the bot a name.'));
+      return;
+    }
+    final capTotal = _capOf(_capTotal);
+    final capReply = _capOf(_capReply);
+    if (!capTotal.$1 || !capReply.$1) {
+      setState(() => _status = t('Caps are whole numbers of sats.'));
       return;
     }
     final existing = app.bots.where((b) => b.id == _editingId);
@@ -108,9 +122,19 @@ class _BotsSheetState extends State<_BotsSheet> {
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();
+    bot.capSats = capTotal.$2;
+    bot.askAboveSats = capReply.$2;
     await app.saveBot(bot);
     if (!mounted) return;
     _reset();
+  }
+
+  (bool, int?) _capOf(TextEditingController c) {
+    final raw = c.text.trim();
+    if (raw.isEmpty) return (true, null);
+    final n = num.tryParse(raw);
+    if (n == null || n < 0) return (false, null);
+    return (true, n > 0 ? n.floor() : null);
   }
 
   Future<void> _use(Bot? bot) async {
@@ -283,6 +307,26 @@ class _BotsSheetState extends State<_BotsSheet> {
                 labelText: t('Openers, one per line'),
               ),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('botCapTotal'),
+              controller: _capTotal,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: t('Stop each chat with this bot at (sats)'),
+                hintText: t('No cap'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('botCapReply'),
+              controller: _capReply,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: t('Ask me before a reply that could cost more than (sats)'),
+                hintText: t('No cap'),
+              ),
+            ),
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(_status,
@@ -299,8 +343,12 @@ class _BotsSheetState extends State<_BotsSheet> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                TextButton(
-                    onPressed: _reset, child: Text(t('Clear the form'))),
+                Flexible(
+                  child: TextButton(
+                    onPressed: _reset,
+                    child: Text(t('Clear the form')),
+                  ),
+                ),
               ],
             ),
           ],

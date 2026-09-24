@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Credits and pricing - Nymbot Knowledge Base</title>
-    <meta name="description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <meta name="description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, server runs and research, spending caps, gifting and refunds.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
@@ -13,7 +13,7 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Credits and pricing - Nymbot Knowledge Base">
-    <meta property="og:description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <meta property="og:description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, server runs and research, spending caps, gifting and refunds.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/credits/">
     <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
     <meta name="twitter:title" content="Credits and pricing - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, gifting and refunds.">
+    <meta name="twitter:description" content="How Nymbot credits work: the free daily allowance, two balances, buying over Lightning, what a reply costs, server runs and research, spending caps, gifting and refunds.">
     <link rel="canonical" href="https://nymbot.ai/docs/credits/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -58,8 +58,9 @@
                 at midnight UTC.</p>
             <p>What the allowance does not cover is anything with a bill of its own: the frontier
                 <a href="/docs/models/#pro">Pro models</a>, <a href="/docs/git/">repositories</a>,
-                <a href="/docs/media/">pictures, video and speech</a>, and live web search. Those are what
-                credits are for.</p>
+                <a href="/docs/media/">pictures, video and speech</a>, live web search,
+                <a href="/docs/research/">deep research</a> and <a href="/docs/server-runs/">server runs</a>.
+                Those are what credits are for.</p>
 
             <h2 id="two-balances">Two balances</h2>
             <div class="docs-table-wrap">
@@ -75,7 +76,8 @@
             </div>
             <p>They are separate and neither converts into the other. The <strong>Standard / Pro</strong>
                 switch in the toolbar decides which one the conversation is spending;
-                <code>?balance</code> shows both, and so does the chat header.</p>
+                <code>?balance</code> shows both, and so does the credits sheet. In the web app the Buy chip
+                in the toolbar shows the one the conversation is spending.</p>
             <figure class="docs-shot">
                 <img src="/images/docs/wide-buy.webp" width="1280" height="800" loading="lazy" alt="The Buy credits modal showing separate Standard and Pro balances above a tier switch.">
                 <figcaption>The two balances, and the switch that decides which one a purchase adds to.</figcaption>
@@ -122,6 +124,41 @@
             <p>A <a href="/docs/git/#cost">repository task</a> can use up to six model calls for one message,
                 each billed at the pinned model's price. Only the calls actually made are charged.</p>
 
+            <h2 id="server-time">Server runs, research and Team mode</h2>
+            <p>Some work is paid from your Pro balance but priced differently from a single reply:</p>
+            <ul>
+                <li><strong><a href="/docs/server-runs/">Server runs</a></strong> are billed for server time,
+                    in steps of 10 seconds, at what the server costs plus a margin, converted to Pro credits
+                    at the current Bitcoin price. A run is charged separately from any reply that asked for
+                    it.</li>
+                <li><strong><a href="/docs/research/">Deep research</a></strong> is metered on the tokens it
+                    uses across every step.</li>
+                <li><strong><a href="/docs/team-mode/">Team mode</a></strong> is the metered total of the
+                    overseer and every worker.</li>
+            </ul>
+            <p>In all three you see the most it can cost before it starts. That maximum is held from your Pro
+                balance while the work runs, and only what was actually used is charged.</p>
+
+            <h2 id="caps">Spending caps</h2>
+            <p>A chat can have two limits, in sats, set from <strong>Spending caps</strong> in its header
+                menu:</p>
+            <ul>
+                <li><strong>A total to stop at.</strong> Once the chat has spent that much, nothing more is
+                    sent from it until you raise the cap.</li>
+                <li><strong>A reply to ask about.</strong> Before sending, the app compares the most a reply
+                    could cost with this amount, and if it could cost more, asks first: send it anyway, raise
+                    the cap, or cancel.</li>
+            </ul>
+            <p>Caps count both balances, each at its own price per credit, so they work the same whichever
+                tier answers. The chat header and the chat's statistics show how much of the cap is used, and
+                caps sync with the chat to your other devices.</p>
+            <p>A <a href="/docs/workspaces/#bots">bot</a> can carry caps too, for every chat that uses it.
+                When a chat and its bot both have them, the stricter one applies.</p>
+            <p>The server enforces the cap as well. A reply is never charged more than the cap allows, and a
+                repository task, research task or server run that would go past it stops instead. Work that
+                carries on with nobody there to ask, such as a task continuing by itself or a scheduled
+                prompt, stops rather than going over.</p>
+
             <h2 id="every-model">Every model and what it costs</h2>
             <p>The same sheet the app shows under <code>?model</code>, read from the same catalog, so you
                 can check a price without opening anything. A range runs from a short answer to a long one at
@@ -140,19 +177,58 @@
 
             <h2 id="gifting">Gifting and transferring</h2>
             <ul>
-                <li><code>?gift @nym#abcd</code> buys credits and puts them straight onto someone else's
-                    nym.</li>
-                <li><code>?transfer @nym#abcd</code> moves <em>your whole balance</em>, standard and Pro, to
-                    another nym. Useful when you rotate keys; irreversible once it lands.</li>
+                <li><code>?gift</code> opens <strong>Gift an amount</strong>: you give some of your credits
+                    as a link, a code and a QR code that anyone can redeem once. In Nymchat you can also tap
+                    someone's nym and choose <em>Gift Nymbot Credits</em>.</li>
+                <li><code>?transfer</code> moves <em>your whole balance</em>, standard and Pro, to another
+                    key. Useful when you rotate keys; irreversible once it lands.</li>
             </ul>
-            <p>Both stay on your real nym, because both are about a named account. Moving credits onto a
+            <p>Both are also under Identity in Settings, as <strong>Gift an amount&hellip;</strong> and
+                <strong>Move my whole balance&hellip;</strong>.</p>
+
+            <h3 id="gift-an-amount">Gift an amount</h3>
+            <ol>
+                <li>Pick <strong>Standard</strong> or <strong>Pro</strong>, then a preset or your own
+                    number. A gift is a whole number of credits: at least 10 standard credits or 1 Pro
+                    credit, and at most what you have free to give. Credits a reply is still using are not
+                    free until it finishes.</li>
+                <li>Tap <strong>Make the gift</strong> and confirm. The credits leave your balance at
+                    once.</li>
+                <li>You get a link, a code that starts with <code>GIFT-</code> and a QR code. Copy or share
+                    whichever suits, and send it only to the person it is for: whoever uses it first gets
+                    the credits.</li>
+            </ol>
+            <p>The person you send it to opens the link, or types <code>?gift</code> followed by the link
+                or the code, or taps <strong>Redeem a gift&hellip;</strong> on the Gift an amount screen.
+                The app shows what the gift is before anything moves, and <strong>Add to my
+                balance</strong> adds the credits to the key they are signed in with. Standard credits
+                arrive as standard credits and Pro credits as Pro credits.</p>
+            <ul>
+                <li>A gift can be claimed once. A second attempt, from anyone, is refused.</li>
+                <li><strong>Your gifts</strong>, on the same screen, lists what you have made and whether it
+                    was claimed. <strong>Cancel gift</strong> on one nobody has claimed puts the credits back
+                    on your balance and the link and code stop working.</li>
+                <li>A gift nobody claims within 30 days expires, and the credits go back to you by
+                    themselves.</li>
+                <li>You cannot redeem your own gift; cancel it instead.</li>
+                <li>Nymbot keeps only a fingerprint of the code, not the code itself. The app that made the
+                    gift keeps the code so <strong>Show</strong> can bring the link back up; on another
+                    device you can still see and cancel the gift, but not show its link again.</li>
+            </ul>
+
+            <h3 id="transfer">Moving your whole balance</h3>
+            <p><code>?transfer</code> takes no name typed after it in the app. It opens the transfer
+                screen, where you paste the other key as an npub or in hex and confirm before anything
+                moves.</p>
+            <p>Gifts and transfers both use your real nym's balance. Moving credits onto a
                 <a href="/docs/anonymous/">throwaway key</a> works differently and deliberately &mdash; as
                 blind vouchers, so the move cannot be used to link the two.</p>
 
             <h2 id="refunds">When nothing is charged</h2>
             <p>You are charged for an answer, not an attempt.</p>
             <ul>
-                <li>A generation that fails costs nothing.</li>
+                <li>A generation that fails costs nothing, and so does a research task that fails.</li>
+                <li>A server run that fails to start costs nothing, and one you decline never runs.</li>
                 <li>A reply that never reaches you costs nothing &mdash; ask again and the turn is
                     replayed, not regenerated. Resending the same message never buys a second answer.</li>
                 <li>Local commands &mdash; <code>?help</code>, <code>?balance</code>, <code>?buy</code>,

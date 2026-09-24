@@ -10,7 +10,14 @@ import 'package:url_launcher/url_launcher.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
 import 'i18n/i18n.dart';
+import 'run_output.dart';
+import 'server_run_sheet.dart';
+import '../app.dart';
+import '../config.dart';
 import '../core/theme/theme.dart';
+import '../services/sandbox_host.dart';
+import '../services/sandbox_protocol.dart';
+import '../services/server_runs.dart';
 
 Widget mediaWaiting(BuildContext context, ImageChunkEvent? progress,
     {double width = 260, double height = 180}) {
@@ -44,9 +51,14 @@ class MarkdownBody extends StatelessWidget {
     this.wrapCode = false,
     this.monospace = false,
     this.media,
+    this.runnable = false,
+    this.lineNumbers = false,
   });
 
+  final bool lineNumbers;
+
   final String source;
+  final bool runnable;
   final String? media;
   final bool wrapCode;
   final bool monospace;
@@ -73,6 +85,50 @@ class MarkdownBody extends StatelessWidget {
       RegExp(r'\.(mp4|webm|mov|mp3|wav|ogg|m4a|opus|flac)(\?|$)', caseSensitive: false);
   static final _anyExt = RegExp(r'\.[a-z0-9]{2,5}(\?|$)', caseSensitive: false);
   static final _bareUrl = RegExp(r'^https?://\S+$');
+
+  static String? imageSource(String url) {
+    final u = Uri.tryParse(url);
+    if (u == null || u.scheme.toLowerCase() != 'https' || u.host.isEmpty) return null;
+    if (u.host.toLowerCase() == NymbotConfig.apiHost) return url;
+    return 'https://${NymbotConfig.apiHost}/api/proxy?url=${Uri.encodeComponent(url)}';
+  }
+
+  static final _hostLike = RegExp(
+      r'^(?:[a-z][a-z0-9+.-]*://)?((?:[a-z0-9-]+\.)+[a-z]{2,})\.?(?::\d+)?(?:[/?#]\S*)?$',
+      caseSensitive: false);
+
+  static String? misleadingHost(String label, String href) {
+    final m = _hostLike.firstMatch(label.trim());
+    if (m == null) return null;
+    String bare(String h) => h.toLowerCase().replaceFirst(RegExp(r'^www\.'), '');
+    final target = Uri.tryParse(href)?.host ?? '';
+    if (target.isNotEmpty && bare(m.group(1)!) == bare(target)) return null;
+    return target.isEmpty ? href : target.toLowerCase();
+  }
+
+  static Future<void> openLink(BuildContext context, String label, String href) async {
+    final real = misleadingHost(label, href);
+    if (real != null) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t('Open this link?')),
+          content: Text(t('The link reads {label}, but it goes to {host}.',
+              {'label': label, 'host': real})),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: Text(t('Cancel'))),
+            FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text(t('Open {host}', {'host': real}))),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
+    await launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
 
   static String plain(String source) => source
       .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
@@ -142,7 +198,12 @@ class MarkdownBody extends StatelessWidget {
         if (lang == 'diff' || lang == 'patch') {
           blocks.add(DiffView(source: body.join('\n')));
         } else {
-          blocks.add(CodeBlock(code: body.join('\n'), language: lang, wrap: wrapCode));
+          blocks.add(CodeBlock(
+              code: body.join('\n'),
+              language: lang,
+              wrap: wrapCode,
+              runnable: runnable,
+              lineNumbers: lineNumbers));
         }
         continue;
       }
@@ -264,7 +325,9 @@ class MarkdownBody extends StatelessWidget {
       final bare = text.trim();
       final linked = _bareUrl.hasMatch(bare);
       final unlabelled = linked && !_anyExt.hasMatch(bare);
-      if (linked && (_imageUrl.hasMatch(bare) || (unlabelled && media == 'image'))) {
+      if (linked &&
+          imageSource(bare) != null &&
+          (_imageUrl.hasMatch(bare) || (unlabelled && media == 'image'))) {
         blocks.add(MediaBlock(url: bare, image: true));
       } else if (linked &&
           (_clipUrl.hasMatch(bare) ||
@@ -296,8 +359,8 @@ class MarkdownBody extends StatelessWidget {
     if (monospace && style == null) {
       base = base.copyWith(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: (base.fontSize ?? 14) - 1);
     }
-    return RichText(
-      text: TextSpan(style: base, children: _spans(context, text, base)),
+    return Text.rich(
+      TextSpan(style: base, children: _spans(context, text, base)),
     );
   }
 
@@ -327,13 +390,17 @@ class MarkdownBody extends StatelessWidget {
             backgroundColor: theme.dividerColor,
           ),
         ));
+      } else if ((m.group(2) != null || m.group(3) != null) &&
+          imageSource(m.group(3)!) == null) {
+        final alt = m.group(2) ?? '';
+        spans.add(_link(context, alt.isEmpty ? m.group(3)! : alt, m.group(3)!, base));
       } else if (m.group(2) != null || m.group(3) != null) {
         spans.add(WidgetSpan(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 240),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(m.group(3)!,
+              child: Image.network(imageSource(m.group(3)!)!,
                   loadingBuilder: (c, child, p) => p == null
                       ? child
                       : mediaWaiting(c, p, width: 200, height: 140),
@@ -382,7 +449,7 @@ class MarkdownBody extends StatelessWidget {
         decoration: TextDecoration.underline,
       ),
       recognizer: TapGestureRecognizer()
-        ..onTap = () => launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication),
+        ..onTap = () => openLink(context, label, href),
     );
   }
 }
@@ -530,7 +597,7 @@ class _Callout extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          MarkdownBody(body, wrapCode: parent.wrapCode, monospace: parent.monospace),
+          MarkdownBody(body, wrapCode: parent.wrapCode, monospace: parent.monospace, runnable: parent.runnable),
         ],
       ),
     );
@@ -552,7 +619,7 @@ class _Quote extends StatelessWidget {
           left: BorderSide(color: Theme.of(context).colorScheme.primary, width: 2),
         ),
       ),
-      child: MarkdownBody(text, wrapCode: parent.wrapCode, monospace: parent.monospace),
+      child: MarkdownBody(text, wrapCode: parent.wrapCode, monospace: parent.monospace, runnable: parent.runnable),
     );
   }
 }
@@ -563,11 +630,15 @@ class CodeBlock extends StatefulWidget {
     required this.code,
     this.language = '',
     this.wrap = false,
+    this.runnable = false,
+    this.lineNumbers = false,
   });
 
   final String code;
   final String language;
   final bool wrap;
+  final bool runnable;
+  final bool lineNumbers;
 
   @override
   State<CodeBlock> createState() => _CodeBlockState();
@@ -576,16 +647,56 @@ class CodeBlock extends StatefulWidget {
 class _CodeBlockState extends State<CodeBlock> {
   late bool _wrap = widget.wrap;
   bool _copied = false;
+  RunCodeController? _run;
+
+  RunCodeController? _runnerFor(bool server) {
+    if (!widget.runnable) return null;
+    final local = SandboxHost.supported ? SandboxProtocol.languageOf(widget.language) : null;
+    final remote = server ? ServerRuns.languageOf(widget.language) : null;
+    if (local == null && remote == null) return _run;
+    return _run ??= RunCodeController(local, serverLanguage: ServerRuns.languageOf(widget.language));
+  }
+
+  @override
+  void dispose() {
+    _run?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final server = widget.runnable &&
+        (context.getElementForInheritedWidgetOfExactType<AppScope>() != null) &&
+        AppScope.of(context).runnerAvailable;
+    final runner = _runnerFor(server);
     final lines = widget.code.split('\n').length;
-    final body = HighlightedCode(
+    final code = HighlightedCode(
       code: widget.code,
       language: widget.language,
       wrap: _wrap,
     );
+    final body = widget.lineNumbers && !_wrap
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                [for (var i = 1; i <= lines; i++) '$i'].join('\n'),
+                key: const ValueKey('code-gutter'),
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  fontFamily: kMonoFamily,
+                  fontFamilyFallback: kMonoFallback,
+                  fontSize: 12.5,
+                  height: 1.45,
+                  color: theme.hintColor,
+                ),
+              ),
+              const SizedBox(width: 10),
+              code,
+            ],
+          )
+        : code;
 
     return Container(
       width: double.infinity,
@@ -614,6 +725,9 @@ class _CodeBlockState extends State<CodeBlock> {
                   style: TextStyle(fontSize: 11, color: theme.hintColor),
                 ),
                 const Spacer(),
+                if (runner?.language != null) RunButton(controller: runner!, code: widget.code),
+                if (server && runner?.serverLanguage != null)
+                  ServerRunButton(controller: runner!, code: widget.code),
                 _tiny(
                   icon: _wrap ? Icons.wrap_text : Icons.short_text,
                   tooltip: t('Wrap long lines'),
@@ -640,6 +754,7 @@ class _CodeBlockState extends State<CodeBlock> {
                 ? body
                 : SingleChildScrollView(scrollDirection: Axis.horizontal, child: body),
           ),
+          if (runner != null) RunOutputView(controller: runner),
         ],
       ),
     );
@@ -757,10 +872,14 @@ class _MediaBlockState extends State<MediaBlock> {
         ]),
       );
     }
+    final src = MarkdownBody.imageSource(widget.url);
+    if (src == null) {
+      return Text(widget.url, style: TextStyle(fontSize: 12, color: theme.hintColor));
+    }
     return Stack(children: [
       ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: Image.network(widget.url,
+        child: Image.network(src,
             loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
             errorBuilder: (c, e, s) => Text(widget.url,
                 style: TextStyle(fontSize: 12, color: theme.hintColor))),

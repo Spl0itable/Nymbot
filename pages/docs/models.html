@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Models and routing - Nymbot Knowledge Base</title>
-    <meta name="description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <meta name="description" content="Standard auto-routing, pinning a Pro model, asking one model with an @mention, the live model catalog, and reasoning and vision support.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
@@ -13,7 +13,7 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Models and routing - Nymbot Knowledge Base">
-    <meta property="og:description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <meta property="og:description" content="Standard auto-routing, pinning a Pro model, asking one model with an @mention, the live model catalog, and reasoning and vision support.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/models/">
     <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
     <meta name="twitter:title" content="Models and routing - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="Standard auto-routing, pinning a Pro model, the live model catalog, and reasoning and vision support.">
+    <meta name="twitter:description" content="Standard auto-routing, pinning a Pro model, asking one model with an @mention, the live model catalog, and reasoning and vision support.">
     <link rel="canonical" href="https://nymbot.ai/docs/models/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -75,6 +75,18 @@
                 <figcaption>The same picker on iOS and Android.</figcaption>
             </figure>
 
+            <h2 id="mentions">Asking one model with @</h2>
+            <p>Start a message with <code>@</code> and a model's name, as in
+                <code>@opus is this proof right?</code>, and that model answers that one message. Typing
+                <code>@</code> opens a list of models to pick from. The chat's own model stays as it was,
+                so the next message goes back to it.</p>
+            <p>A mentioned model is a Pro model, so the answer is paid from your Pro balance, and the
+                composer says which model will answer and from which balance before you send. If your Pro
+                balance is empty, it says so and sends nothing.</p>
+            <p>Add <code>!</code> to ask without the chat's history, as either <code>!@opus</code> or
+                <code>@opus !</code>. A name that matches no model is sent as ordinary text, with a note
+                saying so.</p>
+
             <h2 id="catalog">The model catalog</h2>
             <p>The picker is generated from a live catalog rather than hard-coded, so the list you see is
                 exactly what the server will accept and charge for. Each entry carries its base price, its
@@ -113,7 +125,7 @@
                 <strong>&#128173; Reasoning</strong> section above the answer. Tap to read it; it is not
                 charged separately from the reply it belongs to.</p>
             <p>Every Claude, GPT, Gemini, Grok and Kimi Pro model can see images, as can the creative and
-                translation routes on standard. Put a picture's link in your message and ask about it
+                translation routes on standard. Attach a picture, or put its link in your message, and ask about it
                 &mdash; see <a href="/docs/chats/#attachments">sending pictures</a>.</p>
         <!--DOCS-PAGER-->
         </main>

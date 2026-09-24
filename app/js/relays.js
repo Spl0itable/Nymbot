@@ -92,7 +92,8 @@
                 clearTimeout(bail);
                 if (this.sockets.get(url) === ws) this.sockets.delete(url);
                 this._upstream = [];
-                if (!up) Edge.recover().catch(() => { });
+                if (up) Edge.networkChanged();
+                else Edge.recover().catch(() => { });
                 this._emit();
                 this._fallBack();
             });
@@ -199,7 +200,8 @@
 
         /// One-shot query against relays this app does not keep open.
         fetchFrom(urls, filter, timeoutMs) {
-            const list = (urls || []).filter(u => /^wss?:\/\//i.test(u)).slice(0, 8);
+            if (!C.apiHost) return Promise.resolve([]);
+            const list = Array.from(new Set((urls || []).filter(u => typeof u === 'string' && /^wss:\/\//i.test(u)))).slice(0, 8);
             if (!list.length) return Promise.resolve([]);
             return new Promise((resolve) => {
                 const found = new Map();
@@ -215,15 +217,15 @@
                 };
                 const timer = setTimeout(finish, timeoutMs || 6000);
                 const id = subId();
-                // Proxied while the pool is up; one direct retry if that fails.
-                const dial = (url, viaProxy) => {
-                    const target = viaProxy
-                        ? 'wss://' + C.apiHost + '/api/relay?relay=' + encodeURIComponent(url)
-                        : url;
+                const give = () => { if (++done >= list.length) finish(); };
+                const dial = (url) => {
                     let ws;
-                    try { ws = new WebSocket(target); } catch (_) { return retry(url, viaProxy); }
+                    try {
+                        ws = new WebSocket('wss://' + C.apiHost + '/api/relay?relay=' + encodeURIComponent(url));
+                    } catch (_) { return give(); }
                     opened.push(ws);
-                    let spoke = false;
+                    let over = false;
+                    const end = () => { if (over) return; over = true; give(); };
                     ws.addEventListener('open', () => {
                         try { ws.send(JSON.stringify(['REQ', id, filter])); } catch (_) { }
                     });
@@ -231,24 +233,13 @@
                         let data;
                         try { data = JSON.parse(m.data); } catch (_) { return; }
                         if (!Array.isArray(data) || data[1] !== id) return;
-                        spoke = true;
                         if (data[0] === 'EVENT' && data[2] && data[2].id) found.set(data[2].id, data[2]);
-                        else if (data[0] === 'EOSE' && ++done >= list.length) finish();
+                        else if (data[0] === 'EOSE') end();
                     });
-                    const gone = () => {
-                        if (spoke || settled) return;
-                        spoke = true;
-                        retry(url, viaProxy);
-                    };
-                    ws.addEventListener('error', gone);
-                    ws.addEventListener('close', gone);
+                    ws.addEventListener('error', end);
+                    ws.addEventListener('close', end);
                 };
-                const retry = (url, viaProxy) => {
-                    if (viaProxy) return dial(url, false);
-                    if (++done >= list.length) finish();
-                };
-                const proxy = this.pooled && !!C.apiHost;
-                for (const url of list) dial(url, proxy);
+                for (const url of list) dial(url);
             });
         },
 

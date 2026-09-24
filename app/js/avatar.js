@@ -98,14 +98,9 @@
         return `${adj}_${noun}`;
     }
 
-    function suffix(pubkey) {
-        const key = String(pubkey || '');
-        return key.length >= 4 ? key.slice(-4) : (fnv(key).toString(16) + '0000').slice(0, 4);
-    }
-
     function colorClass(pubkey) {
         return 'user-color-' + (fnv(String(pubkey || '')) % 8);
     }
 
-    window.NymbotAvatar = { identicon, nymName, suffix, colorClass };
+    window.NymbotAvatar = { identicon, nymName, colorClass };
 })();

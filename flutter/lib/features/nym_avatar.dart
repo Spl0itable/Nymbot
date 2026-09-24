@@ -166,11 +166,5 @@ class NymIdentity {
     return '${adj}_$noun';
   }
 
-  static String suffix(String pubkey) => pubkey.length >= 4
-      ? pubkey.substring(pubkey.length - 4)
-      : '${fnv(pubkey).toRadixString(16)}0000'.substring(0, 4);
-
   static Color colour(String pubkey) => colours[fnv(pubkey) % colours.length];
-
-  static String handle(String pubkey) => '${name(pubkey)}#${suffix(pubkey)}';
 }

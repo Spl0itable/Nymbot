@@ -74,7 +74,7 @@
             const T = NT();
             return T.nip44.encrypt(plaintext, T.nip44.getConversationKey(Identity._sk, Identity.pubkey));
         }
-        const inner = await window.nostr.nip44.encrypt(Identity.pubkey, plaintext);
+        const inner = await Identity.encryptTo(Identity.pubkey, plaintext);
         if (kem) {
             try { return NC().pq2Seal(inner, Identity.pubkey, Identity.pubkey, kem); } catch (_) { }
         }
@@ -87,7 +87,24 @@
         return Identity._kem ? [{ kemSk: Identity._kem.secretKey, kemPk: Identity._kem.publicKey }] : [];
     }
 
+    const OPENED_MAX = 2000;
+    const opened = new Map();
+
+    function remember(key, plain) {
+        if (opened.size >= OPENED_MAX) opened.delete(opened.keys().next().value);
+        opened.set(key, plain);
+    }
+
     async function open(blob) {
+        if (!Identity.isRemote) return openWith(blob);
+        const key = await sha256Hex(blob);
+        if (opened.has(key)) return opened.get(key);
+        const plain = await openWith(blob);
+        remember(key, plain);
+        return plain;
+    }
+
+    async function openWith(blob) {
         const NCx = NC();
         if (Identity._sk) {
             if (NCx.isPq2Payload(blob)) {
@@ -110,9 +127,9 @@
                 catch (e) { lastErr = e; }
             }
             if (inner == null) throw lastErr || new Error('needs the root');
-            return window.nostr.nip44.decrypt(Identity.pubkey, inner);
+            return Identity.decryptFrom(Identity.pubkey, inner);
         }
-        return window.nostr.nip44.decrypt(Identity.pubkey, blob);
+        return Identity.decryptFrom(Identity.pubkey, blob);
     }
 
     /// Never hybrid, whatever this device can do. The root row is the one row
@@ -123,14 +140,14 @@
             const T = NT();
             return T.nip44.encrypt(plaintext, T.nip44.getConversationKey(Identity._sk, Identity.pubkey));
         }
-        return window.nostr.nip44.encrypt(Identity.pubkey, plaintext);
+        return Identity.encryptTo(Identity.pubkey, plaintext);
     }
 
     /// `account` stands in for the signed-in identity when there is not one
     /// yet: the sign-in gate has to ask what the account already holds before it
     /// decides what to give this device. It carries the pubkey, something that
     /// signs, and something that opens a classical blob addressed to it.
-    async function auth(action, account) {
+    async function auth(action, account, payload) {
         const event = {
             kind: 27235,
             created_at: Math.floor(Date.now() / 1000),
@@ -139,23 +156,28 @@
                 ['method', 'POST'],
                 ['u', url()],
                 ['action', action]
-            ],
+            ].concat(payload ? [['payload', payload]] : []),
             content: 'nymbot-sync-auth'
         };
         return account ? account.sign(event) : Identity.signEvent(event);
     }
 
+    async function signedBody(action, fields, account) {
+        const Api = window.NymbotApi;
+        const text = Api.signedText(fields);
+        return Api.withAuth(text, await auth(action, account, await sha256Hex(text)));
+    }
+
     async function call(action, extra, account) {
         const pubkey = account ? account.pubkey : Identity.pubkey;
-        const body = Object.assign(
-            { action, pubkey, auth: await auth(action, account) }, extra || {});
+        const body = await signedBody(action, Object.assign({ action, pubkey }, extra || {}), account);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 20000);
         try {
             const resp = await Edge.fetch(url(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+                body,
                 signal: controller.signal
             });
             return await resp.json().catch(() => null);
@@ -270,7 +292,30 @@
         return Array.from(out.values());
     }
 
+    function carriesSecret(row, marks) {
+        return !!row && marks.some(f => typeof row[f] === 'string');
+    }
+
+    function secretOf(row, fields, at, from) {
+        const out = { from };
+        for (const f of fields) out[f] = row && typeof row[f] === 'string' ? row[f] : '';
+        out[at] = row ? Number(row[at]) || 0 : 0;
+        return out;
+    }
+
+    function pickSecret(mine, theirs, fields, at, marks) {
+        const held = secretOf(mine, fields, at, 'mine');
+        if (!carriesSecret(theirs, marks || fields)) return held;
+        const came = secretOf(theirs, fields, at, 'theirs');
+        if (came[at] > held[at]) return came;
+        if (fields.some(f => held[f])) return held;
+        if (came[at] === 0 || came[at] === held[at]) return fields.some(f => came[f]) ? came : held;
+        return held;
+    }
+
     const Sync = {
+        pickSecret,
+
         /// Set once a pull has come back with rows this device could not open — a
         /// key that has not been linked yet.
         blocked: false,
@@ -321,14 +366,14 @@
                 const value = get();
                 if (value != null) library[name] = value;
             }
-            // A repository travels without its token: the token stays on the
-            // device that was given it and is sent per request.
             library.repos = Store.repos().map(r => {
                 const copy = Object.assign({}, r);
-                delete copy.token;
+                copy.token = r.token || '';
+                copy.tokenAt = Number(r.tokenAt) || 0;
                 copy.tokenElsewhere = !!r.token;
                 return copy;
             });
+            if (window.NymbotConnectors) library.connectors = window.NymbotConnectors.syncCopy();
             out['library'] = library;
 
             const chats = Store.conversations()
@@ -360,7 +405,12 @@
             if (remote.settings && typeof remote.settings === 'object') {
                 // The local ones win on the keys this device has changed since
                 // its last push; everything else comes across.
-                const merged = Object.assign({}, remote.settings, Store.read('settings', {}) || {});
+                const local = Store.read('settings', {}) || {};
+                const merged = Object.assign({}, remote.settings, local);
+                if ((Number(remote.settings.nicknameAt) || 0) > (Number(local.nicknameAt) || 0)) {
+                    merged.nickname = typeof remote.settings.nickname === 'string' ? remote.settings.nickname : '';
+                    merged.nicknameAt = Number(remote.settings.nicknameAt);
+                }
                 Store.write('settings', merged);
                 touched.push('settings');
             }
@@ -381,16 +431,26 @@
                 if (Array.isArray(remote.library.repos)) {
                     const mine = Store.repos();
                     const byId = new Map(mine.map(r => [r.id, r]));
+                    const theirsById = new Map(remote.library.repos.filter(r => r && r.id).map(r => [r.id, r]));
                     const merged = mergeById(mine, remote.library.repos, graves).map(r => {
-                        // Never let a remote row blank a token this device holds.
-                        const held = byId.get(r.id);
                         const copy = Object.assign({}, r);
-                        if (held && held.token) copy.token = held.token;
-                        else delete copy.token;
+                        const kept = pickSecret(byId.get(r.id), theirsById.get(r.id), ['token'], 'tokenAt');
+                        delete copy.token;
+                        delete copy.tokenAt;
+                        if (kept.token) {
+                            copy.token = kept.token;
+                            delete copy.tokenElsewhere;
+                        }
+                        if (kept.tokenAt) copy.tokenAt = kept.tokenAt;
                         return copy;
                     });
                     Store.saveRepos(merged);
                     touched.push('repos');
+                }
+                if (Array.isArray(remote.library.connectors) && window.NymbotConnectors) {
+                    const Connectors = window.NymbotConnectors;
+                    Connectors.syncMerge(mergeById(Connectors.list(), remote.library.connectors, graves), remote.library.connectors);
+                    touched.push('connectors');
                 }
             }
 
@@ -425,8 +485,9 @@
             const data = await call('settings-get', {});
             if (!data || !data.categories || typeof data.categories !== 'object') return null;
             const out = {};
+            const remote = Identity.isRemote;
             let unreadable = 0;
-            for (const entry of Object.values(data.categories)) {
+            for (const [category, entry] of Object.entries(data.categories)) {
                 if (!entry || typeof entry.blob !== 'string') continue;
                 let payload;
                 try {
@@ -441,6 +502,11 @@
                 if (name === PQ_ROOT_D_TAG) continue;
                 delete payload.__cat;
                 out[name] = payload.v !== undefined ? payload.v : payload;
+                if (remote && category === await categoryFor(name)) {
+                    const plain = JSON.stringify({ __cat: name, v: out[name] });
+                    const mode = NC().isPq2Payload(entry.blob) ? 'pq' : 'c';
+                    this._hashes.set(category, await sha256Hex(Identity.pubkey + '|' + mode + '|' + plain));
+                }
             }
             // Rows exist and none of them opened: this device holds a key that
             // cannot read the account's own settings, so it must not write.
@@ -459,6 +525,7 @@
             const resp = await call('settings-set', { category, blob, contentHash: hash });
             if (!resp || resp.error) return false;
             this._hashes.set(category, hash);
+            if (Identity.isRemote) remember(await sha256Hex(blob), plain);
             return true;
         },
 
@@ -528,11 +595,10 @@
             if (!Identity.pubkey) return false;
             let body;
             try {
-                body = JSON.stringify({
+                body = await signedBody('account-purge', {
                     action: 'account-purge',
                     app: 'nymbot',
-                    pubkey: Identity.pubkey,
-                    auth: await auth('account-purge')
+                    pubkey: Identity.pubkey
                 });
             } catch (_) { return false; }
             try {

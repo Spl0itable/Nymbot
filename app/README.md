@@ -36,6 +36,7 @@ never fetch and open, so the list is not a preference.
 | `js/markdown.js` | Reply rendering: tables, task lists, callouts, code blocks with copy/wrap/save/preview, and images. |
 | `js/attach.js` | Files off the device: text and code inlined into the wire body, images shrunk and carried beside it. |
 | `js/speech.js` | A reply read back out, through the browser's own voices. |
+| `js/dictate.js` | Dictation: the microphone button records a clip with `MediaRecorder`, and the worker's `transcribe` action turns it into text in the composer. |
 | `js/commands.js` | Every `?` command, and the matcher the composer and the palette share. |
 | `js/export.js` | A conversation as Markdown, plain text or JSON, and the backup that restores all of them. |
 | `js/qr.js` | A byte-mode QR encoder, so an invoice is rendered here rather than sent somewhere to be drawn. |
@@ -54,8 +55,9 @@ The chat surface, beyond sending a message:
   per chat; a chat with more than one gets a preamble naming them, so a reply
   can say which one it means. `?git list`, `?repo <name>`, `?git writes on`.
   One branch connected twice is sent once, so it is not explored twice.
-- **Personas and custom instructions** are sent with the first message of a
-  chat and never repeated. Six are built in; your own are stored on the device.
+- **Personas and custom instructions** are sent with every message of a chat,
+  so they keep applying; the worker keeps one copy of them in the history rather
+  than one per turn. Six are built in; your own are stored on the device.
 - **A prompt library** with `{{blanks}}` the app asks you to fill in.
 - **Attachments**: text and code go into the message as a fenced block, images
   are shrunk and travel beside it. Drag, paste or pick them.

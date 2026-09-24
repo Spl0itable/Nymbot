@@ -124,8 +124,12 @@ try {
     const page = await ctx.newPage();
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.goto(`${base}/app`, { waitUntil: 'networkidle' });
-    await page.evaluate(() => window.NymbotI18n.setLang('en'));
+    await Promise.all([
+      page.waitForEvent('load'),
+      page.evaluate(() => { window.NymbotI18n.setLang('en'); }),
+    ]);
     await page.waitForLoadState('networkidle');
+    await page.waitForFunction(() => window.NymbotUI && typeof window.NymbotUI.renderLanguages === 'function');
     ok(await page.locator('html').getAttribute('lang') === 'en',
        'choosing English sticks, even in a Spanish browser');
     // The picker is filled when the settings modal opens, which is behind a

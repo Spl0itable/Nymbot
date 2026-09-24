@@ -73,8 +73,8 @@
                         <tr><td><code>?help</code></td><td>A free, local guide to tiers, pricing and setup.</td></tr>
                         <tr><td><code>?balance</code></td><td>Your standard and Pro balances.</td></tr>
                         <tr><td><code>?buy</code></td><td>Buys credits over Lightning, with a Standard/Pro switch.</td></tr>
-                        <tr><td><code>?gift @nym</code></td><td>Gifts credits to another nym.</td></tr>
-                        <tr><td><code>?transfer @nym</code></td><td>Moves your whole balance, standard and Pro, to another nym.</td></tr>
+                        <tr><td><code>?gift</code></td><td>Opens Gift an amount, where you give some of your credits as a link, a code and a QR code anyone can redeem once. Followed by a gift link or code, it opens Redeem a gift instead.</td></tr>
+                        <tr><td><code>?transfer</code></td><td>Moves your whole balance, standard and Pro, to another key, after you confirm it.</td></tr>
                         <tr><td><code>?anon</code></td><td><a href="/docs/anonymous/">Anonymous mode</a>: chat from a throwaway key.</td></tr>
                         <tr><td><code>?clear</code></td><td>Empties the current conversation and resets its context.</td></tr>
                     </tbody>
@@ -92,6 +92,7 @@
                         <tr><td><code>?git</code></td><td>Connects a <a href="/docs/git/">repository</a>.</td></tr>
                         <tr><td><code>?git writes on</code></td><td>Lets it commit, branch and open pull requests.</td></tr>
                         <tr><td><code>!question</code></td><td>Not a command &mdash; a leading <code>!</code> sends this message with no history.</td></tr>
+                        <tr><td><code>@model question</code></td><td>Not a command either &mdash; <a href="/docs/models/#mentions">asks that one model</a> this message, from your Pro balance.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -104,10 +105,12 @@
                         <tr><td><code>?image &lt;description&gt;</code></td><td>Generates a picture.</td></tr>
                         <tr><td><code>?image models</code></td><td>Lists the generators and their prices. Free.</td></tr>
                         <tr><td><code>?image --model &lt;name&gt; &lt;description&gt;</code></td><td>Picks the generator. Needs a Pro model selected.</td></tr>
+                        <tr><td><code>?image &lt;change&gt;</code> with a picture attached</td><td><a href="/docs/media/#editing">Edits that picture</a>. Needs a Pro model selected.</td></tr>
                         <tr><td><code>?video &lt;description&gt;</code></td><td>Generates a short clip. Needs a Pro model selected.</td></tr>
                         <tr><td><code>?video models</code></td><td>Lists the video generators and their prices. Free.</td></tr>
                         <tr><td><code>?video --model &lt;name&gt; &lt;description&gt;</code></td><td>Picks the video generator.</td></tr>
                         <tr><td><code>?speak &lt;text&gt;</code></td><td>Returns a spoken clip, up to 800 characters.</td></tr>
+                        <tr><td><code>?speak models</code></td><td>Lists the voices. <code>?speak --model &lt;voice&gt; &lt;text&gt;</code> picks one, with a Pro model selected.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -119,12 +122,13 @@
                     <thead><tr><th>Command</th><th>Does</th></tr></thead>
                     <tbody>
                         <tr><td><code>?ask &lt;question&gt;</code></td><td>Asks the AI. Plain text does the same.</td></tr>
+                        <tr><td><code>?research &lt;question&gt;</code></td><td><a href="/docs/research/">Deep research</a> with the pinned Pro model: a long report with numbered sources.</td></tr>
                         <tr><td><code>?define &lt;word&gt;</code></td><td>Definition, part of speech and example usage.</td></tr>
                         <tr><td><code>?translate &lt;text&gt;</code></td><td>Translates, detecting the source language.</td></tr>
                         <tr><td><code>?news</code></td><td>Breaking news headlines.</td></tr>
                         <tr><td><code>?math &lt;expression&gt;</code></td><td>Calculates it.</td></tr>
                         <tr><td><code>?units 10 km to mi</code></td><td>Converts units.</td></tr>
-                        <tr><td><code>?time</code></td><td>UTC time and the Unix timestamp.</td></tr>
+                        <tr><td><code>?time [place]</code></td><td>The current time. In a public channel it is UTC and the Unix timestamp; in a private chat you can name a place.</td></tr>
                         <tr><td><code>?btc</code></td><td>The Bitcoin price.</td></tr>
                     </tbody>
                 </table>

@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
+import '../../core/theme/theme.dart';
 import '../../models/compare.dart';
+import '../../models/model_maker.dart';
+import '../brand_tile.dart';
 import '../i18n/i18n.dart';
 import '../markdown_body.dart';
 import '../nym_glyph.dart';
+import 'models_sheet.dart';
 import 'sheet.dart';
 
 Future<void> showCompareSheet(BuildContext context, {String prefill = ''}) =>
@@ -50,29 +54,49 @@ class _CompareSheetState extends State<_CompareSheet> {
     final catalog = await app.api.models();
     app.notePricing(catalog);
     if (!mounted) return;
-    final rows =
-        (catalog?['models'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
-    final current = app.activeModel?['key'] as String?;
+    final (a, b) = ModelPicker.compareDefaults(catalog,
+        pinned: app.activeModel?['key'] as String?,
+        favourites: app.favouriteModels);
     setState(() {
       _catalog = catalog;
       _loading = false;
-      _a = current ?? (rows.isNotEmpty ? rows.first['key'] as String : null);
-      _b = rows
-          .map((m) => m['key'] as String)
-          .where((k) => k != _a)
-          .cast<String?>()
-          .firstWhere((k) => true, orElse: () => null);
+      _a = a;
+      _b = b;
     });
   }
 
   List<Map<String, dynamic>> get _models =>
-      (_catalog?['models'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      ModelPicker.modelsOf(_catalog).where(ModelPicker.isChat).toList();
 
   Map<String, dynamic>? _byKey(String? key) {
     for (final m in _models) {
       if (m['key'] == key) return m;
     }
     return null;
+  }
+
+  Future<void> _choose(bool first) async {
+    final current = first ? _a : _b;
+    final other = first ? _b : _a;
+    final picked = await showNymSheet<Map<String, dynamic>>(
+      context,
+      (_) => _CompareChoice(
+        catalog: _catalog,
+        first: first,
+        current: current,
+        other: other,
+      ),
+    );
+    final key = picked?['key'] as String?;
+    if (key == null || key == other || !mounted) return;
+    setState(() {
+      if (first) {
+        _a = key;
+      } else {
+        _b = key;
+      }
+      _status = '';
+    });
   }
 
   Future<void> _run() async {
@@ -128,7 +152,9 @@ class _CompareSheetState extends State<_CompareSheet> {
     setState(() {
       _busy = false;
       _runs = out;
-      _status = out.every((r) => r.ok)
+      _status = out.isEmpty
+          ? t('Nothing was sent.')
+          : out.every((r) => r.ok)
           ? t('Both answered. Keep the one you want to carry on from.')
           : t('One of them did not answer.');
     });
@@ -180,9 +206,29 @@ class _CompareSheetState extends State<_CompareSheet> {
                     style: const TextStyle(fontSize: 12)),
               )
             else ...[
-              _picker(t('First model'), _a, (v) => setState(() => _a = v)),
-              const SizedBox(height: 10),
-              _picker(t('Second model'), _b, (v) => setState(() => _b = v)),
+              _Slot(
+                key: const ValueKey('compare-slot-a'),
+                title: t('Model A'),
+                model: _byKey(_a),
+                catalog: _catalog,
+                onTap: _busy ? null : () => _choose(true),
+              ),
+              const SizedBox(height: 8),
+              _Slot(
+                key: const ValueKey('compare-slot-b'),
+                title: t('Model B'),
+                model: _byKey(_b),
+                catalog: _catalog,
+                onTap: _busy ? null : () => _choose(false),
+              ),
+              if (_byKey(_a) != null && _byKey(_b) != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  ModelPicker.pairLabel(_byKey(_a)!, _byKey(_b)!, _catalog),
+                  style: const TextStyle(
+                      fontSize: 12, color: NymbotColors.lightning),
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 controller: _prompt,
@@ -206,38 +252,24 @@ class _CompareSheetState extends State<_CompareSheet> {
             ],
             for (final run in _runs) ...[
               const SizedBox(height: 10),
-              _Result(run: run, onKeep: () => _keep(run)),
+              _Result(
+                run: run,
+                maker: ModelMaker.of(run.model, _catalog),
+                onKeep: () => _keep(run),
+              ),
             ],
           ],
         ),
       ),
     );
   }
-
-  Widget _picker(String label, String? value, ValueChanged<String?> onChanged) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label),
-      items: [
-        for (final m in _models)
-          DropdownMenuItem(
-            value: m['key'] as String,
-            child: Text(
-              '${m['label']} · ${figure((m['credits'] as num?)?.toInt() ?? 1)}',
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-      ],
-      onChanged: onChanged,
-    );
-  }
 }
 
 class _Result extends StatelessWidget {
-  const _Result({required this.run, required this.onKeep});
+  const _Result({required this.run, required this.maker, required this.onKeep});
 
   final CompareRun run;
+  final ModelMaker? maker;
   final VoidCallback onKeep;
 
   @override
@@ -261,10 +293,28 @@ class _Result extends StatelessWidget {
                 const NymGlyph('model', size: 14),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text(run.label,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(run.label,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600)),
+                      ),
+                      if (maker != null) ...[
+                        const SizedBox(width: 4),
+                        Tooltip(
+                          message: maker!.name,
+                          child: Semantics(
+                            label: maker!.name,
+                            image: true,
+                            child: ExcludeSemantics(
+                                child: BrandTile(slug: maker!.slug, size: 14)),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 if (run.ok)
                   Text(t('{n} credits', {'n': creditFigure(run.cost)}),
@@ -293,6 +343,158 @@ class _Result extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _Slot extends StatelessWidget {
+  const _Slot({
+    super.key,
+    required this.title,
+    required this.model,
+    required this.catalog,
+    required this.onTap,
+  });
+
+  final String title;
+  final Map<String, dynamic>? model;
+  final Map<String, dynamic>? catalog;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final m = model;
+    final maker = ModelMaker.of(m, catalog);
+    final name = m == null ? t('Pick a model') : '${m['label'] ?? m['key']}';
+    return Semantics(
+      button: true,
+      label: '$title: $name',
+      excludeSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              border: Border.all(color: theme.dividerColor),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                maker == null
+                    ? const SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: Center(child: NymGlyph('model', size: 20)),
+                      )
+                    : BrandTile(slug: maker.slug, size: 32),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        maker == null
+                            ? title.toUpperCase()
+                            : '${title.toUpperCase()} · ${maker.name}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11,
+                            letterSpacing: 1,
+                            color: theme.hintColor),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      if (m != null)
+                        Text(
+                          ModelPicker.turnLabel(m, catalog),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: NymbotColors.lightning),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(t('Change'),
+                    style: TextStyle(
+                        fontSize: 13, color: theme.colorScheme.primary)),
+                Icon(Icons.chevron_right,
+                    size: 18, color: theme.colorScheme.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompareChoice extends StatelessWidget {
+  const _CompareChoice({
+    required this.catalog,
+    required this.first,
+    required this.current,
+    required this.other,
+  });
+
+  final Map<String, dynamic>? catalog;
+  final bool first;
+  final String? current;
+  final String? other;
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.95,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (context, controller) => Padding(
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 12,
+          top: 12,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(first ? t('Pick Model A') : t('Pick Model B'),
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ModelList(
+                catalog: catalog,
+                loading: false,
+                chatOnly: true,
+                filters: ModelPicker.chatFilters,
+                selectedKeys: {if (current != null) current!},
+                unavailable: {
+                  if (other != null)
+                    other!: first
+                        ? t('Already picked as Model B')
+                        : t('Already picked as Model A'),
+                },
+                scrollController: controller,
+                onPick: (m, _) => Navigator.pop(context, m),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -72,6 +72,31 @@ class _MemorySheetState extends State<_MemorySheet> {
             m.topic.toLowerCase().contains(needle))
         .toList();
 
+    final topic = TextField(
+      controller: _topic,
+      decoration: InputDecoration(isDense: true, labelText: t('Topic')),
+    );
+    final scope = DropdownButtonFormField<String?>(
+      // ignore: deprecated_member_use
+      value: _scope,
+      isExpanded: true,
+      decoration: InputDecoration(isDense: true, labelText: t('Applies to')),
+      items: [
+        DropdownMenuItem(
+            value: null,
+            child: Text(t('Every chat'), overflow: TextOverflow.ellipsis)),
+        for (final space in app.workspaces)
+          DropdownMenuItem(
+            value: space.id,
+            child: Text(
+              space.name.isEmpty ? t('Untitled') : space.name,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: (v) => setState(() => _scope = v),
+    );
+
     return Padding(
       padding: EdgeInsets.only(
         left: 16,
@@ -131,51 +156,30 @@ class _MemorySheetState extends State<_MemorySheet> {
               ),
             ),
             const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _topic,
-                    decoration: InputDecoration(
-                        isDense: true, labelText: t('Topic')),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DropdownButtonFormField<String?>(
-                    // ignore: deprecated_member_use
-                    value: _scope,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                        isDense: true, labelText: t('Applies to')),
-                    items: [
-                      DropdownMenuItem(value: null, child: Text(t('Every chat'))),
-                      for (final space in app.workspaces)
-                        DropdownMenuItem(
-                          value: space.id,
-                          child: Text(
-                            space.name.isEmpty ? t('Untitled') : space.name,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onChanged: (v) => setState(() => _scope = v),
-                  ),
-                ),
-              ],
-            ),
+            if (MediaQuery.textScalerOf(context).scale(1) > 1.3) ...[
+              topic,
+              const SizedBox(height: 8),
+              scope,
+            ] else
+              Row(
+                children: [
+                  Expanded(child: topic),
+                  const SizedBox(width: 8),
+                  Expanded(child: scope),
+                ],
+              ),
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 FilledButton(
                   onPressed: () => _save(app),
                   child: Text(
                       _editingId == null ? t('Remember it') : t('Save changes')),
                 ),
-                if (_editingId != null) ...[
-                  const SizedBox(width: 8),
+                if (_editingId != null)
                   TextButton(onPressed: _reset, child: Text(t('Cancel'))),
-                ],
               ],
             ),
             const Divider(height: 24),
@@ -194,23 +198,9 @@ class _MemorySheetState extends State<_MemorySheet> {
               onPressed: app.memories.isEmpty
                   ? null
                   : () async {
-                      final go = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: Text(t('Forget everything')),
-                          content: Text(t('Throw away everything Nymbot '
-                              'remembers about you? This cannot be undone.')),
-                          actions: [
-                            TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: Text(t('Cancel'))),
-                            FilledButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: Text(t('Forget it all'))),
-                          ],
-                        ),
-                      );
-                      if (go == true) await app.clearMemories();
+                      if (await confirmForgetAll(context)) {
+                        await app.clearMemories();
+                      }
                     },
               child: Text(t('Forget everything')),
             ),
@@ -297,4 +287,24 @@ class _MemorySheetState extends State<_MemorySheet> {
         child: Text(label,
             style: TextStyle(fontSize: 9.5, color: theme.hintColor)),
       );
+}
+
+Future<bool> confirmForgetAll(BuildContext context) async {
+  final go = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(t('Forget everything')),
+      content: Text(t('Throw away everything Nymbot '
+          'remembers about you? This cannot be undone.')),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t('Cancel'))),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t('Forget it all'))),
+      ],
+    ),
+  );
+  return go == true;
 }

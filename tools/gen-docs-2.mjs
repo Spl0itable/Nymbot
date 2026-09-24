@@ -6,7 +6,7 @@ await docsPage({
   file: 'pages/docs/chats.html',
   slug: 'docs/chats',
   title: 'Conversations - Nymbot Knowledge Base',
-  description: 'How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.',
+  description: 'How separate Nymbot conversations work: titles, what the model remembers, attachments, suggested next steps, sharing a chat by link, clearing history, ghost chats and auto-delete.',
   body: `            <h1>Conversations</h1>
             <p class="docs-lede">You can keep as many separate chats with Nymbot as you like. Each one is
                 its own thread, its own context and its own title.</p>
@@ -30,7 +30,7 @@ ${NOTE}
                 header and in the sidebar.</p>
             <p>Two things follow from that. A conversation that starts "why does this regex backtrack" is
                 findable a week later, and the title is chosen entirely on your device &mdash; the server is
-                not asked to summarise anything, and never sees the title at all.</p>
+                not asked to summarize anything, and never sees the title at all.</p>
             <p>Rename any chat from its header menu if the first thing you asked turned out not to be what
                 the conversation became about. The same menu is on every row in the sidebar, behind the
                 &hellip; button, and it acts on that row's chat: renaming, pinning, archiving, exporting or
@@ -52,14 +52,14 @@ ${NOTE}
 
             <h2 id="branching">Asking a question differently</h2>
             <p><strong>Ask this differently</strong> under any message you sent reopens it for editing.
-                What happens next is your choice, and the box is ticked by default: the chat you had stays
+                What happens next is your choice, and the box is checked by default: the chat you had stays
                 exactly as it is and the new answer arrives on a branch.</p>
             <p>The branch carries everything said before the question you changed, along with the whole
                 standing setup &mdash; repositories, persona, workspace, bot, model, effort &mdash; and the
                 artifacts those earlier messages produced. It runs on a thread of its own, so the two
                 conversations do not see each other.</p>
-            <p>Untick the box and it rewrites in place instead, which throws away everything said after
-                that message. That was the only behaviour once, and it is still there when you want it
+            <p>Uncheck the box and it rewrites in place instead, which throws away everything said after
+                that message. That was the only behavior once, and it is still there when you want it
                 &mdash; but it is no longer what happens by default, because nothing about it could be
                 undone.</p>
             <p><strong>Branch from here</strong> under a reply does the same thing without changing
@@ -71,7 +71,7 @@ ${NOTE}
                 done. Take one back out while it waits, or press <strong>Stop</strong> and nothing behind it
                 is sent either.</p>
             <p>Commands are the exception. They cost nothing and happen instantly, so <code>?balance</code>
-                or <code>?model</code> run straight away rather than queueing behind a repo task that has
+                or <code>?model</code> run right away rather than queuing behind a repo task that has
                 another eight minutes to go.</p>
 
             <h2 id="memory">What carries between chats</h2>
@@ -109,15 +109,15 @@ ${NOTE}
                 that actually look something up, and not on the ones that do not.</p>
             <div class="docs-note">
                 <span class="docs-note-label">Why not simply send everything</span>
-                <p>A long conversation sent whole would cost more on every single reply, for ever, and the
+                <p>A long conversation sent whole would cost more on every single reply, forever, and the
                     price would rise the longer the chat stayed useful. That is the pricing that makes people
                     start a new chat to save money and throw away the context they were paying for. What a
                     reply costs here tracks what the question needed, not how long you have been talking.</p>
             </div>
             <p>Begin a message with <code>!</code> to send it with no history at all: a one-off question
-                inside an existing conversation, without the thread's context colouring the answer or
-                inflating the prompt. It stays out of the thread afterwards too, so the tangent you asked to
-                keep out does not colour the next answer either. It remains in the chat where you can read
+                inside an existing conversation, without the thread's context coloring the answer or
+                inflating the prompt. It stays out of the thread afterward too, so the tangent you asked to
+                keep out does not color the next answer either. It remains in the chat where you can read
                 it &mdash; what changes is only what the model is shown next time.</p>
 
             <h2 id="writing">Writing your message</h2>
@@ -134,19 +134,21 @@ ${NOTE}
                 A short paste is left where you put it.</p>
 
             <h2 id="attachments">Sending pictures</h2>
-            <p>Put an image link in your message and ask about it. The worker pulls any picture URLs
-                out of what you send and hands them to the model alongside the question, so
-                "what is wrong with this diagram? https://…" works as one message.</p>
+            <p>Attach a picture from your device, or put an image link in your message, and ask about it.
+                The worker hands the pictures to the model alongside the question, so "what is wrong with
+                this diagram?" with the diagram attached works as one message.</p>
             <p>Every Claude, GPT, Gemini, Grok and Kimi <a href="/docs/models/#pro">Pro model</a> can see
                 images, as can the creative and translation routes on the standard tier. A vision reply
                 costs what that model's reply would have cost &mdash; there is no separate charge for
                 looking.</p>
-            <div class="docs-note">
-                <span class="docs-note-label">Note</span>
-                <p>Uploading a picture from the device is not in the standalone apps yet; a link is.
-                    <a href="https://nymchat.app">Nymchat</a> has the upload, and shares this
-                    conversation.</p>
-            </div>
+            <p>An attached picture is uploaded to a public media host so the model can look at it. The
+                upload goes through the Nymbot worker, which keeps your address off the host, and it is
+                signed with a throwaway key made for that one picture, so the host cannot tie your pictures
+                to your account or to each other. The picture itself is not encrypted there: anyone who has
+                its address can open it. A picture can be up to 4 MB, and a large one is scaled down before
+                it goes.</p>
+            <p>Documents are handled differently. A PDF or a long file is read on your device and searched
+                for each question &mdash; see <a href="/docs/documents/">PDFs and long documents</a>.</p>
 
             <h2 id="watching">Watching a reply as it is written</h2>
             <p>While a reply is generating, Nymbot reports what it is doing underneath the spinner:
@@ -159,13 +161,48 @@ ${NOTE}
                 account behind it is no more involved than it was before. Turn it off in Settings and
                 you get the plain spinner.</p>
 
+            <h2 id="follow-ups">Next steps and sources</h2>
+            <p>A reply can end with a few suggested next steps, shown as chips under the latest reply. Tap
+                one and it is sent exactly as it reads, as a plain message, with nothing pinned, attached or
+                quoted riding along. To change it first, long-press it, or right-click or Shift+click it on a
+                computer, and it goes into the composer instead.</p>
+            <p>The chips stay until you send something, a new reply starts or a message is queued, and they
+                come back when you reopen the chat.</p>
+            <p>A reply that used the web lists its sources under it. One or two are shown as cards. More than
+                that are folded into a single row of site icons with a count: tap the row to open the numbered
+                cards, and tap it again to fold them away. The icons are fetched through the Nymbot worker,
+                never straight from the sites.</p>
+
+            <h2 id="sharing">Sharing a chat by link</h2>
+            <p><strong>Share a link</strong>, in a chat's menu in the header or on its row in the sidebar,
+                makes a read-only copy of the conversation that anyone with the link can open in a
+                browser.</p>
+            <p>You choose how much goes: the whole chat, or everything up to a particular message. You also
+                choose whether sources, reasoning, the text of attached files and images go with it. By
+                default it is the messages and their sources only, and the sheet shows a preview of exactly
+                what will be shared.</p>
+            <p>The copy is encrypted on your device with a new key made for that link, and only the
+                encrypted copy is uploaded to a media host, signed by a throwaway key rather than by your
+                account. The key is the part of the link after the <code>#</code>, which browsers never send
+                to a server, so neither the host nor Nymbot can read what you shared.</p>
+            <p>The app remembers the link for that chat on this device. <strong>Stop sharing</strong> deletes
+                the encrypted copy from the host, and the link stops opening. Anyone who already opened it
+                may have kept a copy, and that cannot be taken back.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Posting to Nostr</span>
+                <p><strong>Also post to Nostr</strong> publishes a public note with the link in it, signed by
+                    your key. Anyone who sees the note can open the chat, and a public note cannot be
+                    reliably deleted, so the app asks you to confirm that first. It is never offered in an
+                    <a href="/docs/anonymous/">Anonymous Mode</a> chat.</p>
+            </div>
+
             <h2 id="clearing">Clearing and deleting</h2>
             <ul>
                 <li><strong>Delete a chat</strong> removes it from this device, wipes its archived copies,
                     and tells the server to drop the thread it keeps for context.</li>
                 <li><code>?clear</code> empties the current conversation without deleting it: same chat,
                     blank slate, model context reset.</li>
-                <li>A <a href="/docs/identity/#panic">panic wipe</a> takes everything at once &mdash; every
+                <li>A <a href="/docs/identity/#panic">device wipe</a> takes everything at once &mdash; every
                     conversation, your key, and any credits sitting on a
                     <a href="/docs/anonymous/">throwaway key</a>.</li>
             </ul>
@@ -205,7 +242,7 @@ ${NOTE}
                 <code>?model</code>, <code>?git</code>, <code>?anon</code>, <code>?clear</code>. The rest go
                 to the server and are charged like any other reply.</p>
             <p>Commands work in your own language: if the app is running in Spanish, the Spanish form of a
-                command is recognised and folded back to its canonical name before it is sent.</p>
+                command is recognized and folded back to its canonical name before it is sent.</p>
             <p>Anything that is <em>not</em> a command is simply a question, answered by whichever
                 <a href="/docs/models/">model</a> the conversation is set to.</p>
 
@@ -217,8 +254,8 @@ ${NOTE}
                         <tr><td><code>?help</code></td><td>A free, local guide to tiers, pricing and setup.</td></tr>
                         <tr><td><code>?balance</code></td><td>Your standard and Pro balances.</td></tr>
                         <tr><td><code>?buy</code></td><td>Buys credits over Lightning, with a Standard/Pro switch.</td></tr>
-                        <tr><td><code>?gift @nym</code></td><td>Gifts credits to another nym.</td></tr>
-                        <tr><td><code>?transfer @nym</code></td><td>Moves your whole balance, standard and Pro, to another nym.</td></tr>
+                        <tr><td><code>?gift</code></td><td>Opens Gift an amount, where you give some of your credits as a link, a code and a QR code anyone can redeem once. Followed by a gift link or code, it opens Redeem a gift instead.</td></tr>
+                        <tr><td><code>?transfer</code></td><td>Moves your whole balance, standard and Pro, to another key, after you confirm it.</td></tr>
                         <tr><td><code>?anon</code></td><td><a href="/docs/anonymous/">Anonymous mode</a>: chat from a throwaway key.</td></tr>
                         <tr><td><code>?clear</code></td><td>Empties the current conversation and resets its context.</td></tr>
                     </tbody>
@@ -236,6 +273,7 @@ ${NOTE}
                         <tr><td><code>?git</code></td><td>Connects a <a href="/docs/git/">repository</a>.</td></tr>
                         <tr><td><code>?git writes on</code></td><td>Lets it commit, branch and open pull requests.</td></tr>
                         <tr><td><code>!question</code></td><td>Not a command &mdash; a leading <code>!</code> sends this message with no history.</td></tr>
+                        <tr><td><code>@model question</code></td><td>Not a command either &mdash; <a href="/docs/models/#mentions">asks that one model</a> this message, from your Pro balance.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -248,10 +286,12 @@ ${NOTE}
                         <tr><td><code>?image &lt;description&gt;</code></td><td>Generates a picture.</td></tr>
                         <tr><td><code>?image models</code></td><td>Lists the generators and their prices. Free.</td></tr>
                         <tr><td><code>?image --model &lt;name&gt; &lt;description&gt;</code></td><td>Picks the generator. Needs a Pro model selected.</td></tr>
+                        <tr><td><code>?image &lt;change&gt;</code> with a picture attached</td><td><a href="/docs/media/#editing">Edits that picture</a>. Needs a Pro model selected.</td></tr>
                         <tr><td><code>?video &lt;description&gt;</code></td><td>Generates a short clip. Needs a Pro model selected.</td></tr>
                         <tr><td><code>?video models</code></td><td>Lists the video generators and their prices. Free.</td></tr>
                         <tr><td><code>?video --model &lt;name&gt; &lt;description&gt;</code></td><td>Picks the video generator.</td></tr>
                         <tr><td><code>?speak &lt;text&gt;</code></td><td>Returns a spoken clip, up to 800 characters.</td></tr>
+                        <tr><td><code>?speak models</code></td><td>Lists the voices. <code>?speak --model &lt;voice&gt; &lt;text&gt;</code> picks one, with a Pro model selected.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -263,12 +303,13 @@ ${NOTE}
                     <thead><tr><th>Command</th><th>Does</th></tr></thead>
                     <tbody>
                         <tr><td><code>?ask &lt;question&gt;</code></td><td>Asks the AI. Plain text does the same.</td></tr>
+                        <tr><td><code>?research &lt;question&gt;</code></td><td><a href="/docs/research/">Deep research</a> with the pinned Pro model: a long report with numbered sources.</td></tr>
                         <tr><td><code>?define &lt;word&gt;</code></td><td>Definition, part of speech and example usage.</td></tr>
                         <tr><td><code>?translate &lt;text&gt;</code></td><td>Translates, detecting the source language.</td></tr>
                         <tr><td><code>?news</code></td><td>Breaking news headlines.</td></tr>
                         <tr><td><code>?math &lt;expression&gt;</code></td><td>Calculates it.</td></tr>
                         <tr><td><code>?units 10 km to mi</code></td><td>Converts units.</td></tr>
-                        <tr><td><code>?time</code></td><td>UTC time and the Unix timestamp.</td></tr>
+                        <tr><td><code>?time [place]</code></td><td>The current time. In a public channel it is UTC and the Unix timestamp; in a private chat you can name a place.</td></tr>
                         <tr><td><code>?btc</code></td><td>The Bitcoin price.</td></tr>
                     </tbody>
                 </table>
@@ -327,11 +368,22 @@ ${NOTE}
                 is about to make, and the generator takes over the model chip in the toolbar.</p>
             <p>Because every generator but the built-in one is Pro work, pinning it selects the Pro tier
                 too, carried by the cheapest chat model when you have not chosen one.</p>
-            <p>Tick <strong>Only for this chat</strong> before picking to pin it to the conversation you
+            <p>Check <strong>Only for this chat</strong> before picking to pin it to the conversation you
                 are in rather than everywhere. Clear it by picking the same generator again, by switching
                 back to standard, or with <code>?image off</code> and <code>?video off</code>. A message
                 that starts with <code>?</code> or <code>!</code> is always left alone, so the commands
                 still work while a generator is pinned.</p>
+
+            <h2 id="editing">Editing a picture</h2>
+            <p>Attach a picture, or link one, and send <code>?image</code> with what to change:
+                <code>?image make the sky stormy</code>. The generator starts from your picture rather than
+                from nothing. The same works with a generator pinned: attach the picture and describe the
+                change, and the composer prompts you for it.</p>
+            <p>Editing is <a href="/docs/models/#pro">Pro</a> work, and it is priced per generation, the
+                same as making a new picture. Not every generator can edit; <code>?image models</code> and the
+                picker say which ones can. If the one you pinned cannot, Nymbot hands the edit to the default
+                editor, or to the cheapest one that costs no more, and the reply says which one made it. If
+                every generator that can edit would cost more, it tells you rather than charging more.</p>
 
             <h2 id="video">Video</h2>
             <p><code>?video a lighthouse beam sweeping across a storm</code> returns a short clip. It is a

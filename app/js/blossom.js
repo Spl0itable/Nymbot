@@ -3,7 +3,6 @@
     'use strict';
 
     const C = window.NymbotConfig;
-    const Identity = window.NymbotIdentity;
     const Edge = window.NymbotEdge;
 
     // The same hosts Nymchat mirrors across, so a blob uploaded in one app
@@ -27,22 +26,29 @@
         return hex(new Uint8Array(digest));
     }
 
+    function throwaway() {
+        const T = window.NostrTools;
+        const sk = T.generateSecretKey();
+        const pubkey = T.getPublicKey(sk);
+        return { pubkey, sign: (evt) => T.finalizeEvent(Object.assign({ pubkey }, evt), sk) };
+    }
+
     /// BUD-02 upload auth.
-    async function auth(hashHex, signer) {
+    async function auth(hashHex, signer, verb) {
         const now = Math.floor(Date.now() / 1000);
+        const action = verb || 'upload';
         const event = {
             kind: 24242,
             created_at: now,
             tags: [
-                ['t', 'upload'],
+                ['t', action],
                 ['x', hashHex],
                 ['expiration', String(now + 600)]
             ],
-            content: 'Uploading blob with SHA-256 hash'
+            content: action === 'delete' ? 'Delete blob' : 'Uploading blob with SHA-256 hash'
         };
-        const signed = signer
-            ? signer.sign(Object.assign({ pubkey: signer.pubkey }, event))
-            : await Identity.signEvent(event);
+        const who = signer || throwaway();
+        const signed = await who.sign(Object.assign({ pubkey: who.pubkey }, event));
         return 'Nostr ' + btoa(JSON.stringify(signed));
     }
 
@@ -77,20 +83,35 @@
 
     const Blossom = {
         HOSTS,
+        throwaway,
 
         /// Uploads bytes and returns the public URL.
         async put(bytes, mime, opts) {
+            return (await this.place(bytes, mime, opts)).url;
+        },
+
+        async place(bytes, mime, opts) {
             const options = opts || {};
-            const header = await auth(await sha256Hex(bytes), options.signer);
+            const sha256 = await sha256Hex(bytes);
+            const header = await auth(sha256, options.signer);
             let last = null;
             for (const host of HOSTS) {
                 if (options.signal && options.signal.aborted) throw new Error(t('Canceled.'));
                 try {
-                    return await putTo(host, bytes, mime, header, options.signal);
+                    return { url: await putTo(host, bytes, mime, header, options.signal), host, sha256 };
                 } catch (e) { last = e; }
             }
             throw new Error(t('The file could not be uploaded — every media host refused it.')
                 + (last && last.message ? ' (' + last.message + ')' : ''));
+        },
+
+        async remove(host, hashHex, opts) {
+            const options = opts || {};
+            const header = await auth(hashHex, options.signer, 'delete');
+            const url = `${proxyBase()}?action=delete&server=${encodeURIComponent(host)}`
+                + `&x=${encodeURIComponent(hashHex)}`;
+            const resp = await Edge.fetch(url, { method: 'POST', headers: { 'Authorization': header } });
+            return resp.status;
         },
 
         /// Uploads one attachment and records where it landed.

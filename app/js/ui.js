@@ -21,6 +21,7 @@
     const REPLY_PIN_MARGIN = 8;
     const MD = window.NymbotMarkdown;
     const QR = window.NymbotQR;
+    const Nip46 = window.NymbotNip46;
     const Avatar = window.NymbotAvatar;
     const Attach = window.NymbotAttach;
     const Blossom = window.NymbotBlossom;
@@ -35,6 +36,13 @@
     const Artifacts = window.NymbotArtifacts;
     const GitApi = window.NymbotGitApi;
     const Free = window.NymbotFree;
+    const Caps = window.NymbotCaps;
+    const Mention = window.NymbotMention;
+    const PicEdit = window.NymbotPicEdit;
+    const Research = window.NymbotResearch;
+    const Team = window.NymbotTeam;
+    const GitRun = window.NymbotGitRun;
+    const ServerRun = window.NymbotServerRun;
     const NT = () => window.NostrTools;
 
     /// Credits and sats, with their thousands separated. Never abbreviated —
@@ -43,6 +51,9 @@
     const NOMINAL_TURN_IN = 3000;
     const EST_TYPICAL_OUT = 400;
     const EST_LONG_OUT = 1600;
+    const MEDIA_FILTERS = ['image', 'video', 'speech'];
+    const INVOICE_KEPT_MS = 24 * 60 * 60 * 1000;
+    const POPULAR_MAKERS = ['anthropic', 'openai', 'google', 'xai', 'deepseek', 'meta', 'mistralai', 'qwen', 'moonshotai'];
 
     const CREDIT_PRESETS = [5, 10, 25, 50, 75, 100, 150, 250, 500, 1000, 2500, 5000];
 
@@ -64,20 +75,19 @@
     // How far to look for the epoch an account's announced key sits at.
     const PQ_EPOCH_SCAN = 12;
 
-    const BOT_SUFFIX = C.botPubkey.slice(-4);
     const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
 
     const shortcuts = () => [
         { keys: [MODIFIER, 'K'], what: t('Command palette') },
         { keys: [MODIFIER, 'Shift', 'F'], what: t('Search every chat') },
         { keys: [MODIFIER, 'F'], what: t('Find in this chat') },
-        { keys: [MODIFIER, 'N'], what: t('New chat') },
+        { keys: [MODIFIER, 'Shift', 'O'], what: t('New chat') },
         { keys: [MODIFIER, 'B'], what: t('Show or hide the chat list — bold, while writing') },
         { keys: [MODIFIER, 'I'], what: t('Italic, while writing') },
         { keys: [MODIFIER, 'E'], what: t('Code, while writing') },
         { keys: [MODIFIER, 'Shift', 'E'], what: t('Code block, while writing') },
         { keys: [MODIFIER, 'Enter'], what: t('Send, whatever the Enter setting is') },
-        { keys: [MODIFIER, 'Shift', 'C'], what: t('Copy the last reply') },
+        { keys: [MODIFIER, 'Shift', ';'], what: t('Copy the last reply') },
         { keys: [MODIFIER, 'Shift', 'S'], what: t('Ask the last question again') },
         { keys: [MODIFIER, 'Shift', 'M'], what: t('Pick a model') },
         { keys: [MODIFIER, 'Shift', 'G'], what: t('Repositories') },
@@ -90,11 +100,11 @@
 
     const starters = () => [
         { title: t('Explain something'), body: t('Explain ML-KEM in three sentences, then tell me what it does not protect.') },
-        { title: t('Work in a repo'), body: t('Read the repositories I connected and tell me where the retry logic gives up too early.') },
+        { title: t('Work in a repo'), body: t('Read the repositories I connected and tell me where the retry logic gives up too early.'), needs: 'repos' },
         { title: t('Write code'), body: t('Write a small, dependency-free function that debounces an async call and cancels the pending one.') },
         { title: t('Compare options'), body: t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.') },
         { title: t('Generate a picture'), body: '?image a lighthouse at dusk, long exposure, muted palette' },
-        { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk' }
+        { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk', needs: 'pro' }
     ];
 
     const UI = {
@@ -107,6 +117,8 @@
         attachments: [],
         turns: new Map(),
         queues: new Map(),
+        queueEdit: null,
+        dictation: null,
         get sending() { return this.sendingIn(this.conv && this.conv.id); },
         get queue() { return this.queueFor(this.conv && this.conv.id); },
         quote: null,
@@ -129,6 +141,8 @@
         artifact: null,
         artifactTab: 'preview',
         compare: null,
+        comparePicks: null,
+        _compareBusy: false,
         openCitations: new Set(),
         stopped: false,
         _turnWatch: null,
@@ -159,6 +173,8 @@
             brand.appendChild(el('span', 'brand-name', 'Nymbot'));
             this.applyAppearance();
             this.bind();
+            this.watchSigner();
+            if (window.NymbotVault && !(await window.NymbotVault.gate())) return;
             Anon.load();
             Anon.onKeysetChange = () => this.ask({
                 title: t('Voucher keys changed'),
@@ -182,8 +198,10 @@
             $('shell').hidden = false;
 
             Relays.onStatus((n) => {
+                const label = n > 0 ? t('{n} relays connected', { n }) : t('Not connected to any relay');
                 $('relayDot').classList.toggle('is-live', n > 0);
-                $('relayDot').title = t('{n} relays connected', { n });
+                $('relayDot').title = label;
+                $('relayDot').setAttribute('aria-label', label);
             });
             Relays.connect();
 
@@ -202,7 +220,9 @@
             }
             this.renderIdentity();
             this.refreshToolbar();
+            this.refreshMic();
             this.restoreLibrary();
+            if (ServerRun) ServerRun.load().catch(() => { });
 
             // The announcement and the bot's key are what make a reply
             // post-quantum; neither blocks the first message.
@@ -213,6 +233,7 @@
                 if (Identity.rootLocked) this.toast(t('This account already uses another device\'s post-quantum key. Open Identity to link this one.'));
                 this.refreshBalance();
                 Anon.flush().then(() => this.runAutoTopUp()).catch(() => { });
+                this.resumeInvoices().catch(() => { });
             }, 300);
 
             Chat.onStatus = (text) => this.status(text);
@@ -228,6 +249,7 @@
             };
             Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
             this.offerBotFromUrl();
+            window.NymbotGift.fromUrl(this);
             this.watchScrolling();
             this.startScheduler();
             setTimeout(() => this.runDueSchedules().catch(() => { }), 4000);
@@ -341,9 +363,14 @@
         afterSync(touched) {
             const set = new Set(touched || []);
             if (set.has('settings')) {
+                const nickname = this.nickname();
                 this.settings = Store.settings();
                 this.applyAppearance();
                 this.refreshNotices(true);
+                if (this.nickname() !== nickname) {
+                    this.renderIdentity();
+                    if (this.conv && !set.has('chat-' + this.conv.id)) this.renderMessages();
+                }
             }
             if (set.has('chats')) this.renderList();
             if (this.conv && set.has('chat-' + this.conv.id)) {
@@ -366,6 +393,22 @@
             root.setAttribute('data-mono', s.monospaceReplies ? 'on' : 'off');
             root.setAttribute('data-motion', s.reduceMotion ? 'reduce' : 'full');
             root.style.setProperty('--font-scale', String(s.fontScale || 1));
+            this.syncThemeColor();
+        },
+
+        syncThemeColor() {
+            const root = document.documentElement;
+            const themed = root.hasAttribute('data-theme');
+            const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
+            for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+                if (!meta.dataset.fallback) meta.dataset.fallback = meta.getAttribute('content') || '';
+                meta.setAttribute('content', themed && bg ? bg : meta.dataset.fallback);
+            }
+        },
+
+        reducedMotion() {
+            if (this.settings.reduceMotion) return true;
+            return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
         },
 
         saveSettings(patch) {
@@ -509,14 +552,48 @@
             if (anon) {
                 return {
                     pubkey: pk,
-                    name: Avatar.nymName(pk),
-                    suffix: Avatar.suffix(pk),
+                    name: t('Anon'),
                     colour: Avatar.colorClass(pk),
                     avatar: Avatar.identicon(pk),
                     nip05: ''
                 };
             }
-            return Profile.for(pk);
+            const me = Profile.for(pk);
+            const nick = this.nickname();
+            if (nick) me.name = nick;
+            return me;
+        },
+
+        nickname() {
+            return Profile.cleanNickname(this.settings.nickname);
+        },
+
+        setNickname(value) {
+            const nickname = Profile.cleanNickname(value);
+            this.saveSettings({ nickname, nicknameAt: Date.now() });
+            this.renderIdentity();
+            if (this.conv) this.renderMessages();
+            return nickname;
+        },
+
+        saveNicknameField() {
+            const saved = this.setNickname($('setNickname').value);
+            $('setNickname').value = saved;
+            this.modalStatus('settingsStatus', saved ? t('Nickname saved.') : t('Nickname cleared.'), 'ok');
+        },
+
+        clearNicknameField() {
+            $('setNickname').value = '';
+            this.setNickname('');
+            this.modalStatus('settingsStatus', t('Nickname cleared.'), 'ok');
+        },
+
+        takeGateNickname() {
+            const field = $('gateNickname');
+            if (!field) return;
+            const value = Profile.cleanNickname(field.value);
+            field.value = '';
+            if (value) this.setNickname(value);
         },
 
         renderMessages() {
@@ -569,7 +646,8 @@
             const cards = el('div', 'empty-cards');
             const own = bot && (bot.starters || []).length
                 ? bot.starters.map(body => ({ title: bot.name, body }))
-                : starters();
+                : starters().filter(x => x.needs !== 'repos' || Store.repos().length)
+                    .filter(x => x.needs !== 'pro' || (Number(this.balance.pro) || 0) > 0);
             for (const starter of own) {
                 const b = el('button', 'empty-card');
                 b.type = 'button';
@@ -638,6 +716,84 @@
             return badge;
         },
 
+        modelTitle(m) {
+            const title = el('span', 'author-model', m.model);
+            const pro = m.pro != null ? !!m.pro : !!m.model;
+            if (!pro) return title;
+            const maker = this.makerOfMessage(m);
+            if (maker) {
+                title.appendChild(this.makerMark(maker));
+            } else if (!this.models) {
+                title.dataset.makerWait = '1';
+                title.dataset.model = m.model;
+                if (m.modelKey) title.dataset.modelKey = m.modelKey;
+                const loading = this.loadMentionModels();
+                if (loading) loading.then(() => this.fillMakerMarks());
+            }
+            return title;
+        },
+
+        makerMark(maker) {
+            const mark = Icons.brand(maker.slug, { size: 14 });
+            mark.classList.add('maker-mark');
+            mark.removeAttribute('aria-hidden');
+            mark.setAttribute('role', 'img');
+            mark.setAttribute('aria-label', maker.name);
+            const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+            title.textContent = maker.name;
+            mark.insertBefore(title, mark.firstChild);
+            return mark;
+        },
+
+        fillMakerMarks() {
+            if (!this.models) return;
+            for (const title of document.querySelectorAll('.author-model[data-maker-wait]')) {
+                delete title.dataset.makerWait;
+                const maker = this.makerOfMessage({ model: title.dataset.model, modelKey: title.dataset.modelKey || null });
+                if (maker) title.appendChild(this.makerMark(maker));
+            }
+        },
+
+        makerOfMessage(m) {
+            if (m.modelMaker) {
+                const known = m.modelKey ? this.makerOf({ key: m.modelKey }) : null;
+                return {
+                    slug: m.modelMaker,
+                    name: (known && known.slug === m.modelMaker && known.name) || m.modelMakerName || m.modelMaker
+                };
+            }
+            return this.modelMaker(m.model, m.modelKey ? [{ key: m.modelKey }] : []);
+        },
+
+        makerOf(pick) {
+            const catalog = (this.models && this.models.models) || [];
+            const groups = (this.models && this.models.groups) || [];
+            const full = (pick.key && catalog.find(c => c.key === pick.key)) || {};
+            const group = (pick.key && groups.find(g => (g.keys || []).includes(pick.key))) || {};
+            const slug = full.authorSlug || pick.authorSlug || pick.slug || group.authorSlug || null;
+            if (!slug) return null;
+            return { key: pick.key || null, slug, name: full.author || pick.author || group.author || slug };
+        },
+
+        modelMaker(label, picks) {
+            if (!label) return null;
+            const catalog = (this.models && this.models.models) || [];
+            const hit = (picks || []).filter(p => p && p.key)
+                .map(p => p.label ? p : (catalog.find(c => c.key === p.key) || p))
+                .find(p => p.label === label)
+                || catalog.find(c => c.label === label);
+            return hit ? this.makerOf(hit) : null;
+        },
+
+        modelStamp(label, picks) {
+            const maker = this.modelMaker(label, picks);
+            return {
+                modelKey: maker ? maker.key : null,
+                modelMaker: maker ? maker.slug : null,
+                modelMakerName: maker ? maker.name : null
+            };
+        },
+
         messageNode(m, grouped) {
             const self = m.role === 'self';
             const node = el('div', 'chat-message'
@@ -652,17 +808,13 @@
                 const who = el('span', 'message-author' + (m.role === 'bot' ? ' bot-author' : ''));
                 if (m.role === 'bot') {
                     who.appendChild(document.createTextNode(C.botName));
-                    who.appendChild(el('span', 'nym-suffix', '#' + BOT_SUFFIX));
                     // Which tier wrote this.
                     who.appendChild(this.tierBadge(m));
-                    if (m.model) who.appendChild(el('span', 'author-model', m.model));
+                    if (m.model) who.appendChild(this.modelTitle(m));
                 } else {
                     const me = this.selfIdentity();
                     who.classList.add(me.colour);
                     who.appendChild(document.createTextNode(me.name));
-                    // The suffix is what tells two generated nyms apart. A
-                    // published name is already unique enough to stand alone.
-                    if (!me.hasProfile) who.appendChild(el('span', 'nym-suffix', '#' + me.suffix));
                     if (m.edited) who.appendChild(el('span', 'author-model', t('edited')));
                 }
                 node.appendChild(who);
@@ -719,6 +871,11 @@
                 text.textContent = m.content;
             }
             body.appendChild(text);
+            if (m.role === 'bot' && window.NymbotRunner) window.NymbotRunner.decorate(text);
+            if (m.docs && window.NymbotDocs) {
+                const used = window.NymbotDocs.usedNode(m.docs);
+                if (used) body.appendChild(used);
+            }
 
             const cites = Array.isArray(m.sources) && m.sources.length
                 ? this.citationCards(m.sources, m.id) : null;
@@ -726,6 +883,14 @@
             if (m.checkpoint) {
                 body.appendChild(this.checkpointCard(m));
             }
+            if (m.pendingTool && window.NymbotConnectors) {
+                body.appendChild(window.NymbotConnectors.pendingCard(this, m));
+            }
+            if (m.staged) body.appendChild(this.stagedCard(m));
+            const runs = window.NymbotServerRun ? window.NymbotServerRun.summaryNode(m) : null;
+            if (runs) body.appendChild(runs);
+            const crew = m.role === 'bot' ? Team.summaryNode(this, m) : null;
+            if (crew) body.appendChild(crew);
 
 
             const made = m.role === 'bot'
@@ -760,14 +925,15 @@
             // rather than as a chip wedged into the byline.
             const foot = el('span', 'bubble-foot');
             foot.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
-            if (m.cost) {
+            const paid = window.NymbotServerRun ? window.NymbotServerRun.totalCost(m) : m.cost;
+            if (paid) {
                 const cost = el('button', 'cost-chip');
                 cost.type = 'button';
                 cost.dataset.act = 'msg-cost';
                 cost.dataset.id = m.id;
                 cost.title = t('What this reply cost');
                 cost.appendChild(Icons.node('bolt', { size: 10, filled: false }));
-                cost.appendChild(el('span', null, String(m.cost)));
+                cost.appendChild(el('span', null, String(paid)));
                 foot.appendChild(cost);
             }
             body.appendChild(foot);
@@ -923,16 +1089,23 @@
             const convId = turn.convId;
             let token = res.resumeToken;
             let reserve = res.nextReserve || 0;
-            if (!token) {
+            const research = res.research ? (turn.research || true) : null;
+            let stall = GitRun.stallWait(res);
+            let stallResumes = 0;
+            if (!token && !res.capStopped) {
                 this.note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'), convId);
                 return;
             }
-            let left = this.continueBudget(turn);
-            if (left <= 0) {
+            if (!token && res.capStopped) {
+                this.note(t('That answer stopped early to stay inside this chat\'s spending cap.'), convId);
+                return;
+            }
+            let left = research ? Infinity : this.continueBudget(turn);
+            if (stall == null && left <= 0) {
                 this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'), convId);
                 return;
             }
-            if (reserve && reserve > left) {
+            if (stall == null && reserve && reserve > left) {
                 this.note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
                     { n: num(reserve - left) }), convId);
                 return;
@@ -940,26 +1113,45 @@
 
             let legs = 0;
             let stalls = 0;
-            while (token && left > 0 && !turn.stopped) {
-                if (legs++) {
+            while (token && !turn.stopped
+                && (stall != null ? stallResumes < GitRun.MAX_STALL_RESUMES : left > 0)) {
+                if (stall != null) {
+                    stallResumes++;
+                    legs = 1;
+                    await this.stallPause(turn, stall, stallResumes);
+                    if (turn.stopped) break;
+                } else if (legs++) {
                     const gap = LEG_GAP_MS + Math.round(Math.random() * LEG_GAP_JITTER_MS);
                     this.turnLabel(turn, t('Pausing a moment so the next step does not crowd the last'));
                     await this.legPause(turn, gap);
                     if (turn.stopped) break;
                 }
+                const stored = Store.conversation(convId);
+                if (!stored) return;
+                const conv = turn.asked ? Object.assign({}, stored, { proModel: turn.asked, mediaModel: null }) : stored;
+                const capStop = this.capStopsLeg(conv);
+                if (capStop) {
+                    this.note(capStop, convId);
+                    return;
+                }
                 this.turnLabel(turn, t('Carrying on where it left off'));
-                const conv = Store.conversation(convId);
-                if (!conv) return;
                 let next;
                 try {
                     next = await Chat.send(conv, t('Continue.'), this.settings, {
                         resume: token,
+                        maxCost: Caps.maxCost(conv, true, this.models),
+                        research,
                         controller: turn.controller,
                         onStatus: (text) => this.turnStatus(turn, text),
                         onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
                     });
                 } catch (e) {
                     this.stopWatchingTurn(turn);
+                    if (stall != null && e && e.resumable && e.resumeToken && !turn.stopped
+                        && stallResumes < GitRun.MAX_STALL_RESUMES) {
+                        token = e.resumeToken;
+                        continue;
+                    }
                     if (e && e.resumable && e.resumeToken && stalls < LEG_STALL_WAITS_MS.length
                         && !turn.stopped) {
                         const wait = LEG_STALL_WAITS_MS[stalls++];
@@ -972,6 +1164,10 @@
                     }
                     if (e && e.resumable) {
                         this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'), convId);
+                        return;
+                    }
+                    if (e && e.capExceeded) {
+                        this.note(t('Stopped: carrying on could go past this chat\'s spending cap.'), convId);
                         return;
                     }
                     this.note((e && e.message) || t('Could not carry on from there.'), convId);
@@ -989,26 +1185,42 @@
                     pro: !!next.pro,
                     model: next.modelLabel
                         || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
+                    ...this.modelStamp(next.modelLabel
+                        || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
+                    [{ key: next.modelKey }, conv.mediaModel, conv.proModel, this.settings.proModel]),
                     sources: next.sources || null,
+                    team: Team.carry(next),
                     followUps: next.followUps || null,
+                    serverRuns: next.serverRuns || null,
+                    serverRunCredits: next.serverRunCredits || 0,
                     calls: next.modelCalls || 1,
                     task: next.taskType || null,
+                    checkpoint: next.checkpoint || null,
+                    staged: next.staged || null,
                     continued: true,
+                    pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(next) : null,
                     ts: Date.now()
                 };
                 Store.addMessage(convId, more);
                 Artifacts.harvest(convId, more);
                 this.showMessage(convId, more);
-                Store.recordUsage(more.cost);
-                this.bumpStats(conv, more.cost);
+                const legSpent = ServerRun ? ServerRun.totalCost(more) : more.cost;
+                Store.recordUsage(legSpent, !!next.pro);
+                this.bumpStats(conv, legSpent, !!next.pro);
 
-                turn.continued = (turn.continued || 0) + (more.cost || 0);
+                turn.continued = (turn.continued || 0) + (legSpent || 0);
                 this.creditBalance(next.pro,
                     next.balanceCredits != null ? next.balanceCredits : next.balance);
-                left = this.continueBudget(turn);
+                left = research ? Infinity : this.continueBudget(turn);
                 token = next.truncated ? next.resumeToken : null;
                 reserve = next.nextReserve || 0;
+                stall = GitRun.stallWait(next);
+                if (stall != null) continue;
 
+                if (token && !research && !(Number(this.settings.autoContinue) || 0)) {
+                    this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'), convId);
+                    return;
+                }
                 if (token && reserve && reserve > left) {
                     this.note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
                         { n: num(reserve), left: num(left) }), convId);
@@ -1020,9 +1232,32 @@
                     return;
                 }
             }
-            if (turn.continued) {
+            if (token && stall != null && !turn.stopped) {
+                this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'), convId);
+                return;
+            }
+            if (turn.continued && !token) {
                 this.note(t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(turn.continued) }), convId);
             }
+        },
+
+        capStopsLeg(conv) {
+            if (!Caps.any(conv)) return null;
+            const check = Caps.check(conv, { tier: 'pro', high: 0 }, this.models);
+            return check.state === 'block' ? t('Stopped: this chat has reached its spending cap.') : null;
+        },
+
+        async stallPause(turn, ms, attempt) {
+            const until = Date.now() + ms;
+            while (!turn.stopped) {
+                const left = until - Date.now();
+                if (left <= 0) break;
+                const line = GitRun.stallLine(left, attempt);
+                this.turnLabel(turn, line);
+                this.turnStatus(turn, line);
+                await new Promise(r => setTimeout(r, Math.min(1000, left)));
+            }
+            this.turnStatus(turn, null);
         },
 
         // --- watching a turn as it runs ----------------------------------------
@@ -1061,7 +1296,10 @@
                     return step.stage === 'planning'
                         ? t('Planning the answer before writing it')
                         : t('Reading the answer back against the question');
+                case 'connector':
+                    return window.NymbotConnectors ? window.NymbotConnectors.progressLine(step) : '';
                 case 'tool':
+                    if (step.connector && window.NymbotConnectors) return window.NymbotConnectors.progressLine(step);
                     return step.target
                         ? t('{tool}: {target}', { tool: this.toolLabel(step.tool), target: step.target })
                         : this.toolLabel(step.tool);
@@ -1099,9 +1337,14 @@
         toolLabel(name) {
             switch (name) {
                 case 'list_directory': return t('Listing files');
+                case 'list_files': return t('Listing files');
                 case 'read_file': return t('Reading');
                 case 'search_code': return t('Searching the code');
                 case 'write_file': return t('Writing');
+                case 'edit_file': return t('Editing');
+                case 'commit': return t('Committing');
+                case 'ci_status': return t('Checking CI');
+                case 'explore': return t('Exploring');
                 case 'create_branch': return t('Creating a branch');
                 case 'open_pull_request': return t('Opening a pull request');
                 case 'recall': return t('Looking back through this chat');
@@ -1111,9 +1354,19 @@
 
         renderProgress(turn) {
             const node = turn && turn.node;
-            if (!node || !node.isConnected || !this.settings.showProgress) return;
+            if (!node || !node.isConnected || (!this.settings.showProgress && !turn.research && !turn.team)) return;
             const box = node.querySelector('.bot-progress');
             if (!box) return;
+            if (turn.team) {
+                Team.render(box, turn.steps, turn.team);
+                this.scrollToBottom();
+                return;
+            }
+            if (turn.research) {
+                Research.render(box, turn.steps);
+                this.scrollToBottom();
+                return;
+            }
             box.innerHTML = '';
             // The last few only: this sits under a spinner, not in a log view.
             let last = '';
@@ -1132,7 +1385,7 @@
         /// turn is over, and never keeps the send waiting on it.
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
-            if (!this.settings.showProgress) return;
+            if (!this.settings.showProgress && !turn.research && !turn.team) return;
             turn.steps = [];
             let after = 0;
             let alive = true;
@@ -1146,7 +1399,7 @@
                         for (const s of steps) turn.steps.push(s);
                         this.renderProgress(turn);
                     }
-                    await new Promise(r => setTimeout(r, 2000));
+                    await new Promise(r => setTimeout(r, !signer && Identity.isRemote ? 5000 : 2000));
                 }
             };
             tick().catch(() => { });
@@ -1221,6 +1474,7 @@
                     if (follow) placed = this.pinReply(node);
                     if (at >= target.length) {
                         caret.remove();
+                        if (window.NymbotRunner) window.NymbotRunner.decorate(text);
                         resolve();
                         return;
                     }
@@ -1253,12 +1507,28 @@
                 return;
             }
 
-            const text = bare ? typed : this.withMediaModel(typed, conv);
+            let mention = null;
+            if (!bare && Mention.parse(typed)) {
+                if (!this.models) await this.loadMentionModels();
+                mention = this.models ? Mention.apply(typed, this.models) : { unknown: Mention.parse(typed).name };
+                if (mention && mention.model && !mention.text) {
+                    this.note(t('Say what to ask {name} after the mention.', { name: mention.model.label }), conv.id);
+                    return;
+                }
+                const wallet = conv.anon && Anon.ready() ? this.anonBalance : this.balance;
+                if (mention && mention.model && wallet.pro != null && !(wallet.pro > 0)) {
+                    this.note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
+                        { name: mention.model.key }), conv.id);
+                    return;
+                }
+            }
+            const asked = mention && mention.model ? Mention.pinned(mention.model) : null;
+            let text = asked ? mention.text : (bare ? typed : this.withMediaModel(typed, conv));
 
             // Typing while it is still writing used to do nothing at all — the
             // message was dropped on the floor with no sign it had been. It
             // waits its turn instead, and says that it is waiting.
-            if (this.sendingIn(conv.id)) {
+            if (this.sendingIn(conv.id) || (override == null && this.queueEdit && this.queueEdit.convId === conv.id)) {
                 if (bare) return;
                 this.queueFor(conv.id, true).push(typed);
                 if (here()) this.renderQueue();
@@ -1272,6 +1542,21 @@
                 return;
             }
 
+            if (navigator.onLine === false) {
+                this.toast(t('You are offline. Your message is still here; send it once you are back online.'));
+                return;
+            }
+
+            const research = bare ? null : Research.claim(this,
+                asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv, asked ? text : typed);
+            if (research && research.blocked) {
+                this.note(research.blocked, conv.id);
+                return;
+            }
+            if (research) text = research.question;
+            const team = bare ? null : Team.claim(this,
+                asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv, !!research);
+
             if (override == null) {
                 input.value = '';
                 Store.setDraft(conv.id, '');
@@ -1280,9 +1565,10 @@
                 this.hideSuggest();
             }
 
-            const composing = here() && !bare;
-            const attachments = composing ? this.attachments.slice() : [];
-            const quote = composing ? this.quote : null;
+            const carried = !!(opts && Array.isArray(opts.attachments));
+            const composing = here() && !bare && !carried;
+            const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
+            const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
 
             // One gift wrap carries about 23 KB once the standing context and
             // the attachments are counted. Checked before the message joins
@@ -1297,7 +1583,7 @@
             // it. What it must never do is reach the worker, because a device
             // counter the server could see would link a person's keys to each
             // other, which is the one thing this app is built not to do.
-            if (!this.freeAllows()) {
+            if (!asked && !this.freeAllows()) {
                 this.offerUpgrade();
                 if (override == null) {
                     $('input').value = typed;
@@ -1322,8 +1608,10 @@
                         confirm: t('Send anyway')
                     });
                     if (!go) {
-                        this.attachments = attachments;
-                        this.renderAttachments();
+                        if (composing) {
+                            this.attachments = attachments;
+                            this.renderAttachments();
+                        }
                         if (override == null) {
                             $('input').value = typed;
                             this.autoGrow();
@@ -1334,6 +1622,7 @@
                 }
             }
 
+            if (window.NymbotDocs && !window.NymbotDocs.loaded(conv.id)) await window.NymbotDocs.load(conv.id);
             const cost = Chat.wireCost(conv, text, { attachments, quote });
             if (cost.over > 0) {
                 if (override == null) {
@@ -1344,6 +1633,30 @@
                 this.toast(Chat.overLimitMessage(
                     Chat.wireTextFor(conv, text, { attachments, quote })));
                 return;
+            }
+
+            let maxCost = null;
+            if (Caps.any(conv)) {
+                const capConv = asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv;
+                let est = Caps.estimate(this, text, capConv, { attachments, quote });
+                const waived = this._capWaive === conv.id;
+                if (team && !waived) {
+                    const priced = await Team.estimate(this, capConv, team, team.mode);
+                    if (!priced.error) est = { tier: 'pro', low: priced.typical, high: priced.max };
+                }
+                this._capWaive = null;
+                const gate = waived
+                    ? { go: true, waived: true }
+                    : await Caps.gate(this, capConv, est, { unattended: !!(opts && opts.unattended) });
+                if (!gate.go) {
+                    if (override == null) {
+                        $('input').value = typed;
+                        this.autoGrow();
+                        this.updateHints();
+                    }
+                    return;
+                }
+                if (!gate.waived) maxCost = Caps.maxCost(capConv, est.tier === 'pro', this.models);
             }
 
             if (composing) {
@@ -1358,14 +1671,16 @@
                 role: 'self',
                 content: typed,
                 ts: Date.now(),
-                attachments: attachments.map(a => ({
-                    id: a.id, kind: a.kind, name: a.name, mime: a.mime, size: a.size,
-                    ...(a.kind === 'image' ? { dataUrl: a.dataUrl } : {})
-                })),
-                quote: quote ? quote.slice(0, 200) : null
+                attachments: attachments.map(a => this.attachmentRecord(a)),
+                quote: quote ? quote.slice(0, 200) : null,
+                docs: window.NymbotDocs ? window.NymbotDocs.usage(conv, text, attachments) : null
             };
             Store.addMessage(conv.id, mine);
             this.showMessage(conv.id, mine);
+            if (window.NymbotDocs) {
+                window.NymbotDocs.keep(conv.id, attachments)
+                    .then(() => { if (here()) window.NymbotDocs.renderTray(this.conv); });
+            }
             // Read for standing facts before the reply comes back, so what is
             // remembered is offered while the message is still on screen.
             if (!bare) this.noticeMemories(typed, conv);
@@ -1379,13 +1694,28 @@
             }
 
             const repos = Chat.reposFor(live);
-            const turn = this.beginTurn(live, repos.length && (live.proModel || this.settings.proModel)
-                ? t('Nymbot is reading your repositories')
-                : t('Nymbot is thinking'));
+            const turn = this.beginTurn(live, team
+                ? t('Nymbot is leading a team')
+                : (research
+                    ? t('Nymbot is researching')
+                    : (repos.length && (live.proModel || this.settings.proModel)
+                        ? t('Nymbot is reading your repositories')
+                        : t('Nymbot is thinking'))));
+            turn.asked = asked;
+            if (research) turn.research = research.payload;
+            if (team) turn.team = team;
+            if (research || team) this.renderProgress(turn);
+            if (mention && mention.unknown) {
+                this.note(t('No model called @{name}, so that went as an ordinary message. Type @ to pick one.',
+                    { name: mention.unknown }), live.id);
+            }
 
             try {
-                const res = await Chat.send(live, text, this.settings, {
-                    attachments, quote,
+                const res = await Chat.send(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
+                    text, this.settings, {
+                    attachments, quote, maxCost,
+                    research: research ? research.payload : null,
+                    team,
                     controller: turn.controller,
                     onStatus: (status) => this.turnStatus(turn, status),
                     onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
@@ -1399,9 +1729,15 @@
                     cost: res.cost || 0,
                     pro: !!res.pro,
                     model: res.modelLabel
-                        || (res.pro ? ((live.proModel || this.settings.proModel || {}).label || null) : null),
+                        || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null),
+                    ...this.modelStamp(res.modelLabel
+                        || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null),
+                    [{ key: res.modelKey }, asked, live.mediaModel, live.proModel, this.settings.proModel]),
                     sources: res.sources || null,
+                    team: Team.carry(res),
                     followUps: res.followUps || null,
+                    serverRuns: res.serverRuns || null,
+                    serverRunCredits: res.serverRunCredits || 0,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
                     // Kept so the cost breakdown reports what the worker said
                     // it did rather than re-deriving a guess after the fact.
@@ -1410,17 +1746,20 @@
                     // What it changed in a repository, and where the branch
                     // stood before it did — so the run can be put back.
                     checkpoint: res.checkpoint || null,
+                    pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(res) : null,
+                    staged: res.staged || null,
                     ts: Date.now()
                 };
                 Store.addMessage(live.id, reply);
                 const lifted = Artifacts.harvest(live.id, reply);
                 const node = this.showMessage(live.id, reply);
                 if (node && lifted.length) this.renderArtifactStrip();
-                if (node && this.settings.typewriter && reply.content.length < 12000) {
+                if (node && this.settings.typewriter && !this.reducedMotion() && reply.content.length < 12000) {
                     await this.typeInto(node, reply);
                 }
-                Store.recordUsage(reply.cost);
-                live = this.bumpStats(live, reply.cost) || live;
+                const spent = ServerRun ? ServerRun.totalCost(reply) : reply.cost;
+                Store.recordUsage(spent, !!res.pro);
+                live = this.bumpStats(live, spent, !!res.pro) || live;
                 this.renderList();
                 this.notifyReply(reply);
 
@@ -1453,6 +1792,18 @@
                 this.stopWatchingTurn(turn);
                 if (e && e.name === 'AbortError') {
                     this.note(t('Stopped. That reply was not charged for unless it had already finished.'), live.id);
+                } else if (e && e.offline) {
+                    this.unsend(live, mine, { typed, attachments, quote, composing, override });
+                    this.toast(e.message);
+                } else if (e && e.capExceeded) {
+                    this.capRefused(live, e, { typed, mine, attachments, quote, override, unattended: !!(opts && opts.unattended) });
+                } else if (e && e.team && !e.noCredits) {
+                    this.teamRefused(live, e, { typed, mine, attachments, quote, override });
+                } else if (e && e.noCredits && e.team) {
+                    this.creditBalance(true, e.balanceCredits != null ? e.balanceCredits : e.balance);
+                    this.renderBalance();
+                    this.note(Team.refusal(e), live.id);
+                    if (here() && !live.anon) this.openCredits();
                 } else if (e && e.noCredits) {
                     this.creditBalance(e.pro,
                         e.balanceCredits != null ? e.balanceCredits : e.balance);
@@ -1473,7 +1824,13 @@
                     const topped = live.anon
                         ? await this.runAutoTopUp({ force: true })
                         : null;
-                    if (topped) {
+                    if (topped && !(opts && opts.toppedUp)) {
+                        Store.deleteMessage(live.id, mine.id);
+                        if (here()) this.renderMessages();
+                        this.note(t('Topped the throwaway key up and sent it again.'), live.id);
+                        const again = Object.assign(this.carriedFrom(mine.attachments, quote), { toppedUp: true });
+                        setTimeout(() => this.send(typed, Store.conversation(live.id) || live, again), 0);
+                    } else if (topped) {
                         this.note(t('Topped the throwaway key up. Send that again when you are ready.'), live.id);
                     } else {
                         this.note(e.message, live.id);
@@ -1487,6 +1844,8 @@
                         role: 'error',
                         content: (e && e.message) || t('Something went wrong.'),
                         retry: typed,
+                        retryAttachments: mine.attachments.length ? mine.attachments : null,
+                        retryQuote: quote || null,
                         ts: Date.now()
                     };
                     Store.addMessage(live.id, err);
@@ -1498,37 +1857,219 @@
             }
         },
 
+        unsend(conv, mine, sent) {
+            Store.deleteMessage(conv.id, mine.id);
+            if (!this.conv || this.conv.id !== conv.id) return;
+            this.renderMessages();
+            const input = $('input');
+            if (sent.override == null && !String(input.value || '').trim()) {
+                input.value = sent.typed;
+                Store.setDraft(conv.id, sent.typed);
+                this.autoGrow();
+                this.updateHints();
+            }
+            if (sent.composing && !this.attachments.length && sent.attachments.length) {
+                this.attachments = sent.attachments.slice();
+                this.renderAttachments();
+            }
+            if (sent.composing && !this.quote && sent.quote) {
+                this.quote = sent.quote;
+                this.renderQuote();
+            }
+        },
+
+        async capRefused(conv, err, sent) {
+            Store.deleteMessage(conv.id, sent.mine.id);
+            const here = !!(this.conv && this.conv.id === conv.id);
+            if (here) this.renderMessages();
+            if (sent.unattended) {
+                this.note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'), conv.id);
+                return;
+            }
+            const choice = await Caps.refused(this, conv, err);
+            const back = here && sent.override == null && this.conv && this.conv.id === conv.id;
+            if (back) {
+                this.attachments = sent.attachments;
+                this.quote = sent.quote;
+                this.renderAttachments();
+                this.renderQuote();
+            }
+            if (choice === 'send') {
+                this._capWaive = conv.id;
+                if (back) {
+                    $('input').value = sent.typed;
+                    this.send();
+                } else {
+                    this.send(sent.typed, Store.conversation(conv.id) || conv);
+                }
+                return;
+            }
+            if (back) {
+                $('input').value = sent.typed;
+                this.autoGrow();
+                this.updateHints();
+            }
+        },
+
+        teamRefused(conv, err, sent) {
+            Store.deleteMessage(conv.id, sent.mine.id);
+            const here = !!(this.conv && this.conv.id === conv.id);
+            if (here) this.renderMessages();
+            this.note(Team.refusal(err), conv.id);
+            if (!here || sent.override != null) return;
+            this.attachments = sent.attachments;
+            this.quote = sent.quote;
+            this.renderAttachments();
+            this.renderQuote();
+            $('input').value = sent.typed;
+            this.autoGrow();
+            this.updateHints();
+        },
+
         /// Renders what is waiting to be sent. Each one can be taken back out
         /// while it waits, which is the whole reason for showing them.
         renderQueue() {
             const strip = $('queueStrip');
+            const active = document.activeElement;
+            const refocus = !!(active && active.classList && active.classList.contains('queue-edit-input') && strip.contains(active));
+            const caret = refocus ? active.selectionStart : null;
             strip.innerHTML = '';
             strip.hidden = this.queue.length === 0;
+            const convId = this.conv && this.conv.id;
+            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
             this.queue.forEach((text, i) => {
+                if (editing && editing.index === i) {
+                    strip.appendChild(this.queueEditRow(editing, i, refocus, caret));
+                    return;
+                }
                 const row = el('div', 'queue-item');
                 row.appendChild(el('span', 'queue-order', t('#{n}', { n: i + 1 })));
                 row.appendChild(el('span', 'queue-text', text));
-                const drop = el('button', 'icon-btn');
+                const edit = el('button', 'icon-btn queue-edit');
+                edit.type = 'button';
+                edit.setAttribute('aria-label', t('Edit message'));
+                edit.title = t('Edit message');
+                edit.appendChild(Icons.node('pencil', { size: 13 }));
+                edit.addEventListener('click', () => this.editQueued(convId, i));
+                row.appendChild(edit);
+                const drop = el('button', 'icon-btn queue-drop');
                 drop.type = 'button';
                 drop.setAttribute('aria-label', t('Do not send this'));
                 drop.title = t('Do not send this');
                 drop.appendChild(Icons.node('close', { size: 13 }));
-                drop.addEventListener('click', () => {
-                    this.queue.splice(i, 1);
-                    this.renderQueue();
-                });
+                drop.addEventListener('click', () => this.dropQueued(convId, i));
                 row.appendChild(drop);
                 strip.appendChild(row);
             });
             this.syncFollowUps();
         },
 
-        /// Sends the next thing that was waiting. One at a time: they were
-        /// typed as a conversation, so they have to arrive as one.
+        queueEditRow(editing, i, refocus, caret) {
+            const row = el('div', 'queue-item is-editing');
+            row.appendChild(el('span', 'queue-order', t('#{n}', { n: i + 1 })));
+            const field = document.createElement('textarea');
+            field.className = 'queue-edit-input';
+            field.rows = 2;
+            field.dir = 'auto';
+            field.value = editing.draft;
+            field.setAttribute('aria-label', t('Edit message'));
+            field.addEventListener('input', () => { editing.draft = field.value; });
+            field.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.cancelQueuedEdit();
+                } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                    e.preventDefault();
+                    this.saveQueuedEdit();
+                }
+            });
+            row.appendChild(field);
+            const actions = el('div', 'queue-edit-actions');
+            const save = el('button', 'btn btn-primary', t('Save'));
+            save.type = 'button';
+            save.addEventListener('click', () => this.saveQueuedEdit());
+            const cancel = el('button', 'btn', t('Cancel'));
+            cancel.type = 'button';
+            cancel.addEventListener('click', () => this.cancelQueuedEdit());
+            actions.appendChild(save);
+            actions.appendChild(cancel);
+            row.appendChild(actions);
+            if (refocus) {
+                requestAnimationFrame(() => {
+                    field.focus();
+                    if (caret != null) field.setSelectionRange(caret, caret);
+                });
+            }
+            return row;
+        },
+
+        editQueued(convId, index) {
+            const queue = this.queueFor(convId);
+            if (index < 0 || index >= queue.length) return;
+            this.queueEdit = { convId, index, draft: queue[index] };
+            this.renderQueue();
+            const field = $('queueStrip').querySelector('.queue-edit-input');
+            if (field) {
+                field.focus();
+                field.setSelectionRange(field.value.length, field.value.length);
+            }
+        },
+
+        dropQueued(convId, index) {
+            const queue = this.queueFor(convId);
+            if (index < 0 || index >= queue.length) return;
+            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
+            queue.splice(index, 1);
+            if (!queue.length) this.queues.delete(convId);
+            if (editing && editing.index === index) this.queueEdit = null;
+            else if (editing && editing.index > index) editing.index--;
+            if (this.conv && this.conv.id === convId) this.renderQueue();
+            this.resumeQueue(convId);
+        },
+
+        async saveQueuedEdit() {
+            const editing = this.queueEdit;
+            if (!editing) return;
+            const text = editing.draft.trim();
+            if (!text) {
+                const drop = await this.ask({
+                    title: t('Remove this message?'),
+                    body: t('It is empty now, so there is nothing to send. Take it out of the queue?'),
+                    confirm: t('Remove'),
+                    danger: true
+                });
+                if (this.queueEdit !== editing) return;
+                if (drop) this.dropQueued(editing.convId, editing.index);
+                return;
+            }
+            const queue = this.queueFor(editing.convId);
+            if (editing.index < queue.length) queue[editing.index] = text;
+            this.queueEdit = null;
+            if (this.conv && this.conv.id === editing.convId) this.renderQueue();
+            this.resumeQueue(editing.convId);
+        },
+
+        cancelQueuedEdit() {
+            const editing = this.queueEdit;
+            if (!editing) return;
+            this.queueEdit = null;
+            if (this.conv && this.conv.id === editing.convId) this.renderQueue();
+            this.resumeQueue(editing.convId);
+        },
+
+        resumeQueue(convId) {
+            if (this.sendingIn(convId) || !this.queueFor(convId).length) return;
+            this.sendQueued(convId);
+        },
+
         sendQueued(convId) {
             const queue = this.queues.get(convId);
             if (!queue || !queue.length || this.sendingIn(convId)) return;
+            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
+            if (editing && editing.index === 0) return;
             const next = queue.shift();
+            if (editing) editing.index--;
             if (!queue.length) this.queues.delete(convId);
             if (this.conv && this.conv.id === convId) this.renderQueue();
             const conv = Store.conversation(convId);
@@ -1544,6 +2085,158 @@
                 this.queues.set(convId, queue);
             }
             return queue || [];
+        },
+
+        refreshMic() {
+            const Dictate = window.NymbotDictate;
+            const button = $('micBtn');
+            if (!button) return;
+            button.hidden = !(Dictate && Dictate.supported());
+            this.renderDictation();
+        },
+
+        renderDictation() {
+            const state = this.dictation;
+            const button = $('micBtn');
+            const strip = $('dictateStrip');
+            if (!button || !strip) return;
+            button.classList.toggle('is-on', state === 'recording');
+            button.classList.toggle('is-busy', state === 'starting' || state === 'sending');
+            button.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
+            const label = state === 'recording' ? t('Stop and transcribe') : t('Dictate a message');
+            button.setAttribute('aria-label', label);
+            button.title = label;
+            strip.hidden = state !== 'recording' && state !== 'sending';
+            strip.classList.toggle('is-sending', state === 'sending');
+            $('dictateDone').hidden = state !== 'recording';
+            $('dictateCancel').hidden = !state;
+            if (state === 'recording') {
+                const secs = Math.floor(window.NymbotDictate.elapsed() / 1000);
+                $('dictateLabel').textContent = t('Listening… {time}', {
+                    time: Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0')
+                });
+            } else if (state === 'sending') {
+                $('dictateLabel').textContent = t('Transcribing…');
+            }
+        },
+
+        toggleDictation() {
+            if (this.dictation === 'recording') return this.finishDictation();
+            if (!this.dictation) return this.startDictation();
+            return null;
+        },
+
+        async startDictation() {
+            const Dictate = window.NymbotDictate;
+            if (!Dictate || !Dictate.supported()) {
+                this.toast(t('This browser cannot record from a microphone.'));
+                return;
+            }
+            this.dictation = 'starting';
+            this.renderDictation();
+            Dictate.onLimit = () => {
+                this.toast(t('That is the two-minute limit for one clip, so it stopped there.'));
+                this.finishDictation();
+            };
+            try {
+                await Dictate.start();
+            } catch (e) {
+                this.dictation = null;
+                this.renderDictation();
+                const name = e && e.name;
+                this.toast(name === 'NotAllowedError' || name === 'SecurityError'
+                    ? t('The microphone is blocked. Allow it for this site in your browser settings, then try again.')
+                    : (name === 'NotFoundError' || name === 'OverconstrainedError'
+                        ? t('No microphone was found.')
+                        : t('The microphone could not be started.')));
+                return;
+            }
+            if (this.dictation !== 'starting') {
+                Dictate.cancel();
+                return;
+            }
+            this.dictation = 'recording';
+            clearInterval(this._dictateTick);
+            this._dictateTick = setInterval(() => this.renderDictation(), 500);
+            this.renderDictation();
+        },
+
+        cancelDictation() {
+            const Dictate = window.NymbotDictate;
+            clearInterval(this._dictateTick);
+            this._dictateTick = null;
+            const was = this.dictation;
+            this.dictation = null;
+            this._dictateRun = null;
+            if (Dictate) Dictate.cancel();
+            this.renderDictation();
+            if (was) this.toast(t('Dictation canceled.'));
+        },
+
+        async finishDictation() {
+            const Dictate = window.NymbotDictate;
+            if (this.dictation !== 'recording' || !Dictate) return;
+            clearInterval(this._dictateTick);
+            this._dictateTick = null;
+            this.dictation = 'sending';
+            const run = {};
+            this._dictateRun = run;
+            this.renderDictation();
+            const settle = (message) => {
+                if (this._dictateRun !== run) return false;
+                this._dictateRun = null;
+                this.dictation = null;
+                this.renderDictation();
+                if (message) this.toast(message);
+                return true;
+            };
+            const blob = await Dictate.stop();
+            if (this._dictateRun !== run) return;
+            if (!blob || !blob.size) {
+                settle(t('Nothing was recorded.'));
+                return;
+            }
+            let audio;
+            try { audio = await Dictate.toDataUrl(blob); } catch (_) { audio = null; }
+            if (!audio) {
+                settle(t('That recording could not be read.'));
+                return;
+            }
+            if (audio.length > Dictate.MAX_AUDIO_CHARS) {
+                settle(t('That clip is too long. Dictation takes up to two minutes at a time.'));
+                return;
+            }
+            if (navigator.onLine === false) {
+                settle(t('You are offline, so it could not be transcribed.'));
+                return;
+            }
+            const opts = this.spendingAnon() ? { signer: Anon.signer() } : {};
+            let data = null;
+            try { ({ data } = await Api.transcribe(audio, opts)); } catch (e) { data = { error: e && e.message }; }
+            if (this._dictateRun !== run) return;
+            if (!data || data.error) {
+                settle(this.friendlyError((data && data.error) || t('Transcription failed.')));
+                return;
+            }
+            const said = String(data.text || '').trim();
+            if (!said) {
+                settle(t('Nothing was heard. Try again a little closer to the microphone.'));
+                return;
+            }
+            settle(null);
+            const input = $('input');
+            const draft = String(input.value || '').replace(/\s+$/, '');
+            input.value = draft ? draft + ' ' + said : said;
+            if (this.conv) Store.setDraft(this.conv.id, input.value);
+            this.autoGrow();
+            this.updateHints();
+            input.focus();
+        },
+
+        friendlyError(text) {
+            const raw = String(text || '');
+            if (navigator.onLine === false) return t('You are offline, so it could not be transcribed.');
+            return raw;
         },
 
         turnOf(convId) {
@@ -1679,8 +2372,12 @@
             const m = this.latestReply(convId);
             const items = m && m.id === id ? Chat.followUpsOf(m.followUps) : null;
             if (!items || !items.includes(text)) return;
+            if (this._followedUp === id) return;
+            this._followedUp = id;
             for (const row of $('messages').querySelectorAll('.follow-ups')) row.remove();
-            this.send(text, this.conv, { bare: true });
+            Promise.resolve(this.send(text, this.conv, { bare: true })).catch(() => { }).then(() => {
+                if (this._followedUp === id) this._followedUp = null;
+            });
         },
 
         editFollowUp(text) {
@@ -1739,6 +2436,7 @@
             // behind it should go either.
             const queue = this.queues.get(conv.id);
             this.queues.delete(conv.id);
+            if (this.queueEdit && this.queueEdit.convId === conv.id) this.queueEdit = null;
             if (queue && queue.length) {
                 this.renderQueue();
                 this.note(t('Stopped. Anything waiting behind it was not sent.'));
@@ -1753,11 +2451,14 @@
             Chat.abort();
         },
 
-        bumpStats(conv, cost) {
+        bumpStats(conv, cost, pro) {
             const stats = Object.assign({ messages: 0, credits: 0 }, conv.stats || {});
+            stats[Caps.SPENT] = Caps.nextSpent(conv, cost, pro, this.models);
             stats.messages += 1;
             stats.credits += cost || 0;
-            return this.patchChat(conv, { stats });
+            const next = this.patchChat(conv, { stats });
+            Caps.renderBadge(this);
+            return next;
         },
 
         notifyReply(reply) {
@@ -1819,7 +2520,7 @@
                     this.regenerate(m);
                     return;
                 case 'msg-resend':
-                    this.send(m.content);
+                    this.send(m.content, null, this.carriedFrom(m.attachments, m.quote));
                     return;
                 case 'msg-edit':
                     this.editMessage(m);
@@ -1862,13 +2563,18 @@
                     if (m.retry) {
                         Store.deleteMessage(this.conv.id, m.id);
                         this.renderMessages();
-                        this.send(m.retry);
+                        this.send(m.retry, null, this.carriedFrom(m.retryAttachments, m.retryQuote));
                     }
                     return;
-                case 'msg-delete':
-                    Store.deleteMessage(this.conv.id, m.id);
+                case 'msg-delete': {
+                    const conv = this.conv;
+                    const snap = this.chatSnapshot(conv);
+                    Store.deleteMessage(conv.id, m.id);
+                    if (m.role === 'self' || m.role === 'bot') this.reseed(conv);
                     this.renderMessages();
+                    this.toastUndo(t('Message deleted.'), () => this.restoreSnapshot(snap));
                     return;
+                }
             }
         },
 
@@ -1882,7 +2588,7 @@
             if (!question) { this.toast(t('There is nothing to ask again.')); return; }
             Store.deleteMessage(this.conv.id, botMessage.id);
             this.renderMessages();
-            await this.send(question.content);
+            await this.send(question.content, null, this.carriedFrom(question.attachments, question.quote));
         },
 
         /// Asking the question differently. By default that happens on a branch:
@@ -1908,9 +2614,30 @@
                 this.toast(t('Branched. The chat you had is still in the list.'));
             } else {
                 Store.truncateFrom(this.conv.id, m.id, true);
+                this.reseed(this.conv);
                 this.renderMessages();
             }
-            await this.send(value.trim());
+            await this.send(value.trim(), null, this.carriedFrom(m.attachments, m.quote));
+        },
+
+        attachmentRecord(a) {
+            const record = { id: a.id, kind: a.kind, name: a.name, mime: a.mime, size: a.size };
+            if (a.kind === 'image') {
+                record.dataUrl = a.dataUrl;
+                if (a.url) record.url = a.url;
+            } else if (a.kind === 'text') {
+                record.text = a.text;
+                record.lang = a.lang || '';
+                if (a.truncated) record.truncated = true;
+            }
+            return record;
+        },
+
+        carriedFrom(list, quote) {
+            const attachments = (Array.isArray(list) ? list : [])
+                .filter(a => a && ((a.kind === 'image' && (a.url || a.dataUrl)) || (a.kind === 'text' && typeof a.text === 'string')))
+                .map(a => Object.assign({}, a));
+            return { attachments, quote: quote || null };
         },
 
         /// A copy of this chat carrying everything up to a point, on a thread of
@@ -1919,11 +2646,7 @@
         /// chat it came from does. The original is untouched, which is the
         /// whole point of a branch.
         branchFrom(kept) {
-            const seed = kept
-                .filter(x => x.role === 'self' || x.role === 'bot')
-                .slice(-8)
-                .map(x => `${x.role === 'self' ? 'User' : 'Assistant'}: ${MD.plain(x.content).slice(0, 700)}`)
-                .join('\n\n');
+            const seed = this.seedFrom(kept);
             const copy = Store.createConversation({
                 title: (this.conv.title || t('New chat')) + ' ' + t('(branch)'),
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
@@ -1968,6 +2691,7 @@
                 this.note(t('Back to answering in words.'));
                 return true;
             }
+            if (cmd === 'research') return Research.handle(this, arg);
             if (!Commands.isLocal(cmd)) return false;
 
             switch (cmd) {
@@ -2037,6 +2761,13 @@
                     return this.gitCommand(cmd, arg);
                 case 'anon':
                     this.openAnon();
+                    return true;
+                case 'gift':
+                    if (window.NymbotGift.codeOf(arg)) window.NymbotGift.openRedeem(this, arg.trim());
+                    else window.NymbotGift.open(this);
+                    return true;
+                case 'transfer':
+                    this.transfer(this.pubkeyFrom(arg) ? arg.trim() : '');
                     return true;
                 case 'persona':
                     if (/^off$/i.test(arg)) {
@@ -2235,6 +2966,8 @@
 
         updateSuggest() {
             const value = $('input').value;
+            const at = Mention.typing(value);
+            if (at) { this.showMentionSuggest(at); return; }
             const m = /^\?(\w*)$/.exec(value);
             if (!m) { this.hideSuggest(); return; }
             const rows = Commands.match(m[1]);
@@ -2246,6 +2979,7 @@
             rows.forEach((entry, i) => {
                 const b = el('button', 'suggest-row' + (i === 0 ? ' is-active' : ''));
                 b.type = 'button';
+                this.suggestOption(b, i);
                 b.appendChild(el('span', 'suggest-name', '?' + entry.name));
                 if (entry.args) b.appendChild(el('span', 'suggest-args', entry.args));
                 b.appendChild(el('span', 'suggest-hint', entry.hint()));
@@ -2254,18 +2988,70 @@
             });
             box.hidden = false;
             box.scrollTop = 0;
+            this.syncSuggestA11y();
+        },
+
+        suggestOption(b, i) {
+            b.id = 'suggest-' + i;
+            b.setAttribute('role', 'option');
+            b.setAttribute('aria-selected', String(i === 0));
+            b.tabIndex = -1;
+        },
+
+        syncSuggestA11y() {
+            const input = $('input');
+            const open = !$('suggest').hidden && this.suggestRows.length > 0;
+            input.setAttribute('aria-autocomplete', 'list');
+            input.setAttribute('aria-controls', 'suggest');
+            input.setAttribute('aria-expanded', String(open));
+            if (open) input.setAttribute('aria-activedescendant', 'suggest-' + this.suggestAt);
+            else input.removeAttribute('aria-activedescendant');
+        },
+
+        showMentionSuggest(at) {
+            if (!this.models) {
+                this.hideSuggest();
+                this.loadMentionModels();
+                return;
+            }
+            const models = Mention.suggest(at.query, this.models);
+            if (!models.length) { this.hideSuggest(); return; }
+            this.suggestRows = models.map(m => ({ mention: m, fresh: at.fresh }));
+            this.suggestAt = 0;
+            const box = $('suggest');
+            box.innerHTML = '';
+            models.forEach((m, i) => {
+                const b = el('button', 'suggest-row is-mention' + (i === 0 ? ' is-active' : ''));
+                b.type = 'button';
+                this.suggestOption(b, i);
+                const mark = Icons.brand(m.authorSlug, { size: 15 });
+                mark.classList.add('suggest-mark');
+                b.appendChild(mark);
+                b.appendChild(el('span', 'suggest-name', '@' + m.key));
+                b.appendChild(el('span', 'suggest-hint', m.label));
+                b.addEventListener('click', () => this.pickSuggest(i));
+                box.appendChild(b);
+            });
+            box.hidden = false;
+            box.scrollTop = 0;
+            this.syncSuggestA11y();
         },
 
         hideSuggest() {
             $('suggest').hidden = true;
             this.suggestRows = [];
+            this.syncSuggestA11y();
         },
 
         moveSuggest(delta) {
             if (!this.suggestRows.length) return false;
             this.suggestAt = (this.suggestAt + delta + this.suggestRows.length) % this.suggestRows.length;
             const rows = $('suggest').querySelectorAll('.suggest-row');
-            rows.forEach((r, i) => r.classList.toggle('is-active', i === this.suggestAt));
+            rows.forEach((r, i) => {
+                r.classList.toggle('is-active', i === this.suggestAt);
+                r.setAttribute('aria-selected', String(i === this.suggestAt));
+            });
+            this.syncSuggestA11y();
             const active = rows[this.suggestAt];
             if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
             return true;
@@ -2275,7 +3061,9 @@
             const entry = this.suggestRows[index == null ? this.suggestAt : index];
             if (!entry) return false;
             const input = $('input');
-            input.value = '?' + entry.name + (entry.args ? ' ' : '');
+            input.value = entry.mention
+                ? Mention.completion(entry.mention, entry.fresh)
+                : '?' + entry.name + (entry.args ? ' ' : '');
             this.hideSuggest();
             this.autoGrow();
             this.updateHints();
@@ -2289,7 +3077,19 @@
             const hint = $('costHint');
             const opts = { attachments: this.attachments, quote: this.quote };
             const media = this.mediaModel();
-            if (media && text.trim() && !/^[?!]/.test(text.trim())) {
+            input.setAttribute('placeholder', this.composerPlaceholder(media));
+            const mention = this.mentionOf(text);
+            const researchHint = Research.hint(this, text);
+            if (researchHint) {
+                hint.textContent = researchHint;
+            } else if (mention && mention.model) {
+                hint.textContent = t('{name} answers this one from your Pro balance · {price}', {
+                    name: mention.model.label,
+                    price: this.modelPrice(mention.model)
+                });
+            } else if (PicEdit.editing(text, this.attachments, media) && !PicEdit.instruction(text)) {
+                hint.textContent = PicEdit.hint();
+            } else if (media && text.trim() && !/^[?!@]/.test(text.trim())) {
                 hint.textContent = t('{name} · {price}', {
                     name: media.label,
                     price: this.modelPrice(media)
@@ -2312,6 +3112,8 @@
             } else {
                 hint.textContent = '';
             }
+            const room = text.trim() ? Caps.roomLine(this.conv, this.models) : '';
+            if (room) hint.textContent = hint.textContent ? hint.textContent + ' · ' + room : room;
             // What a message too long for one wrap will cost, said before it is
             // sent rather than on the receipt.
             const len = $('lenHint');
@@ -2340,7 +3142,7 @@
             if (!url) return;
             this.toast(t('Saving…'));
             try {
-                const res = await fetch(url);
+                const res = await fetch(MD.mediaSrc(url) || url);
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const blob = await res.blob();
                 Exporter.saveBlob(this.mediaName(url, blob.type), blob);
@@ -2383,10 +3185,8 @@
             return attachment.uploading;
         },
 
-        /// An anonymous chat uploads under its throwaway key, so the blob is no
-        /// more linkable to the account than the message carrying it.
         uploadSigner() {
-            return (this.conv && this.conv.anon && Anon.ready()) ? Anon.signer() : null;
+            return Blossom.throwaway();
         },
 
         /// Everything still on its way up, finished before the message goes.
@@ -2396,8 +3196,10 @@
         },
 
         renderAttachments() {
+            this.updateHints();
             const tray = $('attachTray');
             tray.innerHTML = '';
+            if (window.NymbotDocs) window.NymbotDocs.renderTray(this.conv);
             if (!this.attachments.length) { tray.hidden = true; return; }
             for (const a of this.attachments) {
                 const item = el('span', 'attach-item');
@@ -2412,7 +3214,7 @@
                     ? t('uploading…')
                     : (a.error
                         ? t('not uploaded')
-                        : (a.lines ? t('{n} lines', { n: a.lines }) : Attach.humanSize(a.size)));
+                        : (a.label || (a.lines ? t('{n} lines', { n: a.lines }) : Attach.humanSize(a.size))));
                 if (a.error) item.classList.add('is-error');
                 if (a.uploading) item.classList.add('is-busy');
                 const label = el('span', null, `${a.name} · ${measure}`);
@@ -2565,9 +3367,8 @@
             const img = $('whoAvatar');
             img.src = me.avatar;
             img.hidden = false;
-            who.appendChild(document.createTextNode(me.name));
-            if (!me.hasProfile) who.appendChild(el('span', 'nym-suffix', '#' + me.suffix));
-            else if (me.nip05) {
+            who.appendChild(document.createTextNode(this.nickname() || me.name));
+            if (me.hasProfile && me.nip05) {
                 const tick = el('span', 'who-nip05');
                 tick.title = me.nip05;
                 tick.appendChild(Icons.node('verified', { size: 11 }));
@@ -2578,6 +3379,7 @@
         // --- toolbar ----------------------------------------------------------
 
         refreshToolbar() {
+            Caps.renderBadge(this);
             const conv = this.conv || {};
             const model = conv.proModel || this.settings.proModel;
             const media = this.mediaModel();
@@ -2658,30 +3460,58 @@
 
             const webChip = $('chipWeb');
             webChip.classList.toggle('is-active', !!this.settings.webSearch);
+            Research.refreshChip(this);
+            Team.refreshChip(this);
 
             const anonChip = $('chipAnon');
-            const anonOn = Anon.enabled();
+            const anonOn = !!conv.anon;
             anonChip.classList.toggle('is-active', anonOn);
             anonChip.querySelector('.chip-label').textContent = t('Anon');
 
             const composer = $('input');
-            if (composer) {
-                composer.setAttribute('placeholder', media
-                    ? (media.kind === 'video'
-                        ? t('Describe the video to make')
-                        : (media.kind === 'speech'
-                            ? t('Type what to read aloud')
-                            : t('Describe the picture to make')))
-                    : t('Ask something, or type ? for commands'));
-            }
+            if (composer) composer.setAttribute('placeholder', this.composerPlaceholder(media));
 
             $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
             $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
 
+            if (window.NymbotConnectors) window.NymbotConnectors.refreshChip(this);
+            if (ServerRun) ServerRun.refreshChip(this);
             this.groupChips();
             this.renderContextBar(repos, persona, hasSystem);
             this.renderBalance();
             this.updateHints();
+        },
+
+        composerPlaceholder(media) {
+            if (PicEdit.pinnedImage(media) && PicEdit.hasPicture(this.attachments)) return PicEdit.hint();
+            return media
+                ? (media.kind === 'video'
+                    ? t('Describe the video to make')
+                    : (media.kind === 'speech'
+                        ? t('Type what to read aloud')
+                        : t('Describe the picture to make')))
+                : t('Ask something, or type ? for commands');
+        },
+
+        mentionOf(text) {
+            if (!Mention.parse(text)) return null;
+            if (!this.models) {
+                this.loadMentionModels();
+                return null;
+            }
+            return Mention.apply(text, this.models);
+        },
+
+        loadMentionModels() {
+            if (this.models || this._mentionLoading) return this._mentionLoading || null;
+            this._mentionLoading = Api.models().then((data) => {
+                if (data && data.models && !this.models) this.models = data;
+                this._mentionLoading = null;
+                this.updateSuggest();
+                this.updateHints();
+                return this.models;
+            }).catch(() => { this._mentionLoading = null; return null; });
+            return this._mentionLoading;
         },
 
         /// Sorts whatever is on for this chat to the front of the rail, with a
@@ -2930,8 +3760,21 @@
 
         // --- models -----------------------------------------------------------
 
-        async openModels(filter) {
-            this.openModal('modalModels');
+        async openModels(filter, pick) {
+            const picking = pick && typeof pick.pick === 'function' ? pick : null;
+            this.openModal('modalModels', { over: !!(picking && picking.over), from: picking ? picking.from : null });
+            this.modelPick = picking;
+            $('modelsTitle').textContent = this.modelPick ? this.modelPick.title : t('Nymbot Pro model');
+            $('modelForChatRow').hidden = !!this.modelPick;
+            $('modelOff').hidden = !!this.modelPick;
+            for (const b of document.querySelectorAll('#modelFilters .pill')) {
+                b.hidden = !!this.modelPick && MEDIA_FILTERS.includes(b.dataset.filter);
+            }
+            if (this.modelPick) {
+                if (MEDIA_FILTERS.includes(this.modelFilter)) this.setModelFilter('all');
+                $('modelSearch').value = '';
+            }
+            $('modelSearchClear').hidden = !$('modelSearch').value;
             const list = $('modelList');
             if (!this.models) {
                 list.innerHTML = '';
@@ -2939,11 +3782,30 @@
                 this.models = await Api.models();
             }
             if (!this.models || !this.models.models) {
-                list.textContent = t('The model catalog is unavailable right now.');
+                this.models = null;
+                list.innerHTML = '';
+                list.appendChild(el('p', 'hint', t('The model catalog is unavailable right now.')));
+                const retry = el('button', 'btn btn-small', t('Try again'));
+                retry.type = 'button';
+                retry.dataset.role = 'catalog-retry';
+                retry.addEventListener('click', () => this.openModels(filter, pick));
+                list.appendChild(retry);
                 return;
             }
             if (filter) $('modelSearch').value = filter;
+            $('modelSearchClear').hidden = !$('modelSearch').value;
             this.renderModels();
+            if (this.modelPick && this.modelPick.over && !window.matchMedia('(pointer: coarse)').matches) {
+                $('modelSearch').focus();
+            }
+        },
+
+        pickFirstModel() {
+            if (!this.modelPick) return false;
+            const row = $('modelList').querySelector('.model-row:not(:disabled)');
+            if (!row) return false;
+            row.click();
+            return true;
         },
 
         setModelFilter(filter) {
@@ -3044,13 +3906,18 @@
             const terms = this.modelSearchTerms();
             const list = $('modelList');
             list.innerHTML = '';
-            const current = (this.conv && this.conv.proModel) || this.settings.proModel;
-            const media = this.mediaModel();
+            const picking = this.modelPick && $('modalModels') && !$('modalModels').hidden ? this.modelPick : null;
+            const current = picking
+                ? { key: picking.current }
+                : ((this.conv && this.conv.proModel) || this.settings.proModel);
+            const media = picking ? null : this.mediaModel();
+            const taken = picking && picking.taken ? picking.taken : null;
             const forChat = $('modelForChat').checked;
             const byKey = new Map(this.models.models.map(m => [m.key, m]));
             const shown = (group) => group.keys
                 .map(k => byKey.get(k))
-                .filter(m => m && this.modelMatchesSearch(m, terms) && this.modelMatchesFilter(m));
+                .filter(m => m && this.modelMatchesSearch(m, terms) && this.modelMatchesFilter(m)
+                    && !(picking && (m.command || (m.kind || 'chat') !== 'chat')));
             const sections = [];
             if (this.modelSort === 'provider') {
                 for (const group of this.models.groups || []) {
@@ -3074,14 +3941,18 @@
                         : !!(current && current.key === m.key);
                     const row = el('button', 'model-row' + (pinned ? ' is-active' : ''));
                     row.type = 'button';
+                    const blocked = !!(taken && taken.key === m.key);
+                    if (blocked) row.disabled = true;
                     // Who makes it, on the left, so the list scans by maker.
                     row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
                     const name = el('span', 'model-name');
                     name.appendChild(el('span', 'model-title', m.label));
                     if (m.description) name.appendChild(el('span', 'model-desc', m.description));
                     name.appendChild(el('span', 'model-cost', this.modelPrice(m)));
+                    if (m.edit) name.appendChild(el('span', 'model-edit', m.needsImage ? t('Edits a picture you send') : t('Can also edit a picture you send')));
                     const rates = this.modelRates(m);
                     if (rates) name.appendChild(el('span', 'model-rates', rates));
+                    if (blocked) name.appendChild(el('span', 'model-taken', taken.note));
                     row.appendChild(name);
                     const on = this.favourites.includes(m.key);
                     const star = el('span', 'model-star' + (on ? ' is-on' : ''));
@@ -3097,6 +3968,13 @@
                     });
                     row.appendChild(star);
                     row.addEventListener('click', () => {
+                        if (blocked) return;
+                        if (picking) {
+                            this.modelPick = null;
+                            if (picking.over) this.closeTop();
+                            picking.pick(m);
+                            return;
+                        }
                         if (m.command) {
                             const off = pinned;
                             const media = off ? null : {
@@ -3171,6 +4049,9 @@
                 if (r.branch) bits.push(r.branch);
                 if (r.paths) bits.push(r.paths);
                 main.appendChild(el('span', 'repo-sub', bits.join(' · ')));
+                if (!r.token) {
+                    main.appendChild(el('span', 'repo-sub connector-missing', t('No access token on this device. Edit it to add one.')));
+                }
                 row.appendChild(main);
 
                 // Announced on Nostr rather than typed in: worth saying, since it
@@ -3189,12 +4070,30 @@
                 edit.type = 'button';
                 edit.addEventListener('click', () => this.editRepo(r));
                 actions.appendChild(edit);
+                if (r.token) {
+                    const drop = el('button', 'row-btn', t('Disconnect'));
+                    drop.type = 'button';
+                    drop.dataset.role = 'repo-disconnect';
+                    drop.addEventListener('click', async () => {
+                        const ok = await this.ask({
+                            title: t('Disconnect this repository'),
+                            body: t('Forget the access token for {repo}? The repository stays listed, and with sync on your other devices forget the token too.', { repo: r.repo }),
+                            confirm: t('Disconnect'),
+                            danger: true
+                        });
+                        if (!ok) return;
+                        Store.updateRepo(r.id, { token: '' });
+                        this.renderRepos();
+                        this.refreshToolbar();
+                    });
+                    actions.appendChild(drop);
+                }
                 const del = el('button', 'row-btn danger', t('Remove'));
                 del.type = 'button';
                 del.addEventListener('click', async () => {
                     const ok = await this.ask({
                         title: t('Remove this repository'),
-                        body: t('Remove {repo}? Its token is deleted from this device.', { repo: r.repo }),
+                        body: t('Remove {repo} and its token? With sync on, your other devices drop it too.', { repo: r.repo }),
                         confirm: t('Remove'),
                         danger: true
                     });
@@ -3224,6 +4123,7 @@
             $('gitPaths').value = repo.paths || '';
             $('gitLabel').value = repo.label || '';
             $('gitWrites').checked = !!repo.allowWrites;
+            $('gitApprove').checked = !!repo.approve;
             $('repoFormTitle').textContent = t('Edit repository');
             $('repoSaveBtn').textContent = t('Save changes');
             $('repoResetBtn').hidden = false;
@@ -3243,6 +4143,7 @@
             $('gitPaths').value = '';
             $('gitLabel').value = '';
             $('gitWrites').checked = false;
+            $('gitApprove').checked = false;
             $('repoFormTitle').textContent = t('Add a repository');
             $('repoSaveBtn').textContent = t('Add repository');
             $('repoResetBtn').hidden = true;
@@ -3347,6 +4248,7 @@
             const provider = $('gitProvider').value;
             const host = $('gitHost').value.trim();
             const allowWrites = $('gitWrites').checked;
+            const approve = $('gitApprove').checked;
             const next = new Set((this.conv.repoIds || []));
             for (const r of picked) {
                 const entry = Store.addRepo({
@@ -3355,7 +4257,8 @@
                     branch: r.branch,
                     paths: '',
                     label: '',
-                    allowWrites
+                    allowWrites,
+                    approve
                 });
                 next.add(entry.id);
             }
@@ -3428,7 +4331,8 @@
                 branch: $('gitBranch').value.trim(),
                 paths: $('gitPaths').value.trim(),
                 label: $('gitLabel').value.trim(),
-                allowWrites: $('gitWrites').checked
+                allowWrites: $('gitWrites').checked,
+                approve: $('gitApprove').checked
             };
             // Where it was announced, kept alongside the forge it actually lives
             // on — so the app can say a repository came from Nostr, and point at
@@ -3475,7 +4379,7 @@
                 row.appendChild(mark);
                 const main = el('div', 'persona-main');
                 main.appendChild(el('span', 'persona-name', p.name));
-                main.appendChild(el('span', 'persona-sub', (p.instructions || '').slice(0, 110)));
+                main.appendChild(el('span', 'persona-sub', (p.instructions || '').replace(/\s+/g, ' ').trim()));
                 main.style.cursor = 'pointer';
                 main.addEventListener('click', () => {
                     this.conv = Store.updateConversation(this.conv.id, { personaId: p.id });
@@ -3538,20 +4442,37 @@
         },
 
         renderPersonaIcons() {
-            const box = $('personaIcons');
+            this.renderIconChoices($('personaIcons'), this.personaIcon, (name) => {
+                this.personaIcon = name;
+                this.renderPersonaIcons();
+            });
+        },
+
+        iconName(name) {
+            const names = {
+                tools: t('Tools'), code: t('Code'), search: t('Magnifying glass'), pen: t('Pen'),
+                graduation: t('Graduation cap'), chart: t('Chart'), flask: t('Flask'), scale: t('Scales'),
+                compass: t('Compass'), lightbulb: t('Light bulb'), globe: t('Globe'), terse: t('Short lines'),
+                robot: t('Robot'), model: t('Model'), person: t('Person'), bolt: t('Lightning bolt')
+            };
+            return names[name] || name;
+        },
+
+        renderIconChoices(box, current, pick) {
+            const focused = box.contains(document.activeElement);
             box.innerHTML = '';
             for (const name of Icons.PERSONA_ICONS) {
-                const b = el('button', 'icon-choice' + (name === this.personaIcon ? ' is-active' : ''));
+                const on = name === current;
+                const b = el('button', 'icon-choice' + (on ? ' is-active' : ''));
                 b.type = 'button';
-                b.title = name;
+                b.title = this.iconName(name);
+                b.setAttribute('aria-label', this.iconName(name));
                 b.setAttribute('role', 'radio');
-                b.setAttribute('aria-checked', String(name === this.personaIcon));
+                b.setAttribute('aria-checked', String(on));
                 b.appendChild(Icons.node(name, { size: 17 }));
-                b.addEventListener('click', () => {
-                    this.personaIcon = name;
-                    this.renderPersonaIcons();
-                });
+                b.addEventListener('click', () => pick(name));
                 box.appendChild(b);
+                if (on && focused) b.focus();
             }
         },
 
@@ -3623,7 +4544,7 @@
                 const row = el('div', 'prompt-row');
                 const main = el('div', 'prompt-main');
                 main.appendChild(el('span', 'prompt-name', p.title));
-                main.appendChild(el('span', 'prompt-sub', p.body.replace(/\s+/g, ' ').slice(0, 120)));
+                main.appendChild(el('span', 'prompt-sub', p.body.replace(/\s+/g, ' ').trim()));
                 main.style.cursor = 'pointer';
                 main.addEventListener('click', () => this.insertPrompt(p));
                 row.appendChild(main);
@@ -4019,16 +4940,21 @@
             grid.innerHTML = '';
             const mine = msgs.filter(m => m.role === 'self').length;
             const theirs = msgs.filter(m => m.role === 'bot').length;
-            const credits = msgs.reduce((n, m) => n + (m.cost || 0), 0);
+            const spentHere = (pro) => msgs.filter(m => m.role === 'bot' && !!m.pro === pro)
+                .reduce((n, m) => n + (m.cost || 0), 0);
             const words = msgs.reduce((n, m) => n + MD.plain(m.content).split(/\s+/).filter(Boolean).length, 0);
             const usage = Store.usage();
+            const capLine = Caps.usedLine(conv, this.models);
             const cells = [
                 [String(mine), t('Messages sent')],
                 [String(theirs), t('Replies')],
-                [num(credits), t('Credits spent here')],
+                [creditAmount(spentHere(false)), t('Standard credits spent here')],
+                [creditAmount(spentHere(true)), t('Pro credits spent here')],
+                ...(capLine ? [[capLine, t('Spending cap')]] : []),
                 [String(words), t('Words exchanged')],
-                [num(usage.credits), t('Credits spent overall')],
-                [String(usage.replies), t('Replies overall')]
+                [creditAmount(Number(usage.standard) || 0), t('Standard credits spent on this device')],
+                [creditAmount(Number(usage.pro) || 0), t('Pro credits spent on this device')],
+                [String(usage.replies), t('Replies on this device')]
             ];
             for (const [value, label] of cells) {
                 const cell = el('div', 'stat-cell');
@@ -4376,6 +5302,56 @@
             return card;
         },
 
+        stagedCard(m) {
+            return GitRun.stagedCard(m.staged, {
+                code: (body, lang) => MD.code(body, lang, { wrap: this.settings.codeWrap }),
+                onApply: (apply, discard) => this.applyStaged(m, apply, discard),
+                onDiscard: () => this.discardStaged(m)
+            });
+        },
+
+        async applyStaged(m, apply, discard) {
+            const convId = this.conv.id;
+            const staged = m.staged;
+            apply.disabled = true;
+            if (discard) discard.disabled = true;
+            apply.textContent = t('Applying…');
+            const marks = [];
+            try {
+                for (const one of GitRun.all(staged)) {
+                    const res = await Chat.applyStaged(this.conv, one);
+                    if (res.checkpoint) marks.push(res.checkpoint);
+                }
+            } catch (e) {
+                apply.disabled = false;
+                if (discard) discard.disabled = false;
+                apply.textContent = t('Apply');
+                if (marks.length) this.keepStagedMarks(convId, m, marks, false);
+                this.note((e && e.message) || t('Could not apply those changes.'), convId);
+                return;
+            }
+            this.keepStagedMarks(convId, m, marks, true);
+            this.note(t('Applied: {n} file(s) committed as one commit.', {
+                n: marks.reduce((n, k) => n + (k.paths || []).length, 0)
+            }), convId);
+        },
+
+        keepStagedMarks(convId, m, marks, done) {
+            const patch = {};
+            if (done) patch.staged = GitRun.settled(m.staged, 'applied');
+            if (marks.length) {
+                patch.checkpoint = Object.assign({}, marks[0], marks.length > 1 ? { also: marks.slice(1) } : {});
+            }
+            Store.patchMessage(convId, m.id, patch);
+            this.replaceMessage(Store.messages(convId).find(x => x.id === m.id) || m);
+        },
+
+        discardStaged(m) {
+            const convId = this.conv.id;
+            Store.patchMessage(convId, m.id, { staged: GitRun.settled(m.staged, 'discarded') });
+            this.replaceMessage(Store.messages(convId).find(x => x.id === m.id) || m);
+        },
+
         async revertCheckpoint(m, button) {
             const mark = m.checkpoint;
             const ok = await this.ask({
@@ -4451,7 +5427,7 @@
         },
 
         citationInfo(s) {
-            const url = typeof s.url === 'string' ? s.url : '';
+            const url = typeof s.url === 'string' && /^https?:\/\//i.test(s.url) ? s.url : '';
             let host = '';
             try {
                 host = url ? new URL(url).hostname.replace(/^www\./, '') : '';
@@ -4505,7 +5481,7 @@
             const pro = !!m.model;
             const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
             const rows = [
-                [t('Charged'), t('{n} credits', { n: creditAmount(m.costCredits != null ? m.costCredits : m.cost) })],
+                [t('Charged'), t('{n} credits', { n: creditAmount((m.costCredits != null ? m.costCredits : m.cost) + (Number(m.serverRunCredits) || 0)) })],
                 [t('Tier'), pro ? t('Pro') : t('Standard')],
                 [t('Model'), m.model || t('Auto-routed')],
                 [t('At today\'s price'), t('{n} sats', { n: num(sats) })]
@@ -4519,6 +5495,10 @@
             if (m.sources && m.sources.length) {
                 rows.push([t('Sources read'), String(m.sources.length)]);
             }
+            if (Number(m.serverRunCredits) > 0) {
+                rows.push([t('Server runs'), t('{n} Pro credits', { n: window.amount(m.serverRunCredits, 3) })]);
+            }
+            for (const row of Team.costRows(this, m)) rows.push(row);
             rows.push([t('When'), `${this.dayLabel(m.ts)} ${this.timeLabel(m.ts)}`]);
             return rows;
         },
@@ -4611,6 +5591,8 @@
                     title: t('Asking it to think harder'),
                     body: t('The Effort chip on a Pro chat says how much work each reply is worth. Normal is one pass. Careful plans the answer before writing it, and Deep also reads its answer back against the question and corrects it before you see it. Each step is another model call, so a careful reply costs about twice a normal one and a deep reply about three times — the toolbar says the range before you send. A repo task ignores it: it already loops on a budget of its own.')
                 },
+                Research.helpTopic(),
+                Team.helpTopic(),
                 {
                     title: t('Typing while it is still writing'),
                     body: t('You do not have to wait for a reply to land before saying the next thing. Anything typed mid-reply waits its turn, shown above the composer in the order it was typed, and goes as soon as the current one is done. Take one back out while it waits, or press Stop and nothing behind it is sent either. Commands are the exception: they are free and instant, so they run straight away rather than queueing.')
@@ -4637,7 +5619,7 @@
                 },
                 {
                     title: t('Keyboard'),
-                    body: t('Command palette with Ctrl/Cmd+K, new chat with Ctrl/Cmd+N, find in chat with Ctrl/Cmd+F, search everything with Ctrl/Cmd+Shift+F. The full list is under Keyboard shortcuts in Settings.')
+                    body: t('Command palette with Ctrl/Cmd+K, new chat with Ctrl/Cmd+Shift+O, find in chat with Ctrl/Cmd+F, search everything with Ctrl/Cmd+Shift+F. The full list is under Keyboard shortcuts in Settings.')
                 }
             ];
         },
@@ -4847,7 +5829,7 @@
             this.renderSchedules();
             this.refreshToolbar();
             this.note(t('Running “{name}”.', { name: entry.title || t('Untitled') }));
-            await this.send(entry.prompt);
+            await this.send(entry.prompt, null, { unattended: true });
         },
 
         dueSchedules() {
@@ -4927,19 +5909,10 @@
         },
 
         renderBotIcons() {
-            const box = $('botIcons');
-            box.innerHTML = '';
-            for (const name of Icons.PERSONA_ICONS) {
-                const b = el('button', 'icon-choice' + (name === this.botIcon ? ' is-active' : ''));
-                b.type = 'button';
-                b.title = name;
-                b.appendChild(Icons.node(name, { size: 17 }));
-                b.addEventListener('click', () => {
-                    this.botIcon = name;
-                    this.renderBotIcons();
-                });
-                box.appendChild(b);
-            }
+            this.renderIconChoices($('botIcons'), this.botIcon, (name) => {
+                this.botIcon = name;
+                this.renderBotIcons();
+            });
         },
 
         resetBotForm() {
@@ -4950,6 +5923,7 @@
             $('botInstructions').value = '';
             $('botStarters').value = '';
             $('botModel').value = '';
+            Caps.fillBotForm(null);
             $('botFormTitle').textContent = t('New bot');
             this.modalStatus('botStatus', '');
             this.renderBotIcons();
@@ -4965,6 +5939,7 @@
             $('botInstructions').value = bot.instructions || '';
             $('botStarters').value = (bot.starters || []).join('\n');
             $('botModel').value = bot.modelKey || '';
+            Caps.fillBotForm(bot);
             $('botFormTitle').textContent = t('Edit bot');
             this.modalStatus('botStatus', '');
             this.renderBotIcons();
@@ -5031,6 +6006,11 @@
                 this.modalStatus('botStatus', t('Give the bot a name.'), 'warn');
                 return;
             }
+            const caps = Caps.readBotForm();
+            if (!caps) {
+                this.modalStatus('botStatus', t('Caps are whole numbers of sats.'), 'warn');
+                return;
+            }
             const key = $('botModel').value || null;
             const found = key && this.models
                 ? (this.models.models || []).find(m => m.key === key)
@@ -5044,7 +6024,8 @@
                 modelKey: key,
                 modelLabel: found ? found.label : null,
                 starters: ($('botStarters').value || '').split('\n')
-                    .map(x => x.trim()).filter(Boolean)
+                    .map(x => x.trim()).filter(Boolean),
+                ...caps
             });
             this.resetBotForm();
             this.renderBots();
@@ -5146,9 +6127,7 @@
                 try {
                     events = await Relays.fetch(Bots.filterFor(pointer), 5000);
                 } catch (_) { }
-                const newest = events
-                    .filter(e => e && e.pubkey === pointer.pubkey)
-                    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+                const newest = Bots.newestFor(events, pointer);
                 bot = newest ? Bots.fromEvent(newest) : null;
                 if (!bot) {
                     this.modalStatus('addBotStatus',
@@ -5172,7 +6151,7 @@
             box.appendChild(el('p', 'bot-preview-line',
                 bot.modelLabel ? t('Model: {name}', { name: bot.modelLabel }) : t('Auto-routed')));
             if (bot.instructions) {
-                box.appendChild(el('pre', 'bot-preview-body', bot.instructions.slice(0, 800)));
+                box.appendChild(el('pre', 'bot-preview-body', bot.instructions));
             }
             box.appendChild(el('p', 'hint',
                 t('Instructions from a stranger are still instructions. Read them before you use it.')));
@@ -5404,52 +6383,176 @@
             $('compareGrid').hidden = true;
             $('compareGrid').innerHTML = '';
             this.compare = null;
+            this.comparePicks = { a: null, b: null };
             this.modalStatus('compareStatus', '');
             const text = prefill != null ? prefill : ($('input').value || '').trim();
             if (text) $('comparePrompt').value = text;
 
-            const a = $('compareA'), b = $('compareB');
+            const slots = $('compareSlots');
+            slots.hidden = true;
+            $('compareTotal').hidden = true;
             if (!this.models) {
-                a.innerHTML = '';
-                b.innerHTML = '';
                 const wait = el('div', 'catalog-wait');
-                a.parentNode.insertBefore(wait, a);
-                this.models = await Api.models();
+                slots.parentNode.insertBefore(wait, slots);
+                try { this.models = await Api.models(); } catch (_) { this.models = null; }
                 wait.remove();
             }
-            if (!this.models || !this.models.models) {
+            if (!this.compareModels().length) {
                 this.modalStatus('compareStatus',
                     t('The model catalog is unavailable right now.'), 'warn');
                 return;
             }
-            const rows = this.models.models.slice().sort((x, y) => {
-                const fx = this.favourites.includes(x.key) ? 0 : 1;
-                const fy = this.favourites.includes(y.key) ? 0 : 1;
-                return fx - fy || x.label.localeCompare(y.label);
-            });
-            const fill = (sel, chosen) => {
-                sel.innerHTML = '';
-                for (const m of rows) {
-                    const opt = document.createElement('option');
-                    opt.value = m.key;
-                    opt.textContent = `${m.label} · ${num(m.credits || 1)}`;
-                    if (m.key === chosen) opt.selected = true;
-                    sel.appendChild(opt);
-                }
-            };
             const current = (this.conv && this.conv.proModel) || this.settings.proModel;
-            const first = current ? current.key : (rows[0] && rows[0].key);
-            const second = (rows.find(m => m.key !== first) || {}).key;
-            fill(a, first);
-            fill(b, second);
+            this.comparePicks = this.compareDefaults(current ? current.key : null);
+            slots.hidden = false;
+            this.renderCompareSlots();
+        },
+
+        compareModels() {
+            const models = (this.models && this.models.models) || [];
+            return models.filter(m => m && m.key && (m.kind || 'chat') === 'chat' && !m.command);
+        },
+
+        compareMaker(m) {
+            const group = ((this.models && this.models.groups) || []).find(g => (g.keys || []).includes(m.key)) || {};
+            return Icons.canonical(m.authorSlug || group.authorSlug || m.author || '');
+        },
+
+        compareDefaults(pinned) {
+            const chats = this.compareModels();
+            if (!chats.length) return { a: null, b: null };
+            const rank = (m) => {
+                const starred = this.favourites.includes(m.key) ? 0 : 1;
+                const at = POPULAR_MAKERS.indexOf(this.compareMaker(m));
+                return starred * 100 + (at < 0 ? POPULAR_MAKERS.length : at);
+            };
+            const order = new Map(chats.map((m, i) => [m.key, i]));
+            const ranked = chats.slice().sort((x, y) => rank(x) - rank(y) || order.get(x.key) - order.get(y.key));
+            const a = chats.find(m => m.key === pinned) || ranked[0];
+            const others = ranked.filter(m => m.key !== a.key);
+            const b = others.find(m => this.compareMaker(m) !== this.compareMaker(a)) || others[0] || null;
+            return { a, b };
+        },
+
+        compareRange(m) {
+            const turn = this.modelTurnCredits(m);
+            if (turn) return turn;
+            const low = Number(m.credits) || 0;
+            return { low, high: Math.max(low, Number(m.max) || low) };
+        },
+
+        compareTotalLabel(a, b) {
+            const x = this.compareRange(a), y = this.compareRange(b);
+            const low = creditAmount(x.low + y.low);
+            const high = creditAmount(x.high + y.high);
+            return low === high
+                ? t('Both replies together: ~{n} credits', { n: low })
+                : t('Both replies together: ~{low}–{high} credits', { low, high });
+        },
+
+        renderCompareSlots() {
+            const picks = this.comparePicks || { a: null, b: null };
+            const busy = !!this._compareBusy;
+            for (const [slot, id, tag] of [['a', 'compareA', t('Model A')], ['b', 'compareB', t('Model B')]]) {
+                const button = $(id);
+                const m = picks[slot];
+                button.innerHTML = '';
+                button.disabled = busy;
+                button.dataset.key = m ? m.key : '';
+                const maker = m ? this.makerOf(m) : null;
+                const name = m ? (m.label || m.key) : t('Pick a model');
+                button.setAttribute('aria-label', t('{slot}: {name}', { slot: tag, name }));
+                if (maker) {
+                    button.appendChild(Icons.brand(maker.slug, { size: 32 }));
+                } else {
+                    const glyph = el('span', 'compare-slot-glyph');
+                    glyph.appendChild(Icons.node('model', { size: 20 }));
+                    button.appendChild(glyph);
+                }
+                const text = el('span', 'compare-slot-text');
+                const kicker = el('span', 'compare-slot-kicker');
+                kicker.appendChild(el('span', 'compare-slot-tag', tag));
+                if (maker) kicker.appendChild(document.createTextNode(' · ' + maker.name));
+                text.appendChild(kicker);
+                text.appendChild(el('span', 'compare-slot-name', name));
+                if (m) text.appendChild(el('span', 'compare-slot-cost', this.modelPrice(m)));
+                button.appendChild(text);
+                const change = el('span', 'compare-slot-change', t('Change'));
+                change.appendChild(Icons.node('chevron', { size: 16 }));
+                button.appendChild(change);
+                for (const child of button.children) child.setAttribute('aria-hidden', 'true');
+            }
+            const total = $('compareTotal');
+            total.hidden = !(picks.a && picks.b);
+            total.textContent = picks.a && picks.b ? this.compareTotalLabel(picks.a, picks.b) : '';
+        },
+
+        pickCompare(slot) {
+            if (this._compareBusy || !this.comparePicks) return;
+            const first = slot === 'a';
+            const current = this.comparePicks[first ? 'a' : 'b'];
+            const other = this.comparePicks[first ? 'b' : 'a'];
+            this.openModels(null, {
+                over: true,
+                from: $(first ? 'compareA' : 'compareB'),
+                title: first ? t('Pick Model A') : t('Pick Model B'),
+                current: current ? current.key : null,
+                taken: other ? {
+                    key: other.key,
+                    note: first ? t('Already picked as Model B') : t('Already picked as Model A')
+                } : null,
+                pick: (m) => {
+                    if (!this.comparePicks || (other && other.key === m.key)) return;
+                    this.comparePicks[first ? 'a' : 'b'] = m;
+                    this.modalStatus('compareStatus', '');
+                    this.renderCompareSlots();
+                }
+            });
         },
 
         compareSeed(limit) {
-            return Store.messages(this.conv.id)
+            return this.seedFrom(Store.messages(this.conv.id), limit);
+        },
+
+        seedFrom(kept, limit) {
+            return kept
                 .filter(x => x.role === 'self' || x.role === 'bot')
                 .slice(-(limit || 8))
                 .map(x => `${x.role === 'self' ? 'User' : 'Assistant'}: ${MD.plain(x.content).slice(0, 700)}`)
                 .join('\n\n');
+        },
+
+        reseed(conv) {
+            Store.setThread(conv.id, []);
+            return this.patchChat(conv, {
+                rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
+                seed: this.seedFrom(Store.messages(conv.id)) || null
+            });
+        },
+
+        chatSnapshot(conv) {
+            const live = Store.conversation(conv.id) || conv;
+            return {
+                id: conv.id,
+                messages: Store.messages(conv.id).slice(),
+                thread: Store.thread(conv.id).slice(),
+                rootId: live.rootId,
+                seed: live.seed || null,
+                stats: live.stats || null
+            };
+        },
+
+        restoreSnapshot(snap) {
+            const conv = Store.conversation(snap.id);
+            if (!conv) return;
+            Store.saveMessages(snap.id, snap.messages);
+            Store.setThread(snap.id, snap.thread);
+            const next = this.patchChat(conv, { rootId: snap.rootId, seed: snap.seed, stats: snap.stats });
+            if (this.conv && next && next.id === this.conv.id) {
+                this.renderMessages();
+                this.renderArtifactStrip();
+            }
+            this.renderList();
         },
 
         async runCompare() {
@@ -5459,9 +6562,8 @@
                 this.modalStatus('compareStatus', t('Type a prompt for both of them first.'), 'warn');
                 return;
             }
-            const byKey = new Map((this.models.models || []).map(m => [m.key, m]));
-            const a = byKey.get($('compareA').value);
-            const b = byKey.get($('compareB').value);
+            const picks = this.comparePicks || {};
+            const a = picks.a, b = picks.b;
             if (!a || !b || a.key === b.key) {
                 this.modalStatus('compareStatus', t('Pick two different models.'), 'warn');
                 return;
@@ -5475,6 +6577,17 @@
                         { n: num(price), have: creditAmount(this.balance.pro) }), 'warn');
                 return;
             }
+            let maxCost = null;
+            if (Caps.any(this.conv)) {
+                const estA = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: a, mediaModel: null }), {}, this.models);
+                const estB = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: b, mediaModel: null }), {}, this.models);
+                const low = Math.max(price, (Number(estA.low) || 0) + (Number(estB.low) || 0));
+                const high = Math.max(price, (Number(estA.high) || 0) + (Number(estB.high) || 0));
+                const gate = await Caps.gate(this, this.conv, { tier: 'pro', low, high });
+                if (!gate.go) return;
+                const room = gate.waived ? null : Caps.maxCost(this.conv, true, this.models);
+                if (room != null) maxCost = Math.max(0.001, Math.floor(room / 2 * 1000) / 1000);
+            }
             const go = await this.ask({
                 title: t('Ask both?'),
                 body: t('{a} and {b} each answer once, so this costs two replies — about {n} Pro credits.',
@@ -5487,21 +6600,28 @@
             this.modalStatus('compareStatus', t('Waiting on both…'));
             $('compareGrid').hidden = false;
             $('compareGrid').innerHTML = '';
+            this._compareBusy = true;
+            this.renderCompareSlots();
             let out;
             try {
                 out = await Chat.compare(this.conv, text, this.settings, [a, b], {
-                    seed: this.compareSeed()
+                    seed: this.compareSeed(),
+                    maxCost
                 });
             } catch (e) {
                 this.endTurn(turn);
+                this._compareBusy = false;
+                this.renderCompareSlots();
                 this.modalStatus('compareStatus', (e && e.message) || t('The request failed.'), 'warn');
                 return;
             }
             this.endTurn(turn);
+            this._compareBusy = false;
+            this.renderCompareSlots();
             this.compare = { prompt: text, runs: out };
             const spent = out.reduce((n, r) => n + ((r.result && r.result.cost) || 0), 0);
-            Store.recordUsage(spent);
-            this.bumpStats(this.conv, spent);
+            Store.recordUsage(spent, true);
+            this.bumpStats(this.conv, spent, true);
             const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
             if (balance) {
                 this.creditBalance(balance.pro,
@@ -5523,6 +6643,8 @@
                 const head = el('div', 'compare-head');
                 head.appendChild(Icons.node('model', { size: 13 }));
                 head.appendChild(el('span', 'compare-name', run.model.label));
+                const maker = this.makerOf(run.model);
+                if (maker) head.appendChild(this.makerMark(maker));
                 if (run.ok) {
                     head.appendChild(el('span', 'compare-cost',
                         t('{n} credits', { n: creditAmount(run.result.costCredits != null ? run.result.costCredits : (run.result.cost || 0)) })));
@@ -5540,7 +6662,7 @@
                 col.appendChild(body);
                 const foot = el('div', 'compare-foot');
                 if (run.ok) {
-                    const keep = el('button', 'btn primary', t('Keep this one'));
+                    const keep = el('button', 'btn btn-primary', t('Keep this one'));
                     keep.type = 'button';
                     keep.addEventListener('click', () => this.keepCompare(i));
                     foot.appendChild(keep);
@@ -5573,8 +6695,12 @@
                 cost: run.result.cost || 0,
                 pro: run.result.pro !== false,
                 model: run.model.label,
+                ...this.modelStamp(run.model.label, [run.model]),
                 sources: run.result.sources || null,
+                team: Team.carry(run.result),
                 followUps: run.result.followUps || null,
+                serverRuns: run.result.serverRuns || null,
+                serverRunCredits: run.result.serverRunCredits || 0,
                 calls: run.result.modelCalls || 1,
                 task: run.result.taskType || null,
                 ts: Date.now()
@@ -5629,20 +6755,37 @@
         async importBackup(file) {
             try {
                 const payload = await Exporter.readFile(file);
-                const mode = await this.ask({
+                const choice = await this.ask({
                     title: t('Import a backup'),
                     body: t('Add these conversations to the ones already here, or replace everything?'),
                     confirm: t('Add'),
-                    cancel: t('Replace everything')
+                    alt: t('Replace everything'),
+                    altDanger: true,
+                    cancel: t('Cancel')
                 });
-                const count = Store.importAll(payload, mode ? 'merge' : 'replace');
+                if (!choice) return;
+                if (choice === 'alt') {
+                    const sure = await this.ask({
+                        title: t('Replace everything?'),
+                        body: t('Every conversation on this device is deleted and replaced with the ones in the backup. This cannot be undone.'),
+                        confirm: t('Replace everything'),
+                        danger: true
+                    });
+                    if (!sure) return;
+                }
+                const mode = choice === 'alt' ? 'replace' : 'merge';
+                const count = Store.importAll(payload, mode);
+                const skipped = mode === 'merge'
+                    ? Math.max(0, (payload.conversations || []).length - count)
+                    : 0;
                 this.settings = Store.settings();
                 this.applyAppearance();
                 this.renderList();
                 const list = Store.conversations();
                 this.open(list.length ? list[0] : this.newConversation());
-                this.modalStatus('appearanceStatus',
-                    t('Imported {n} conversations.', { n: count }), 'ok');
+                this.modalStatus('appearanceStatus', skipped
+                    ? t('Imported {n} conversations. {m} were already here, so they were skipped.', { n: count, m: skipped })
+                    : t('Imported {n} conversations.', { n: count }), 'ok');
             } catch (e) {
                 this.modalStatus('appearanceStatus', t('That file could not be read.'), 'warn');
             }
@@ -5657,8 +6800,7 @@
             $('anonAutoFloor').value = String(s.anonAutoTopFloor ?? 10);
             $('anonAutoAmount').value = String(s.anonAutoTopAmount ?? 25);
             $('anonAutoTier').value = s.anonAutoTopTier || 'both';
-            $('anonAutoFields').hidden = !s.anonAutoTop;
-            $('anonAutoTier').hidden = !s.anonAutoTop;
+            this.syncAnonFields();
             $('anonStatus').textContent = '';
             $('anonBalances').textContent = t('Checking balances…');
             this.openModal('modalAnon');
@@ -5670,6 +6812,44 @@
                 box.appendChild(el('div', null, t('Throwaway key: {standard} standard · {pro} Pro',
                     { standard: b.anon ?? '–', pro: b.anonPro ?? '–' })));
             }).catch(() => { $('anonBalances').textContent = t('Could not read the balances.'); });
+        },
+
+        syncAnonFields() {
+            const on = Anon.enabled();
+            const auto = !!this.settings.anonAutoTop;
+            $('anonFunding').hidden = !on;
+            $('anonOffHint').hidden = on;
+            $('anonAutoFields').hidden = !auto;
+            $('anonAutoTier').hidden = !auto;
+            $('anonAutoTierLabel').hidden = !auto;
+        },
+
+        setAnon(on) {
+            Anon.setEnabled(on);
+            this.syncAnonFields();
+            const conv = this.conv;
+            if (conv && !!conv.anon !== on) {
+                const empty = !Store.messages(conv.id).some(m => m.role === 'self' || m.role === 'bot');
+                if (empty) {
+                    this.conv = Store.updateConversation(conv.id, { anon: on });
+                    $('chatAnon').hidden = !on;
+                    this.renderList();
+                    this.modalStatus('anonStatus', on
+                        ? t('This chat is anonymous now.')
+                        : t('This chat uses your nym now.'), 'ok');
+                } else if (on) {
+                    this.open(this.newConversation());
+                    this.renderList();
+                    this.modalStatus('anonStatus',
+                        t('Opened a new anonymous chat. The one you were in started under your nym, so it stays that way.'), 'ok');
+                } else {
+                    this.modalStatus('anonStatus',
+                        t('New chats use your nym. This one started anonymously, so it stays that way.'), 'ok');
+                }
+            }
+            this.refreshToolbar();
+            this.renderBalance();
+            if (on) this.runAutoTopUp({ announce: true });
         },
 
         /// Tops the throwaway key up when it is running low, so anonymous mode
@@ -5713,6 +6893,8 @@
         // --- credits --------------------------------------------------------------
 
         openCredits() {
+            if (!this.invoice && !this._invoiceRestored) this.invoice = this.restoreInvoice();
+            this._invoiceRestored = true;
             const live = this.invoice;
             this.creditTier = live ? live.tier : (this.proTier() ? 'pro' : 'standard');
             for (const b of document.querySelectorAll('#creditTier .tier-btn')) {
@@ -5739,6 +6921,85 @@
             this.creditSats();
             this.renderCreditBalances();
             this.openModal('modalCredits');
+            if (live && !live.paid && !live.polling) this.pollInvoice(live);
+            this.resumeInvoices().catch(() => { });
+        },
+
+        keptInvoices() {
+            const list = Store.read('pendingInvoices', []);
+            const now = Date.now();
+            return (Array.isArray(list) ? list : [])
+                .filter(x => x && /^[0-9a-f]{64}$/i.test(x.invoiceId || '') && now - (Number(x.createdAt) || 0) < INVOICE_KEPT_MS);
+        },
+
+        keepInvoice(invoice) {
+            const rest = this.keptInvoices().filter(x => x.invoiceId !== invoice.id);
+            rest.push({
+                invoiceId: invoice.id, pr: invoice.pr, tier: invoice.tier, credits: invoice.credits,
+                sats: invoice.sats, anon: !!(invoice.opts && invoice.opts.signer), createdAt: invoice.createdAt || Date.now(),
+                paid: !!invoice.paid
+            });
+            Store.write('pendingInvoices', rest.slice(-8));
+        },
+
+        forgetInvoice(id) {
+            Store.write('pendingInvoices', this.keptInvoices().filter(x => x.invoiceId !== id));
+        },
+
+        invoiceOpts(kept) {
+            if (!kept.anon) return {};
+            return Anon.ready() ? { signer: Anon.signer() } : null;
+        },
+
+        restoreInvoice() {
+            const kept = this.keptInvoices().filter(x => x.pr);
+            for (let i = kept.length - 1; i >= 0; i--) {
+                const opts = this.invoiceOpts(kept[i]);
+                if (!opts) continue;
+                const k = kept[i];
+                return {
+                    id: k.invoiceId, pr: k.pr, tier: k.tier === 'pro' ? 'pro' : 'standard',
+                    credits: k.credits, sats: k.sats, opts, paid: !!k.paid, createdAt: k.createdAt
+                };
+            }
+            return null;
+        },
+
+        async resumeInvoices() {
+            if (this._resumingInvoices) return;
+            this._resumingInvoices = true;
+            try {
+                Store.write('pendingInvoices', this.keptInvoices());
+                for (const kept of this.keptInvoices()) {
+                    if (this.invoice && this.invoice.id === kept.invoiceId) continue;
+                    const opts = this.invoiceOpts(kept);
+                    if (!opts) continue;
+                    let check;
+                    try { check = (await Api.checkInvoice(kept.invoiceId, opts)).data; } catch (_) { continue; }
+                    if (this.invoice && this.invoice.id === kept.invoiceId) continue;
+                    if (check && check.claimed) { this.forgetInvoice(kept.invoiceId); continue; }
+                    if (check && /unknown or expired/i.test(check.error || '')) { this.forgetInvoice(kept.invoiceId); continue; }
+                    if (!check || !check.paid) continue;
+                    let data;
+                    try { data = (await Api.claimCredits(kept.invoiceId, opts)).data; } catch (_) { continue; }
+                    if (data && !data.error) {
+                        this.forgetInvoice(kept.invoiceId);
+                        const tier = kept.tier === 'pro' ? 'pro' : 'standard';
+                        if (!opts.signer) {
+                            this.balance[tier] = data.balanceCredits != null ? data.balanceCredits : data.balance;
+                            this.renderBalance();
+                            this.renderCreditBalances();
+                        }
+                        this.toast(tier === 'pro'
+                            ? t('A payment from earlier arrived: {n} Pro credits added.', { n: num(kept.credits || 0) })
+                            : t('A payment from earlier arrived: {n} credits added.', { n: num(kept.credits || 0) }));
+                    } else if (data && /already claimed/i.test(data.error || '')) {
+                        this.forgetInvoice(kept.invoiceId);
+                    }
+                }
+            } finally {
+                this._resumingInvoices = false;
+            }
         },
 
         renderCreditBalances() {
@@ -5885,8 +7146,9 @@
                 this.modalStatus('creditStatus', (data && data.error) || t('Could not create an invoice.'), 'warn');
                 return;
             }
-            const invoice = { id: data.invoiceId, pr: data.pr, tier, credits, sats, opts, paid: false };
+            const invoice = { id: data.invoiceId, pr: data.pr, tier, credits, sats, opts, paid: false, createdAt: Date.now() };
             this.invoice = invoice;
+            this.keepInvoice(invoice);
             this.showInvoice(invoice);
             this.creditSats();
             if (this.invoice !== invoice) return;
@@ -5904,6 +7166,7 @@
             } finally {
                 this.creditWorking(false);
             }
+            if (data && (!data.error || /already claimed/i.test(data.error))) this.forgetInvoice(invoice.id);
             if (this.invoice !== invoice) return true;
 
             if (data && !data.error) {
@@ -5933,16 +7196,33 @@
 
         markPaid(invoice) {
             invoice.paid = true;
+            if (this.keptInvoices().some(x => x.invoiceId === invoice.id)) this.keepInvoice(invoice);
             if (this.invoice === invoice) $('creditBuy').textContent = t('Add my credits');
         },
 
         async pollInvoice(invoice) {
+            invoice.polling = true;
+            try {
+                await this.pollInvoiceOnce(invoice);
+            } finally {
+                invoice.polling = false;
+            }
+        },
+
+        async pollInvoiceOnce(invoice) {
             for (let i = 0; i < 90; i++) {
                 await new Promise(r => setTimeout(r, 2000));
                 if (this.invoice !== invoice) return;
                 if (this.creditBusy) continue;
-                const { data } = await Api.checkInvoice(invoice.id, invoice.opts);
+                let data;
+                try { ({ data } = await Api.checkInvoice(invoice.id, invoice.opts)); } catch (_) { continue; }
                 if (this.invoice !== invoice) return;
+                if (data && /unknown or expired/i.test(data.error || '')) {
+                    this.forgetInvoice(invoice.id);
+                    this.resetInvoice();
+                    this.modalStatus('creditStatus', t('That invoice has expired. Create a new one.'), 'warn');
+                    return;
+                }
                 if (!data || !data.paid) continue;
                 this.markPaid(invoice);
                 if (await this.claimInvoice(invoice)) return;
@@ -5963,12 +7243,17 @@
         openSettings() {
             $('settingsWho').textContent = Identity.method === 'nip07'
                 ? t('Signed in with a browser extension, which holds your key.')
-                : t('Your key lives on this device and nowhere else.');
+                : Identity.isRemote
+                    ? t('Signed in with: Remote signer')
+                    : t('Your key lives on this device and nowhere else.');
+            $('signerRow').hidden = !Identity.isRemote;
             $('setNpub').value = Identity.pubkey
                 ? NT().nip19.npubEncode(Identity.pubkey)
                 : '';
             $('setHex').value = Identity.pubkey || '';
+            $('setNickname').value = this.nickname();
             const nsecRow = $('setNsec').closest('.reveal-row');
+            $('setNsecLabel').hidden = !Identity.isLocal;
             if (Identity.isLocal) {
                 nsecRow.hidden = false;
                 $('setNsec').value = NT().nip19.nsecEncode(Identity._sk);
@@ -5990,6 +7275,7 @@
             $('usageLine').textContent = t('{replies} replies, {credits} credits spent on this device.',
                 { replies: num(usage.replies), credits: num(usage.credits) });
             $('settingsStatus').textContent = '';
+            if (window.NymbotVault) window.NymbotVault.render();
             this.openModal('modalSettings');
         },
 
@@ -6038,7 +7324,7 @@
             this.modalStatus('settingsStatus', t('Checking the code against the account…'), '');
             let stored = null;
             let announced = null;
-            try { stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk)); } catch (_) { stored = null; }
+            try { stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk, Identity.remote)); } catch (_) { stored = null; }
             try { announced = await PQ.resolve(Identity.pubkey); } catch (_) { announced = null; }
             const record = (stored && stored.record) || null;
             const rowPresent = !!(stored && stored.present);
@@ -6087,41 +7373,92 @@
                 : t('Linked. This device now derives the same post-quantum key.'), 'ok');
         },
 
-        async transfer() {
+        async transfer(prefill) {
             const target = await this.ask({
                 title: t('Move your whole balance'),
                 body: t('Every credit on this key moves to the key you name. There is no undo.'),
                 prompt: true,
-                label: t('Move your whole balance to which public key? (hex, 64 characters)'),
-                confirm: t('Move')
+                value: prefill || '',
+                label: t('Move your whole balance to which public key? (npub, or hex, 64 characters)'),
+                confirm: t('Move'),
+                danger: true
             });
             if (!target) return;
-            const { data } = await Api.transferCredits(target.trim().toLowerCase());
-            if (!data || data.error) {
-                this.modalStatus('settingsStatus', (data && data.error) || t('The transfer failed.'), 'warn');
+            const key = this.pubkeyFrom(target);
+            if (!key) {
+                this.transferStatus(t('That is not a public key. Paste an npub or a 64-character hex key.'), 'warn');
                 return;
             }
-            this.modalStatus('settingsStatus', t('Moved.'), 'ok');
+            let data = null;
+            try { ({ data } = await Api.transferCredits(key)); } catch (e) { data = { error: e && e.message }; }
+            if (!data || data.error) {
+                this.transferStatus((data && data.error) || t('The transfer failed.'), 'warn');
+                return;
+            }
+            this.transferStatus(t('Moved.'), 'ok');
             this.refreshBalance();
         },
 
+        pubkeyFrom(text) {
+            const raw = String(text || '').trim().replace(/^nostr:/i, '');
+            if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase();
+            if (/^npub1/i.test(raw)) {
+                try {
+                    const decoded = NT().nip19.decode(raw.toLowerCase());
+                    if (decoded && decoded.type === 'npub' && /^[0-9a-f]{64}$/.test(decoded.data)) return decoded.data;
+                } catch (_) { }
+            }
+            return null;
+        },
+
+        transferStatus(text, kind) {
+            if (!$('modalSettings').hidden) this.modalStatus('settingsStatus', text, kind);
+            else this.toast(text);
+        },
+
         async wipe() {
-            const ok = await this.ask({
-                title: t('Wipe this device'),
-                body: t('Wipe everything on this device — your key, every conversation, and any credits on a throwaway key?\n\nThis cannot be undone.'),
-                confirm: t('Wipe'),
-                danger: true
-            });
-            if (!ok) return;
+            let ok;
+            for (;;) {
+                const local = Identity.isLocal && Identity._sk;
+                ok = await this.ask({
+                    title: t('Wipe this device'),
+                    body: t('Wipe everything on this device — your key, every conversation, and any credits on a throwaway key?\n\nThis cannot be undone.')
+                        + (local ? '\n\n' + t('Your private key is only on this device. Copy it first if you want to sign in again later.') : ''),
+                    confirm: t('Wipe'),
+                    danger: true,
+                    alt: local ? t('Copy my private key') : null
+                });
+                if (ok !== 'alt' || !local) break;
+                const sk = Identity._sk instanceof Uint8Array
+                    ? Identity._sk
+                    : Uint8Array.from((String(Identity._sk).match(/../g) || []).map(h => parseInt(h, 16)));
+                await this.writeClipboard(NT().nip19.nsecEncode(sk));
+            }
+            if (ok !== true) return;
             // Signed while the key is still here; bounded so a signer that
             // never answers cannot hold the wipe up.
             await Promise.race([
                 Sync.purge(),
                 new Promise((done) => setTimeout(done, 3000))
             ]);
+            await Promise.race([
+                Promise.all([
+                    window.NymbotDocs ? window.NymbotDocs.wipe().catch(() => { }) : null,
+                    this.clearCaches()
+                ]),
+                new Promise((done) => setTimeout(done, 3000))
+            ]);
             Store.wipe();
             Identity.forget();
             location.reload();
+        },
+
+        async clearCaches() {
+            try {
+                if (!window.caches) return;
+                const keys = await caches.keys();
+                await Promise.all(keys.map(k => caches.delete(k)));
+            } catch (_) { }
         },
 
         // --- chat menu ------------------------------------------------------------
@@ -6178,14 +7515,15 @@
 
         async clearChat(target) {
             const conv = target || this.conv;
+            const snap = this.chatSnapshot(conv);
             // A fresh root id is what actually resets the model's context: the
             // worker scopes history to the marker, so a new one is a new thread.
             const rootId = window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)));
             Store.saveMessages(conv.id, []);
             Store.setThread(conv.id, []);
-            const next = this.patchChat(conv, { rootId, stats: { messages: 0, credits: 0 } });
+            const next = this.patchChat(conv, { rootId, seed: null, stats: { messages: 0, credits: 0 } });
             if (this.conv && next.id === this.conv.id) this.renderMessages();
-            this.toast(t('Cleared.'));
+            this.toastUndo(t('Cleared.'), () => this.restoreSnapshot(snap));
         },
 
         async renameChat(target) {
@@ -6258,7 +7596,7 @@
             const needle = term.toLowerCase().trim();
             const rows = [];
             const actions = [
-                { label: t('New chat'), hint: MODIFIER + '+N', run: () => this.open(this.newConversation()) },
+                { label: t('New chat'), hint: MODIFIER + '+Shift+O', run: () => this.open(this.newConversation()) },
                 { label: t('Search every chat'), hint: MODIFIER + '+Shift+F', run: () => this.openSearch('') },
                 { label: t('Pick a model'), hint: MODIFIER + '+Shift+M', run: () => this.openModels() },
                 { label: t('Repositories'), hint: MODIFIER + '+Shift+G', run: () => this.openRepos() },
@@ -6441,13 +7779,92 @@
             I18n.setLang(code);
         },
 
-        openModal(id) {
-            this.closeModals();
+        openModal(id, opts) {
+            const over = !!(opts && opts.over) && !!document.querySelector('.modal:not([hidden])');
+            const from = document.activeElement;
+            if (!over) {
+                const keep = this._modalFrom;
+                const already = !!document.querySelector('.modal:not([hidden])');
+                this.closeModals({ keepFocus: true });
+                this._modalFrom = already ? keep : from;
+            }
             $('scrim').hidden = false;
-            $(id).hidden = false;
+            const modal = $(id);
+            modal.classList.toggle('is-over', over);
+            if (over) {
+                this._overFrom = opts.from || from;
+                for (const m of document.querySelectorAll('.modal:not([hidden])')) m.inert = true;
+            }
+            this.labelModal(modal);
+            modal.inert = false;
+            modal.hidden = false;
+            $('shell').inert = true;
+            this.focusModal(modal);
         },
 
-        closeModals() {
+        labelModal(modal) {
+            if (modal.dataset.labelled) return;
+            modal.dataset.labelled = '1';
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+            const heading = modal.querySelector('h2');
+            if (heading) {
+                if (!heading.id) heading.id = modal.id + 'Title';
+                modal.setAttribute('aria-labelledby', heading.id);
+            }
+        },
+
+        focusModal(modal) {
+            const card = modal.querySelector('.modal-card') || modal;
+            if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+                const active = document.activeElement;
+                if (active && active !== document.body && typeof active.blur === 'function') active.blur();
+                if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
+                card.focus({ preventScroll: true });
+                return;
+            }
+            const first = [...card.querySelectorAll('input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])')]
+                .find(n => !n.disabled && !n.hidden && n.getAttribute('data-act') !== 'close-modal'
+                    && n.getClientRects().length && !(n.type === 'hidden'));
+            if (first) first.focus({ preventScroll: true });
+            else {
+                if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
+                card.focus({ preventScroll: true });
+            }
+        },
+
+        closeTop() {
+            const top = document.querySelector('.modal.is-over:not([hidden])');
+            if (!top) {
+                this.closeModals();
+                return;
+            }
+            top.hidden = true;
+            top.classList.remove('is-over');
+            for (const m of document.querySelectorAll('.modal:not([hidden])')) m.inert = false;
+            if (top.id === 'modalModels') this.modelPick = null;
+            const from = this._overFrom;
+            this._overFrom = null;
+            if (from && from.isConnected && typeof from.focus === 'function') from.focus();
+        },
+
+        closeModals(opts) {
+            this.modelPick = null;
+            this._overFrom = null;
+            const wasOpen = !!document.querySelector('.modal:not([hidden])');
+            for (const m of document.querySelectorAll('.modal.is-over')) m.classList.remove('is-over');
+            for (const m of document.querySelectorAll('.modal')) m.inert = false;
+            if ($('shell')) $('shell').inert = false;
+            const from = this._modalFrom;
+            this._modalFrom = null;
+            if (wasOpen && !(opts && opts.keepFocus) && from && from.isConnected && typeof from.focus === 'function') {
+                setTimeout(() => {
+                    const now = document.activeElement;
+                    const left = now && now.closest ? now.closest('.modal') : null;
+                    const stale = !now || now === document.body || !!(left && left.hidden);
+                    if (!document.querySelector('.modal:not([hidden])') && stale) from.focus({ preventScroll: true });
+                }, 0);
+            }
             $('sidebar').classList.remove('is-open');
             $('scrim').hidden = true;
             $('palette').hidden = true;
@@ -6488,6 +7905,10 @@
             confirm.classList.toggle('btn-danger', !!o.danger);
             confirm.classList.toggle('btn-primary', !o.danger);
             $('dialogCancel').textContent = o.cancel || t('Cancel');
+            const alt = $('dialogAlt');
+            alt.hidden = !o.alt;
+            alt.textContent = o.alt || '';
+            alt.classList.toggle('btn-danger', !!o.altDanger);
             $('dialogScrim').hidden = false;
             $('dialog').hidden = false;
             this._dialogPrompt = isPrompt;
@@ -6506,6 +7927,10 @@
             this._dialogResolve = null;
             $('dialog').hidden = true;
             $('dialogScrim').hidden = true;
+            if (ok === 'alt') {
+                resolve('alt');
+                return;
+            }
             resolve(this._dialogPrompt ? (ok ? value : null) : !!ok);
         },
 
@@ -6620,10 +8045,19 @@
         handlers() {
             return {
                 'gate-generate': () => this.gateGenerate(),
-                'gate-show-import': () => { $('gateImport').hidden = false; $('gateNsec').focus(); },
+                'gate-show-import': () => { this.showGateRemote(false); $('gateImport').hidden = false; $('gateNsec').focus(); },
+                'gate-show-remote': () => this.showGateRemote(true),
+                'gate-cancel-remote': () => this.showGateRemote(false),
+                'gate-bunker': () => this.gateBunker(),
+                'gate-nostrconnect': () => this.gateNostrConnect(),
+                'gate-signer-cancel': () => this.cancelSigner(),
+                'signer-auth': () => this.openSignerAuth(),
+                'signer-disconnect': () => this.disconnectSigner(),
                 'gate-cancel-import': () => { $('gateImport').hidden = true; },
                 'gate-import': () => this.gateImport(),
                 'gate-extension': () => this.gateExtension(),
+                'nickname-save': () => this.saveNicknameField(),
+                'nickname-clear': () => this.clearNicknameField(),
                 'reveal-done': () => { $('reveal').hidden = true; this.enter(); },
                 'copy': (target) => this.copy(target.dataset.target),
                 'new-chat': () => this.open(this.newConversation()),
@@ -6646,13 +8080,16 @@
                 'open-system': () => { const c = this.menuChat(); this.closeChatMenu(); this.openSystem(c); },
                 'open-tags': () => { const c = this.menuChat(); this.closeChatMenu(); this.openTags(c); },
                 'open-stats': () => { const c = this.menuChat(); this.closeChatMenu(); this.openStats(c); },
+                'open-caps': () => { const c = this.menuChat(); this.closeChatMenu(); Caps.openEditor(this, c); },
                 'export-md': () => { const c = this.menuChat(); this.closeChatMenu(); Exporter.conversation(c, 'md'); },
+                'export-txt': () => { const c = this.menuChat(); this.closeChatMenu(); Exporter.conversation(c, 'txt'); },
                 'export-json': () => { const c = this.menuChat(); this.closeChatMenu(); Exporter.conversation(c, 'json'); },
                 'copy-transcript': () => {
                     const c = this.menuChat();
                     this.closeChatMenu();
                     this.writeClipboard(Exporter.clipboardMarkdown(c));
                 },
+                'share-chat': () => { const c = this.menuChat(); this.closeChatMenu(); window.NymbotShare.openFor(this, c); },
                 'clear-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.clearChat(c); },
                 'delete-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.deleteChat(c); },
                 'conv-filter': (target) => {
@@ -6722,11 +8159,21 @@
                 'open-shortcuts': () => this.openShortcuts(),
                 'open-anon': () => this.openAnon(),
                 'open-credits': () => this.openCredits(),
+                'toggle-research': () => Research.toggle(this),
                 'toggle-web': () => {
                     this.saveSettings({ webSearch: !this.settings.webSearch });
                     this.refreshToolbar();
                 },
-                'close-modal': () => this.closeModals(),
+                'close-modal': () => this.closeTop(),
+                'dictate': () => this.toggleDictation(),
+                'dictate-cancel': () => this.cancelDictation(),
+                'compare-pick': (b) => this.pickCompare(b.dataset.slot),
+                'model-search-clear': () => {
+                    $('modelSearch').value = '';
+                    $('modelSearchClear').hidden = true;
+                    this.renderModels();
+                    $('modelSearch').focus();
+                },
                 'first-lang-skip': () => { this.markLanguageChosen(); this.closeModals(); },
                 'model-off': () => {
                     this.dropProMedia();
@@ -6807,6 +8254,7 @@
                 },
                 'dialog-confirm': () => this.settleDialog(true),
                 'dialog-cancel': () => this.settleDialog(false),
+                'dialog-alt': () => this.settleDialog('alt'),
                 'link-root': () => this.linkRoot(),
                 'transfer': () => this.transfer(),
                 'wipe': () => this.wipe(),
@@ -6824,7 +8272,12 @@
         },
 
         bind() {
-            const handlers = this.handlers();
+            const handlers = Object.assign(this.handlers(),
+                window.NymbotConnectors ? window.NymbotConnectors.handlers(this) : {},
+                ServerRun ? ServerRun.handlers(this) : {},
+                Team.handlers(this),
+                window.NymbotGift.handlers(this),
+                window.NymbotVault ? window.NymbotVault.handlers(this) : {});
 
             document.addEventListener('click', (e) => {
                 const target = e.target.closest('[data-act]');
@@ -6858,6 +8311,12 @@
             }
 
             $('scrim').addEventListener('click', () => { this.closePalette(); this.closeModals(); });
+            const syncInert = () => {
+                const open = !!document.querySelector('.modal:not([hidden])');
+                if ($('shell').inert !== open) $('shell').inert = open;
+            };
+            const watch = new MutationObserver(syncInert);
+            for (const m of document.querySelectorAll('.modal')) watch.observe(m, { attributes: true, attributeFilter: ['hidden'] });
             $('dialogScrim').addEventListener('click', () => this.settleDialog(false));
 
             document.addEventListener('keydown', (e) => {
@@ -6867,20 +8326,21 @@
 
                 if (e.key === 'Escape') {
                     if (e.shiftKey && this.sending) { this.stop(); return; }
+                    if (this.dictation && !this.dialogOpen()) { this.cancelDictation(); return; }
                     if (this.dialogOpen()) this.settleDialog(false);
                     else if (this.artifact && !document.querySelector('.modal:not([hidden])')
                         && $('palette').hidden) this.closeArtifact();
                     else if (!$('palette').hidden) this.closePalette();
                     else if (!$('findBar').hidden && document.activeElement === $('findInput')) this.closeFind();
                     else if ($('suggest').hidden === false) this.hideSuggest();
-                    else this.closeModals();
+                    else this.closeTop();
                     return;
                 }
 
                 if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); this.openPalette(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); this.openSearch(''); return; }
                 if (mod && !e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); this.openFind(); return; }
-                if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); this.open(this.newConversation()); return; }
+                if (mod && (e.key.toLowerCase() === 'n' || (e.shiftKey && e.key.toLowerCase() === 'o'))) { e.preventDefault(); this.open(this.newConversation()); return; }
                 if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); this.toggleSidebar(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); this.openModels(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); this.openRepos(); return; }
@@ -6892,7 +8352,7 @@
                     this.handleCommand('?retry');
                     return;
                 }
-                if (mod && e.shiftKey && e.key.toLowerCase() === 'c') {
+                if (mod && e.shiftKey && (e.code === 'Semicolon' || e.key === ';' || e.key === ':')) {
                     e.preventDefault();
                     const msgs = Store.messages(this.conv.id).filter(m => m.role === 'bot');
                     if (msgs.length) this.writeClipboard(msgs[msgs.length - 1].content);
@@ -6952,7 +8412,15 @@
                     if (e.key === 'ArrowDown') { e.preventDefault(); this.moveSuggest(1); return; }
                     if (e.key === 'ArrowUp') { e.preventDefault(); this.moveSuggest(-1); return; }
                     if (e.key === 'Tab') { e.preventDefault(); this.pickSuggest(); return; }
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.pickSuggest(); return; }
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        const typed = input.value.trim().toLowerCase();
+                        if (!this.suggestRows.some(r => !r.mention && '?' + r.name === typed)) {
+                            e.preventDefault();
+                            this.pickSuggest();
+                            return;
+                        }
+                        this.hideSuggest();
+                    }
                 }
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();
@@ -6980,9 +8448,11 @@
                 const files = Array.from(data.items || []).filter(i => i.kind === 'file');
                 if (files.length) {
                     e.preventDefault();
-                    const built = await Attach.fromClipboard(data.items);
+                    const built = await Attach.fromClipboard(data.items,
+                        (err) => this.toast((err && err.message) || t('That file could not be attached.')));
                     this.attachments = this.attachments.concat(built);
                     this.renderAttachments();
+                    for (const a of built) this.uploadAttachment(a);
                     return;
                 }
                 // A wall of pasted text is a document, not a sentence: it goes
@@ -7095,8 +8565,20 @@
                 }
             });
 
-            $('convSearch').addEventListener('input', () => this.renderList());
-            $('modelSearch').addEventListener('input', () => this.renderModels());
+            $('convSearch').addEventListener('input', () => {
+                clearTimeout(this._convSearchTimer);
+                this._convSearchTimer = setTimeout(() => this.renderList(), 150);
+            });
+            $('modelSearch').addEventListener('input', () => {
+                $('modelSearchClear').hidden = !$('modelSearch').value;
+                this.renderModels();
+            });
+            $('modelSearch').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.isComposing && this.pickFirstModel()) e.preventDefault();
+            });
+            $('modelList').addEventListener('touchmove', () => {
+                if (document.activeElement === $('modelSearch')) $('modelSearch').blur();
+            }, { passive: true });
             $('modelSort').addEventListener('change', () => {
                 this.modelSort = $('modelSort').value || 'provider';
                 if (this.models && this.models.models) this.renderModels();
@@ -7115,15 +8597,10 @@
             });
             $('creditAmount').addEventListener('input', () => this.creditSats());
             $('modelForChat').addEventListener('change', () => this.renderModels());
-            $('anonToggle').addEventListener('change', (e) => {
-                Anon.setEnabled(e.target.checked);
-                this.refreshToolbar();
-                if (e.target.checked) this.runAutoTopUp({ announce: true });
-            });
+            $('anonToggle').addEventListener('change', (e) => this.setAnon(e.target.checked));
             $('anonAutoTop').addEventListener('change', (e) => {
                 this.saveSettings({ anonAutoTop: e.target.checked });
-                $('anonAutoFields').hidden = !e.target.checked;
-                $('anonAutoTier').hidden = !e.target.checked;
+                this.syncAnonFields();
                 if (e.target.checked) this.runAutoTopUp({ announce: true });
             });
             for (const [id, key] of [['anonAutoFloor', 'anonAutoTopFloor'],
@@ -7140,6 +8617,9 @@
             });
             $('gateNsec').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') this.gateImport();
+            });
+            $('setNickname').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') this.saveNicknameField();
             });
             $('firstLangSearch').addEventListener('input', (e) => {
                 this.renderFirstLanguages(e.target.value);
@@ -7177,6 +8657,7 @@
         gateGenerate() {
             try {
                 Identity.generate();
+                this.takeGateNickname();
                 // A key nobody has seen before cannot already have a root, so
                 // there is nothing to ask D1 — only a row to write, so the next
                 // device to sign in finds it and asks for the code instead of
@@ -7200,6 +8681,7 @@
                 if (!verdict) return;
                 Identity.importSecret($('gateNsec').value, verdict.root, verdict.epoch);
                 $('gateNsec').value = '';
+                this.takeGateNickname();
                 this.afterSignIn(verdict);
             } catch (e) {
                 this.gateError(e.message || t('That key could not be read.'));
@@ -7212,10 +8694,151 @@
                 const verdict = await this.rootForSignIn(this.signInAs(pubkey, null));
                 if (!verdict) return;
                 await Identity.useExtension(verdict.root, verdict.epoch);
+                this.takeGateNickname();
                 this.afterSignIn(verdict);
             } catch (e) {
                 this.gateError(e.message || t('The extension refused.'));
             }
+        },
+
+        showGateRemote(show) {
+            $('gateRemote').hidden = !show;
+            if (show) {
+                $('gateImport').hidden = true;
+                $('gateBunker').focus();
+            } else {
+                this.cancelSigner();
+            }
+        },
+
+        signerPairing(client) {
+            this._pairing = client;
+            const busy = !!client;
+            $('gateSignerCancelRow').hidden = !busy;
+            $('gateBunkerGo').disabled = busy;
+            $('gateConnectGo').disabled = busy;
+            if (!busy) {
+                $('gateConnect').hidden = true;
+                this.gateBusy('');
+            }
+        },
+
+        cancelSigner() {
+            const client = this._pairing;
+            this.signerPairing(null);
+            if (client) client.close(t('Canceled.'));
+        },
+
+        async gateBunker() {
+            if (this._pairing) return;
+            this.gateError('');
+            let started = null;
+            let client;
+            try {
+                this.gateBusy(t('Waiting for your signer…'));
+                client = await Nip46.bunker($('gateBunker').value, {
+                    started: (c) => { started = c; this.signerPairing(c); }
+                });
+            } catch (e) {
+                if (started && this._pairing !== started) return;
+                this.signerPairing(null);
+                this.gateError(e.message || t('The signer did not accept the connection.'));
+                return;
+            }
+            if (this._pairing !== client) { client.close(); return; }
+            $('gateBunker').value = '';
+            await this.gateRemoteSignIn(client);
+        },
+
+        async gateNostrConnect() {
+            if (this._pairing) return;
+            this.gateError('');
+            let client;
+            try {
+                client = Nip46.offer({ relays: $('gateSignerRelay').value.split(/[\s,]+/).filter(Boolean) });
+            } catch (e) {
+                this.gateError(e.message);
+                return;
+            }
+            this.signerPairing(client);
+            const link = client.connectUri;
+            $('gateConnectLink').value = link;
+            try { QR.draw($('gateConnectQr'), link, { width: 240 }); } catch (_) { }
+            $('gateConnect').hidden = false;
+            this.gateBusy(t('Waiting for your signer…'));
+            try {
+                await client.waitForSigner();
+            } catch (e) {
+                if (this._pairing !== client) return;
+                this.signerPairing(null);
+                client.close();
+                this.gateError(e.message || t('No signer answered in time. Try again.'));
+                return;
+            }
+            if (this._pairing !== client) { client.close(); return; }
+            await this.gateRemoteSignIn(client);
+        },
+
+        async gateRemoteSignIn(client) {
+            this.signerPairing(null);
+            try {
+                const verdict = await this.rootForSignIn(this.signInAs(client.pubkey, null, client));
+                if (!verdict) { client.close(); return; }
+                Identity.useRemote(client, verdict.root, verdict.epoch);
+                $('gateRemote').hidden = true;
+                this.takeGateNickname();
+                this.afterSignIn(verdict);
+            } catch (e) {
+                client.close();
+                this.gateError(e.message || t('The signer did not accept the connection.'));
+            }
+        },
+
+        watchSigner() {
+            const show = () => {
+                const auth = this._signerAuth || null;
+                $('signerAuth').hidden = !auth;
+                $('signerWait').hidden = !Nip46.waiting && !auth;
+            };
+            Nip46.onWaiting((waiting) => {
+                if (!waiting) this._signerAuth = null;
+                show();
+            });
+            Nip46.onAuthUrl((url) => {
+                this._signerAuth = /^https:\/\//i.test(url) ? url : null;
+                show();
+            });
+        },
+
+        openSignerAuth() {
+            const url = this._signerAuth;
+            if (!url) return;
+            let parsed = null;
+            try { parsed = new URL(url); } catch (_) { parsed = null; }
+            if (!parsed || parsed.protocol !== 'https:') return;
+            window.open(parsed.href, '_blank', 'noopener,noreferrer');
+        },
+
+        async disconnectSigner() {
+            if (!Identity.isRemote) return;
+            const ok = await this.ask({
+                title: t('Disconnect signer'),
+                body: t('Disconnect your signer and wipe this device? Your conversations and settings here are removed from this device only. Your synced copy stays on the server, and signing back in with the same signer brings it back.'),
+                confirm: t('Disconnect'),
+                danger: true
+            });
+            if (ok !== true) return;
+            Identity.disconnect();
+            await Promise.race([
+                Promise.all([
+                    window.NymbotDocs ? window.NymbotDocs.wipe().catch(() => { }) : null,
+                    this.clearCaches()
+                ]),
+                new Promise((done) => setTimeout(done, 3000))
+            ]);
+            Store.wipe();
+            Identity.forget();
+            location.reload();
         },
 
         /// The same question the gate asks, asked again on every launch of a
@@ -7227,7 +8850,7 @@
             if (!Identity.pubkey) return;
             let stored;
             try {
-                stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk));
+                stored = await Sync.rootRecord(this.signInAs(Identity.pubkey, Identity._sk, Identity.remote));
             } catch (_) { return; }
             if (!stored) return;
             const fingerprint = Identity.rootFingerprint();
@@ -7259,16 +8882,20 @@
         /// to ask the account what it already holds before it decides what to
         /// give this device, and that question is signed by the key being
         /// signed in with — whether this app holds it or an extension does.
-        signInAs(pubkey, sk) {
+        signInAs(pubkey, sk, remote) {
             const T = NT();
             return {
                 pubkey,
                 sign: (event) => sk
                     ? T.finalizeEvent(Object.assign({}, event, { pubkey }), sk)
-                    : window.nostr.signEvent(Object.assign({}, event, { pubkey })),
+                    : remote
+                        ? remote.sign(Object.assign({}, event, { pubkey }))
+                        : window.nostr.signEvent(Object.assign({}, event, { pubkey })),
                 open: (blob) => sk
                     ? T.nip44.decrypt(blob, T.nip44.getConversationKey(sk, pubkey))
-                    : window.nostr.nip44.decrypt(pubkey, blob)
+                    : remote
+                        ? remote.nip44Decrypt(pubkey, blob)
+                        : window.nostr.nip44.decrypt(pubkey, blob)
             };
         },
 
@@ -7318,7 +8945,7 @@
 
             const code = await this.ask({
                 title: t('This key already has a post-quantum root'),
-                body: t('Your settings and conversations are sealed to it, and so are your replies. Paste the recovery code from the device that made it — Identity → Post-quantum root, in Nymbot or Nymchat.\n\nWithout it this device can still chat, but it cannot open anything the other one saved.'),
+                body: t('Your settings and conversations are sealed to it, and so are your replies. Paste the recovery code from the device that made it — Identity → Post-quantum recovery code, in Nymbot or Nymchat.\n\nWithout it this device can still chat, but it cannot open anything the other one saved.'),
                 prompt: true,
                 label: t('Recovery code'),
                 placeholder: 'nympq1…',

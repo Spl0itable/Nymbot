@@ -118,8 +118,9 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
             Text(
               t('A workspace is standing context: instructions, reference files and '
                   'repositories that every chat in it starts with. The files stay on '
-                  'this device and travel only inside the first message of a chat '
-                  'that uses them.'),
+                  'this device. The instructions travel with every message of a chat '
+                  'that uses them, along with the parts of the files that bear on '
+                  'the question.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -275,9 +276,11 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                TextButton(
-                  onPressed: _reset,
-                  child: Text(t('Clear the form')),
+                Flexible(
+                  child: TextButton(
+                    onPressed: _reset,
+                    child: Text(t('Clear the form')),
+                  ),
                 ),
               ],
             ),

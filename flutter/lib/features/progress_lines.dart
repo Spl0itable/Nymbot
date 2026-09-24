@@ -1,4 +1,5 @@
 import '../services/chat_engine.dart';
+import '../services/connectors.dart';
 import 'i18n/i18n.dart';
 
 /// What one progress step reads as. The worker sends facts; the words are the
@@ -38,6 +39,9 @@ String progressLine(TurnStep step) {
       return step.text.isNotEmpty
           ? '${toolLabel(step.tool)}: ${step.text}'
           : toolLabel(step.tool);
+    case 'connector':
+    case 'connector-tool':
+      return Connectors.progressLine(step);
     case 'thinking':
       return step.text;
     default:
@@ -80,6 +84,7 @@ String routeLabel(String task) {
 String toolLabel(String name) {
   switch (name) {
     case 'list_directory':
+    case 'list_files':
       return t('Listing files');
     case 'read_file':
       return t('Reading');
@@ -87,6 +92,14 @@ String toolLabel(String name) {
       return t('Searching the code');
     case 'write_file':
       return t('Writing');
+    case 'edit_file':
+      return t('Editing');
+    case 'commit':
+      return t('Committing');
+    case 'ci_status':
+      return t('Checking CI');
+    case 'explore':
+      return t('Exploring');
     case 'create_branch':
       return t('Creating a branch');
     case 'open_pull_request':

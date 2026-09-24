@@ -11,6 +11,8 @@ import '../models/schedule.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import '../state/store.dart';
+import 'connectors.dart';
+import 'nostr/event_signer.dart';
 import 'storage_sync.dart';
 
 class AccountSync {
@@ -66,37 +68,62 @@ class AccountSync {
   bool get _hybrid => !_identity.rootLocked && _identity.kem != null;
 
   Future<String?> _seal(String plaintext) async {
-    final sk = _identity.privkey;
-    if (sk == null) return null;
-    final kemPk = _identity.kemPublicKey;
-    if (_hybrid && kemPk != null) {
-      try {
-        return await pq.pq2Encrypt(plaintext, sk, _identity.pubkey, kemPk);
-      } catch (_) {
-      }
-    }
+    if (!_identity.present) return null;
+    final signer = _identity.signer;
+    final self = signer.pubkey;
+    final String inner;
     try {
-      return await _identity.signer.nip44Encrypt(_identity.pubkey, plaintext);
+      inner = await signer.nip44Encrypt(self, plaintext);
     } catch (_) {
       return null;
     }
+    final kemPk = _identity.kemPublicKey;
+    if (_hybrid && kemPk != null) {
+      try {
+        return await pq.pq2Seal(inner, self, self, kemPk);
+      } catch (_) {
+      }
+    }
+    return inner;
   }
 
+  final Map<String, String> _opened = {};
+
   Future<String> _open(String blob) async {
+    final signer = _identity.signer;
+    final remember = signer.isRemote;
+    final key = remember ? _sha256Hex(blob) : '';
+    final held = remember ? _opened[key] : null;
+    if (held != null) return held;
+    final plain = await _openWith(signer, blob);
+    if (remember) _remember(key, plain);
+    return plain;
+  }
+
+  void _remember(String key, String plain) {
+    if (_opened.length >= 2000) _opened.remove(_opened.keys.first);
+    _opened[key] = plain;
+  }
+
+  Future<String> _openWith(EventSigner signer, String blob) async {
+    final self = signer.pubkey;
     if (pq.isPq2Payload(blob)) {
-      final selves = _identity.pqCandidates();
-      if (selves.isEmpty) throw StateError('needs the local key');
+      final kems = _identity.kemCandidates();
+      if (kems.isEmpty) throw StateError('needs the post-quantum root');
       Object? lastErr;
-      for (final self in selves) {
+      for (final k in kems) {
+        String inner;
         try {
-          return await pq.pq2Decrypt(blob, _identity.pubkey, self);
+          inner = await pq.pq2Open(blob, self, self, k.kemSk, k.kemPk);
         } catch (e) {
           lastErr = e;
+          continue;
         }
+        return signer.nip44Decrypt(self, inner);
       }
       throw lastErr ?? StateError('the post-quantum layer did not open');
     }
-    return _identity.signer.nip44Decrypt(_identity.pubkey, blob);
+    return signer.nip44Decrypt(self, blob);
   }
 
   static int _stamp(Object? record) {
@@ -122,6 +149,71 @@ class AccountSync {
       if (held == null || _stamp(record) >= _stamp(held)) out[id] = record;
     }
     return out.values.toList();
+  }
+
+  static bool _carriesSecret(Map<String, dynamic>? row, List<String> marks) =>
+      row != null && marks.any((f) => row[f] is String);
+
+  static Map<String, dynamic> _secretOf(
+      Map<String, dynamic>? row, List<String> fields, String at, String from) {
+    final out = <String, dynamic>{'from': from};
+    for (final f in fields) {
+      final v = row == null ? null : row[f];
+      out[f] = v is String ? v : '';
+    }
+    final stamp = row == null ? null : row[at];
+    out[at] = stamp is num ? stamp.toInt() : 0;
+    return out;
+  }
+
+  static Map<String, dynamic> pickSecret(
+    Map<String, dynamic>? mine,
+    Map<String, dynamic>? theirs,
+    List<String> fields,
+    String at, [
+    List<String>? marks,
+  ]) {
+    final held = _secretOf(mine, fields, at, 'mine');
+    if (!_carriesSecret(theirs, marks ?? fields)) return held;
+    final came = _secretOf(theirs, fields, at, 'theirs');
+    final heldAt = held[at] as int;
+    final cameAt = came[at] as int;
+    if (cameAt > heldAt) return came;
+    if (fields.any((f) => (held[f] as String).isNotEmpty)) return held;
+    if (cameAt == 0 || cameAt == heldAt) {
+      return fields.any((f) => (came[f] as String).isNotEmpty) ? came : held;
+    }
+    return held;
+  }
+
+  static List<Map<String, dynamic>> mergeRepos(
+    List<Map<String, dynamic>> mine,
+    List<Map<String, dynamic>> theirs,
+    Map<String, int> graves,
+  ) {
+    final byId = {for (final r in mine) r['id']: r};
+    final theirsById = {
+      for (final r in theirs)
+        if (r['id'] is String) r['id']: r
+    };
+    return [
+      for (final r in _mergeById(mine, theirs, graves))
+        () {
+          final kept = pickSecret(
+              byId[r['id']], theirsById[r['id']], const ['token'], 'tokenAt');
+          final copy = {...r}
+            ..remove('token')
+            ..remove('tokenAt');
+          final token = kept['token'] as String;
+          if (token.isNotEmpty) {
+            copy['token'] = token;
+            copy.remove('tokenElsewhere');
+          }
+          final at = kept['tokenAt'] as int;
+          if (at > 0) copy['tokenAt'] = at;
+          return copy;
+        }()
+    ];
   }
 
   static Map<String, dynamic> _overlay(Object? raw, Map<String, dynamic> mine) {
@@ -163,11 +255,13 @@ class AccountSync {
     return null;
   }
 
-  Map<String, dynamic> _convToWire(Conversation conv, Map<String, dynamic>? raw) {
+  static Map<String, dynamic> _convToWire(Conversation conv, Map<String, dynamic>? raw) {
     final mine = conv.toJson();
+    mine.remove('satsSpent');
     mine['stats'] = {
       'messages': conv.messageCount,
       'credits': conv.creditsSpent,
+      if (conv.satsSpent != null) 'sats': conv.satsSpent,
     };
     return _overlay(raw, mine);
   }
@@ -178,11 +272,12 @@ class AccountSync {
       j = {...j};
       j['messageCount'] ??= stats['messages'];
       j['creditsSpent'] ??= stats['credits'];
+      if (stats['sats'] is num) j['satsSpent'] = stats['sats'];
     }
     return Conversation.fromJson(j);
   }
 
-  Map<String, dynamic> _msgToWire(ChatMessage msg, Map<String, dynamic>? raw) {
+  static Map<String, dynamic> _msgToWire(ChatMessage msg, Map<String, dynamic>? raw) {
     final mine = msg.toJson();
     mine['ts'] = msg.at.millisecondsSinceEpoch;
     return _overlay(raw, mine);
@@ -196,7 +291,7 @@ class AccountSync {
     return ChatMessage.fromJson(j);
   }
 
-  Map<String, dynamic> _settingsToWire(AppSettings s, Object? raw) {
+  static Map<String, dynamic> _settingsToWire(AppSettings s, Object? raw) {
     final mine = s.toJson();
     mine['sidebarGrouping'] = s.grouping.name;
     mine['defaultPersona'] = s.defaultPersonaId;
@@ -213,6 +308,20 @@ class AccountSync {
     j['showCostEstimate'] ??= j['showTokenEstimate'];
     return AppSettings.fromJson(j);
   }
+
+  static Map<String, dynamic> chatToWire(Conversation conv) =>
+      _convToWire(conv, null);
+
+  static Conversation chatFromWire(Map<String, dynamic> j) => _convFromWire(j);
+
+  static Map<String, dynamic> messageToWire(ChatMessage msg) =>
+      _msgToWire(msg, null);
+
+  static ChatMessage messageFromWire(Map<String, dynamic> j) =>
+      _msgFromWire(j);
+
+  static Map<String, dynamic> settingsToWire(AppSettings s) =>
+      _settingsToWire(s, null);
 
   Future<Map<String, dynamic>> snapshot() async {
     final graves = _store.syncGraves();
@@ -255,9 +364,15 @@ class AccountSync {
     library['repos'] = [
       for (final r in await _store.repos())
         _overlay(_remoteRecord('library.repos', r.id), {
-          ...r.toJson()..remove('token'),
+          ...r.toJson(),
+          'token': r.token,
+          'tokenAt': r.tokenAt,
           'tokenElsewhere': r.token.isNotEmpty,
         })
+    ];
+    library['connectors'] = [
+      for (final c in await _store.connectors())
+        _overlay(_remoteRecord('library.connectors', c.id), c.toSyncJson())
     ];
     out['library'] = library;
 
@@ -310,7 +425,14 @@ class AccountSync {
       final theirs = _settingsToWire(
           _settingsFromWire(settings.cast<String, dynamic>()), null);
       final mine = _settingsToWire(_store.settings(), null);
-      await _store.saveSettings(_settingsFromWire(_overlay(theirs, mine)));
+      final merged = _overlay(theirs, mine);
+      final theirAt = settings['nicknameAt'];
+      if (theirAt is num && theirAt.toInt() > (mine['nicknameAt'] as int? ?? 0)) {
+        merged['nickname'] =
+            settings['nickname'] is String ? settings['nickname'] : '';
+        merged['nicknameAt'] = theirAt.toInt();
+      }
+      await _store.saveSettings(_settingsFromWire(merged));
       touched.add('settings');
     }
 
@@ -382,17 +504,20 @@ class AccountSync {
       final repos = library['repos'];
       if (repos is List) {
         final mine = await _store.repos();
-        final held = {for (final r in mine) r.id: r.token};
-        final merged = _mergeById(
+        final merged = mergeRepos(
             [for (final r in mine) r.toJson()], _maps(repos), graves);
-        await _store.saveRepos([
-          for (final j in merged)
-            GitRepo.fromJson({
-              ...j,
-              'token': held[j['id']] ?? (j['token'] as String? ?? ''),
-            })
-        ]);
+        await _store.saveRepos([for (final j in merged) GitRepo.fromJson(j)]);
         touched.add('repos');
+      }
+
+      final connectors = library['connectors'];
+      if (connectors is List) {
+        final mine = await _store.connectors();
+        final merged = _mergeById(
+            [for (final c in mine) c.toJson()], _maps(connectors), graves);
+        await _store.saveConnectors(
+            Connectors.keepSecrets(mine, merged, _maps(connectors)));
+        touched.add('connectors');
       }
     }
 
@@ -443,8 +568,10 @@ class AccountSync {
     final categories = data == null ? null : data['categories'];
     if (categories is! Map) return null;
     final out = <String, dynamic>{};
+    final remote = _identity.signer.isRemote;
     var unreadable = 0;
-    for (final entry in categories.values) {
+    for (final row in categories.entries) {
+      final entry = row.value;
       if (entry is! Map) continue;
       final blob = entry['blob'];
       if (blob is! String || blob.isEmpty) continue;
@@ -460,6 +587,11 @@ class AccountSync {
       if (name is! String || name.isEmpty) continue;
       if (name == StorageSync.pqRootDTag) continue;
       out[name] = payload.containsKey('v') ? payload['v'] : payload;
+      if (remote && row.key == categoryFor(name)) {
+        final plain = jsonEncode({'__cat': name, 'v': out[name]});
+        _hashes[row.key as String] = _sha256Hex(
+            '${_identity.pubkey}|${pq.isPq2Payload(blob) ? 'pq' : 'c'}|$plain');
+      }
     }
     blocked = unreadable > 0 && out.isEmpty;
     return out;
@@ -477,6 +609,7 @@ class AccountSync {
         category: category, blob: blob, contentHash: hash);
     if (!ok) return false;
     _hashes[category] = hash;
+    if (_identity.signer.isRemote) _remember(_sha256Hex(blob), plain);
     return true;
   }
 
@@ -561,6 +694,7 @@ class AccountSync {
 
   void forget() {
     _hashes.clear();
+    _opened.clear();
     _remote = {};
     blocked = false;
   }

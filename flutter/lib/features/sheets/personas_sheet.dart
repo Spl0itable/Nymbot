@@ -62,8 +62,9 @@ class _PersonasSheetState extends State<_PersonasSheet> {
             Text(t('Personas'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              t('A persona is a standing instruction sent with the first message of a '
-                  'chat. It never leaves your device except as part of that message.'),
+              t('A persona is a standing instruction sent with every message of '
+                  'a chat. It never leaves your device except inside those '
+                  'messages.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -245,43 +246,45 @@ class _SystemSheetState extends State<_SystemSheet> {
         top: 16,
         bottom: MediaQuery.of(context).viewInsets.bottom + 16,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(t('Custom instructions'),
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            t('Sent once, with the first message of this chat, on top of any persona.'),
-            style: const TextStyle(fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _body,
-            minLines: 5,
-            maxLines: 10,
-            decoration: InputDecoration(
-              hintText: t('Always answer in British English, and show the diff before '
-                  'the explanation.'),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(t('Custom instructions'),
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              t('Sent with every message of this chat, on top of any persona.'),
+              style: const TextStyle(fontSize: 12),
             ),
-          ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () async {
-              await app.setSystemPrompt(_body.text);
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: Text(t('Save')),
-          ),
-          TextButton(
-            onPressed: () async {
-              await app.setSystemPrompt('');
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: Text(t('Clear')),
-          ),
-        ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: _body,
+              minLines: 5,
+              maxLines: 10,
+              decoration: InputDecoration(
+                hintText: t('Always answer in British English, and show the diff before '
+                    'the explanation.'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () async {
+                await app.setSystemPrompt(_body.text);
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text(t('Save')),
+            ),
+            TextButton(
+              onPressed: () async {
+                await app.setSystemPrompt('');
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text(t('Clear')),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -43,7 +43,7 @@ ${NOTE}
                 retroactively &mdash; traffic captured today, decrypted years later. So the encryption is
                 <em>hybrid</em>: an ML-KEM key encapsulation is combined with the classical exchange, and an
                 attacker has to break both to read anything.</p>
-            <p>ML-KEM is the NIST-standardised lattice KEM. Combining rather than replacing is deliberate:
+            <p>ML-KEM is the NIST-standardized lattice KEM. Combining rather than replacing is deliberate:
                 if the lattice assumption turns out to be wrong, you still have the elliptic curve, and the
                 other way round.</p>
             <p>Nymbot publishes a signed capability announcement carrying its KEM key, so your app can seal
@@ -61,7 +61,9 @@ ${NOTE}
                         <tr><td>Which key is charged</td><td>Your nym</td><td>The throwaway key</td></tr>
                         <tr><td>Your conversation title</td><td>Never sent</td><td>Never sent</td></tr>
                         <tr><td>Your private key</td><td>Never leaves the device</td><td>Never leaves the device</td></tr>
-                        <tr><td>Your <a href="/docs/git/#token-safety">git token</a></td><td>Passed per request, never stored</td><td>Same</td></tr>
+                        <tr><td>Your <a href="/docs/git/#token-safety">repository</a> and <a href="/docs/connectors/#secrets">connector</a> tokens</td><td>Passed with the requests that use them, never stored readable; synced only inside your sealed settings</td><td>Same</td></tr>
+                        <tr><td>Pictures you attach</td><td>Uploaded to a public media host, signed by a throwaway key made for that picture</td><td>Same</td></tr>
+                        <tr><td>Code you <a href="/docs/server-runs/">run on a server</a></td><td>The code and any files you chose, run in a container destroyed afterward</td><td>Same, paid by the throwaway key</td></tr>
                         <tr><td>Your IP address</td><td>Seen by relays and the worker</td><td>Same &mdash; use Tor or a VPN if that matters</td></tr>
                     </tbody>
                 </table>
@@ -95,12 +97,15 @@ ${NOTE}
                 moves the whole conversation onto it. From then on the rumor, the seal and the request
                 signature are all that key &mdash; your identity key signs nothing in this conversation at
                 all.</p>
+            <p>A conversation stays under the key it started with. In the web app, the chip shows whether
+                the chat on screen is anonymous; turning it on in an empty chat makes that chat anonymous,
+                and turning it on in a chat that already has messages opens a new anonymous chat instead.</p>
             <p>Replies stay <a href="/docs/encryption/#post-quantum">hybrid post-quantum</a>: the throwaway
                 key carries its own KEM key, derived from a root generated independently of the signing key,
                 so publishing one does not weaken the other.</p>
             <p>While it is on, read receipts, typing indicators, reactions and edits to Nymbot are held
                 back. Each of those would otherwise carry your real signature into the same conversation and
-                undo the whole thing. If your app cannot honour that &mdash; a locked vault, state not yet
+                undo the whole thing. If your app cannot honor that &mdash; a locked vault, state not yet
                 restored &mdash; it refuses to send rather than quietly falling back to your identity
                 key.</p>
             <p>The throwaway key is stored under <a href="/docs/identity/#encryption-at-rest">identity
@@ -143,13 +148,13 @@ ${NOTE}
                     context.</li>
                 <li><strong>What you write can identify you.</strong> No amount of key hygiene helps if the
                     question names your employer.</li>
-                <li><code>?gift</code> and <code>?transfer</code> stay on your real nym, because both are
-                    about a named account.</li>
+                <li><code>?gift</code> and <code>?transfer</code> stay on your real nym: a gift is made
+                    from its balance and a redeemed gift lands on it, never on the throwaway key.</li>
             </ul>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Careful</span>
                 <p>Credits on a throwaway key live and die with that key. A
-                    <a href="/docs/identity/#panic">panic wipe</a> takes it and anything left on it.</p>
+                    <a href="/docs/identity/#panic">device wipe</a> takes it and anything left on it.</p>
             </div>`,
 });
 
@@ -157,7 +162,7 @@ await docsPage({
   file: 'pages/docs/identity.html',
   slug: 'docs/identity',
   title: 'Identity and login - Nymbot Knowledge Base',
-  description: 'Keys instead of accounts, ways to sign in, encrypting your identity at rest, and the panic wipe.',
+  description: 'Keys instead of accounts, ways to sign in, encrypting your identity with a passphrase, passkey or biometrics, what syncs between devices, and wiping a device.',
   body: `            <h1>Identity and login</h1>
             <p class="docs-lede">There is no account, no email and no password. There is a key, and
                 everything else follows from how well you look after it.</p>
@@ -189,22 +194,87 @@ ${NOTE}
             <p>Signing in with the same key on a second device gives you the same account. Nothing has to be
                 migrated, because nothing lives anywhere but the key.</p>
 
-            <h2 id="encryption-at-rest">Identity encryption</h2>
-            <p>Optional protection for the stored key, so it cannot be read out of local storage without
-                unlocking. You pick the factor per device: a passphrase, a biometric, or a hardware security
-                key.</p>
-            <p>No password, salt or credential is ever synced. Only an on/off preference travels, so you can
-                choose to set encryption up on a new device rather than have it assumed.</p>
-            <p>It also covers the <a href="/docs/anonymous/">anonymous mode</a> throwaway key and its
-                vouchers. Your <a href="/docs/git/#token-safety">git access token</a> is device-local too,
-                for the same reason.</p>
+            <h3 id="remote-signer">Remote signer</h3>
+            <p>If your key lives in a signer app, choose <strong>I already have one</strong>, then
+                <strong>Use a remote signer</strong>. Paste the <code>bunker://</code> link your signer shows, or
+                tap <strong>Show a code instead</strong> and scan the code (or paste its link) in the signer. The
+                code uses <code>wss://relay.primal.net</code> unless you change the relay first, and Nymbot
+                waits up to five minutes for the signer, with a Cancel button.</p>
+            <p>The key never reaches Nymbot. Each time Nymbot signs or decrypts, it asks the signer, and
+                <strong>Waiting for your signer&hellip;</strong> appears when an answer takes more than a second.
+                A signer can ask you to approve the request on its own web page; Nymbot shows a button for it
+                and opens it only when you tap it, and only if it is an <code>https</code> page. Nymbot accepts
+                answers only from the signer you paired with, checks every signature it returns, and does not
+                trust a code scan that does not echo the connection secret back.</p>
+            <p>Identity then shows <strong>Signed in with: Remote signer</strong>. There is no
+                <code>nsec</code> to back up here, so keep your key backed up in the signer. Your post-quantum
+                recovery code still lives on the device, and you should save it as usual.
+                <strong>Disconnect signer&hellip;</strong> signs this device out and wipes it, but it does not
+                delete your synced copy, which comes back when you sign in again with the same signer.
+                <a href="/docs/anonymous/">Anonymous mode</a> still uses its own throwaway key, never the
+                signer.</p>
 
-            <h2 id="panic">Panic wipe</h2>
-            <p>Press and hold the panic control and everything local is destroyed immediately: your key,
-                every conversation, the git token, the throwaway key and any credits left on it.</p>
-            <p>It is not a logout and there is no confirmation dialog to talk yourself out of. If you have
-                backed up your <code>nsec</code> you can come back to the same account later; if you have
-                not, that identity is gone.</p>`,
+            <h2 id="encryption-at-rest">Identity encryption</h2>
+            <p>Optional, and off until you turn it on from the <strong>Identity</strong> sheet. With it
+                on, the secrets Nymbot keeps on the device are encrypted, so they cannot be read out of the
+                device's storage without unlocking:</p>
+            <ul>
+                <li>your private key, or your remote signer connection, and its post-quantum root,</li>
+                <li>the <a href="/docs/anonymous/">Anonymous Mode</a> throwaway key and its vouchers,</li>
+                <li>your <a href="/docs/git/#token-safety">repository</a> and
+                    <a href="/docs/connectors/#secrets">connector</a> tokens,</li>
+                <li>the keys to chats you <a href="/docs/chats/#sharing">shared by link</a>,</li>
+                <li>and, in the Android and iOS app, the keys used to upload pictures.</li>
+            </ul>
+            <p>Nymbot then opens on an unlock screen, and nothing loads, syncs or sends until you unlock it.
+                A wrong passphrase changes nothing.</p>
+            <p>What it protects is the copy on the device, against someone who gets hold of the device or its
+                storage. It does not change what is sent or what the server sees, and it is not a backup.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">If you forget it</span>
+                <p>There is no recovery. <strong>Forgot your passphrase?</strong> (or <strong>Lost your
+                    passkey?</strong>) on the unlock screen offers, after a warning, to delete the key and
+                    everything else Nymbot keeps on the device and start over. If you
+                    <a href="#nsec">backed up your <code>nsec</code></a>, sign back in with it afterward.</p>
+            </div>
+
+            <h2 id="unlock-methods">Passphrase, passkey or biometrics</h2>
+            <p>You choose how it unlocks, separately on each device:</p>
+            <ul>
+                <li><strong>A passphrase</strong> of at least four characters. Offered everywhere.</li>
+                <li><strong>A passkey</strong>, in the web app. It can live on the device, in a password
+                    manager or on a security key, but it has to support the WebAuthn PRF extension, which is
+                    what lets a passkey produce an encryption key. One that does not is refused with nothing
+                    changed, and you can use a passphrase instead.</li>
+                <li><strong>Biometrics</strong>: a fingerprint, your face, or Windows Hello. In the web app
+                    this uses the device's own authenticator, and it is not offered on Apple devices, where a
+                    passkey already is Face ID or Touch ID. In the Android and iOS app it is offered when the
+                    device has a fingerprint or face set up.</li>
+            </ul>
+            <p>The web app offers only a passphrase in a browser without passkey support. The Android and iOS
+                app offers a passphrase or biometrics.</p>
+            <p>The same sheet changes the passphrase, switches to another method or turns encryption off,
+                each after confirming the current method. Whatever unlocks it stays on the device: no
+                passphrase, passkey or salt is synced, so each device is set up on its own.</p>
+
+            <h2 id="synced-settings">What syncs between your devices</h2>
+            <p>Your settings travel between the devices you sign in on inside a record that is end-to-end
+                encrypted with your own key, so the server stores a sealed copy it cannot read. That includes
+                your workspaces, bots, memory, saved prompts, schedules and folders, and your repository and
+                connector tokens, so a chat that uses them works on a new device without setting them up
+                again.</p>
+            <p>When a token was changed on two devices, the newer change wins, so disconnecting a repository
+                on one device clears its token on the others. Removing a connector removes it everywhere.</p>
+            <p>What stays on each device is how you unlock identity encryption, and anything in a
+                <a href="/docs/chats/#ghost-mode">ghost chat</a>.</p>
+
+            <h2 id="panic">Wiping this device</h2>
+            <p><strong>Wipe this device</strong>, under Identity, asks once and then destroys everything the app
+                keeps here: your key, every conversation, your repository and connector tokens, stored documents,
+                cached files, the throwaway key and any credits left on it. Before the key is gone it also asks the
+                server to delete the sealed copy of your chats and settings that sync keeps for this account.</p>
+            <p>It is not a logout and it cannot be undone. If you have backed up your <code>nsec</code> you can
+                come back to the same account later, starting with no chats; if you have not, that identity is gone.</p>`,
 });
 
 console.log('docs batch 4 written');

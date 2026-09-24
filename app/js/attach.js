@@ -8,6 +8,7 @@
 // than sending it.
     const MAX_TEXT_BYTES = 96 * 1024;
     const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+    const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024;
     const MAX_IMAGE_EDGE = 1280;
 
     const TEXTUAL = /\.(txt|md|markdown|json|jsonl|ya?ml|toml|ini|cfg|conf|env|csv|tsv|log|sql|sh|bash|zsh|fish|ps1|bat|js|mjs|cjs|jsx|ts|tsx|dart|py|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|lua|r|scala|clj|ex|exs|erl|hs|ml|vue|svelte|html|htm|xml|svg|css|scss|less|gradle|properties|lock|diff|patch|gitignore|dockerfile|makefile)$/i;
@@ -89,22 +90,37 @@
         });
     }
 
+    function dataUrlBytes(dataUrl) {
+        const text = String(dataUrl || '');
+        const comma = text.indexOf(',');
+        const body = comma >= 0 ? text.slice(comma + 1) : text;
+        const pad = body.endsWith('==') ? 2 : (body.endsWith('=') ? 1 : 0);
+        return Math.max(0, Math.floor(body.length * 3 / 4) - pad);
+    }
+
     async function fromFile(file) {
         if (!file) return null;
         if (/^image\//i.test(file.type)) {
-            if (file.size > MAX_IMAGE_BYTES) throw new Error(t('That image is too large — 4 MB is the limit.'));
+            if (file.size > MAX_IMAGE_SOURCE_BYTES) throw new Error(t('That image is too large — 25 MB is the limit.'));
             const raw = await readAsDataUrl(file);
             const shrunk = await shrinkImage(raw, file.type);
+            const bytes = dataUrlBytes(shrunk);
+            if (bytes > MAX_IMAGE_BYTES) throw new Error(t('That image is still over 4 MB after shrinking it, so it cannot be sent.'));
             return {
                 id: window.NymbotStore.uid(),
                 kind: 'image',
                 name: file.name || 'image',
-                mime: file.type,
-                size: file.size,
+                mime: shrunk === raw ? file.type : (/^data:([^;,]+)/.exec(shrunk) || [])[1] || file.type,
+                size: shrunk === raw ? file.size : bytes,
                 dataUrl: shrunk
             };
         }
-        if (!looksTextual(file)) throw new Error(t('Only text, code and image files can be attached.'));
+        const Docs = window.NymbotDocs;
+        if (Docs && Docs.handles(file)) return Docs.fromFile(file);
+        if (!looksTextual(file)) throw new Error(t('Only text, code, document and image files can be attached.'));
+        if (file.size > MAX_TEXT_BYTES && Docs) {
+            return Docs.fromText(await readAsText(file), { name: file.name || 'file.txt', mime: file.type || 'text/plain', size: file.size });
+        }
         if (file.size > MAX_TEXT_BYTES) throw new Error(t('That file is too large to send in a message — 96 KB is the limit. Add it to a workspace instead, where the whole file is searched.'));
         const text = await readAsText(file);
         return {
@@ -150,7 +166,7 @@
         };
     }
 
-    async function fromClipboard(items) {
+    async function fromClipboard(items, onError) {
         const out = [];
         for (const item of items || []) {
             if (item.kind !== 'file') continue;
@@ -159,7 +175,9 @@
             try {
                 const built = await fromFile(file);
                 if (built) out.push(built);
-            } catch (_) { }
+            } catch (e) {
+                if (typeof onError === 'function') onError(e);
+            }
         }
         return out;
     }
@@ -167,6 +185,7 @@
     /// What an attachment looks like inside the message.
     function wireBlock(attachment) {
         if (!attachment) return '';
+        if (attachment.kind === 'doc') return '';
         if (attachment.kind === 'text') {
             return `\n\n--- attached file: ${attachment.name} ---\n\`\`\`${attachment.lang || ''}\n${attachment.text}\n\`\`\``;
         }
@@ -186,6 +205,6 @@
 
     window.NymbotAttach = {
         fromFile, fromClipboard, fromText, pasteIsLong,
-        wireBlock, humanSize, looksTextual, langFor
+        wireBlock, humanSize, looksTextual, langFor, dataUrlBytes
     };
 })();

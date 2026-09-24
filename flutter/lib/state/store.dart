@@ -7,10 +7,13 @@ import '../services/free_tier.dart';
 
 import '../models/artifact.dart';
 import '../models/bot.dart';
+import '../models/connector.dart';
 import '../models/conversation.dart';
 import '../models/memory.dart';
 import '../models/schedule.dart';
 import '../models/workspace.dart';
+import 'biometrics.dart';
+import 'vault.dart';
 
 /// Everything the app keeps on the device.
 ///
@@ -20,18 +23,48 @@ import '../models/workspace.dart';
 /// on the relays, and keeping them out of the keystore keeps its surface to the
 /// things that must not be readable at rest.
 class Store {
-  Store(this._prefs);
+  Store(this._prefs,
+      {int vaultIterations = Vault.defaultIterations, Biometrics? biometrics})
+      : vault = Vault(_prefs, _secure,
+            iterations: vaultIterations, biometrics: biometrics);
 
   static const _secure = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
+  );
+
+  static const _legacySecure = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
   );
+
+  static const installedKey = 'installed';
 
   static const _messageCap = 800;
 
   final SharedPreferences _prefs;
 
-  static Future<Store> open() async => Store(await SharedPreferences.getInstance());
+  final Vault vault;
+
+  static Future<Store> open() async {
+    final prefs = await SharedPreferences.getInstance();
+    await settleInstall(prefs);
+    return Store(prefs);
+  }
+
+  static Future<bool> settleInstall(SharedPreferences prefs) async {
+    if (prefs.containsKey(installedKey)) return false;
+    final fresh = prefs.getKeys().isEmpty;
+    if (fresh) {
+      for (final storage in const [_secure, _legacySecure]) {
+        try {
+          await storage.deleteAll();
+        } catch (_) {}
+      }
+    }
+    await prefs.setBool(installedKey, true);
+    return fresh;
+  }
 
   void Function()? onChanged;
   bool _muted = false;
@@ -65,10 +98,12 @@ class Store {
 
   // --- secrets ---------------------------------------------------------------
 
-  Future<String?> secret(String key) => _secure.read(key: key);
-  Future<void> setSecret(String key, String value) =>
-      _secure.write(key: key, value: value);
-  Future<void> dropSecret(String key) => _secure.delete(key: key);
+  Future<String?> secret(String key) => vault.read(key);
+  Future<void> setSecret(String key, String value) => vault.write(key, value);
+  Future<void> dropSecret(String key) async {
+    await vault.remove(key);
+    await _legacySecure.delete(key: key);
+  }
 
   // --- preferences -----------------------------------------------------------
 
@@ -97,10 +132,16 @@ class Store {
   Future<void> resetSettings() => _prefs.remove('appSettings');
 
   Future<List<GitRepo>> repos() async =>
-      GitRepo.decodeList(await _secure.read(key: 'repos'));
+      GitRepo.decodeList(await vault.read('repos'));
 
   Future<void> saveRepos(List<GitRepo> list) => _watched(
-      _secure.write(key: 'repos', value: GitRepo.encodeList(list.take(40).toList())));
+      vault.write('repos', GitRepo.encodeList(list.take(40).toList())));
+
+  Future<List<McpConnector>> connectors() async =>
+      McpConnector.decodeList(await vault.read('connectors'));
+
+  Future<void> saveConnectors(List<McpConnector> list) => _watched(vault.write(
+      'connectors', McpConnector.encodeList(list.take(40).toList())));
 
   Future<GitRepo?> repo(String id) async {
     for (final r in await repos()) {
@@ -233,7 +274,14 @@ class Store {
     return ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
   }
 
+  final Map<String, String> _lowered = {};
+
+  String searchText(String convId) => _lowered[convId] ??= messages(convId)
+      .map((m) => m.content.toLowerCase())
+      .join('\u0000');
+
   Future<void> saveMessages(String convId, List<ChatMessage> list) async {
+    _lowered.remove(convId);
     // Capped so one long conversation cannot fill the store and start failing
     // the writes it needs to make.
     final kept = list.length > _messageCap
@@ -252,6 +300,7 @@ class Store {
   /// Moves what a chat has already said into memory and off the disk, which is
   /// what turning ghost mode on part-way through has to mean.
   Future<void> makeGhost(String convId) async {
+    _lowered.remove(convId);
     _ghosts[convId] = ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
     _ghostArtifacts[convId] =
         Artifact.decodeList(_prefs.getString('artifacts_$convId'));
@@ -262,6 +311,7 @@ class Store {
   /// Writes a ghost chat back to disk, so turning the mode off keeps what is
   /// on screen rather than dropping it.
   Future<void> unmakeGhost(String convId) async {
+    _lowered.remove(convId);
     final kept = _ghosts.remove(convId) ?? const <ChatMessage>[];
     final lifted = _ghostArtifacts.remove(convId) ?? const <Artifact>[];
     await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
@@ -304,6 +354,7 @@ class Store {
       : _prefs.setString('draft_$convId', text);
 
   Future<void> dropConversation(String convId) async {
+    _lowered.remove(convId);
     _ghosts.remove(convId);
     _ghostArtifacts.remove(convId);
     await _prefs.remove('msgs_$convId');
@@ -421,31 +472,14 @@ class Store {
     return out;
   }
 
-  Future<String> exportAll() async {
-    return jsonEncode({
-      'version': 2,
-      'exportedAt': DateTime.now().millisecondsSinceEpoch,
-      'settings': settings().toJson(),
-      'folders': folders().map((f) => f.toJson()).toList(),
-      'personas': customPersonas().map((p) => p.toJson()).toList(),
-      'prompts': prompts().map((p) => p.toJson()).toList(),
-      'workspaces': workspaces().map((w) => w.toJson()).toList(),
-      'memories': memories().map((m) => m.toJson()).toList(),
-      'bots': bots().map((b) => b.toJson()).toList(),
-      'schedules': schedules().map((s) => s.toJson()).toList(),
-      'conversations': conversations()
-          .map((c) => {
-                'conversation': c.toJson(),
-                'messages': messages(c.id).map((m) => m.toJson()).toList(),
-              })
-          .toList(),
-    });
-  }
-
   /// Everything, gone. Not a logout: there is nothing on a server to log out
   /// of, so this is the only kind of deletion there is.
   Future<void> wipe() async {
+    _lowered.clear();
+    vault.forget();
+    await vault.biometrics.erase();
     await _prefs.clear();
     await _secure.deleteAll();
+    await _legacySecure.deleteAll();
   }
 }

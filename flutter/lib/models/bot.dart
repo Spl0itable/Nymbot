@@ -19,6 +19,8 @@ class Bot {
     List<String>? starters,
     this.author = '',
     this.naddr = '',
+    this.capSats,
+    this.askAboveSats,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : starters = starters ?? [],
@@ -39,6 +41,8 @@ class Bot {
   List<String> starters;
   String author;
   String naddr;
+  int? capSats;
+  int? askAboveSats;
   final DateTime createdAt;
   DateTime updatedAt;
 
@@ -65,6 +69,8 @@ class Bot {
         'starters': starters,
         'author': author,
         'naddr': naddr,
+        'capSats': capSats,
+        'askAboveSats': askAboveSats,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
@@ -81,11 +87,16 @@ class Bot {
         starters: (j['starters'] as List?)?.whereType<String>().toList(),
         author: j['author'] as String? ?? '',
         naddr: j['naddr'] as String? ?? '',
+        capSats: _sats(j['capSats']),
+        askAboveSats: _sats(j['askAboveSats']),
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
             (j['updatedAt'] as num?)?.toInt() ?? 0),
       );
+
+  static int? _sats(Object? v) =>
+      v is num && v > 0 ? v.floor() : null;
 
   static String encodeList(List<Bot> list) =>
       jsonEncode(list.map((b) => b.toJson()).toList());

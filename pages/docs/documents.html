@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDFs and long documents - Nymbot Knowledge Base</title>
+    <meta name="description" content="Attaching PDFs, Word documents and large files: read on your device, searched per question, with the pages used shown under each message.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="PDFs and long documents - Nymbot Knowledge Base">
+    <meta property="og:description" content="Attaching PDFs, Word documents and large files: read on your device, searched per question, with the pages used shown under each message.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/documents/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="PDFs and long documents - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Attaching PDFs, Word documents and large files: read on your device, searched per question, with the pages used shown under each message.">
+    <link rel="canonical" href="https://nymbot.ai/docs/documents/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>PDFs and long documents</h1>
+            <p class="docs-lede">Attach a PDF, a Word document or a large file and ask about it. It is read on
+                your device, and each question sends only the parts that answer it.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="attaching">What you can attach</h2>
+            <p>The attach button in the composer takes PDFs, Word documents (<code>.docx</code>), plain
+                text, code, CSV and TSV, JSON, Markdown and HTML, as well as pictures. A PDF's text is
+                pulled out on your device; nothing is uploaded to be converted.</p>
+            <p>A short file goes into the message whole, fenced as a block, the same way a long paste does.
+                A long one is handled differently, and that is what the rest of this page is about.</p>
+
+            <h2 id="searched">Long documents are searched, not sent whole</h2>
+            <p>A document too long to fit in a message is split on your device into passages of about
+                1,500 characters, following its pages and paragraphs. The passages are kept on the device
+                with the chat.</p>
+            <p>Each time you ask something, the app ranks those passages against your question and sends
+                the ones that match best, along with an outline of the document and a note telling the model
+                that it searched the document rather than read all of it. So the model knows when an answer
+                might be somewhere it was not shown.</p>
+            <p>Later questions in the same chat are ranked again against the same passages, so you can keep
+                asking about different parts of the document without attaching it again. It stays until you
+                remove it.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Why not send it all</span>
+                <p>A model can only hold so much at once, and a long document sent whole would crowd out the
+                    conversation and cost more on every reply. Sending the passages that bear on the question
+                    keeps the answer focused and the price close to an ordinary reply.</p>
+            </div>
+
+            <h2 id="pages-used">Seeing which pages were used</h2>
+            <p>Every message that drew on a long document says so underneath: which document was searched
+                and which of its pages (or, for a file without pages, which parts) were sent. If the answer
+                seems to be missing something, that line tells you what the model actually saw. Ask about a
+                specific page or section and the next question sends that part.</p>
+            <p>The chat also lists every document it is searching, each with a
+                <strong>Remove from this chat</strong> button.</p>
+
+            <h2 id="limits">Limits</h2>
+            <ul>
+                <li>A file can be up to 50 MB, and up to 8 MB once its text is pulled out.</li>
+                <li>A chat can hold up to 20 documents.</li>
+                <li>A scanned PDF with no text in it cannot be read, and neither can a password-protected
+                    one. The app says which it is.</li>
+                <li>Pictures are separate: see <a href="/docs/chats/#attachments">sending pictures</a>.</li>
+            </ul>
+            <p>For files that a whole run of chats should share, put them in a
+                <a href="/docs/workspaces/#knowledge-files">workspace</a> instead. They are searched the same
+                way, on your device, for every chat in it.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

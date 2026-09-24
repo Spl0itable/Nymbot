@@ -1,8 +1,13 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../app.dart';
 import '../../models/workspace.dart';
+import '../../services/backup.dart';
+import '../../services/share_file.dart';
+import '../../services/voice.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import 'sheet.dart';
@@ -78,6 +83,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               const SizedBox(height: 10),
             ],
             DropdownButtonFormField<ChatTheme>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: s.theme,
               decoration: InputDecoration(labelText: t('Theme')),
@@ -98,6 +104,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<ChatDensity>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: s.density,
               decoration: InputDecoration(labelText: t('Density')),
@@ -115,6 +122,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<double>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: const [0.9, 1.0, 1.15, 1.3].contains(s.fontScale)
                   ? s.fontScale
@@ -133,6 +141,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<SidebarGrouping>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: s.grouping,
               decoration: InputDecoration(labelText: t('Chat list')),
@@ -160,6 +169,9 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                 (v) => s.showReasoningByDefault = v),
             toggle(t('Monospace replies'), s.monospaceReplies,
                 (v) => s.monospaceReplies = v),
+            toggle(t('Line numbers in code blocks'), s.lineNumbers,
+                (v) => s.lineNumbers = v),
+            toggle(t('Wrap long code lines'), s.codeWrap, (v) => s.codeWrap = v),
             toggle(t('Reduce motion'), s.reduceMotion, (v) => s.reduceMotion = v),
             const SizedBox(height: 12),
             Text(t('Behavior'), style: Theme.of(context).textTheme.titleSmall),
@@ -172,8 +184,16 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             toggle(t('Vibrate when a reply lands'), s.hapticOnReply,
                 (v) => s.hapticOnReply = v),
             toggle(t('Read every reply aloud'), s.autoSpeak, (v) => s.autoSpeak = v),
+            VoicePicker(
+              value: s.voiceUri,
+              onChanged: (v) {
+                s.voiceUri = v;
+                app.saveSettings(s);
+              },
+            ),
             const SizedBox(height: 10),
             DropdownButtonFormField<double>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: const [0.8, 1.0, 1.25, 1.5].contains(s.speechRate)
                   ? s.speechRate
@@ -260,12 +280,15 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               t('Your chats and your library, sealed to your key and kept where '
                   'every device you sign in on can read them back. Nobody else '
                   'can open them — not Nymbot, not the server holding them. '
-                  'Ghost chats are never included.'),
+                  'Ghost chats are never included. Repository and connector tokens '
+                  'are, sealed the same way, so a chat that uses them works on every '
+                  'device; disconnecting one anywhere disconnects it everywhere.'),
               style: TextStyle(
                   fontSize: 11, color: Theme.of(context).hintColor),
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<int>(
+              isExpanded: true,
               value: s.autoDeleteDays,
               decoration: InputDecoration(labelText: t('Delete chats after')),
               items: [
@@ -289,11 +312,17 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               spacing: 8,
               children: [
                 OutlinedButton(
-                  onPressed: () async {
-                    final payload = await app.store.exportAll();
-                    await Share.share(payload, subject: 'Nymbot export');
-                  },
+                  onPressed: () => ShareFile.text(
+                    Backup.everything(app.store),
+                    name: 'nymbot-export.json',
+                    mime: 'application/json',
+                    subject: t('Nymbot export'),
+                  ),
                   child: Text(t('Export everything')),
+                ),
+                OutlinedButton(
+                  onPressed: () => importBackup(context),
+                  child: Text(t('Import a backup')),
                 ),
                 OutlinedButton(
                   onPressed: () async {
@@ -306,6 +335,116 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+Future<void> importBackup(BuildContext context) async {
+  final app = AppScope.read(context);
+  final messenger = ScaffoldMessenger.of(context);
+  void say(String text) => messenger
+    ..clearSnackBars()
+    ..showSnackBar(SnackBar(content: Text(text)));
+  final picked = await FilePicker.platform.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: const ['json'],
+    withData: true,
+  );
+  final bytes = picked?.files.single.bytes;
+  if (bytes == null) return;
+  Object? payload;
+  try {
+    payload = jsonDecode(utf8.decode(bytes));
+  } catch (_) {
+    say(t('That file could not be read.'));
+    return;
+  }
+  if (!context.mounted) return;
+  final merge = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(t('Import a backup')),
+      content: Text(t(
+          'Add these conversations to the ones already here, or replace everything?')),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx), child: Text(t('Cancel'))),
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t('Replace everything'))),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true), child: Text(t('Add'))),
+      ],
+    ),
+  );
+  if (merge == null) return;
+  try {
+    final count = await app.importBackup(payload, merge: merge);
+    say(t('Imported {n} conversations.', {'n': count}));
+  } catch (_) {
+    say(t('That file could not be read.'));
+  }
+}
+
+class VoicePicker extends StatefulWidget {
+  const VoicePicker({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.voice,
+  });
+
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  final Voice? voice;
+
+  @override
+  State<VoicePicker> createState() => _VoicePickerState();
+}
+
+class _VoicePickerState extends State<VoicePicker> {
+  late final Voice _voice = widget.voice ?? Voice();
+  List<VoiceOption> _options = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _voice.voices().then((list) {
+      if (mounted) setState(() => _options = list);
+    });
+  }
+
+  @override
+  void dispose() {
+    if (widget.voice == null) _voice.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_options.isEmpty) return const SizedBox.shrink();
+    final value =
+        _options.any((v) => v.name == widget.value) ? widget.value : null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: DropdownButtonFormField<String?>(
+        key: const ValueKey('voice-picker'),
+        isExpanded: true,
+        value: value,
+        decoration: InputDecoration(labelText: t('Voice')),
+        items: [
+          DropdownMenuItem<String?>(value: null, child: Text(t('Default voice'))),
+          for (final v in _options)
+            DropdownMenuItem<String?>(
+              value: v.name,
+              child: Text(
+                v.locale.isEmpty ? v.name : '${v.name} (${v.locale})',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: widget.onChanged,
       ),
     );
   }

@@ -58,7 +58,7 @@
                 <a href="#ngit">announces itself on Nostr</a> can be pasted in as its address instead.</p>
             <p>You do not have to type the repository's name. Paste the token and choose
                 <strong>List what this token can reach</strong>: Nymbot asks the forge what that token can
-                see and shows the answer as a list you tick. Ticking connects each one with its default
+                see and shows the answer as a list you check. Checking connects each one with its default
                 branch already filled in, and puts them all in this chat. Anything already connected is
                 shown as such rather than offered a second time. That request goes from your device
                 straight to the forge &mdash; not through the Nymbot worker &mdash; so the token does not
@@ -67,10 +67,12 @@
                 works the same.</p>
             <p>Once connected, the chip shows the repository name, and messages sent with a
                 <a href="/docs/models/#pro">Pro model</a> selected run in that repository's context.
-                <code>?git disconnect</code> removes it.</p>
+                <code>?git disconnect</code> removes it. <strong>Disconnect</strong> in the repository list
+                forgets the token but keeps the repository there, marked as having no token, so you can add
+                a new one later.</p>
             <figure class="docs-shot">
                 <img src="/images/docs/wide-repos.webp" width="1280" height="800" loading="lazy" alt="The Repositories modal, where a GitHub, GitLab or Gitea repository is connected to a chat.">
-                <figcaption>Connecting a repository. The token stays on the device.</figcaption>
+                <figcaption>Connecting a repository. The token syncs to your other devices, sealed end to end.</figcaption>
             </figure>
 
             <h2 id="ngit">Repositories announced on Nostr</h2>
@@ -99,6 +101,9 @@
                 found &mdash; so "why does the retry loop give up early" is answered from your code, not
                 from a guess about code that looks like yours.</p>
             <p>It sees the branch you connected, at its current head.</p>
+            <p>With <a href="/docs/server-runs/#in-a-repository">server runs</a> turned on for the chat, it
+                can also ask to run a command against your code, such as the tests, on a Nymbot server. Every
+                run waits for you to allow it.</p>
             <figure class="docs-shot is-phone">
                 <img src="/images/docs/phone-repo.webp" width="880" height="1904" loading="lazy" alt="A repository task on a phone: Nymbot finds a bug and shows the patch as a diff.">
                 <figcaption>A repo task on a phone, with the patch and what the run cost.</figcaption>
@@ -110,6 +115,11 @@
             <p>With writes on, ask for a change and you get a branch and a pull request to review rather
                 than a patch pasted into chat. Nothing is pushed to your default branch unless that is the
                 branch you connected and you asked for it.</p>
+            <p>A run's edits go in as one commit per repository, at the end of the run or when the model
+                decides a piece of work is done. If you would rather see them first, turn on <strong>Ask
+                before committing</strong> for that repository. The run then holds its changes back, the
+                reply shows them as a diff, and <strong>Apply</strong> commits them while
+                <strong>Discard</strong> throws them away. Applying costs nothing.</p>
 
             <h2 id="undo">Undoing what a run changed</h2>
             <p>A reply that wrote to your repository says what it touched: the repository, the branch, and
@@ -157,14 +167,16 @@
             <h2 id="token-safety">About that token</h2>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">About that token</span>
-                <p>The access token is stored only on your device and is wiped by a
-                    <a href="/docs/identity/#panic">panic wipe</a>. It travels to the Nymbot worker with each
-                    request, and is never stored server-side or published to relays. Scope it to the one
+                <p>The access token is kept on your devices and syncs between them inside your end-to-end
+                    encrypted settings, so the server holds only a sealed copy it cannot read. It is wiped by a
+                    <a href="/docs/identity/#panic">device wipe</a>, travels to the Nymbot worker with each
+                    request, and is never stored readable server-side or published to relays. Scope it to the one
                     repository you mean to use, and revoke it at your provider when you are done.</p>
             </div>
-            <p>Because it is device-local, it does not sync: connect the repository again on a second
-                device, with a token scoped for that device if you would rather be able to revoke them
-                separately.</p>
+            <p>Because it syncs, a chat that uses the repository works on every device you sign in on
+                without connecting it again. Disconnecting the repository on one device clears the token on
+                the others too. The token never enters a <a href="/docs/server-runs/#isolation">server
+                run</a>'s container.</p>
         <!--DOCS-PAGER-->
         </main>
         <!--DOCS-TOC-->

@@ -32,6 +32,7 @@
     const Identity = {
         pubkey: null,
         method: null,     // 'local' | 'nip07'
+        remote: null,
         _sk: null,        // Uint8Array, local logins only
         _root: null,      // Uint8Array
         _kem: null,       // { publicKey, secretKey }
@@ -44,6 +45,7 @@
 
         get skHex() { return this._sk ? hex(this._sk) : null; },
         get isLocal() { return this.method === 'local'; },
+        get isRemote() { return this.method === 'nip46'; },
         get kemPk() { return this._kem ? this._kem.publicKey : null; },
 
         /// Restores whatever the last session left. Returns false when there is
@@ -51,6 +53,11 @@
         restore() {
             const saved = Store.identity();
             if (!saved || !saved.pubkey) return false;
+            if (saved.method === 'nip46') {
+                const remote = window.NymbotNip46.restore(Store.signer());
+                if (!remote || remote.pubkey !== saved.pubkey) return false;
+                this.remote = remote;
+            }
             this.pubkey = saved.pubkey;
             this.method = saved.method || 'local';
             if (saved.secret) this._sk = unhex(saved.secret);
@@ -114,7 +121,24 @@
             this.rootLocked = !next;
         },
 
+        useRemote(remote, root, epoch) {
+            if (!remote || !remote.pubkey) throw new Error(t('No signer is connected.'));
+            const next = root === null ? null : (root || this._root || NC().pqGenerateRoot());
+            if (this.remote && this.remote !== remote) this.remote.close();
+            this.remote = remote;
+            Store.setSigner(remote.session);
+            this._adopt(null, remote.pubkey, 'nip46', next, epoch);
+            this.rootLocked = !next;
+        },
+
+        disconnect() {
+            if (this.remote) this.remote.close();
+            this.remote = null;
+            Store.clearSigner();
+        },
+
         _adopt(sk, pubkey, method, root, epoch) {
+            if (method !== 'nip46' && this.remote) this.disconnect();
             this._sk = sk;
             this.pubkey = pubkey;
             this.method = method;
@@ -240,6 +264,7 @@
         async signEvent(event) {
             const evt = Object.assign({ pubkey: this.pubkey }, event);
             if (this._sk) return NT().finalizeEvent(evt, this._sk);
+            if (this.remote) return this.remote.sign(evt);
             const signed = await window.nostr.signEvent(evt);
             if (!signed || !signed.sig) throw new Error(t('The extension refused to sign.'));
             return signed;
@@ -251,6 +276,7 @@
                 const T = NT();
                 return T.nip44.encrypt(plaintext, T.nip44.getConversationKey(this._sk, peerPubkey));
             }
+            if (this.remote) return this.remote.nip44Encrypt(peerPubkey, plaintext);
             return window.nostr.nip44.encrypt(peerPubkey, plaintext);
         },
 
@@ -259,10 +285,13 @@
                 const T = NT();
                 return T.nip44.decrypt(payload, T.nip44.getConversationKey(this._sk, peerPubkey));
             }
+            if (this.remote) return this.remote.nip44Decrypt(peerPubkey, payload);
             return window.nostr.nip44.decrypt(peerPubkey, payload);
         },
 
         forget() {
+            if (this.remote) this.remote.close();
+            this.remote = null;
             this.pubkey = null;
             this.method = null;
             this._sk = null;

@@ -156,6 +156,24 @@
             };
         },
 
+        newestFor(events, pointer) {
+            const T = NT();
+            if (!T || !pointer) return null;
+            let newest = null;
+            for (const evt of events || []) {
+                if (!evt || evt.kind !== KIND || evt.pubkey !== pointer.pubkey || !evt.sig) continue;
+                const d = (Array.isArray(evt.tags) ? evt.tags : []).find(tag => Array.isArray(tag) && tag[0] === 'd');
+                if (!d || d[1] !== pointer.identifier) continue;
+                if (newest && (evt.created_at || 0) <= (newest.created_at || 0)) continue;
+                try {
+                    if (T.getEventHash(evt) !== evt.id) continue;
+                    if (!T.verifyEvent(evt)) continue;
+                } catch (_) { continue; }
+                newest = evt;
+            }
+            return newest;
+        },
+
         filterFor(pointer) {
             return {
                 kinds: [KIND],

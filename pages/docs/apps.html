@@ -62,7 +62,7 @@
             <h2 id="mobile">Android and iOS</h2>
             <p>The mobile app is the same product built natively, so the keystore, the share sheet and the
                 system theme behave the way the platform expects. It talks to exactly the same service, and a
-                conversation started on a phone is readable on the web and the other way round.</p>
+                conversation started on a phone is readable on the web and the other way around.</p>
             <div class="docs-note">
                 <span class="docs-note-label">On Google Play and Zapstore, not yet on the App Store</span>
                 <p>Android installs from
@@ -78,13 +78,22 @@
                 long Pro reply finishes when you come back to the app rather than while it is buried.</p>
 
             <h2 id="one-account">One account everywhere</h2>
-            <p>There is nothing to sync, because there is nothing per-device to sync. Your key is the
-                account; point a second device at the same <code>nsec</code> and it is the same account,
-                with the same balance and the same conversations restored from the relays.</p>
-            <p>What does not travel is anything deliberately device-local: the
-                <a href="/docs/git/#token-safety">git access token</a>, and whatever unlock factor you chose
-                for <a href="/docs/identity/#encryption-at-rest">identity encryption</a>. Both are set up per
-                device on purpose.</p>
+            <p>Your key is the account. Point a second device at the same <code>nsec</code> and it is the
+                same account, with the same balance and the same conversations restored from the relays.</p>
+            <p>Your settings come along too, in a record end-to-end encrypted with your key: workspaces,
+                bots, memory and the rest, including your repository and connector tokens, so a chat that
+                uses them works on the new device right away. See
+                <a href="/docs/identity/#synced-settings">what syncs between your devices</a>.</p>
+            <p>What does not travel is whatever unlock method you chose for
+                <a href="/docs/identity/#encryption-at-rest">identity encryption</a>. That is set up per device
+                on purpose.</p>
+
+            <h2 id="notices">Announcements</h2>
+            <p>Now and then the app shows a short notice at the top of the chat: a new model, a change worth
+                knowing about, or something going wrong. It can carry a link to read more, and a notice about
+                a new model can have a <strong>Try it</strong> button.</p>
+            <p>Dismiss one and it stays dismissed. To stop seeing them altogether, turn off
+                <strong>Show announcements</strong> in Settings.</p>
 
             <h2 id="nymchat">Nymbot inside Nymchat</h2>
             <p><a href="https://nymchat.app">Nymchat</a> is a full messenger &mdash; public channels, group

@@ -18,6 +18,7 @@ class Conversation {
     this.folderId,
     List<String>? tags,
     List<String>? repoIds,
+    List<String>? connectorIds,
     this.personaId,
     this.workspaceId,
     this.botId,
@@ -27,10 +28,16 @@ class Conversation {
     this.seed,
     this.messageCount = 0,
     this.creditsSpent = 0,
+    this.capSats,
+    this.askAboveSats,
+    this.satsSpent,
+    this.serverRuns = false,
+    this.team,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : tags = tags ?? [],
         repoIds = repoIds ?? [],
+        connectorIds = connectorIds ?? [],
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -53,6 +60,7 @@ class Conversation {
   String? folderId;
   List<String> tags;
   List<String> repoIds;
+  List<String> connectorIds;
   String? personaId;
   String? workspaceId;
   String? botId;
@@ -62,6 +70,11 @@ class Conversation {
   String? seed;
   int messageCount;
   double creditsSpent;
+  int? capSats;
+  int? askAboveSats;
+  double? satsSpent;
+  bool serverRuns;
+  Map<String, dynamic>? team;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -77,6 +90,7 @@ class Conversation {
         'folderId': folderId,
         'tags': tags,
         'repoIds': repoIds,
+        if (connectorIds.isNotEmpty) 'connectorIds': connectorIds,
         'personaId': personaId,
         'workspaceId': workspaceId,
         'botId': botId,
@@ -86,6 +100,11 @@ class Conversation {
         'seed': seed,
         'messageCount': messageCount,
         'creditsSpent': creditsSpent,
+        'capSats': capSats,
+        'askAboveSats': askAboveSats,
+        if (satsSpent != null) 'satsSpent': satsSpent,
+        if (serverRuns) 'serverRuns': true,
+        'team': team,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
@@ -102,6 +121,7 @@ class Conversation {
         folderId: j['folderId'] as String?,
         tags: (j['tags'] as List?)?.map((e) => '$e').toList(),
         repoIds: (j['repoIds'] as List?)?.map((e) => '$e').toList(),
+        connectorIds: (j['connectorIds'] as List?)?.map((e) => '$e').toList(),
         personaId: j['personaId'] as String?,
         workspaceId: j['workspaceId'] as String?,
         botId: j['botId'] as String?,
@@ -111,11 +131,19 @@ class Conversation {
         seed: j['seed'] as String?,
         messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
         creditsSpent: (j['creditsSpent'] as num?)?.toDouble() ?? 0,
+        capSats: _sats(j['capSats']),
+        askAboveSats: _sats(j['askAboveSats']),
+        satsSpent: (j['satsSpent'] as num?)?.toDouble(),
+        serverRuns: j['serverRuns'] == true,
+        team: j['team'] is Map ? (j['team'] as Map).cast<String, dynamic>() : null,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
             (j['updatedAt'] as num?)?.toInt() ?? 0),
       );
+
+  static int? _sats(Object? v) =>
+      v is num && v > 0 ? v.floor() : null;
 
   static String encodeList(List<Conversation> list) =>
       jsonEncode(list.map((c) => c.toJson()).toList());
@@ -142,10 +170,15 @@ class ChatMessage {
     this.thinking,
     this.cost = 0,
     this.model,
+    this.modelKey,
+    this.modelMaker,
+    this.modelMakerName,
     this.pro,
     this.calls = 1,
     this.task,
     this.checkpoint,
+    this.pendingTool,
+    this.staged,
     this.rating = 0,
     this.pinned = false,
     this.edited = false,
@@ -155,8 +188,12 @@ class ChatMessage {
     List<String>? repos,
     List<Map<String, dynamic>>? sources,
     List<String>? followUps,
+    this.serverRunCredits = 0,
+    List<Map<String, dynamic>>? serverRuns,
+    this.team,
     DateTime? at,
   })  : attachments = attachments ?? const [],
+        serverRuns = serverRuns ?? const [],
         repos = repos ?? const [],
         sources = sources ?? const [],
         followUps = followUps ?? const [],
@@ -168,6 +205,9 @@ class ChatMessage {
   final String? thinking;
   final double cost;
   final String? model;
+  final String? modelKey;
+  final String? modelMaker;
+  final String? modelMakerName;
 
   /// Which tier answered.
   final bool? pro;
@@ -180,6 +220,8 @@ class ChatMessage {
   /// What this reply changed in a repository, and where the branch stood
   /// before it did, so the run can be put back.
   final Map<String, dynamic>? checkpoint;
+  final Map<String, dynamic>? pendingTool;
+  final Map<String, dynamic>? staged;
   int rating;
   bool pinned;
   final bool edited;
@@ -189,10 +231,17 @@ class ChatMessage {
   final List<String> repos;
   final List<Map<String, dynamic>> sources;
   final List<String> followUps;
+  final double serverRunCredits;
+  final List<Map<String, dynamic>> serverRuns;
+  final Map<String, dynamic>? team;
   final DateTime at;
 
   ChatMessage copyWith(
-          {int? rating, bool? pinned, Map<String, dynamic>? checkpoint}) =>
+          {int? rating,
+          bool? pinned,
+          Map<String, dynamic>? checkpoint,
+          Map<String, dynamic>? pendingTool,
+          Map<String, dynamic>? staged}) =>
       ChatMessage(
         id: id,
         role: role,
@@ -200,10 +249,15 @@ class ChatMessage {
         thinking: thinking,
         cost: cost,
         model: model,
+        modelKey: modelKey,
+        modelMaker: modelMaker,
+        modelMakerName: modelMakerName,
         pro: pro,
         calls: calls,
         task: task,
         checkpoint: checkpoint ?? this.checkpoint,
+        pendingTool: pendingTool ?? this.pendingTool,
+        staged: staged ?? this.staged,
         rating: rating ?? this.rating,
         pinned: pinned ?? this.pinned,
         edited: edited,
@@ -213,6 +267,9 @@ class ChatMessage {
         repos: repos,
         sources: sources,
         followUps: followUps,
+        serverRunCredits: serverRunCredits,
+        serverRuns: serverRuns,
+        team: team,
         at: at,
       );
 
@@ -223,9 +280,14 @@ class ChatMessage {
         'thinking': thinking,
         'cost': cost,
         'model': model,
+        if (modelKey != null) 'modelKey': modelKey,
+        if (modelMaker != null) 'modelMaker': modelMaker,
+        if (modelMakerName != null) 'modelMakerName': modelMakerName,
         if (pro != null) 'pro': pro,
         'calls': calls,
         if (checkpoint != null) 'checkpoint': checkpoint,
+        if (pendingTool != null) 'pendingTool': pendingTool,
+        if (staged != null) 'staged': staged,
         'task': task,
         'rating': rating,
         'pinned': pinned,
@@ -236,6 +298,9 @@ class ChatMessage {
         'repos': repos,
         'sources': sources,
         if (followUps.isNotEmpty) 'followUps': followUps,
+        if (serverRunCredits > 0) 'serverRunCredits': serverRunCredits,
+        if (serverRuns.isNotEmpty) 'serverRuns': serverRuns,
+        if (team != null) 'team': team,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -249,9 +314,14 @@ class ChatMessage {
         thinking: j['thinking'] as String?,
         cost: (j['cost'] as num?)?.toDouble() ?? 0,
         model: j['model'] as String?,
+        modelKey: j['modelKey'] as String?,
+        modelMaker: j['modelMaker'] as String?,
+        modelMakerName: j['modelMakerName'] as String?,
         pro: j['pro'] as bool?,
         calls: (j['calls'] as num?)?.toInt() ?? 1,
         checkpoint: j['checkpoint'] as Map<String, dynamic>?,
+        pendingTool: j['pendingTool'] as Map<String, dynamic>?,
+        staged: j['staged'] as Map<String, dynamic>?,
         task: j['task'] as String?,
         rating: (j['rating'] as num?)?.toInt() ?? 0,
         pinned: j['pinned'] == true,
@@ -265,6 +335,9 @@ class ChatMessage {
         repos: (j['repos'] as List?)?.map((e) => '$e').toList(),
         sources: (j['sources'] as List?)?.whereType<Map<String, dynamic>>().toList(),
         followUps: followUpsOf(j['followUps']),
+        serverRunCredits: (j['serverRunCredits'] as num?)?.toDouble() ?? 0,
+        serverRuns: (j['serverRuns'] as List?)?.whereType<Map<String, dynamic>>().toList(),
+        team: j['team'] is Map ? (j['team'] as Map).cast<String, dynamic>() : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
 
@@ -276,7 +349,7 @@ class ChatMessage {
       if (item is! String) continue;
       final text = item.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (text.length < 2 || text.length > 80) continue;
-      if (RegExp(r'^[?!/]').hasMatch(text)) continue;
+      if (RegExp(r'^[?!/@]').hasMatch(text)) continue;
       if (RegExp(r'[<>\x00-\x1f\x7f]|https?://', caseSensitive: false).hasMatch(text)) continue;
       if (!seen.add(text.toLowerCase())) continue;
       out.add(text);

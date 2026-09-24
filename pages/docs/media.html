@@ -75,11 +75,22 @@
                 is about to make, and the generator takes over the model chip in the toolbar.</p>
             <p>Because every generator but the built-in one is Pro work, pinning it selects the Pro tier
                 too, carried by the cheapest chat model when you have not chosen one.</p>
-            <p>Tick <strong>Only for this chat</strong> before picking to pin it to the conversation you
+            <p>Check <strong>Only for this chat</strong> before picking to pin it to the conversation you
                 are in rather than everywhere. Clear it by picking the same generator again, by switching
                 back to standard, or with <code>?image off</code> and <code>?video off</code>. A message
                 that starts with <code>?</code> or <code>!</code> is always left alone, so the commands
                 still work while a generator is pinned.</p>
+
+            <h2 id="editing">Editing a picture</h2>
+            <p>Attach a picture, or link one, and send <code>?image</code> with what to change:
+                <code>?image make the sky stormy</code>. The generator starts from your picture rather than
+                from nothing. The same works with a generator pinned: attach the picture and describe the
+                change, and the composer prompts you for it.</p>
+            <p>Editing is <a href="/docs/models/#pro">Pro</a> work, and it is priced per generation, the
+                same as making a new picture. Not every generator can edit; <code>?image models</code> and the
+                picker say which ones can. If the one you pinned cannot, Nymbot hands the edit to the default
+                editor, or to the cheapest one that costs no more, and the reply says which one made it. If
+                every generator that can edit would cost more, it tells you rather than charging more.</p>
 
             <h2 id="video">Video</h2>
             <p><code>?video a lighthouse beam sweeping across a storm</code> returns a short clip. It is a

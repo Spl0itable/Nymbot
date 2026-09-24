@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
 /// Translation at runtime, from a pack shipped as an asset.
@@ -24,6 +25,7 @@ class I18n {
   static Future<void> load({String? preferred}) async {
     available = await _index();
     lang = _pick(preferred, available.map((l) => l.code).toList());
+    _pack = null;
     if (lang == 'en') return;
     try {
       final raw = await rootBundle.loadString('$_dir/$lang.json');
@@ -85,6 +87,12 @@ class I18n {
       final key = m.group(1)!;
       return vars.containsKey(key) ? '${vars[key]}' : m.group(0)!;
     });
+  }
+
+  @visibleForTesting
+  static void usePack(String code, Map<String, String> pack) {
+    lang = code;
+    _pack = pack;
   }
 
   static bool get isRtl => const {

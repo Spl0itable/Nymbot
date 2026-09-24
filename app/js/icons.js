@@ -433,5 +433,10 @@
         return svg;
     }
 
-    window.NymbotIcons = { markup, node, brand, wordmark, MARK, PERSONA_ICONS, names: Object.keys(STROKE) };
+    function canonical(slug) {
+        const key = String(slug || '').toLowerCase();
+        return BRAND_ALIASES[key] || key;
+    }
+
+    window.NymbotIcons = { markup, node, brand, canonical, wordmark, MARK, PERSONA_ICONS, names: Object.keys(STROKE) };
 })();

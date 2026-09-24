@@ -8,7 +8,7 @@
 # just minified, and fails if it has gone missing.
 
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss: ws:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
@@ -16,6 +16,14 @@
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
+
+/.well-known/apple-app-site-association
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600
+
+/.well-known/assetlinks.json
+  Content-Type: application/json
+  Cache-Control: public, max-age=3600
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
@@ -30,6 +38,40 @@
 /app/*
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: public, max-age=0, must-revalidate
+
+/app/sandbox.html
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
+  X-Robots-Tag: noindex
+
+/app/sandbox
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
+  X-Robots-Tag: noindex
+
+/app/js/sandbox.js
+  ! Cross-Origin-Resource-Policy
+  Cross-Origin-Resource-Policy: cross-origin
+
+/app/js/pdftext.js
+  ! Cross-Origin-Resource-Policy
+  Cross-Origin-Resource-Policy: cross-origin
+
+/app/js/sandbox-worker.js
+  ! Content-Security-Policy
+  ! Cross-Origin-Resource-Policy
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Cross-Origin-Resource-Policy: cross-origin
 
 # The Cloudflare error pages. These are not browsed to — Cloudflare fetches each
 # one, stores its own copy and serves that when this origin cannot be reached —

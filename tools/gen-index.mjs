@@ -45,7 +45,7 @@ const FEATURES = [
                         <circle cx="6" cy="18" r="3" />
                         <path d="M18 9a9 9 0 0 1-9 9" />`,
     'Works In Your Repo',
-    'Connect GitHub, GitLab or Gitea and Pro replies read your actual files, search the tree and answer from what is there. Turn writes on and it commits, branches and opens pull requests. <a href="/docs/git/">Repository mode</a>.'),
+    'Connect GitHub, GitLab or Gitea and Pro replies read your actual files, search the tree and answer from what is there. Turn writes on and it commits, branches and opens pull requests, and it can <a href="/docs/server-runs/">run your tests on a server</a>, asking you first each time. <a href="/docs/git/">Repository mode</a>.'),
   feature(`                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                         <circle cx="8.5" cy="8.5" r="1.5" />
                         <polyline points="21 15 16 10 5 21" />`,
@@ -103,7 +103,7 @@ const FAQ = [
                     <p>Or pin nothing: on the standard tier each message is classified and routed to a model suited to it, so a quick factual answer does not pay for a reasoning model. The picker is generated from a live catalog, so what you see is exactly what the service will charge for. <a href="/docs/models/">Models and routing</a>.</p>`],
   ['Can it work on my code?',
    `<p>Yes. <code>?git</code> connects GitHub, GitLab or Gitea/Forgejo with a scoped access token, a repository and a branch. After that, Pro replies run as a small agent: listing directories, reading files and searching the tree, then answering from what is actually there.</p>
-                    <p>With <code>?git writes on</code> it can also commit, create branches and open pull or merge requests. The token is stored only on your device, passed with each request, never stored server-side and wiped by a panic wipe. <a href="/docs/git/">Repository mode</a>.</p>`],
+                    <p>With <code>?git writes on</code> it can also commit, create branches and open pull or merge requests. The token syncs between your devices inside your end-to-end encrypted settings, is passed with each request, is never stored readable server-side and is removed when you wipe the device. <a href="/docs/git/">Repository mode</a>.</p>`],
   ['What happens if I lose my key?',
    `<p>You lose the account. Your history is encrypted to that key and your balance is filed under it, and there is no recovery path because there is no user table to recover you from &mdash; that is the same property that means nobody can hand your conversations to anyone else either.</p>
                     <p>Back up your <code>nsec</code> the first day you use it, and turn on <a href="/docs/identity/#encryption-at-rest">identity encryption</a> so the copy on your device is unreadable without unlocking.</p>`],
@@ -121,8 +121,8 @@ const FAQ = [
             </div>`).join('\n\n');
 
 const html = `${head({
-  title: 'Nymbot - Anonymous AI Chat, No Account, Paid in Bitcoin',
-  description: 'Anonymous AI chat with no account and no subscription. End-to-end encrypted, every frontier model, and replies paid for in Bitcoin over Lightning.',
+  title: 'Nymbot - Private AI Chat, No Account, Paid in Bitcoin',
+  description: 'Private AI chat with no account and no subscription. End-to-end encrypted, every frontier model, and replies paid for in Bitcoin over Lightning.',
   slug: '',
 })}
 <body>
@@ -130,7 +130,7 @@ const html = `${head({
     <section class="hero">
         <div class="hero-content">
             <div class="hero-text">
-                <h1 class="glitch ascii-art"><span class="visually-hidden">Nymbot - anonymous AI chat, no account, paid in Bitcoin</span><span aria-hidden="true" data-i18n-skip>
+                <h1 class="glitch ascii-art"><span class="visually-hidden">Nymbot - private AI chat, no account, paid in Bitcoin</span><span aria-hidden="true" data-i18n-skip>
 ${ART}
 </span></h1>
                 <p class="tagline">Private. Paid in Bitcoin. Yours alone.</p>
@@ -158,7 +158,7 @@ ${ART}
                     </a>
                 </div>
                 <div class="terminal-text">
-                    Anonymous AI chat. No account, no email, no subscription.<br/><br/>A key on your device is the whole of it. Ask anything, pin any frontier model, put it to work in your repository &mdash; and when you would rather it did not know who is asking, turn on anonymous mode and it will bill a message it cannot attribute to you.
+                    Private AI chat. No account, no email, no subscription.<br/><br/>A key on your device is the whole of it. Ask anything, pin any frontier model, put it to work in your repository &mdash; and when you would rather it did not know who is asking, turn on anonymous mode and it will bill a message it cannot attribute to you.
                 </div>
                 <div class="cta-buttons">
                     <a href="/app" class="btn">Open Nymbot</a>

@@ -1,6 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart' as convert;
+import 'package:flutter/foundation.dart' show ValueNotifier;
 
 import '../core/crypto/bech32_codec.dart' as bech32;
 import '../core/crypto/keys.dart';
@@ -15,16 +18,25 @@ import '../features/i18n/i18n.dart';
 /// The root is generated independently of the signing key on purpose: the
 /// signing pubkey is published on every wrap, so a KEM key derived from it
 /// would fall with secp256k1.
+typedef SignerRestore = RemoteSigner? Function(Map<String, dynamic> session);
+
 class Identity {
-  Identity(this._store);
+  Identity(this._store, {SignerRestore? restoreSigner})
+      : _restoreSigner = restoreSigner ?? ((_) => null);
 
   static const _skKey = 'nymbot_sk';
+  static const _signerKey = 'nymbot_signer';
   static const _rootKey = 'nymbot_pq_root';
   static const _epochKey = 'nymbot_pq_epoch';
 
   final Store _store;
+  final SignerRestore _restoreSigner;
+
+  final ValueNotifier<bool> waiting = ValueNotifier<bool>(false);
 
   Uint8List? _sk;
+  RemoteSigner? _remote;
+  QueuedSigner? _queued;
   Uint8List? _root;
   MlKemKeyPair? _kem;
   String? _pubkey;
@@ -45,14 +57,18 @@ class Identity {
   static const int epochScan = 12;
   static const int previousEpochs = 3;
 
-  bool get present => _sk != null;
+  bool get present => _sk != null || _remote != null;
+  bool get hasNsec => _sk != null;
+  String get method => _sk != null ? 'local' : (_remote?.method ?? '');
   String get pubkey => _pubkey ?? '';
   Uint8List? get privkey => _sk;
   Uint8List? get root => _root;
   int get epoch => _epoch;
   Uint8List? get kemPublicKey => _kem?.publicKey;
   MlKemKeyPair? get kem => _kem;
-  LocalSigner get signer => LocalSigner(_sk!);
+  EventSigner get signer => _sk != null ? LocalSigner(_sk!) : _queued!;
+
+  RemoteSigner? get remote => _remote;
 
   pq.PqIdentity? get pqIdentity {
     final sk = _sk, kem = _kem;
@@ -66,10 +82,54 @@ class Identity {
 
   Future<bool> restore() async {
     final skHex = await _store.secret(_skKey);
-    if (skHex == null || skHex.isEmpty) return false;
+    if (skHex == null || skHex.isEmpty) return _restoreRemote();
     _epoch = _store.getInt(_epochKey);
     _adopt(Uint8List.fromList(convert.hex.decode(skHex)), await _readRoot());
     return true;
+  }
+
+  Future<bool> _restoreRemote() async {
+    final raw = await _store.secret(_signerKey);
+    if (raw == null || raw.isEmpty) return false;
+    RemoteSigner? made;
+    try {
+      final session = jsonDecode(raw);
+      if (session is Map<String, dynamic>) made = _restoreSigner(session);
+    } catch (_) {
+      made = null;
+    }
+    if (made == null || made.pubkey.isEmpty) return false;
+    _epoch = _store.getInt(_epochKey);
+    _adoptRemote(made, await _readRoot());
+    return true;
+  }
+
+  Future<void> useSigner(RemoteSigner remote, {Uint8List? root, int epoch = 0}) async {
+    _epoch = epoch < 0 ? 0 : epoch;
+    await _store.dropSecret(_skKey);
+    await _store.setSecret(_signerKey, jsonEncode(remote.session));
+    await _store.setInt(_epochKey, _epoch);
+    if (root == null) {
+      await _store.dropSecret(_rootKey);
+    } else {
+      await _store.setSecret(_rootKey, bech32.encodeNymPq(root));
+    }
+    _adoptRemote(remote, root);
+    rootLocked = root == null;
+  }
+
+  Future<void> disconnect() async {
+    await _store.dropSecret(_signerKey);
+    forget();
+  }
+
+  void _adoptRemote(RemoteSigner remote, Uint8List? root) {
+    _sk = null;
+    _remote = remote;
+    _queued = QueuedSigner(remote, waiting: waiting);
+    _root = root;
+    _pubkey = remote.pubkey;
+    _deriveKem();
   }
 
   /// The root this device already holds, or null. Deliberately does not mint
@@ -224,6 +284,7 @@ class Identity {
   }
 
   Future<void> _persist(Uint8List sk, Uint8List? root) async {
+    await _store.dropSecret(_signerKey);
     await _store.setSecret(_skKey, convert.hex.encode(sk));
     await _store.setInt(_epochKey, _epoch);
     if (root == null) {
@@ -235,6 +296,7 @@ class Identity {
   }
 
   void _adopt(Uint8List sk, Uint8List? root) {
+    _dropRemote();
     _sk = sk;
     _root = root;
     _pubkey = getPublicKeyHex(sk);
@@ -307,7 +369,16 @@ class Identity {
     }
   }
 
+  void _dropRemote() {
+    final remote = _remote;
+    _remote = null;
+    _queued = null;
+    waiting.value = false;
+    if (remote != null) unawaited(remote.close().catchError((_) {}));
+  }
+
   void forget() {
+    _dropRemote();
     _sk = null;
     _root = null;
     _kem = null;

@@ -236,6 +236,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<ScheduleRepeat>(
+              isExpanded: true,
               value: _repeat,
               decoration: InputDecoration(labelText: t('How often')),
               items: [
@@ -273,8 +274,12 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                TextButton(
-                    onPressed: _reset, child: Text(t('Clear the form'))),
+                Flexible(
+                  child: TextButton(
+                    onPressed: _reset,
+                    child: Text(t('Clear the form')),
+                  ),
+                ),
               ],
             ),
           ],

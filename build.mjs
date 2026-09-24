@@ -22,7 +22,7 @@ const outDir = "dist";
 // Nymbot web app, copied through as built rather than rebuilt here. `media` is
 // the promo video the knowledge base opens with; it is served from this origin,
 // which is what `default-src 'self'` in `_headers` requires of it.
-const staticAssets = ["images", "app", "media", "robots.txt", "_redirects", "_headers"];
+const staticAssets = ["images", "app", "media", "robots.txt", "_redirects", "_headers", "_routes.json", ".well-known"];
 
 // Local assets that get minified and content-hashed for cache busting.
 const hashedAssets = [

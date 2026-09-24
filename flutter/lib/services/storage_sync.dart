@@ -9,6 +9,7 @@ import '../config.dart';
 import '../core/crypto/pq.dart' as pq;
 import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
+import 'signed_body.dart';
 
 /// What the account's post-quantum root row says. [present] is the row's
 /// existence, decided without decrypting: a row this device cannot open is
@@ -38,7 +39,7 @@ class StorageSync {
   static String categoryFor(String pubkey, String dTag) =>
       'nymchat-${_sha256Hex('$pubkey:d1:$dTag')}';
 
-  Future<NostrEvent> _auth(EventSigner signer, String action) => signer.sign(
+  Future<NostrEvent> _auth(EventSigner signer, String action, String payload) => signer.sign(
         UnsignedEvent(
           pubkey: signer.pubkey,
           createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -48,6 +49,7 @@ class StorageSync {
             const ['method', 'POST'],
             ['u', NymbotConfig.storageUrl],
             ['action', action],
+            ['payload', payload],
           ],
           content: 'nymbot-sync-auth',
         ),
@@ -75,7 +77,8 @@ class StorageSync {
     Duration? timeout,
   }) async {
     try {
-      final auth = await _auth(signer, action);
+      final text = SignedBody.text({'action': action, 'pubkey': signer.pubkey, ...extra});
+      final auth = await _auth(signer, action, SignedBody.hash(text));
       final resp = await _client
           .post(
             Uri.parse(NymbotConfig.storageUrl),
@@ -83,12 +86,7 @@ class StorageSync {
               'Content-Type': 'application/json',
               'User-Agent': NymbotConfig.userAgent,
             },
-            body: jsonEncode({
-              'action': action,
-              'pubkey': signer.pubkey,
-              'auth': auth.toJson(),
-              ...extra,
-            }),
+            body: SignedBody.withAuth(text, auth.toJson()),
           )
           .timeout(timeout ?? const Duration(seconds: 15));
       final decoded = jsonDecode(resp.body);

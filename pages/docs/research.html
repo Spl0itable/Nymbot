@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep research - Nymbot Knowledge Base</title>
+    <meta name="description" content="Deep research in Nymbot: a Pro model plans questions, searches the web in rounds, reads the best pages and writes a report with numbered sources.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Deep research - Nymbot Knowledge Base">
+    <meta property="og:description" content="Deep research in Nymbot: a Pro model plans questions, searches the web in rounds, reads the best pages and writes a report with numbered sources.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/research/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Deep research - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Deep research in Nymbot: a Pro model plans questions, searches the web in rounds, reads the best pages and writes a report with numbered sources.">
+    <link rel="canonical" href="https://nymbot.ai/docs/research/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Deep research</h1>
+            <p class="docs-lede">One message becomes a research task: Nymbot plans the questions to answer,
+                searches and reads the web in several rounds, and writes a long report with sources you can
+                open.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="starting">Starting a research task</h2>
+            <p>Turn on the <strong>Research</strong> chip in the toolbar and send your question, or start the
+                message with <code>?research</code>. The chip turns itself off after one message, so the next
+                thing you send is an ordinary reply again.</p>
+            <p>Research needs a <a href="/docs/models/#pro">Pro model</a> pinned, because it makes many
+                searches and model calls. Without one, the app says so and sends nothing. Before you send, the
+                composer shows which model will do the work, what it will probably cost and the most it can
+                cost.</p>
+
+            <h2 id="what-it-does">What it does</h2>
+            <ol>
+                <li><strong>Plans.</strong> The model breaks your question into the smaller questions a
+                    good answer has to cover.</li>
+                <li><strong>Searches.</strong> It searches the web for them in up to four rounds, with
+                    different phrasings each time, including news searches for anything recent.</li>
+                <li><strong>Reads.</strong> It opens the most promising pages, up to twenty in all, and notes
+                    what each one says against the question it answers.</li>
+                <li><strong>Writes.</strong> It turns those notes into a structured report.</li>
+            </ol>
+            <p>While it works, the reply shows each step as it happens: the questions it planned, what it
+                searched for, which site it is reading and how many findings it has noted.</p>
+            <p>A long task can pause partway and carry on in a second step. The app picks it back up by
+                itself, within the same maximum price.</p>
+
+            <h2 id="the-report">The report</h2>
+            <p>The report cites its sources with numbers, and the numbers match the sources list under it in
+                order, so <em>[3]</em> is the third source. When there are more than two sources the list is
+                folded into one row of site icons; tap it to open the numbered cards.</p>
+            <p>A report is only as good as what it found. Open the sources behind any claim that matters to
+                you.</p>
+
+            <h2 id="cost">What it costs</h2>
+            <p>Research is paid from your Pro balance and metered on the tokens it actually uses, across every
+                step, like any other <a href="/docs/credits/#what-a-reply-costs">Pro reply</a>. It never costs
+                more than the maximum the composer showed.</p>
+            <ul>
+                <li>If your Pro balance cannot cover that maximum, it is refused before anything runs.</li>
+                <li>A research task that fails is not charged.</li>
+                <li>A chat's <a href="/docs/credits/#caps">spending cap</a> applies to it the same way it
+                    applies to any reply.</li>
+            </ul>
+            <p>For bigger questions there is also <a href="/docs/team-mode/">Team mode</a>, which splits the
+                research between several models working at once.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

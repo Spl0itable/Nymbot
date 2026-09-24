@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -8,19 +6,21 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app.dart';
 import '../../config.dart';
 import '../../core/theme/theme.dart';
-import '../../services/nostr/event_signer.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import '../purchase_policy.dart';
 import 'sheet.dart';
 
-Future<void> showCreditsSheet(BuildContext context) => showNymSheet<void>(
+Future<void> showCreditsSheet(BuildContext context, {int? credits}) =>
+    showNymSheet<void>(
       context,
-      (_) => const _CreditsSheet(),
+      (_) => _CreditsSheet(credits: credits),
     );
 
 class _CreditsSheet extends StatefulWidget {
-  const _CreditsSheet();
+  const _CreditsSheet({this.credits});
+
+  final int? credits;
 
   @override
   State<_CreditsSheet> createState() => _CreditsSheetState();
@@ -29,23 +29,25 @@ class _CreditsSheet extends StatefulWidget {
 class _CreditsSheetState extends State<_CreditsSheet> {
   final _amount = TextEditingController(text: '50');
   String _tier = 'standard';
-  String? _invoice;
-  String? _invoiceId;
-  String? _status;
-  bool _warn = false;
-  bool _busy = false;
-  Timer? _poll;
-  EventSigner? _signer;
 
   @override
   void initState() {
     super.initState();
-    _tier = AppScope.read(context).proTier ? 'pro' : 'standard';
+    final app = AppScope.read(context);
+    final held = app.invoice;
+    if (held != null) {
+      _tier = held.tier;
+      _amount.text = '${held.credits}';
+    } else {
+      _tier = app.proTier ? 'pro' : 'standard';
+      app.invoiceStatus = null;
+      final credits = widget.credits;
+      if (credits != null && credits > 0) _amount.text = '$credits';
+    }
   }
 
   @override
   void dispose() {
-    _poll?.cancel();
     _amount.dispose();
     super.dispose();
   }
@@ -78,118 +80,11 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           'costs a fraction of a credit. Coding and reasoning questions cost '
           'more, because they are routed to bigger models.');
 
-  Future<void> _buy() async {
-    final app = AppScope.read(context);
-    if (_credits <= 0) {
-      setState(() {
-        _status = t('Enter how many credits to buy.');
-        _warn = true;
-      });
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _status = t('Creating an invoice…');
-      _warn = false;
-    });
-    final useAnon = (app.current?.anon ?? false) && app.anon.ready;
-    final signer = useAnon ? await app.anon.signer() : app.identity.signer;
-    final res = await app.api
-        .createInvoice(signer, amountSats: _sats, tier: _tier);
-    if (!mounted) return;
-    final pr = res.data['pr'] as String?;
-    if (pr == null) {
-      setState(() {
-        _busy = false;
-        _status = (res.data['error'] as String?) ?? 'Could not create an invoice.';
-        _warn = true;
-      });
-      return;
-    }
-    setState(() {
-      _busy = false;
-      _invoice = pr;
-      _invoiceId = res.data['invoiceId'] as String?;
-      _signer = signer;
-      _status = t('Pay {sats} sats. This updates the moment it settles.',
-          {'sats': figure(_sats)});
-    });
-    _startPolling(signer);
-  }
+  Future<void> _buy() =>
+      AppScope.read(context).createInvoice(_credits, _tier);
 
-  Future<void> _claim(EventSigner signer, String id) async {
-    final app = AppScope.read(context);
-    final claim = await app.api.claimCredits(signer, id);
-    if (!mounted) return;
-    final error = claim.data['error'] as String?;
-    if (error == null) {
-      setState(() {
-        _status = t('Credited. Balance: {balance}.',
-            {'balance': figure(claim.data['balance'])});
-        _warn = false;
-        _invoice = null;
-      });
-      await app.refreshBalance();
-    } else {
-      setState(() {
-        _status = error;
-        _warn = !error.toLowerCase().contains('already claimed');
-      });
-    }
-  }
-
-  Future<void> _checkPaid() async {
-    final app = AppScope.read(context);
-    final id = _invoiceId;
-    final signer = _signer;
-    if (id == null || signer == null || _busy) return;
-    setState(() {
-      _busy = true;
-      _status = t('Checking your payment…');
-      _warn = false;
-    });
-    final check = await app.api.checkInvoice(signer, id);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (check.data['paid'] == true) {
-      _poll?.cancel();
-      await _claim(signer, id);
-      return;
-    }
-    setState(() {
-      _status = (check.data['error'] as String?) ??
-          t('Not paid yet. Finish paying in your wallet, then tap it again.');
-      _warn = true;
-    });
-  }
-
-  void _startPolling(EventSigner signer) {
-    final app = AppScope.read(context);
-    final id = _invoiceId;
-    if (id == null) return;
-    var ticks = 0;
-    _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      if (++ticks > 60) {
-        timer.cancel();
-        setState(() {
-          _status = t('Still waiting on this payment. If you have paid, tap '
-              'I\u2019ve paid — otherwise create a new invoice.');
-          _warn = true;
-        });
-        return;
-      }
-      if (_busy) return;
-      final check = await app.api.checkInvoice(signer, id);
-      if (check.data['paid'] != true) return;
-      timer.cancel();
-      await _claim(signer, id);
-    });
-  }
+  Future<void> _checkPaid() =>
+      AppScope.read(context).checkInvoice(manual: true);
 
   /// What the account holds right now, read through [AppScope.of] so a purchase
   /// that lands while this is open is reflected here rather than only behind
@@ -275,6 +170,10 @@ class _CreditsSheetState extends State<_CreditsSheet> {
     // Subscribed, not read: the balances below have to follow a purchase that
     // lands while this sheet is still open.
     final app = AppScope.of(context);
+    final invoice = app.invoice?.pr;
+    final paid = app.invoice?.paid ?? false;
+    final busy = app.invoiceBusy;
+    final status = app.invoiceStatus;
     if (creditPurchasesDisabled) {
       return Padding(
         padding: EdgeInsets.only(
@@ -354,14 +253,14 @@ class _CreditsSheetState extends State<_CreditsSheet> {
               const SizedBox(height: 6),
               Text(_pricingNote(), style: const TextStyle(fontSize: 11)),
             ],
-            if (_invoice != null) ...[
+            if (invoice != null) ...[
               const SizedBox(height: 14),
               Center(
                 child: Container(
                   padding: const EdgeInsets.all(8),
                   color: Colors.white,
                   child: QrImageView(
-                    data: _invoice!.toUpperCase(),
+                    data: invoice.toUpperCase(),
                     size: 220,
                     backgroundColor: Colors.white,
                   ),
@@ -375,7 +274,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                       icon: const Icon(Icons.copy, size: 16),
                       label: Text(t('Copy invoice')),
                       onPressed: () async {
-                        await Clipboard.setData(ClipboardData(text: _invoice!));
+                        await Clipboard.setData(ClipboardData(text: invoice));
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(content: Text(t('Copied.'))),
@@ -389,7 +288,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                       icon: const Icon(Icons.bolt, size: 16),
                       label: Text(t('Open wallet')),
                       onPressed: () => launchUrl(
-                        Uri.parse('lightning:${_invoice!}'),
+                        Uri.parse('lightning:$invoice'),
                         mode: LaunchMode.externalApplication,
                       ),
                     ),
@@ -397,21 +296,23 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                 ],
               ),
             ],
-            if (_status != null)
+            if (status != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
-                  _status!,
+                  status,
                   style: TextStyle(
                     fontSize: 12,
-                    color: _warn ? Theme.of(context).colorScheme.error : null,
+                    color: app.invoiceWarn
+                        ? Theme.of(context).colorScheme.error
+                        : null,
                   ),
                 ),
               ),
             const SizedBox(height: 14),
-            if (_invoice == null)
+            if (invoice == null)
               FilledButton(
-                onPressed: _busy ? null : _buy,
+                onPressed: busy ? null : _buy,
                 child: Text(t('Create invoice')),
               )
             else
@@ -419,14 +320,14 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _busy ? null : _checkPaid,
-                      child: Text(t('I\u2019ve paid')),
+                      onPressed: busy ? null : _checkPaid,
+                      child: Text(paid ? t('Add my credits') : t('I\u2019ve paid')),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _busy ? null : _buy,
+                      onPressed: busy || paid ? null : _buy,
                       child: Text(t('New invoice')),
                     ),
                   ),

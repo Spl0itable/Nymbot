@@ -33,7 +33,7 @@
             if (typeof item !== 'string') continue;
             const text = item.replace(/\s+/g, ' ').trim();
             const key = text.toLowerCase();
-            if (text.length < 2 || text.length > 80 || /^[?!/]/.test(text)
+            if (text.length < 2 || text.length > 80 || /^[?!/@]/.test(text)
                 || /[<>\x00-\x1f\x7f]|https?:\/\//i.test(text) || seen.has(key)) continue;
             seen.add(key);
             out.push(text);
@@ -250,6 +250,7 @@
             repo: repo.repo,
             branch: repo.branch || '',
             allowWrites: !!repo.allowWrites,
+            approve: !!repo.approve,
             paths: repo.paths || '',
             label: repo.label || repo.repo,
             // Where it was announced, when it was.
@@ -310,16 +311,21 @@
         const repos = reposFor(conv);
         const attachments = opts.attachments || [];
         const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
+        const docText = window.NymbotDocs ? window.NymbotDocs.wireFor(conv, text, attachments) : '';
         const preamble = preambleFor(conv, repos, text);
         const quoted = opts.quote
             ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
             : '';
-        return preamble + quoted + text + attachText;
+        return preamble + quoted + text + attachText + docText;
     }
 
     /// Says what is too big and by how much, rather than the byte count the
     /// crypto would have thrown. A file is named as the thing to move,
     /// because a workspace holds a document the wire cannot.
+    function connectorsFor(conv) {
+        return window.NymbotConnectors ? window.NymbotConnectors.forConv(conv) : [];
+    }
+
     function repoNeedsPro(conv, settings) {
         return reposFor(conv || {}).length > 0
             && !((conv && conv.proModel) || (settings && settings.proModel));
@@ -441,7 +447,7 @@
             }
             return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
         }
-        const repoTask = reposFor(conv || {}).length > 0;
+        const repoTask = reposFor(conv || {}).length > 0 || connectorsFor(conv || {}).length > 0;
         const calls = repoTask ? 1 : effortCalls(conv);
         const usdPerCredit = Number(pricing && pricing.usdPerCredit) || 0;
         const wire = wireTextFor(conv || {}, text || '', options || {});
@@ -583,6 +589,13 @@
             // single-use and the worker only redeems it for the key that made
             // it, so nothing here is worth intercepting.
             if (opts.resume) extra.resume = opts.resume;
+            if (Number(opts.maxCost) > 0) extra.maxCost = Number(opts.maxCost);
+            const proTurn = !!(model || (media && media.proKey));
+            const connectors = window.NymbotConnectors && !conv.anon && proTurn && (!opts.research || opts.team)
+                ? window.NymbotConnectors.payloadFor(conv) : [];
+            if (connectors.length) extra.mcp = connectors;
+            if (opts.mcpApprove) extra.mcpApprove = opts.mcpApprove;
+            if (opts.mcpDecline) extra.mcpDecline = opts.mcpDecline;
             const announcement = anon ? Anon.announcement() : PQ.selfAnnouncement;
             if (announcement) extra.pqAnnouncement = announcement;
             else if (!anon && (Identity.rootLocked || !PQ.selfKeys())) extra.pqClassical = true;
@@ -600,11 +613,16 @@
                 // on Pro, and only outside a repo task, which does its own
                 // looping and is charged for that.
                 const effort = effortOf(conv);
-                if (effort !== 'normal' && !repos.length) extra.effort = effort;
+                if (effort !== 'normal' && !repos.length && !connectors.length) extra.effort = effort;
                 if (repos.length) {
                     extra.git = repoPayload(repos[0]);
                     extra.repos = repos.map(repoPayload);
+                    if (conv.serverRuns || opts.serverRuns) extra.serverRuns = true;
+                    if (opts.runApprove) extra.runApprove = opts.runApprove;
+                    if (opts.runDecline) extra.runDecline = opts.runDecline;
                 }
+                if (opts.research) extra.research = opts.research;
+                if (opts.team) extra.team = opts.team;
             }
 
             const controller = opts.controller || new AbortController();
@@ -656,10 +674,19 @@
                 // Present when it was the day's free allowance that ran out
                 // rather than a balance, which is a time rather than a wall.
                 err.free = data.free || null;
+                err.team = !!data.team;
+                err.required = Number(data.required) || 0;
                 throw err;
             }
             if (status >= 400 || !data || data.error) {
                 const err = new Error((data && data.error) || t('The request failed.'));
+                if (!status && data && data.offline) err.offline = true;
+                if (data && data.team) err.team = true;
+                if (data && data.capExceeded) {
+                    err.capExceeded = true;
+                    err.required = Number(data.required) || 0;
+                    err.pro = !!data.pro;
+                }
                 if (data && data.resumable && data.resumeToken) {
                     err.resumeToken = data.resumeToken;
                     err.resumable = true;
@@ -675,7 +702,7 @@
                 }
             }
 
-            const opened = await Wire.unwrap(data.event, anon ? Anon.recipient() : null);
+            const opened = await Wire.unwrap(data.event, anon ? Anon.recipient() : null, { from: C.botPubkey });
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
             // A '!' question is answered without the conversation and stays out
@@ -705,15 +732,25 @@
                 // Set when the run hit its cap with work left. The token buys
                 // one more leg; the client decides whether to spend it.
                 truncated: !!data.truncated,
+                capStopped: !!data.capStopped,
                 // What this reply changed in a repository, and where the
                 // branch stood before it did.
                 checkpoint: data.checkpoint || null,
+                pendingTool: data.pendingTool || null,
+                staged: data.staged && typeof data.staged === 'object' ? data.staged : null,
+                stalled: !!data.stalled,
+                retryAfterMs: Number(data.retryAfterMs) || 0,
                 resumeToken: data.resumeToken || null,
                 nextReserve: data.nextReserve || 0,
+                research: !!data.research,
                 taskType: data.taskType || null,
                 modelLabel: data.modelLabel || null,
+                modelKey: typeof data.proModel === 'string' ? data.proModel : null,
                 sources: Array.isArray(data.sources) ? data.sources : null,
+                team: data.team && typeof data.team === 'object' && Array.isArray(data.team.workers) ? data.team : null,
                 followUps: followUpsOf(data.followUps),
+                serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
+                serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
                 // What the day's free allowance has left, when this reply came
                 // out of it rather than out of a balance.
                 free: data.free || null,
@@ -746,6 +783,7 @@
                     r.scratch, text, settings,
                     {
                         attachments: opts.attachments || [], quote: opts.quote, controller,
+                        maxCost: opts.maxCost || null,
                         // Neither run touches the conversation's stored thread:
                         // the seed carries what was said, and the real chat is
                         fresh: true
@@ -784,6 +822,7 @@
         splitThinking,
         followUpsOf,
         reposFor,
+        connectorsFor,
         workspaceFor,
         botFor,
         knowledgeBlock,
@@ -814,6 +853,31 @@
             }, { signer });
             if (status >= 400 || !data || data.error) {
                 throw new Error((data && data.error) || t('Could not put that back.'));
+            }
+            return data;
+        },
+
+        async applyStaged(conv, staged) {
+            const repos = reposFor(conv);
+            const repo = repos.find(r => r.repo === staged.repo);
+            if (!repo) throw new Error(t('That repository is no longer connected.'));
+            if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
+            const anon = !!(conv.anon && Anon.ready());
+            const signer = anon ? Anon.signer() : null;
+            const { status, data } = await Api.call('git-apply', {
+                git: repoPayload(repo),
+                staged: {
+                    repo: staged.repo,
+                    branch: staged.branch,
+                    baseSha: staged.baseSha || null,
+                    message: staged.message || '',
+                    files: staged.files || []
+                }
+            }, { signer });
+            if (status >= 400 || !data || data.error) {
+                const err = new Error((data && data.error) || t('Could not apply those changes.'));
+                err.conflict = (data && data.conflict) || null;
+                throw err;
             }
             return data;
         },

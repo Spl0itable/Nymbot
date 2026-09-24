@@ -141,7 +141,7 @@ function structuredData(html, lang, slug) {
     graph.push({
       '@type': 'SoftwareApplication',
       name: 'Nymbot',
-      alternateName: 'Nymbot anonymous AI chat',
+      alternateName: 'Nymbot private AI chat',
       applicationCategory: 'CommunicationApplication',
       applicationSubCategory: 'AI assistant',
       operatingSystem: 'Web, Android, iOS',

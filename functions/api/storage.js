@@ -37,6 +37,7 @@ import {
   buildGiftWrappedDM,
   buildGiftWrappedDMPair,
   verifyClientAuth,
+  enforceAuthReplay,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -208,7 +209,7 @@ async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
 // per-request signatures are skipped. The HTTP path verifies each request.
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
-  return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action });
+  return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body });
 }
 
 var STORAGE_PQ_RELAYS = [
@@ -333,9 +334,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   // Ledger Durable Object enforces double-spend safety server-side instead.
   var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
   if (!context._wsAuthedPubkey && SHOP_MONEY_ACTIONS[body.action]) {
-    var rp = await ledgerCall(env, { op: "replay", id: body.auth && body.auth.id, ttl: 130 });
-    if (rp && rp._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
-    if (!rp || !rp.fresh) return json({ error: "This authorization was already used. Please retry." }, 401);
+    var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+    if (!rp.ok) return json({ error: rp.error }, rp.status);
   }
 
   if (body.action === "shop-get") {
@@ -517,14 +517,14 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!codeData) return json({ error: "Unknown recovery code." }, 404);
     var redeemItem = codeData.itemId;
     if (!SHOP_CATALOG[redeemItem]) return json({ error: "Unknown shop item." }, 400);
-    var prevOwner = (codeData.owner || "").toLowerCase();
     // Atomic redeem (move item from prevOwner to redeemer) via the ledger DO.
     var redeemRes = await ledgerCall(env, {
-      op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey,
-      prevOwner: prevOwner, createdAt: codeData.createdAt || Date.now()
+      op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey
     });
     if (redeemRes && redeemRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
+    if (redeemRes && redeemRes.unknown) return json({ error: "Unknown recovery code." }, 404);
     if (!redeemRes || redeemRes.error) return json({ error: (redeemRes && redeemRes.error) || "Redeem failed." }, 400);
+    var prevOwner = String(redeemRes.prevOwner || "").toLowerCase();
     if (prevOwner && prevOwner !== userPubkey && /^[0-9a-f]{64}$/.test(prevOwner)) {
       readCacheDelete(context, "/shop-status/" + prevOwner);
     }
@@ -550,6 +550,8 @@ var SETTINGS_CATEGORY_RE = /^nym(?:chat|bot)-[a-z0-9-]{1,120}$/i;
 // per group per month, so the full backlog can span many thousands of wraps.
 // A very high ceiling is kept only as an abuse backstop.
 var SETTINGS_MAX_CATEGORIES = 50000;
+var SETTINGS_MAX_NYMBOT_CATEGORIES = 1000;
+var SETTINGS_MAX_BYTES = 256 * 1024 * 1024;
 var SETTINGS_MAX_BLOB = 512 * 1024;
 function isValidSettingsCategory(cat) { return SETTINGS_CATEGORY_RE.test(cat); }
 
@@ -598,9 +600,17 @@ async function handleSettingsAction(context, body) {
     // Cap distinct categories per user to bound storage from runaway splitting.
     if (!prevDoc) {
       try {
-        var cntRow = await env.DB_SETTINGS.prepare("SELECT COUNT(*) AS n FROM settings WHERE pubkey = ?").bind(userPubkey).first();
+        var cntRow = await env.DB_SETTINGS.prepare(
+          "SELECT COUNT(*) AS n, SUM(LENGTH(blob)) AS bytes, SUM(CASE WHEN category LIKE 'nymbot-%' THEN 1 ELSE 0 END) AS bot FROM settings WHERE pubkey = ?"
+        ).bind(userPubkey).first();
         if (cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
           return json({ error: "Too many settings categories." }, 429);
+        }
+        if (cntRow && /^nymbot-/i.test(cat) && (cntRow.bot || 0) >= SETTINGS_MAX_NYMBOT_CATEGORIES) {
+          return json({ error: "Too many settings categories." }, 429);
+        }
+        if (cntRow && (Number(cntRow.bytes) || 0) + body.blob.length > SETTINGS_MAX_BYTES) {
+          return json({ error: "Settings storage is full." }, 413);
         }
       } catch (e) { }
     }
@@ -827,6 +837,32 @@ function readCachePutRaw(context, path, bodyText, contentType, ttlSeconds) {
     if (context && context.waitUntil) context.waitUntil(op);
   } catch (e) { }
 }
+var STORAGE_RATE_HOST = "https://nymchat-rate.invalid";
+var PM_DEPOSIT_RATE = 600;
+var ZAP_PUT_RATE = 300;
+var STORAGE_RATE_WINDOW_MS = 60000;
+
+async function storageRateTake(bucket, who, units, limit) {
+  try {
+    if (typeof caches === "undefined" || !caches.default || !who) return true;
+    var windowId = Math.floor(Date.now() / STORAGE_RATE_WINDOW_MS);
+    var key = new Request(STORAGE_RATE_HOST + "/" + bucket + "?k=" + encodeURIComponent(who) + "&w=" + windowId, { method: "GET" });
+    var count = 0;
+    var hit = await caches.default.match(key);
+    if (hit) {
+      var n = parseInt(await hit.text(), 10);
+      if (Number.isFinite(n)) count = n;
+    }
+    if (count + units > limit) return false;
+    await caches.default.put(key, new Response(String(count + units), {
+      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(STORAGE_RATE_WINDOW_MS / 1000) }
+    }));
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 function readCacheDelete(context, path) {
   try {
     var op = caches.default.delete(readCacheRequest(path));
@@ -1015,6 +1051,10 @@ async function handlePmAction(context, body) {
     var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
     var depNow = Date.now();
+    if (!(await storageRateTake("pm-deposit", userPubkey, Math.max(1, depEvents.length), PM_DEPOSIT_RATE))) {
+      return json({ error: "Too many messages deposited. Try again in a minute." }, 429);
+    }
+    var depCeil = Math.floor(depNow / 1000);
     var depStmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
     var depBatch = [];
     for (var di = 0; di < depEvents.length; di++) {
@@ -1023,7 +1063,7 @@ async function handlePmAction(context, body) {
       if (!recipient || recipient === userPubkey) continue;
       if (JSON.stringify(dev).length > PM_EVENT_MAX) continue;
       if (!pmIsValidWrapForUser(dev, recipient)) continue;
-      depBatch.push(depStmt.bind(recipient, dev.id, dev.created_at || 0, JSON.stringify(dev), depNow));
+      depBatch.push(depStmt.bind(recipient, dev.id, Math.min(Number(dev.created_at) || 0, depCeil), JSON.stringify(dev), depNow));
     }
     var depAdded = 0;
     if (depBatch.length) {
@@ -1117,9 +1157,9 @@ async function handleChannelAction(context, body) {
     }
     if (!wantIds.length) return json({ error: "Invalid id." }, 400);
     var idHoles = wantIds.map(function () { return "?"; }).join(",");
-    var idRows = await env.DB_CHANNELS
-      .prepare("SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id IN (" + idHoles + ")")
-      .bind.apply(null, wantIds).all().catch(function () { return null; });
+    var idStmt = env.DB_CHANNELS
+      .prepare("SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id IN (" + idHoles + ")");
+    var idRows = await idStmt.bind.apply(idStmt, wantIds).all().catch(function () { return null; });
     var outEvents = [];
     var idList = (idRows && idRows.results) || [];
     for (var ri = 0; ri < idList.length; ri++) {
@@ -1524,6 +1564,9 @@ async function handleZapAction(context, body) {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
     var now = Date.now();
+    if (!(await storageRateTake("zap-put", userPubkey, Math.max(1, events.length), ZAP_PUT_RATE))) {
+      return json({ error: "Too many zap receipts. Try again in a minute." }, 429);
+    }
     var chan = [];
     var pm = [];
     for (var n = 0; n < events.length; n++) {
@@ -1593,7 +1636,7 @@ async function routeStorageAction(context, body) {
     }
   }
 
-  if (body && typeof body.action === "string" && body.action.indexOf("channel-") === 0) {
+  if (body && typeof body.action === "string" && (body.action.indexOf("channel-") === 0 || body.action === "event-get")) {
     try {
       return await handleChannelAction(context, body);
     } catch (e) {

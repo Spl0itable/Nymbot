@@ -1,19 +1,18 @@
-// Cloudflare Pages Function: WebSocket proxy for Nostr relays
-// Proxies client WebSocket connections through Cloudflare Workers so relays
-// only see Cloudflare IP addresses instead of end-user IPs.
-//
-// Client connects to: wss://<host>/api/relay?relay=wss://relay.example.com
-// Worker connects to the target relay via new WebSocket() and forwards
-// messages bidirectionally through a WebSocketPair.
+import { clientOriginAllowed, socketRateOk } from './_client.js';
+import { mcpIpv6Blocked } from './_mcp.js';
 
-// One definition for every route; see _client.js.
-import { isNymchatClient } from './_client.js';
+export const RELAY_LIMITS = Object.freeze({
+  maxUrlLength: 512,
+  maxClientFrame: 32 * 1024,
+  maxUpstreamFrame: 512 * 1024,
+  maxPending: 16,
+  maxFilters: 10,
+  maxMessages: 64,
+  maxLifetimeMs: 120000,
+  connectsPerMinute: 120
+});
 
-const APP_RELAY = 'wss://relay.nymchat.app';
-
-// Reject relay hostnames that resolve to private/loopback/link-local space so
-// the proxy can't be used to reach internal services (SSRF).
-function isPrivateRelayHost(hostname) {
+export function isPrivateRelayHost(hostname) {
   let host = (hostname || '').toLowerCase().replace(/\.$/, '');
   if (!host) return true;
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
@@ -22,8 +21,9 @@ function isPrivateRelayHost(hostname) {
   if (h6.startsWith('[') && h6.endsWith(']')) h6 = h6.slice(1, -1);
   if (host.includes(':') || h6.includes(':')) {
     if (h6 === '::1' || h6 === '::' || h6 === '0:0:0:0:0:0:0:1') return true;
-    if (/^f[cd][0-9a-f]{2}:/.test(h6)) return true;     // fc00::/7
-    if (/^fe[89ab][0-9a-f]:/.test(h6)) return true;     // fe80::/10
+    if (mcpIpv6Blocked(h6) === true) return true;
+    if (/^f[cd][0-9a-f]{2}:/.test(h6)) return true;
+    if (/^fe[89ab][0-9a-f]:/.test(h6)) return true;
     const m = h6.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
     if (m) host = m[1]; else return false;
   }
@@ -37,16 +37,34 @@ function isPrivateRelayHost(hostname) {
     if (a === 100 && b >= 64 && b <= 127) return true;
     if (a >= 224) return true;
   }
+  if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/i.test(host)) return true;
   return false;
 }
 
-function buildUpstreamUrl(targetRelay, request, env) {
-  if (targetRelay !== APP_RELAY) return targetRelay;
-  if (!env || !env.NYMCHAT_PROXY_SECRET) return targetRelay;
-  if (!isNymchatClient(request, env)) return targetRelay;
-  const u = new URL(targetRelay);
-  u.searchParams.set('nymchat_proxy', env.NYMCHAT_PROXY_SECRET);
-  return u.toString();
+export function relayTargetOk(target) {
+  if (typeof target !== 'string' || !target || target.length > RELAY_LIMITS.maxUrlLength) return null;
+  let url;
+  try { url = new URL(target); } catch { return null; }
+  if (url.protocol !== 'wss:') return null;
+  if (url.username || url.password) return null;
+  if (url.search || url.hash) return null;
+  if (url.port && url.port !== '443') return null;
+  if (isPrivateRelayHost(url.hostname)) return null;
+  return 'wss://' + url.hostname + (url.pathname === '/' ? '' : url.pathname);
+}
+
+export function relayClientFrameOk(raw) {
+  if (typeof raw !== 'string' || raw.length > RELAY_LIMITS.maxClientFrame) return false;
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return false; }
+  if (!Array.isArray(msg)) return false;
+  const sub = msg[1];
+  if (typeof sub !== 'string' || !sub || sub.length > 64) return false;
+  if (msg[0] === 'CLOSE') return msg.length === 2;
+  if (msg[0] !== 'REQ') return false;
+  const filters = msg.slice(2);
+  if (filters.length < 1 || filters.length > RELAY_LIMITS.maxFilters) return false;
+  return filters.every((f) => f && typeof f === 'object' && !Array.isArray(f));
 }
 
 export async function onRequest(context) {
@@ -57,7 +75,7 @@ export async function onRequest(context) {
     return new Response('Expected WebSocket upgrade', { status: 426 });
   }
 
-  if (!isNymchatClient(request, env)) {
+  if (!clientOriginAllowed(request, env)) {
     return new Response('Forbidden', { status: 403 });
   }
 
@@ -68,93 +86,79 @@ export async function onRequest(context) {
     return new Response('Missing relay parameter', { status: 400 });
   }
 
-  // Validate the relay URL
-  try {
-    const relayUrl = new URL(targetRelay);
-    if (relayUrl.protocol !== 'wss:' && relayUrl.protocol !== 'ws:') {
-      return new Response('Relay URL must use ws:// or wss:// protocol', { status: 400 });
-    }
-    if (isPrivateRelayHost(relayUrl.hostname)) {
-      return new Response('Relay host not allowed', { status: 403 });
-    }
-  } catch {
-    return new Response('Invalid relay URL', { status: 400 });
+  const target = relayTargetOk(targetRelay);
+  if (!target) {
+    return new Response('Relay not allowed', { status: 403 });
   }
 
-  // Create the WebSocket pair for the client connection
+  if (!(await socketRateOk(request, env, 'relay', RELAY_LIMITS.connectsPerMinute, 'RELAY_RATE_LIMITER'))) {
+    return new Response('Too many connections', { status: 429 });
+  }
+
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
 
-  // Connect to the upstream relay using the WebSocket constructor
-  // (the standard way to make outbound WebSocket connections from Workers)
-  const upstream = new WebSocket(buildUpstreamUrl(targetRelay, request, env));
+  let upstream;
+  try {
+    upstream = new WebSocket(target);
+  } catch {
+    try { server.close(1011, 'Upstream relay error'); } catch { }
+    return new Response(null, { status: 101, webSocket: client });
+  }
 
-  // Buffer messages from the client until the upstream connection is open
   let upstreamOpen = false;
+  let finished = false;
+  let messages = 0;
   const pendingMessages = [];
+
+  const finish = (code, reason) => {
+    if (finished) return;
+    finished = true;
+    if (!(code === 1000 || (code >= 3000 && code <= 4999) || code === 1008 || code === 1011)) code = 1000;
+    reason = typeof reason === 'string' ? reason.slice(0, 120) : '';
+    clearTimeout(lifetime);
+    pendingMessages.length = 0;
+    try { upstream.close(code, reason); } catch { }
+    try { server.close(code, reason); } catch { }
+  };
+
+  const lifetime = setTimeout(() => finish(1000, 'lifetime'), RELAY_LIMITS.maxLifetimeMs);
 
   upstream.addEventListener('open', () => {
     upstreamOpen = true;
-    // Flush any messages that arrived while upstream was connecting
     for (const msg of pendingMessages) {
-      try { upstream.send(msg); } catch { /* noop */ }
+      try { upstream.send(msg); } catch { }
     }
     pendingMessages.length = 0;
   });
 
-  // Forward messages from client to upstream (buffering if not yet open)
   server.addEventListener('message', (event) => {
-    context.waitUntil(
-      (async () => {
-        try {
-          if (upstreamOpen && upstream.readyState === WebSocket.OPEN) {
-            upstream.send(event.data);
-          } else if (!upstreamOpen) {
-            pendingMessages.push(event.data);
-          }
-        } catch {
-          // Upstream closed
-        }
-      })()
-    );
-  });
-
-  // Forward messages from upstream to client
-  upstream.addEventListener('message', (event) => {
+    if (finished) return;
+    if (++messages > RELAY_LIMITS.maxMessages) { finish(1008, 'too many messages'); return; }
+    if (!relayClientFrameOk(event.data)) return;
     try {
-      if (server.readyState === 1) {
-        server.send(event.data);
+      if (upstreamOpen && upstream.readyState === 1) {
+        upstream.send(event.data);
+      } else if (!upstreamOpen) {
+        if (pendingMessages.length >= RELAY_LIMITS.maxPending) { finish(1008, 'too many messages'); return; }
+        pendingMessages.push(event.data);
       }
-    } catch {
-      // Client closed
-    }
+    } catch { }
   });
 
-  // Handle close events
-  server.addEventListener('close', (event) => {
+  upstream.addEventListener('message', (event) => {
+    if (finished) return;
+    const raw = event.data;
+    if (typeof raw !== 'string' || raw.length > RELAY_LIMITS.maxUpstreamFrame) return;
     try {
-      upstream.close(event.code, event.reason);
-    } catch {
-      // Already closed
-    }
+      if (server.readyState === 1) server.send(raw);
+    } catch { }
   });
 
-  upstream.addEventListener('close', (event) => {
-    try {
-      server.close(event.code, event.reason);
-    } catch {
-      // Already closed
-    }
-  });
-
-  // Handle errors
-  server.addEventListener('error', () => {
-    try { upstream.close(1011, 'Client error'); } catch { /* noop */ }
-  });
-
-  upstream.addEventListener('error', () => {
-    try { server.close(1011, 'Upstream relay error'); } catch { /* noop */ }
-  });
+  server.addEventListener('close', (event) => finish(event && event.code, event && event.reason));
+  upstream.addEventListener('close', (event) => finish(event && event.code, event && event.reason));
+  server.addEventListener('error', () => finish(1011, 'Client error'));
+  upstream.addEventListener('error', () => finish(1011, 'Upstream relay error'));
 
   return new Response(null, {
     status: 101,

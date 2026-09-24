@@ -81,6 +81,7 @@ const Map<String, String> kNymGlyphShell = <String, String>{
   'workspace': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>',
   'compare': '<rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect>',
   'artifacts': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline>',
+  'team': '<circle cx="12" cy="7" r="3"></circle><circle cx="5" cy="17" r="2.5"></circle><circle cx="19" cy="17" r="2.5"></circle><path d="M12 10v3"></path><path d="M7 15.5 10 13h4l3 2.5"></path>',
 };
 
 /// What the web app draws next to each label, so a screen here asks for the
@@ -105,6 +106,7 @@ const Map<String, String> kNymGlyphFor = <String, String>{
   'workspace': 'workspace',
   'compare': 'compare',
   'artifacts': 'artifacts',
+  'team': 'team',
 };
 
 /// The persona icons, in the order the web app offers them.

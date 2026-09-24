@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Conversations - Nymbot Knowledge Base</title>
-    <meta name="description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
+    <meta name="description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, suggested next steps, sharing a chat by link, clearing history, ghost chats and auto-delete.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
@@ -13,7 +13,7 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Conversations - Nymbot Knowledge Base">
-    <meta property="og:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
+    <meta property="og:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, suggested next steps, sharing a chat by link, clearing history, ghost chats and auto-delete.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/chats/">
     <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
     <meta name="twitter:title" content="Conversations - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, clearing history, ghost chats and auto-delete.">
+    <meta name="twitter:description" content="How separate Nymbot conversations work: titles, what the model remembers, attachments, suggested next steps, sharing a chat by link, clearing history, ghost chats and auto-delete.">
     <link rel="canonical" href="https://nymbot.ai/docs/chats/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -95,13 +95,13 @@
 
             <h2 id="branching">Asking a question differently</h2>
             <p><strong>Ask this differently</strong> under any message you sent reopens it for editing.
-                What happens next is your choice, and the box is ticked by default: the chat you had stays
+                What happens next is your choice, and the box is checked by default: the chat you had stays
                 exactly as it is and the new answer arrives on a branch.</p>
             <p>The branch carries everything said before the question you changed, along with the whole
                 standing setup &mdash; repositories, persona, workspace, bot, model, effort &mdash; and the
                 artifacts those earlier messages produced. It runs on a thread of its own, so the two
                 conversations do not see each other.</p>
-            <p>Untick the box and it rewrites in place instead, which throws away everything said after
+            <p>Uncheck the box and it rewrites in place instead, which throws away everything said after
                 that message. That was the only behavior once, and it is still there when you want it
                 &mdash; but it is no longer what happens by default, because nothing about it could be
                 undone.</p>
@@ -114,7 +114,7 @@
                 done. Take one back out while it waits, or press <strong>Stop</strong> and nothing behind it
                 is sent either.</p>
             <p>Commands are the exception. They cost nothing and happen instantly, so <code>?balance</code>
-                or <code>?model</code> run straight away rather than queueing behind a repo task that has
+                or <code>?model</code> run right away rather than queuing behind a repo task that has
                 another eight minutes to go.</p>
 
             <h2 id="memory">What carries between chats</h2>
@@ -152,14 +152,14 @@
                 that actually look something up, and not on the ones that do not.</p>
             <div class="docs-note">
                 <span class="docs-note-label">Why not simply send everything</span>
-                <p>A long conversation sent whole would cost more on every single reply, for ever, and the
+                <p>A long conversation sent whole would cost more on every single reply, forever, and the
                     price would rise the longer the chat stayed useful. That is the pricing that makes people
                     start a new chat to save money and throw away the context they were paying for. What a
                     reply costs here tracks what the question needed, not how long you have been talking.</p>
             </div>
             <p>Begin a message with <code>!</code> to send it with no history at all: a one-off question
                 inside an existing conversation, without the thread's context coloring the answer or
-                inflating the prompt. It stays out of the thread afterwards too, so the tangent you asked to
+                inflating the prompt. It stays out of the thread afterward too, so the tangent you asked to
                 keep out does not color the next answer either. It remains in the chat where you can read
                 it &mdash; what changes is only what the model is shown next time.</p>
 
@@ -177,19 +177,21 @@
                 A short paste is left where you put it.</p>
 
             <h2 id="attachments">Sending pictures</h2>
-            <p>Put an image link in your message and ask about it. The worker pulls any picture URLs
-                out of what you send and hands them to the model alongside the question, so
-                "what is wrong with this diagram? https://…" works as one message.</p>
+            <p>Attach a picture from your device, or put an image link in your message, and ask about it.
+                The worker hands the pictures to the model alongside the question, so "what is wrong with
+                this diagram?" with the diagram attached works as one message.</p>
             <p>Every Claude, GPT, Gemini, Grok and Kimi <a href="/docs/models/#pro">Pro model</a> can see
                 images, as can the creative and translation routes on the standard tier. A vision reply
                 costs what that model's reply would have cost &mdash; there is no separate charge for
                 looking.</p>
-            <div class="docs-note">
-                <span class="docs-note-label">Note</span>
-                <p>Uploading a picture from the device is not in the standalone apps yet; a link is.
-                    <a href="https://nymchat.app">Nymchat</a> has the upload, and shares this
-                    conversation.</p>
-            </div>
+            <p>An attached picture is uploaded to a public media host so the model can look at it. The
+                upload goes through the Nymbot worker, which keeps your address off the host, and it is
+                signed with a throwaway key made for that one picture, so the host cannot tie your pictures
+                to your account or to each other. The picture itself is not encrypted there: anyone who has
+                its address can open it. A picture can be up to 4 MB, and a large one is scaled down before
+                it goes.</p>
+            <p>Documents are handled differently. A PDF or a long file is read on your device and searched
+                for each question &mdash; see <a href="/docs/documents/">PDFs and long documents</a>.</p>
 
             <h2 id="watching">Watching a reply as it is written</h2>
             <p>While a reply is generating, Nymbot reports what it is doing underneath the spinner:
@@ -202,13 +204,48 @@
                 account behind it is no more involved than it was before. Turn it off in Settings and
                 you get the plain spinner.</p>
 
+            <h2 id="follow-ups">Next steps and sources</h2>
+            <p>A reply can end with a few suggested next steps, shown as chips under the latest reply. Tap
+                one and it is sent exactly as it reads, as a plain message, with nothing pinned, attached or
+                quoted riding along. To change it first, long-press it, or right-click or Shift+click it on a
+                computer, and it goes into the composer instead.</p>
+            <p>The chips stay until you send something, a new reply starts or a message is queued, and they
+                come back when you reopen the chat.</p>
+            <p>A reply that used the web lists its sources under it. One or two are shown as cards. More than
+                that are folded into a single row of site icons with a count: tap the row to open the numbered
+                cards, and tap it again to fold them away. The icons are fetched through the Nymbot worker,
+                never straight from the sites.</p>
+
+            <h2 id="sharing">Sharing a chat by link</h2>
+            <p><strong>Share a link</strong>, in a chat's menu in the header or on its row in the sidebar,
+                makes a read-only copy of the conversation that anyone with the link can open in a
+                browser.</p>
+            <p>You choose how much goes: the whole chat, or everything up to a particular message. You also
+                choose whether sources, reasoning, the text of attached files and images go with it. By
+                default it is the messages and their sources only, and the sheet shows a preview of exactly
+                what will be shared.</p>
+            <p>The copy is encrypted on your device with a new key made for that link, and only the
+                encrypted copy is uploaded to a media host, signed by a throwaway key rather than by your
+                account. The key is the part of the link after the <code>#</code>, which browsers never send
+                to a server, so neither the host nor Nymbot can read what you shared.</p>
+            <p>The app remembers the link for that chat on this device. <strong>Stop sharing</strong> deletes
+                the encrypted copy from the host, and the link stops opening. Anyone who already opened it
+                may have kept a copy, and that cannot be taken back.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Posting to Nostr</span>
+                <p><strong>Also post to Nostr</strong> publishes a public note with the link in it, signed by
+                    your key. Anyone who sees the note can open the chat, and a public note cannot be
+                    reliably deleted, so the app asks you to confirm that first. It is never offered in an
+                    <a href="/docs/anonymous/">Anonymous Mode</a> chat.</p>
+            </div>
+
             <h2 id="clearing">Clearing and deleting</h2>
             <ul>
                 <li><strong>Delete a chat</strong> removes it from this device, wipes its archived copies,
                     and tells the server to drop the thread it keeps for context.</li>
                 <li><code>?clear</code> empties the current conversation without deleting it: same chat,
                     blank slate, model context reset.</li>
-                <li>A <a href="/docs/identity/#panic">panic wipe</a> takes everything at once &mdash; every
+                <li>A <a href="/docs/identity/#panic">device wipe</a> takes everything at once &mdash; every
                     conversation, your key, and any credits sitting on a
                     <a href="/docs/anonymous/">throwaway key</a>.</li>
             </ul>

@@ -6,7 +6,9 @@ import 'app.dart';
 import 'config.dart';
 import 'core/crypto/native_schnorr.dart';
 import 'features/i18n/i18n.dart';
+import 'features/unlock_screen.dart';
 import 'state/app_controller.dart';
+import 'state/store.dart';
 
 class _NymbotHttpOverrides extends HttpOverrides {
   @override
@@ -24,8 +26,13 @@ Future<void> main() async {
   // raw-X ECDH prefer. It never throws: the pure-Dart paths stay correct if the
   // library is unavailable, just slower.
   await NativeSchnorr.ensureLoaded();
-  final controller = await AppController.boot();
+  final store = await Store.open();
   // Before the first frame, so the app never shows English and then repaints.
-  await I18n.load(preferred: controller.preferredLanguage);
+  await I18n.load(preferred: store.getString('lang'));
+  if (store.vault.locked) {
+    runApp(LockedApp(store: store));
+    return;
+  }
+  final controller = await AppController.boot(store: store);
   runApp(NymbotApp(controller: controller));
 }

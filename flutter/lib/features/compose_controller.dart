@@ -82,6 +82,87 @@ class MarkdownEditingController extends TextEditingController {
     return KeyEventResult.handled;
   }
 
+  bool format(String kind) {
+    final sel = value.selection;
+    if (!sel.isValid) return false;
+    final text = this.text;
+    final start = sel.start;
+    final end = sel.end;
+    switch (kind) {
+      case 'bold':
+      case 'italic':
+        final mark = kind == 'bold' ? '**' : '*';
+        final before = start >= mark.length
+            ? text.substring(start - mark.length, start)
+            : '';
+        final after = end + mark.length <= text.length
+            ? text.substring(end, end + mark.length)
+            : '';
+        final boldAround = kind == 'italic' &&
+            start >= 2 &&
+            text.substring(start - 2, start) == '**' &&
+            !(start >= 3 && text.substring(start - 3, start) == '***');
+        final inner = text.substring(start, end);
+        if (before == mark && after == mark && !boldAround) {
+          _replace(start - mark.length, end + mark.length, inner,
+              start - mark.length, start - mark.length + inner.length);
+        } else {
+          _replace(start, end, '$mark$inner$mark', start + mark.length,
+              start + mark.length + inner.length);
+        }
+        return true;
+      case 'code':
+        for (final c in _code) {
+          if (c.start <= start && end <= c.end) {
+            _code.remove(c);
+            _touch();
+            return true;
+          }
+        }
+        if (start == end || text.substring(start, end).contains('\n')) {
+          return false;
+        }
+        _code.removeWhere((c) => c.start < end && start < c.end);
+        _code.add(_Code(start, end));
+        _touch();
+        return true;
+      case 'fence':
+        final block = _blockAt(start);
+        if (block != null) {
+          _blocks.remove(block);
+          _touch();
+          return true;
+        }
+        final from = _lineStart(text, start);
+        final nl = text.indexOf('\n', end);
+        final to = nl == -1 ? text.length : nl;
+        _code.removeWhere((c) => c.start < to && from < c.end);
+        _blocks.add(_Block(from, to, ''));
+        _touch();
+        return true;
+    }
+    return false;
+  }
+
+  void _replace(int start, int end, String inserted, int from, int to) {
+    final text = this.text;
+    final next = text.replaceRange(start, end, inserted);
+    _shift(start, end - start, inserted.length, next);
+    _applying = true;
+    value = TextEditingValue(
+      text: next,
+      selection: TextSelection(baseOffset: from, extentOffset: to),
+    );
+    _applying = false;
+  }
+
+  void _touch() {
+    _applying = true;
+    value = value.copyWith();
+    _applying = false;
+    notifyListeners();
+  }
+
   String get markdown {
     final text = this.text;
     final cuts = <_Cut>[];

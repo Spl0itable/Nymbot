@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Shared chat - Nymbot</title>
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <link rel="stylesheet" href="/app/css/app.css">
+    <link rel="stylesheet" href="/app/css/share.css">
+</head>
+
+<body class="share-page">
+    <header class="share-head">
+        <div class="share-head-text">
+            <strong id="shareFrom">Shared from Nymbot</strong>
+            <span id="shareDate"></span>
+        </div>
+        <a class="btn btn-small btn-primary" id="shareOpenApp" href="/app/">Open Nymbot</a>
+    </header>
+    <main class="share-main messages" id="shareMain" aria-live="polite"></main>
+
+    <script src="/app/js/config.js"></script>
+    <script src="/app/js/i18n.js"></script>
+    <script src="/app/js/highlight.js"></script>
+    <script src="/app/js/markdown.js"></script>
+    <script src="/app/js/share.js"></script>
+    <script src="/app/js/share-view.js"></script>
+</body>
+
+</html>

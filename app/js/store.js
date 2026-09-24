@@ -10,6 +10,8 @@
     const MEMORY_MAX = 200;
 
     function read(key, fallback) {
+        const V = window.NymbotVault;
+        if (V && V.covers(key)) return V.read(key, fallback);
         try {
             const raw = localStorage.getItem(P + key);
             return raw == null ? fallback : JSON.parse(raw);
@@ -33,6 +35,13 @@
     }
 
     function write(key, value) {
+        const V = window.NymbotVault;
+        if (V && V.covers(key)) {
+            let done;
+            try { done = V.write(key, JSON.stringify(value)); } catch (_) { return false; }
+            if (done === true) announce(key);
+            return !!done;
+        }
         try {
             const next = JSON.stringify(value);
             // A write that changes nothing is not news.
@@ -44,6 +53,7 @@
     }
 
     function drop(key) {
+        if (window.NymbotVault) window.NymbotVault.drop(key);
         try { localStorage.removeItem(P + key); } catch (_) { }
         announce(key);
     }
@@ -160,6 +170,23 @@
         { id: 'p-brainstorm', title: 'Brainstorm', body: 'Give me {{count}} genuinely different approaches to {{goal}}. For each: the idea in one line, why it might win, and what would sink it.' }
     ];
 
+    function mergeById(held, incoming) {
+        const out = Array.isArray(held) ? held.slice() : [];
+        const keyOf = (item) => (item && typeof item === 'object' && item.id != null)
+            ? 'id:' + String(item.id) : 'raw:' + JSON.stringify(item);
+        const at = new Map(out.map((item, i) => [keyOf(item), i]));
+        for (const item of incoming) {
+            const key = keyOf(item);
+            if (at.has(key)) {
+                out[at.get(key)] = item;
+            } else {
+                at.set(key, out.length);
+                out.push(item);
+            }
+        }
+        return out;
+    }
+
     const Store = {
         uid,
         read,
@@ -187,6 +214,9 @@
         identity() { return read('identity', null); },
         setIdentity(id) { return write('identity', id); },
         clearIdentity() { drop('identity'); },
+        signer() { return read('signer', null); },
+        setSigner(session) { return write('signer', session); },
+        clearSigner() { drop('signer'); },
 
         settings() {
             return Object.assign({}, DEFAULT_SETTINGS, read('settings', {}));
@@ -225,6 +255,8 @@
             const entry = Object.assign({ id: uid(), enabled: true, addedAt: Date.now() }, cfg);
             const at = list.findIndex(r =>
                 r.repo === entry.repo && (r.host || '') === (entry.host || '') && r.provider === entry.provider);
+            const before = at === -1 ? '' : (list[at].token || '');
+            if ('token' in entry && (entry.token || '') !== before) entry.tokenAt = Date.now();
             if (at === -1) list.push(entry);
             else { entry.id = list[at].id; list[at] = Object.assign(list[at], entry); }
             this.saveRepos(list);
@@ -235,7 +267,10 @@
             const list = this.repos();
             const i = list.findIndex(r => r.id === id);
             if (i === -1) return null;
-            list[i] = Object.assign(list[i], patch);
+            const stamped = patch && 'token' in patch && (patch.token || '') !== (list[i].token || '')
+                ? Object.assign({}, patch, { tokenAt: Date.now() }) : patch;
+            list[i] = Object.assign(list[i], stamped);
+            if (!list[i].token) delete list[i].token;
             this.saveRepos(list);
             return list[i];
         },
@@ -678,9 +713,11 @@
             return Object.assign({ credits: 0, replies: 0, since: Date.now() }, read('usage', {}));
         },
 
-        recordUsage(cost) {
+        recordUsage(cost, pro) {
             const u = this.usage();
+            const tier = pro ? 'pro' : 'standard';
             u.credits += cost || 0;
+            u[tier] = (Number(u[tier]) || 0) + (cost || 0);
             u.replies += 1;
             write('usage', u);
             return u;
@@ -710,17 +747,23 @@
             if (mode === 'replace') {
                 for (const c of this.conversations()) this.deleteConversation(c.id);
             }
-            if (Array.isArray(payload.folders)) write('folders', payload.folders);
-            if (Array.isArray(payload.personas)) write('personas', payload.personas);
-            if (Array.isArray(payload.prompts)) write('prompts', payload.prompts);
-            if (Array.isArray(payload.workspaces)) write('workspaces', payload.workspaces);
-            if (Array.isArray(payload.memories)) write('memories', payload.memories);
-            if (Array.isArray(payload.schedules)) write('schedules', payload.schedules);
-            if (Array.isArray(payload.bots)) write('bots', payload.bots);
+            for (const name of ['folders', 'personas', 'prompts', 'workspaces', 'memories', 'schedules', 'bots']) {
+                if (!Array.isArray(payload[name])) continue;
+                write(name, mode === 'replace' ? payload[name] : mergeById(read(name, []), payload[name]));
+            }
             let count = 0;
             const list = this.conversations();
+            const have = new Set();
+            for (const c of list) {
+                have.add(c.id);
+                if (c.importedFrom) have.add(c.importedFrom);
+            }
             for (const entry of payload.conversations) {
-                const conv = Object.assign({}, entry.conversation, { id: uid() });
+                const source = entry && entry.conversation ? entry.conversation : {};
+                const original = source.importedFrom || source.id || null;
+                if (original && have.has(original)) continue;
+                if (original) have.add(original);
+                const conv = Object.assign({}, source, { id: uid(), importedFrom: original });
                 list.unshift(conv);
                 this.saveMessages(conv.id, Array.isArray(entry.messages) ? entry.messages : []);
                 count++;
@@ -730,6 +773,7 @@
         },
 
         wipe() {
+            if (window.NymbotVault) window.NymbotVault.clear();
             const keys = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);

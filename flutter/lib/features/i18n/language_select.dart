@@ -213,6 +213,7 @@ Future<void> showLanguagePicker(BuildContext context, AppController app) {
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
+                    tooltip: t('Close'),
                     onPressed: () => Navigator.of(dialogContext).pop(),
                   ),
                 ],

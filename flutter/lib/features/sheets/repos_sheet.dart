@@ -30,6 +30,7 @@ class _ReposSheetState extends State<_ReposSheet> {
   final _label = TextEditingController();
   String _provider = 'github';
   bool _writes = false;
+  bool _approve = false;
   String? _editingId;
   String? _error;
   List<ForgeRepo>? _found;
@@ -58,6 +59,7 @@ class _ReposSheetState extends State<_ReposSheet> {
       _editingId = null;
       _provider = 'github';
       _writes = false;
+      _approve = false;
       _error = null;
       _host.clear();
       _token.clear();
@@ -74,6 +76,28 @@ class _ReposSheetState extends State<_ReposSheet> {
   }
 
   /// Reads a NIP-34 announcement and fills the form in from it.
+  Future<void> _disconnect(AppController app, GitRepo r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t('Disconnect this repository')),
+        content: Text(t(
+            'Forget the access token for {repo}? The repository stays listed, and with sync on your other devices forget the token too.',
+            {'repo': r.repo})),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(t('Cancel'))),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(t('Disconnect')),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await app.disconnectRepo(r.id);
+  }
+
   Future<void> _lookUp(AppController app) async {
     final typed = _ngit.text.trim();
     if (typed.isEmpty) {
@@ -211,6 +235,7 @@ class _ReposSheetState extends State<_ReposSheet> {
           host: _host.text.trim(),
           branch: r.branch,
           allowWrites: _writes,
+          approve: _approve,
         ),
         useHere: true,
       );
@@ -323,6 +348,7 @@ class _ReposSheetState extends State<_ReposSheet> {
       _editingId = r.id;
       _provider = r.provider;
       _writes = r.allowWrites;
+      _approve = r.approve;
       _error = null;
       _host.text = r.host;
       _token.text = r.token;
@@ -357,9 +383,10 @@ class _ReposSheetState extends State<_ReposSheet> {
             Text(
               t('Connect as many repositories as you like and tick the ones this chat '
                   'can see. Pro replies read their code and, with writes on, commit, '
-                  'branch and open pull requests. Access tokens are stored only on this '
-                  'device and sent to the Nymbot worker per request — never stored '
-                  'server-side or published to relays.'),
+                  'branch and open pull requests. Access tokens are sent to the Nymbot '
+                  'worker per request and never stored server-side or published to '
+                  'relays. With sync on they travel to your other devices sealed to your '
+                  'own key, and disconnecting one on any device disconnects it everywhere.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -383,9 +410,14 @@ class _ReposSheetState extends State<_ReposSheet> {
                   ),
                   title: Text(r.display, overflow: TextOverflow.ellipsis),
                   subtitle: Text(
-                    r.allowWrites ? '${r.subtitle} · ${t('writes')}' : r.subtitle,
+                    [
+                      r.allowWrites ? '${r.subtitle} · ${t('writes')}' : r.subtitle,
+                      if (r.token.isEmpty)
+                        t('No access token on this device. Edit it to add one.'),
+                    ].join('\n'),
                     style: const TextStyle(fontSize: 11),
                     overflow: TextOverflow.ellipsis,
+                    maxLines: 3,
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -395,6 +427,13 @@ class _ReposSheetState extends State<_ReposSheet> {
                         tooltip: t('Edit'),
                         onPressed: () => _edit(r),
                       ),
+                      if (r.token.isNotEmpty)
+                        IconButton(
+                          key: ValueKey('repo-disconnect-${r.id}'),
+                          icon: const Icon(Icons.link_off, size: 18),
+                          tooltip: t('Disconnect'),
+                          onPressed: () => _disconnect(app, r),
+                        ),
                       IconButton(
                         icon: const Icon(Icons.delete_outline, size: 18),
                         tooltip: t('Remove'),
@@ -448,6 +487,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               // ignore: deprecated_member_use
               value: _provider,
               decoration: InputDecoration(labelText: t('Provider')),
@@ -516,6 +556,14 @@ class _ReposSheetState extends State<_ReposSheet> {
                   style: const TextStyle(fontSize: 13)),
               onChanged: (v) => setState(() => _writes = v),
             ),
+            SwitchListTile(
+              key: const ValueKey('repo-approve'),
+              contentPadding: EdgeInsets.zero,
+              value: _approve,
+              title: Text(t('Ask before committing: show the changes for review first'),
+                  style: const TextStyle(fontSize: 13)),
+              onChanged: (v) => setState(() => _approve = v),
+            ),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -541,6 +589,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                     paths: _paths.text.trim(),
                     label: _label.text.trim(),
                     allowWrites: _writes,
+                    approve: _approve,
                     ngit: _originFor(_repo.text.trim(), _host.text.trim()),
                   ),
                   useHere: _editingId == null,

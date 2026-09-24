@@ -29,6 +29,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Nymbot">
     <link rel="stylesheet" href="/app/css/app.css">
+    <link rel="stylesheet" href="/app/css/share.css">
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Nymbot","alternateName":"Nymbot anonymous AI chat","url":"https://nymbot.ai/app","applicationCategory":"CommunicationApplication","applicationSubCategory":"AI assistant","operatingSystem":"Any","browserRequirements":"Requires JavaScript and WebSocket support","description":"Anonymous AI chat with no account, end-to-end encrypted, paid per reply in Bitcoin over Lightning.","license":"https://www.gnu.org/licenses/agpl-3.0.html","isAccessibleForFree":false,"offers":{"@type":"Offer","price":"0.0000001","priceCurrency":"BTC","description":"Replies are paid for in credits bought over the Bitcoin Lightning Network."},"publisher":{"@type":"Organization","name":"21 Million LLC","url":"https://nostrservices.com"}}</script>
 </head>
 
@@ -68,6 +69,12 @@
             <p class="gate-lede">A private AI assistant. There is no account to make &mdash; a key on this
                 device is the whole of it.</p>
 
+            <div class="gate-nickname">
+                <label for="gateNickname">Nickname (optional)</label>
+                <input data-i18n-skip type="text" id="gateNickname" maxlength="32" autocomplete="nickname" spellcheck="false">
+                <p class="hint">What your messages are signed with. It stays private: it syncs between your devices encrypted, and is never published or sent to the model.</p>
+            </div>
+
             <div class="gate-actions">
                 <button class="btn btn-primary" type="button" data-act="gate-generate">Create a key</button>
                 <button class="btn" type="button" data-act="gate-show-import">I already have one</button>
@@ -81,7 +88,32 @@
                     device.</p>
                 <div class="gate-actions">
                     <button class="btn btn-primary" type="button" data-act="gate-import">Sign in</button>
+                    <button class="btn" type="button" data-act="gate-show-remote">Use a remote signer</button>
                     <button class="btn btn-ghost" type="button" data-act="gate-cancel-import">Back</button>
+                </div>
+            </div>
+
+            <div class="gate-import" id="gateRemote" hidden>
+                <label for="gateBunker">Remote signer (NIP-46)</label>
+                <input data-i18n-skip type="text" id="gateBunker" placeholder="bunker://…" autocomplete="off" spellcheck="false">
+                <p class="hint">Paste the bunker:// link from your signer app, or show a code for the app to scan. Your key stays in the signer, which is asked each time Nymbot signs or decrypts.</p>
+                <div class="gate-actions">
+                    <button class="btn btn-primary" type="button" data-act="gate-bunker" id="gateBunkerGo">Connect</button>
+                    <button class="btn" type="button" data-act="gate-nostrconnect" id="gateConnectGo">Show a code instead</button>
+                    <button class="btn btn-ghost" type="button" data-act="gate-cancel-remote">Back</button>
+                </div>
+                <label class="reveal-label" for="gateSignerRelay">Relay for the code</label>
+                <input data-i18n-skip type="text" id="gateSignerRelay" value="wss://relay.primal.net" autocomplete="off" spellcheck="false">
+                <div class="gate-connect" id="gateConnect" hidden>
+                    <canvas id="gateConnectQr" width="240" height="240" aria-label="Connection link as a QR code"></canvas>
+                    <div class="reveal-row">
+                        <input type="text" id="gateConnectLink" readonly spellcheck="false" aria-label="Connection link">
+                        <button class="btn btn-small" type="button" data-act="copy" data-target="gateConnectLink">Copy</button>
+                    </div>
+                    <p class="hint">Scan this with your signer app, or paste the link into it. Nymbot waits up to five minutes.</p>
+                </div>
+                <div class="gate-actions" id="gateSignerCancelRow" hidden>
+                    <button class="btn btn-ghost" type="button" data-act="gate-signer-cancel">Cancel</button>
                 </div>
             </div>
 
@@ -89,6 +121,31 @@
             <p class="gate-error" id="gateError" hidden></p>
             <p class="gate-foot">By continuing you agree to the <a href="/terms/">Terms</a> and
                 <a href="/privacy/">Privacy Policy</a>.</p>
+        </div>
+    </section>
+
+    <div class="signer-wait" id="signerWait" role="status" hidden>
+        <span id="signerWaitText">Waiting for your signer…</span>
+        <button class="btn btn-small" type="button" data-act="signer-auth" id="signerAuth" hidden>Open the approval page</button>
+    </div>
+
+    <section class="gate" id="vaultGate" hidden>
+        <div class="gate-card">
+            <h1 class="gate-title">Unlock your identity</h1>
+            <p class="gate-lede" id="vaultGateLede">Your Nymbot identity is encrypted on this device. Enter your passphrase to
+                unlock it.</p>
+            <div class="gate-import">
+                <div id="vaultGatePassRow">
+                    <label for="vaultGatePass">Passphrase</label>
+                    <input type="password" id="vaultGatePass" autocomplete="current-password" spellcheck="false">
+                </div>
+                <div class="gate-actions">
+                    <button class="btn btn-primary" type="button" data-act="vault-unlock" id="vaultGateUnlock">Unlock</button>
+                    <button class="btn btn-ghost" type="button" data-act="vault-forget" id="vaultGateForget">Forgot your passphrase?</button>
+                </div>
+            </div>
+            <p class="gate-busy" id="vaultGateBusy" hidden>Unlocking…</p>
+            <p class="gate-error" id="vaultGateError" hidden></p>
         </div>
     </section>
 
@@ -150,7 +207,7 @@
                 </div>
             </div>
             <div class="sidebar-search">
-                <input type="search" id="convSearch" placeholder="Search chats" autocomplete="off">
+                <input type="search" id="convSearch" placeholder="Search chats" aria-label="Search chats" autocomplete="off">
             </div>
             <div class="sidebar-filters" id="sidebarFilters">
                 <button class="pill is-active" type="button" data-act="conv-filter" data-filter="all">All</button>
@@ -168,6 +225,10 @@
                 <button class="side-link" type="button" data-act="open-repos">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
                     <span>Repositories</span><span class="side-count" id="repoCount"></span>
+                </button>
+                <button class="side-link" type="button" data-act="open-connectors" id="connectorsLink">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 17v4"></path></svg>
+                    <span>Connectors</span><span class="side-count" id="connectorCount"></span>
                 </button>
                 <button class="side-link" type="button" data-act="open-prompts">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H7l-3 3z"></path></svg>
@@ -202,7 +263,7 @@
                         <span class="who-balance" id="whoBalance"></span>
                     </span>
                 </button>
-                <span class="relay-dot" id="relayDot" title="Relays"></span>
+                <span class="relay-dot" id="relayDot" title="Not connected to any relay" role="img" aria-label="Not connected to any relay"></span>
             </div>
         </aside>
 
@@ -231,6 +292,7 @@
                 <h1 class="chat-title" id="chatTitle">New chat</h1>
                 <span class="chat-anon" id="chatAnon" hidden title="This chat runs on a throwaway key">anon</span>
                 <span class="chat-badge" id="chatPersona" hidden></span>
+                <button class="chat-badge chat-cap" type="button" id="chatCap" data-act="open-caps" title="Spending caps for this chat" hidden></button>
                 <button class="icon-btn" type="button" data-act="find-in-chat" title="Find in this chat" aria-label="Find in this chat">
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 </button>
@@ -245,9 +307,12 @@
                     <button type="button" data-act="open-system">Custom instructions…</button>
                     <button type="button" data-act="open-tags">Tags and folder…</button>
                     <button type="button" data-act="open-stats">Chat statistics</button>
+                    <button type="button" data-act="open-caps">Spending caps…</button>
                     <button type="button" data-act="export-md">Export as Markdown</button>
+                    <button type="button" data-act="export-txt">Export as plain text</button>
                     <button type="button" data-act="export-json">Export as JSON</button>
                     <button type="button" data-act="copy-transcript">Copy transcript</button>
+                    <button type="button" data-act="share-chat">Share a link&hellip;</button>
                     <button type="button" data-act="clear-chat">Clear this chat</button>
                     <button type="button" class="danger" data-act="delete-chat">Delete</button>
                 </div>
@@ -279,6 +344,14 @@
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
                         <span class="chip-label">Git</span>
                     </button>
+                    <button class="chip" type="button" data-act="toggle-server-runs" id="chipServerRuns" hidden title="Let Nymbot ask to run commands on a Nymbot server">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"></rect><rect x="3" y="13" width="18" height="7" rx="1.5"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line></svg>
+                        <span class="chip-label">Server runs</span>
+                    </button>
+                    <button class="chip" type="button" data-act="open-connectors" id="chipConnectors" title="Outside tools this chat can use">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 17v4"></path></svg>
+                        <span class="chip-label">Connectors</span>
+                    </button>
                     <button class="chip" type="button" data-act="open-personas" id="chipPersona" title="Custom instructions">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>
                         <span class="chip-label">Persona</span>
@@ -286,6 +359,14 @@
                     <button class="chip" type="button" data-act="cycle-effort" id="chipEffort" title="How hard to think about each reply">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z"></path><line x1="9.6" y1="18.6" x2="14.4" y2="18.6"></line><line x1="10.6" y1="21" x2="13.4" y2="21"></line></svg>
                         <span class="chip-label">Effort</span>
+                    </button>
+                    <button class="chip" type="button" data-act="toggle-research" id="chipResearch" title="Research the next message in depth">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"></circle><line x1="20" y1="20" x2="15.5" y2="15.5"></line><line x1="8.5" y1="11" x2="13.5" y2="11"></line><line x1="11" y1="8.5" x2="11" y2="13.5"></line></svg>
+                        <span class="chip-label">Research</span>
+                    </button>
+                    <button class="chip" type="button" data-act="open-team" id="chipTeam" hidden title="Split a research or repository task among several workers">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"></circle><circle cx="5" cy="17" r="2.5"></circle><circle cx="19" cy="17" r="2.5"></circle><path d="M12 10v3"></path><path d="M7 15.5 10 13h4l3 2.5"></path></svg>
+                        <span class="chip-label">Team</span>
                     </button>
                     <button class="chip" type="button" data-act="toggle-web" id="chipWeb" title="Let the reply search the web">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"></path></svg>
@@ -330,7 +411,7 @@
             <div class="context-bar" id="contextBar" hidden></div>
 
             <div class="chat-body" id="chatBody">
-                <div class="messages screen-messages" id="messages"></div>
+                <div class="messages screen-messages" id="messages" role="log" aria-label="Conversation"></div>
 
                 <aside class="artifact-panel" id="artifactPanel" hidden>
                     <header class="artifact-head">
@@ -371,18 +452,28 @@
 
             <div class="composer">
                 <div class="attach-tray" id="attachTray" hidden></div>
+                <div class="attach-tray doc-tray" id="docTray" hidden></div>
                 <div class="queue-strip" id="queueStrip" hidden></div>
                 <div class="composer-status" id="composerStatus" hidden></div>
+                <div class="dictate-strip" id="dictateStrip" role="status" aria-live="polite" hidden>
+                    <span class="dictate-dot" aria-hidden="true"></span>
+                    <span class="dictate-label" id="dictateLabel"></span>
+                    <button class="btn btn-small btn-ghost" type="button" data-act="dictate-cancel" id="dictateCancel">Cancel</button>
+                    <button class="btn btn-small btn-primary" type="button" data-act="dictate" id="dictateDone">Done</button>
+                </div>
                 <div class="reply-strip" id="replyStrip" hidden>
                     <span class="reply-strip-text" id="replyStripText"></span>
                     <button class="icon-btn" type="button" data-act="cancel-quote" aria-label="Cancel quote">&times;</button>
                 </div>
-                <div class="suggest" id="suggest" hidden></div>
+                <div class="suggest" id="suggest" role="listbox" aria-label="Suggestions" hidden></div>
                 <div class="composer-row">
                     <button class="composer-btn" type="button" data-act="attach" id="attachBtn" title="Attach a file" aria-label="Attach a file">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.2-9.2a3.67 3.67 0 0 1 5.18 5.18l-9.2 9.2a1.83 1.83 0 1 1-2.6-2.6l8.5-8.48"></path></svg>
                     </button>
                     <div id="input" class="composer-input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message" spellcheck="true" placeholder="Ask something, or type ? for commands" enterkeyhint="send"></div>
+                    <button class="composer-btn mic-btn" type="button" data-act="dictate" id="micBtn" title="Dictate a message" aria-label="Dictate a message" aria-pressed="false" hidden>
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>
+                    </button>
                     <button class="send-btn" type="button" data-act="send" id="sendBtn" aria-label="Send">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                     </button>
@@ -395,7 +486,7 @@
                     <span class="composer-hint composer-hint-right" id="lenHint"></span>
                 </div>
                 <input type="file" id="filePicker" multiple hidden
-                    accept="image/*,text/*,.md,.json,.yml,.yaml,.toml,.csv,.tsv,.log,.sql,.sh,.js,.mjs,.ts,.tsx,.jsx,.dart,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.hpp,.cs,.php,.lua,.html,.css,.scss,.xml,.svg,.diff,.patch">
+                    accept="image/*,text/*,.pdf,.docx,.htm,.md,.json,.yml,.yaml,.toml,.csv,.tsv,.log,.sql,.sh,.js,.mjs,.ts,.tsx,.jsx,.dart,.py,.rb,.go,.rs,.java,.kt,.swift,.c,.h,.cpp,.hpp,.cs,.php,.lua,.html,.css,.scss,.xml,.svg,.diff,.patch">
             </div>
         </main>
     </div>
@@ -418,8 +509,11 @@
     <!-- Model picker -->
     <div class="modal" id="modalModels" hidden>
         <div class="modal-card">
-            <header><h2>Nymbot Pro model</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
-            <input type="search" id="modelSearch" placeholder="Search names and descriptions" autocomplete="off">
+            <header><h2 id="modelsTitle">Nymbot Pro model</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <div class="search-box">
+                <input type="search" id="modelSearch" placeholder="Search names and descriptions" autocomplete="off" aria-label="Search names and descriptions">
+                <button class="icon-btn search-clear" type="button" id="modelSearchClear" data-act="model-search-clear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
+            </div>
             <div class="filter-row" id="modelFilters">
                 <button class="pill is-active" type="button" data-act="model-filter" data-filter="all">All</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="reasoning">Reasoning</button>
@@ -431,7 +525,7 @@
                 <button class="pill" type="button" data-act="model-filter" data-filter="favourites">Starred</button>
             </div>
             <div class="model-tools">
-                <label class="check"><input type="checkbox" id="modelForChat"> Only for this chat</label>
+                <label class="check" id="modelForChatRow"><input type="checkbox" id="modelForChat"> Only for this chat</label>
                 <label class="model-sort">Sort
                     <select id="modelSort">
                         <option value="provider">Provider</option>
@@ -444,7 +538,7 @@
             <div class="model-list" id="modelList"></div>
             <p class="hint">An estimate for one reply at the rates shown: the low end is a short answer, the high end a long one. Whatever the model has to read pushes it up &mdash; web results, repository files, attachments, and a long chat behind you &mdash; and a task that takes several passes costs more again. You pay for the tokens actually used, never a flat price per message. A full breakdown of every model and what it costs is in the <a href="https://nymbot.ai/docs/credits/" target="_blank" rel="noopener">pricing knowledge base</a>.</p>
             <footer>
-                <button class="btn" type="button" data-act="model-off">Auto-routed (standard)</button>
+                <button class="btn" type="button" data-act="model-off" id="modelOff">Auto-routed (standard)</button>
             </footer>
         </div>
     </div>
@@ -514,7 +608,7 @@
                 <label class="check"><input type="checkbox" id="scheduleHere"> Send it into this chat rather than a new one</label>
                 <p class="modal-status" id="scheduleStatus"></p>
                 <footer>
-                    <button class="btn primary" type="button" data-act="schedule-save">Save it</button>
+                    <button class="btn btn-primary" type="button" data-act="schedule-save">Save it</button>
                     <button class="btn" type="button" data-act="schedule-reset">Clear the form</button>
                 </footer>
             </div>
@@ -535,17 +629,21 @@
                 <input data-i18n-skip type="text" id="botName" placeholder="Release notes" autocomplete="off">
                 <label for="botTagline">One line about it</label>
                 <input type="text" id="botTagline" placeholder="Turns a diff into something a human can read" autocomplete="off">
-                <label for="botIcon">Icon</label>
-                <div class="icon-picker" id="botIcons"></div>
+                <label id="botIconLabel">Icon</label>
+                <div class="icon-picker" id="botIcons" role="radiogroup" aria-labelledby="botIconLabel"></div>
                 <label for="botInstructions">Standing instructions</label>
                 <textarea id="botInstructions" rows="4" placeholder="How it should answer, every time"></textarea>
                 <label for="botModel">Model</label>
                 <select id="botModel"></select>
                 <label for="botStarters">Openers, one per line</label>
                 <textarea id="botStarters" rows="3" placeholder="Summarize the last release&#10;What changed in the API?"></textarea>
+                <label for="botCapTotal">Stop each chat with this bot at (sats)</label>
+                <input type="number" id="botCapTotal" min="0" step="1" inputmode="numeric" placeholder="No cap" autocomplete="off">
+                <label for="botCapReply">Ask me before a reply that could cost more than (sats)</label>
+                <input type="number" id="botCapReply" min="0" step="1" inputmode="numeric" placeholder="No cap" autocomplete="off">
                 <p class="modal-status" id="botStatus"></p>
                 <footer>
-                    <button class="btn primary" type="button" data-act="bot-save">Save bot</button>
+                    <button class="btn btn-primary" type="button" data-act="bot-save">Save bot</button>
                     <button class="btn" type="button" data-act="bot-reset">Clear the form</button>
                 </footer>
             </div>
@@ -573,6 +671,36 @@
         </div>
     </div>
 
+    <div class="modal" id="modalShareChat" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Share a link to this chat</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">The chat is encrypted on this device before it leaves. The key travels only in the link, so the media host stores something it cannot read. Anyone you give the link to can read what you include.</p>
+            <label for="shareUpTo">Messages</label>
+            <select id="shareUpTo"></select>
+            <label class="check"><input type="checkbox" id="shareSources"> Sources</label>
+            <label class="check"><input type="checkbox" id="shareReasoning"> Reasoning</label>
+            <label class="check"><input type="checkbox" id="shareFiles"> Text of attached files</label>
+            <label class="check"><input type="checkbox" id="shareImages"> Images</label>
+            <p class="hint" id="shareSummary"></p>
+            <div class="share-preview messages" id="sharePreview" aria-label="Preview of what will be shared"></div>
+            <div id="shareResult" hidden>
+                <label for="shareLink">Link</label>
+                <textarea id="shareLink" rows="3" readonly data-i18n-skip></textarea>
+                <div class="row-actions">
+                    <button class="btn" type="button" id="shareCopy">Copy the link</button>
+                    <button class="btn" type="button" id="shareSend">Share&hellip;</button>
+                    <button class="btn" type="button" id="sharePost">Also post to Nostr&hellip;</button>
+                </div>
+            </div>
+            <p class="modal-status" id="shareStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" id="shareCreate">Create the link</button>
+            </footer>
+            <h3 class="share-list-head" id="shareListHead" hidden>Links to this chat</h3>
+            <div class="share-list" id="shareList"></div>
+        </div>
+    </div>
+
     <!-- Adding a shared bot -->
     <div class="modal" id="modalAddBot" hidden>
         <div class="modal-card">
@@ -583,7 +711,7 @@
             <div class="bot-preview" id="addBotPreview" hidden></div>
             <p class="modal-status" id="addBotStatus"></p>
             <footer>
-                <button class="btn primary" type="button" data-act="bot-fetch">Look it up</button>
+                <button class="btn btn-primary" type="button" data-act="bot-fetch">Look it up</button>
                 <button class="btn" type="button" data-act="bot-accept" hidden id="addBotAccept">Add it</button>
             </footer>
         </div>
@@ -594,8 +722,8 @@
         <div class="modal-card modal-wide">
             <header><h2>Workspaces</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
             <p class="modal-lede">A workspace is standing context: instructions, reference files and
-                repositories that every chat in it starts with. The files stay on this device and
-                travel only inside the first message of a chat that uses them.</p>
+                repositories that every chat in it starts with. The files stay on this device, and the
+                parts that bear on what you ask travel inside each message of a chat that uses them.</p>
             <div class="repo-list" id="workspaceList"></div>
             <div class="repo-form" id="workspaceForm">
                 <h3 class="section-head" id="workspaceFormTitle">New workspace</h3>
@@ -613,7 +741,7 @@
                 </div>
                 <p class="modal-status" id="workspaceStatus"></p>
                 <footer>
-                    <button class="btn primary" type="button" data-act="workspace-save">Save workspace</button>
+                    <button class="btn btn-primary" type="button" data-act="workspace-save">Save workspace</button>
                     <button class="btn" type="button" data-act="workspace-reset">Clear the form</button>
                 </footer>
             </div>
@@ -627,22 +755,17 @@
             <p class="modal-lede">The same prompt goes to two models on separate threads, so neither
                 sees the other's answer. Keep the one you prefer and the chat carries on from it.
                 Two replies means two charges.</p>
-            <div class="compare-pickers">
-                <div>
-                    <label for="compareA">First model</label>
-                    <select id="compareA"></select>
-                </div>
-                <div>
-                    <label for="compareB">Second model</label>
-                    <select id="compareB"></select>
-                </div>
+            <div class="compare-slots" id="compareSlots">
+                <button class="compare-slot" type="button" id="compareA" data-act="compare-pick" data-slot="a"></button>
+                <button class="compare-slot" type="button" id="compareB" data-act="compare-pick" data-slot="b"></button>
             </div>
+            <p class="compare-total" id="compareTotal" hidden></p>
             <label for="comparePrompt">Prompt</label>
             <textarea id="comparePrompt" rows="3" placeholder="What should both of them answer?"></textarea>
             <div class="compare-grid" id="compareGrid" hidden></div>
             <p class="modal-status" id="compareStatus"></p>
             <footer>
-                <button class="btn primary" type="button" data-act="compare-run">Ask both</button>
+                <button class="btn btn-primary" type="button" data-act="compare-run">Ask both</button>
                 <button class="btn" type="button" data-act="close-modal">Close</button>
             </footer>
         </div>
@@ -654,8 +777,9 @@
             <header><h2>Repositories</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
             <p class="modal-lede">Connect as many repositories as you like and tick the ones this chat can
                 see. Pro replies read their code and, with writes on, commit, branch and open pull requests.
-                Access tokens are stored only on this device and sent to the Nymbot worker per request
-                &mdash; never stored server-side or published to relays.</p>
+                Access tokens are sent to the Nymbot worker per request and never stored server-side or published
+                to relays. With sync on they travel to your other devices sealed to your own key, and disconnecting
+                one on any device disconnects it everywhere.</p>
             <div class="repo-list" id="repoList"></div>
             <div class="repo-form" id="repoForm">
                 <h3 class="section-head" id="repoFormTitle">Add a repository</h3>
@@ -712,6 +836,7 @@
                 <label for="gitLabel">Label (optional)</label>
                 <input data-i18n-skip type="text" id="gitLabel" placeholder="Frontend" autocomplete="off" spellcheck="false">
                 <label class="check"><input type="checkbox" id="gitWrites"> Allow commits, branches and pull requests</label>
+                <label class="check"><input type="checkbox" id="gitApprove"> Ask before committing: show the changes for review first</label>
                 <p class="modal-status" id="gitStatus"></p>
                 <div class="gate-actions">
                     <button class="btn btn-primary" type="button" data-act="repo-save" id="repoSaveBtn">Add repository</button>
@@ -721,6 +846,61 @@
             <footer>
                 <button class="btn btn-ghost" type="button" data-act="repo-none">Use none in this chat</button>
                 <button class="btn btn-ghost" type="button" data-act="repo-all">Use all in this chat</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalConnectors" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Connectors</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Connect outside tools over MCP and tick the ones this chat can use, up to three at
+                a time. Pro replies can call their tools; every tool asks you before it runs unless you choose to
+                always allow it, and a tool the server marks as able to delete always asks. The URL and any token
+                or header are sent to the Nymbot worker with the messages that use them and never stored
+                server-side or published to relays. With sync on they travel to your other devices sealed to your
+                own key.</p>
+            <div class="repo-list" id="connectorList"></div>
+            <div class="repo-form" id="connectorForm">
+                <h3 class="section-head" id="connectorFormTitle">Add a connector</h3>
+                <label for="connectorName">Name</label>
+                <input data-i18n-skip type="text" id="connectorName" placeholder="Docs" autocomplete="off" spellcheck="false">
+                <label for="connectorUrl">Server URL</label>
+                <input data-i18n-skip type="text" inputmode="url" id="connectorUrl" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false">
+                <label for="connectorAuth">Authentication</label>
+                <select id="connectorAuth">
+                    <option value="none">None</option>
+                    <option value="bearer">Bearer token</option>
+                    <option value="header">Custom header</option>
+                </select>
+                <div id="connectorTokenRow" hidden>
+                    <label for="connectorToken">Token</label>
+                    <input type="password" id="connectorToken" placeholder="Sent as Authorization: Bearer" autocomplete="off" spellcheck="false">
+                </div>
+                <div id="connectorHeaderRow" hidden>
+                    <div class="field-grid">
+                        <div>
+                            <label for="connectorHeaderName">Header name</label>
+                            <input data-i18n-skip type="text" id="connectorHeaderName" placeholder="X-Api-Key" autocomplete="off" spellcheck="false">
+                        </div>
+                        <div>
+                            <label for="connectorHeaderValue">Header value</label>
+                            <input type="password" id="connectorHeaderValue" autocomplete="off" spellcheck="false">
+                        </div>
+                    </div>
+                </div>
+                <div class="gate-actions">
+                    <button class="btn btn-small" type="button" data-act="connector-test" id="connectorTestBtn">Test connection</button>
+                </div>
+                <div class="connector-tools" id="connectorTools" hidden></div>
+                <p class="modal-status" id="connectorStatus"></p>
+                <div class="gate-actions">
+                    <button class="btn btn-primary" type="button" data-act="connector-save" id="connectorSaveBtn">Add connector</button>
+                    <button class="btn btn-ghost" type="button" data-act="connector-reset" id="connectorResetBtn" hidden>Cancel</button>
+                </div>
+            </div>
+            <footer>
+                <button class="btn btn-ghost" type="button" data-act="connector-none">Use none in this chat</button>
+                <button class="btn btn-ghost" type="button" data-act="connector-all">Use all in this chat</button>
             </footer>
         </div>
     </div>
@@ -736,8 +916,8 @@
     <div class="modal" id="modalPersonas" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Personas</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
-            <p class="modal-lede">A persona is a standing instruction sent with the first message of a chat.
-                It never leaves your device except as part of that message.</p>
+            <p class="modal-lede">A persona is a standing instruction sent with every message of a chat.
+                It never leaves your device except as part of those messages.</p>
             <div class="persona-list" id="personaList"></div>
             <div class="repo-form">
                 <h3 class="section-head" id="personaFormTitle">New persona</h3>
@@ -769,7 +949,7 @@
     <div class="modal" id="modalSystem" hidden>
         <div class="modal-card">
             <header><h2>Custom instructions</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
-            <p class="modal-lede">Sent once, with the first message of this chat, on top of any persona.</p>
+            <p class="modal-lede">Sent with every message of this chat, on top of any persona.</p>
             <textarea id="systemBody" rows="8" placeholder="Always answer in British English, and show the diff before the explanation."></textarea>
             <p class="modal-status" id="systemStatus"></p>
             <footer>
@@ -893,6 +1073,66 @@
         </div>
     </div>
 
+    <div class="modal" id="modalServerRun" hidden>
+        <div class="modal-card">
+            <header><h2>Run on a Nymbot server</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">The code runs in a fresh container that is thrown away afterwards. It can download packages and nothing else, and it never sees your keys or this chat. You pay for the time it runs, never more than the price shown.</p>
+            <p class="server-run-image" id="serverRunImage"></p>
+            <label for="serverRunTime">Time limit</label>
+            <select id="serverRunTime"></select>
+            <p class="server-run-price" id="serverRunPrice"></p>
+            <label class="check" id="serverRunFilesRow" hidden><input type="checkbox" id="serverRunFiles"> Include this chat's attached files</label>
+            <p class="modal-status" id="serverRunStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="server-run-go" id="serverRunGo">Run</button>
+                <button class="btn btn-ghost" type="button" data-act="close-modal" id="serverRunCancel">Cancel</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalTeam" hidden>
+        <div class="modal-card">
+            <header><h2>Team mode</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A lead model splits the task among workers that run at the same time, then checks and combines what they bring back.</p>
+            <p class="hint" id="teamLead"></p>
+            <label for="teamWorkers">Number of workers</label>
+            <select id="teamWorkers">
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+            </select>
+            <label>Worker model</label>
+            <div class="reveal-row team-model-row">
+                <span class="team-model-name" id="teamModelName"></span>
+                <button class="btn btn-small" type="button" data-act="team-pick-model" id="teamPickModel">Change</button>
+            </div>
+            <p class="team-price" id="teamPrice"></p>
+            <p class="hint" id="teamLeadTools" hidden>The lead can use this chat's connectors and server runs, and the workers cannot. Each call the lead wants waits for you to allow it.</p>
+            <p class="modal-status" id="teamStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="team-save" id="teamSave">Save</button>
+                <button class="btn btn-ghost" type="button" data-act="team-off" id="teamOff">Turn off</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalCaps" hidden>
+        <div class="modal-card">
+            <header><h2>Spending caps</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Limits for this chat, in sats, whichever tier answers. Replies are counted at each tier&rsquo;s price per credit. A bot&rsquo;s own caps apply too, and the stricter one wins.</p>
+            <label for="capTotal">Stop this chat at (sats)</label>
+            <input type="number" id="capTotal" min="0" step="1" inputmode="numeric" placeholder="No cap" autocomplete="off">
+            <label for="capReply">Ask me before a reply that could cost more than (sats)</label>
+            <input type="number" id="capReply" min="0" step="1" inputmode="numeric" placeholder="No cap" autocomplete="off">
+            <p class="hint" id="capUsed"></p>
+            <p class="modal-status" id="capStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" id="capSave">Save</button>
+                <button class="btn btn-ghost" type="button" id="capClear">Remove caps</button>
+            </footer>
+        </div>
+    </div>
+
     <!-- Settings: appearance and behavior -->
     <div class="modal" id="modalAppearance" hidden>
         <div class="modal-card modal-wide">
@@ -943,7 +1183,7 @@
             <label class="check"><input type="checkbox" id="setBubbles"> Bubbles rather than blocks</label>
             <label class="check"><input type="checkbox" id="setAvatars"> Show avatars</label>
             <label class="check"><input type="checkbox" id="setTimestamps"> Show timestamps</label>
-            <label class="check"><input type="checkbox" id="setTypewriter"> Reveal replies as they are read out</label>
+            <label class="check"><input type="checkbox" id="setTypewriter"> Reveal replies gradually, as if being typed</label>
             <label class="check"><input type="checkbox" id="setReasoning"> Open reasoning by default</label>
             <label class="check"><input type="checkbox" id="setMono"> Monospace replies</label>
             <label class="check"><input type="checkbox" id="setLineNumbers"> Line numbers in code blocks</label>
@@ -994,9 +1234,9 @@
             <label class="check"><input type="checkbox" id="setSync"> Keep this account in step across my devices</label>
             <p class="hint">Your settings, library and conversations are sealed to your own key and
                 kept where any device signing in with it can read them back. The server stores a blob
-                it cannot open, under a name that is a hash. Ghost chats are never included, and
-                neither are repository access tokens &mdash; those stay on the device you pasted
-                them into.</p>
+                it cannot open, under a name that is a hash. Ghost chats are never included.
+                Repository and connector tokens are, sealed the same way, so a chat that uses them
+                works on every device; disconnecting one anywhere disconnects it everywhere.</p>
             <label for="setAutoDelete">Delete chats after</label>
             <select id="setAutoDelete">
                 <option value="0">Never</option>
@@ -1008,6 +1248,7 @@
             </select>
             <p class="hint">Swept when the app opens. Pinned chats are never swept.</p>
             <div class="gate-actions">
+                <button class="btn btn-small" type="button" data-act="open-settings">Identity and backup&hellip;</button>
                 <button class="btn btn-small" type="button" data-act="export-all">Export everything</button>
                 <button class="btn btn-small" type="button" data-act="import-open">Import a backup</button>
                 <button class="btn btn-small" type="button" data-act="open-shortcuts">Keyboard shortcuts</button>
@@ -1043,20 +1284,22 @@
                 throwaway key generated on this device. Credits move across as blind vouchers Nymbot signs
                 without seeing, so its own records cannot link the two.</p>
             <label class="check"><input type="checkbox" id="anonToggle"> Route new chats through a throwaway key</label>
+            <p class="hint" id="anonOffHint">Turn it on to fund the throwaway key, by hand or automatically.</p>
+            <div id="anonFunding">
             <label class="check"><input type="checkbox" id="anonAutoTop"> Keep it topped up automatically</label>
             <p class="hint">When the throwaway key runs low, move credits across without asking. Same blind
                 vouchers, same unlinkability &mdash; it just saves doing it by hand before every chat.</p>
             <div class="field-grid" id="anonAutoFields">
                 <div>
-                    <label for="anonAutoFloor">Top up below</label>
+                    <label for="anonAutoFloor">Top up below (credits)</label>
                     <input type="number" id="anonAutoFloor" min="0" value="10">
                 </div>
                 <div>
-                    <label for="anonAutoAmount">Move each time</label>
+                    <label for="anonAutoAmount">Move each time (credits)</label>
                     <input type="number" id="anonAutoAmount" min="1" value="25">
                 </div>
             </div>
-            <label for="anonAutoTier">Which balance</label>
+            <label for="anonAutoTier" id="anonAutoTierLabel">Which balance</label>
             <select id="anonAutoTier">
                 <option value="both">Standard and Pro</option>
                 <option value="standard">Standard only</option>
@@ -1075,6 +1318,7 @@
             <p class="hint">Spends that many credits from your nym and mints the same value onto the
                 throwaway key. Nymbot signs the vouchers blind, so it cannot match what it spent to what it
                 later accepts.</p>
+            </div>
             <p class="modal-status" id="anonStatus"></p>
             <footer>
                 <button class="btn btn-ghost" type="button" data-act="anon-rotate">Rotate the key</button>
@@ -1113,11 +1357,72 @@
         </div>
     </div>
 
+    <div class="modal" id="modalGift" hidden>
+        <div class="modal-card">
+            <header><h2>Gift an amount</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Choose how many of your credits to give. You get a link, a code and a QR code, and whoever uses it first adds the credits to their own balance.</p>
+            <p class="hint" id="giftBalances"></p>
+            <div class="tier-switch wide" id="giftTier">
+                <button class="tier-btn is-active" type="button" data-act="gift-tier" data-tier="standard">Standard</button>
+                <button class="tier-btn" type="button" data-act="gift-tier" data-tier="pro">Pro</button>
+            </div>
+            <div class="amount-grid" id="giftPresets"></div>
+            <label for="giftAmount">Credits</label>
+            <input type="number" id="giftAmount" min="1" step="1" inputmode="numeric">
+            <p class="hint" id="giftLimits"></p>
+            <div class="gift-made" id="giftMade" hidden>
+                <p class="gift-made-what" id="giftMadeWhat"></p>
+                <canvas id="giftQr" width="240" height="240" aria-label="Gift link as a QR code"></canvas>
+                <label for="giftLink">Link</label>
+                <textarea id="giftLink" rows="3" readonly></textarea>
+                <label class="reveal-label" for="giftCodeText">Code</label>
+                <div class="reveal-row">
+                    <input data-i18n-skip type="text" id="giftCodeText" readonly spellcheck="false">
+                    <button class="btn btn-small" type="button" data-act="copy" data-target="giftCodeText">Copy</button>
+                </div>
+                <div class="row-actions">
+                    <button class="btn" type="button" data-act="copy" data-target="giftLink">Copy the link</button>
+                    <button class="btn" type="button" data-act="gift-share" id="giftShare">Share…</button>
+                </div>
+                <p class="hint">Anyone with the link or the code can claim it, so send it only to the person it is for.</p>
+            </div>
+            <p class="modal-status" id="giftStatus"></p>
+            <h3 class="gift-list-head" id="giftListHead" hidden>Your gifts</h3>
+            <div class="gift-list" id="giftList"></div>
+            <footer>
+                <button class="btn btn-ghost" type="button" data-act="gift-redeem-open">Redeem a gift…</button>
+                <button class="btn btn-primary" type="button" data-act="gift-make" id="giftMake">Make the gift</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalRedeemGift" hidden>
+        <div class="modal-card">
+            <header><h2>Redeem a gift</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Paste the gift link or code someone sent you. The credits go onto this key's balance.</p>
+            <label for="redeemCode">Gift link or code</label>
+            <input data-i18n-skip type="text" id="redeemCode" spellcheck="false" autocomplete="off">
+            <p class="hint" id="redeemWhat"></p>
+            <p class="modal-status" id="redeemStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="gift-redeem" id="redeemGo" disabled>Add to my balance</button>
+            </footer>
+        </div>
+    </div>
+
     <!-- Settings and identity -->
     <div class="modal" id="modalSettings" hidden>
         <div class="modal-card">
             <header><h2>Identity</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
             <p class="modal-lede" id="settingsWho"></p>
+
+            <label class="reveal-label" for="setNickname">Nickname</label>
+            <div class="reveal-row">
+                <input data-i18n-skip type="text" id="setNickname" maxlength="32" autocomplete="nickname" spellcheck="false">
+                <button class="btn btn-small" type="button" data-act="nickname-save" id="nicknameSave">Save</button>
+                <button class="btn btn-small" type="button" data-act="nickname-clear" id="nicknameClear">Clear</button>
+            </div>
+            <p class="hint">Shown on your messages and here instead of the generated name. Only you see it: it syncs between your devices end-to-end encrypted, and is never published or sent to the model. Anonymous chats always show Anon.</p>
 
             <label class="reveal-label" for="setNpub">Public key (npub)</label>
             <div class="reveal-row">
@@ -1133,7 +1438,14 @@
             <p class="hint">Both are the same key in two spellings, and both are safe to share &mdash;
                 they are how somebody addresses you.</p>
 
-            <label class="reveal-label" for="setNsec">Private key (nsec)</label>
+            <div id="signerRow" hidden>
+                <p class="hint">Your private key stays in your signer, so there is no nsec to back up here. Keep it backed up in the signer itself.</p>
+                <div class="reveal-row">
+                    <button class="btn btn-small" type="button" data-act="signer-disconnect">Disconnect signer…</button>
+                </div>
+            </div>
+
+            <label class="reveal-label" for="setNsec" id="setNsecLabel">Private key (nsec)</label>
             <div class="reveal-row">
                 <input type="password" id="setNsec" readonly spellcheck="false">
                 <button class="btn btn-small" type="button" data-act="toggle-secret" data-target="setNsec">Show</button>
@@ -1155,13 +1467,49 @@
             </div>
 
 
+            <label class="reveal-label">Identity encryption</label>
+            <p class="hint" id="vaultState"></p>
+            <div class="reveal-row">
+                <button class="btn btn-small" type="button" data-act="vault-enable" id="vaultEnable">Turn on…</button>
+                <button class="btn btn-small" type="button" data-act="vault-change" id="vaultChange" hidden>Change unlock method…</button>
+                <button class="btn btn-small" type="button" data-act="vault-disable" id="vaultDisable" hidden>Turn off…</button>
+            </div>
+
             <div class="usage-line" id="usageLine"></div>
 
             <p class="modal-status" id="settingsStatus"></p>
             <footer>
                 <button class="btn btn-ghost" type="button" data-act="open-appearance">Settings…</button>
+                <button class="btn btn-ghost" type="button" data-act="open-gift">Gift an amount…</button>
                 <button class="btn btn-ghost" type="button" data-act="transfer">Move my whole balance…</button>
                 <button class="btn btn-danger" type="button" data-act="wipe">Wipe this device</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalVault" hidden>
+        <div class="modal-card">
+            <header><h2 id="vaultTitle"></h2><button class="icon-btn" type="button" data-act="vault-back" aria-label="Close">&times;</button></header>
+            <p class="modal-lede" id="vaultLede"></p>
+            <div id="vaultCurrentRow">
+                <label for="vaultCurrent" id="vaultCurrentLabel"></label>
+                <input type="password" id="vaultCurrent" autocomplete="current-password" spellcheck="false">
+            </div>
+            <div id="vaultMethodRow" hidden>
+                <label for="vaultMethod">Unlock with</label>
+                <select id="vaultMethod"></select>
+            </div>
+            <p class="hint" id="vaultMethodHint" hidden></p>
+            <div id="vaultNextRow">
+                <label for="vaultNext" id="vaultNextLabel"></label>
+                <input type="password" id="vaultNext" autocomplete="new-password" spellcheck="false">
+                <label for="vaultConfirm">Confirm passphrase</label>
+                <input type="password" id="vaultConfirm" autocomplete="new-password" spellcheck="false">
+            </div>
+            <p class="modal-status" id="vaultStatus"></p>
+            <footer>
+                <button class="btn btn-ghost" type="button" data-act="vault-back">Cancel</button>
+                <button class="btn btn-primary" type="button" data-act="vault-submit" id="vaultSubmit">Turn on</button>
             </footer>
         </div>
     </div>
@@ -1182,12 +1530,26 @@
             <label class="check" id="dialogCheckRow" hidden><input type="checkbox" id="dialogCheck"> <span id="dialogCheckLabel"></span></label>
             <footer>
                 <button class="btn btn-primary" type="button" data-act="dialog-confirm" id="dialogConfirm">OK</button>
+                <button class="btn" type="button" data-act="dialog-alt" id="dialogAlt" hidden></button>
                 <button class="btn btn-ghost" type="button" data-act="dialog-cancel" id="dialogCancel">Cancel</button>
             </footer>
         </div>
     </div>
 
-    <div class="toast" id="toast" hidden></div>
+    <div class="dialog-scrim" id="capScrim" hidden></div>
+    <div class="dialog" id="capDialog" hidden role="dialog" aria-modal="true" aria-labelledby="capDialogTitle">
+        <div class="modal-card">
+            <header><h2 id="capDialogTitle"></h2></header>
+            <p class="dialog-body" id="capDialogBody"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" id="capSendOnce">Send anyway once</button>
+                <button class="btn" type="button" id="capRaise">Raise the cap</button>
+                <button class="btn btn-ghost" type="button" id="capCancel">Cancel</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
     <script src="/app/js/config.js"></script>
     <script src="/app/js/edge.js"></script>
@@ -1197,6 +1559,7 @@
     <script src="/app/js/vendor/nym-crypto.js"></script>
     <script src="/app/js/store.js"></script>
     <script src="/app/js/identity.js"></script>
+    <script src="/app/js/nip46.js"></script>
     <script src="/app/js/relays.js"></script>
     <script src="/app/js/pq.js"></script>
     <script src="/app/js/wire.js"></script>
@@ -1207,8 +1570,11 @@
     <script src="/app/js/profile.js"></script>
     <script src="/app/js/blossom.js"></script>
     <script src="/app/js/attach.js"></script>
+    <script src="/app/js/pdftext.js"></script>
+    <script src="/app/js/docs.js"></script>
     <script src="/app/js/commands.js"></script>
     <script src="/app/js/speech.js"></script>
+    <script src="/app/js/dictate.js"></script>
     <script src="/app/js/chat.js"></script>
     <script src="/app/js/highlight.js"></script>
     <script src="/app/js/markdown.js"></script>
@@ -1222,6 +1588,18 @@
     <script src="/app/js/free.js"></script>
     <script src="/app/js/sync.js"></script>
     <script src="/app/js/qr.js"></script>
+    <script src="/app/js/caps.js"></script>
+    <script src="/app/js/share.js"></script>
+    <script src="/app/js/mention.js"></script>
+    <script src="/app/js/picedit.js"></script>
+    <script src="/app/js/research.js"></script>
+    <script src="/app/js/team.js"></script>
+    <script src="/app/js/gift.js"></script>
+    <script src="/app/js/connectors.js"></script>
+    <script src="/app/js/gitrun.js"></script>
+    <script src="/app/js/runner.js"></script>
+    <script src="/app/js/serverrun.js"></script>
+    <script src="/app/js/vault.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>
 </body>

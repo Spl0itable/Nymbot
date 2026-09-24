@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/crypto/bech32_codec.dart';
+import '../core/crypto/schnorr.dart' as schnorr;
 import '../features/i18n/i18n.dart';
 import '../models/nostr_event.dart';
 import '../models/workspace.dart';
@@ -146,13 +147,23 @@ class Ngit {
     return all.isEmpty ? '' : all.first;
   }
 
-  static NostrEvent? _newest(List<NostrEvent> events) {
+  static NostrEvent? newestFrom(
+      List<NostrEvent> events, NgitAddress address, int kind) {
     NostrEvent? best;
     for (final ev in events) {
-      if (best == null || ev.createdAt > best.createdAt) best = ev;
+      if (ev.pubkey != address.pubkey || ev.kind != kind) continue;
+      if (_firstTag(ev, 'd') != address.identifier) continue;
+      if (best != null && ev.createdAt <= best.createdAt) continue;
+      if (!schnorr.verifyEvent(ev)) continue;
+      best = ev;
     }
     return best;
   }
+
+  static List<String> secureRelays(Iterable<String> urls) => urls
+      .where((u) => u.toLowerCase().startsWith('wss://'))
+      .toSet()
+      .toList();
 
   /// Looks an announcement up and reads everything off it, or throws with a
   /// reason a person can act on.
@@ -161,7 +172,7 @@ class Ngit {
     if (address == null) {
       throw NgitFailure(t('That is not a repository address. Paste an naddr, or a nostr:// URL from the repository page.'));
     }
-    final where = {...address.relays, ...fallbackRelays}.toList();
+    final where = secureRelays([...address.relays, ...fallbackRelays]);
     final filter = {
       'kinds': [kindRepo],
       'authors': [address.pubkey],
@@ -174,7 +185,7 @@ class Ngit {
       ...await relays.fetch(filter, timeout: const Duration(seconds: 5)),
       ...await relays.fetchFrom(where, filter, timeout: const Duration(seconds: 6)),
     ];
-    final announcement = _newest(events);
+    final announcement = newestFrom(events, address, kindRepo);
     if (announcement == null) {
       throw NgitFailure(t('No repository announcement was found at that address. It may be on relays this app is not connected to.'));
     }
@@ -217,7 +228,7 @@ class Ngit {
   /// The branch the repository says is current, from its kind-30618.
   Future<({String head, Map<String, String> refs})> _state(
       NgitAddress address, List<String> extraRelays) async {
-    final where = {...address.relays, ...extraRelays, ...fallbackRelays}.toList();
+    final where = secureRelays([...address.relays, ...extraRelays, ...fallbackRelays]);
     final filter = {
       'kinds': [kindState],
       'authors': [address.pubkey],
@@ -233,7 +244,7 @@ class Ngit {
     } catch (_) {
       events = const [];
     }
-    final state = _newest(events);
+    final state = newestFrom(events, address, kindState);
     if (state == null) return (head: '', refs: <String, String>{});
     final refs = <String, String>{};
     for (final tag in state.tags) {

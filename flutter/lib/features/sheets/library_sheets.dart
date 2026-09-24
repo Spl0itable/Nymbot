@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../app.dart';
 import '../../models/conversation.dart';
+import '../command_palette.dart';
 import '../markdown_body.dart';
 import '../i18n/i18n.dart';
 import '../../core/theme/theme.dart';
@@ -41,38 +42,55 @@ class _SearchSheetState extends State<_SearchSheet> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final hits = app.store.searchAll(_term, includeArchived: _archived);
+    final media = MediaQuery.of(context);
+    final tight = media.size.height - media.viewInsets.bottom < 520 ||
+        media.textScaler.scale(1) > 1.3;
+    final head = [
+      Text(t('Search everything'),
+          style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 10),
+      TextField(
+        controller: _field,
+        autofocus: true,
+        decoration: InputDecoration(hintText: t('Search every message')),
+        onChanged: (v) => setState(() => _term = v),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        value: _archived,
+        title: Text(t('Include archived chats'),
+            style: const TextStyle(fontSize: 13)),
+        onChanged: (v) => setState(() => _archived = v),
+      ),
+    ];
 
     return Padding(
       padding: EdgeInsets.only(
         left: 16,
         right: 16,
         top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        bottom: media.viewInsets.bottom + 16,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(t('Search everything'),
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _field,
-            autofocus: true,
-            decoration: InputDecoration(hintText: t('Search every message')),
-            onChanged: (v) => setState(() => _term = v),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: _archived,
-            title: Text(t('Include archived chats'),
-                style: const TextStyle(fontSize: 13)),
-            onChanged: (v) => setState(() => _archived = v),
-          ),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.45),
+          if (tight)
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight:
+                      (media.size.height - media.viewInsets.bottom) * 0.4),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: head,
+                ),
+              ),
+            )
+          else
+            ...head,
+          Flexible(
             child: _term.trim().isEmpty
                 ? Center(
                     child: Text(
@@ -86,6 +104,7 @@ class _SearchSheetState extends State<_SearchSheet> {
                             style: TextStyle(color: Theme.of(context).hintColor)),
                       )
                     : ListView.builder(
+                        key: const ValueKey('search-results'),
                         shrinkWrap: true,
                         itemCount: hits.length > 120 ? 120 : hits.length,
                         itemBuilder: (context, i) {
@@ -152,9 +171,7 @@ class _SavedSheetState extends State<_SavedSheet> {
                 style: TextStyle(color: Theme.of(context).hintColor),
               ),
             ),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.55),
+          Flexible(
             child: ListView.builder(
               shrinkWrap: true,
               itemCount: rows.length,
@@ -235,66 +252,69 @@ class _TagsSheetState extends State<_TagsSheet> {
         top: 16,
         bottom: MediaQuery.of(context).viewInsets.bottom + 16,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(t('Tags and folder'), style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _tags,
-            decoration: InputDecoration(
-              labelText: t('Tags'),
-              hintText: 'work, crypto, draft',
-              helperText: t('Comma separated. Tags show in the chat list and are searchable.'),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(t('Tags and folder'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _tags,
+              decoration: InputDecoration(
+                labelText: t('Tags'),
+                hintText: 'work, crypto, draft',
+                helperText: t('Comma separated. Tags show in the chat list and are searchable.'),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String?>(
-            // ignore: deprecated_member_use
-            value: folders.any((f) => f.id == _folderId) ? _folderId : null,
-            decoration: InputDecoration(labelText: t('Folder')),
-            items: [
-              DropdownMenuItem<String?>(value: null, child: Text(t('No folder'))),
-              for (final f in folders)
-                DropdownMenuItem<String?>(value: f.id, child: Text(f.name)),
-            ],
-            onChanged: (v) => setState(() => _folderId = v),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _folder,
-                  decoration: InputDecoration(
-                      labelText: t('Or create one'), hintText: 'Projects'),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              isExpanded: true,
+              // ignore: deprecated_member_use
+              value: folders.any((f) => f.id == _folderId) ? _folderId : null,
+              decoration: InputDecoration(labelText: t('Folder')),
+              items: [
+                DropdownMenuItem<String?>(value: null, child: Text(t('No folder'))),
+                for (final f in folders)
+                  DropdownMenuItem<String?>(value: f.id, child: Text(f.name)),
+              ],
+              onChanged: (v) => setState(() => _folderId = v),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _folder,
+                    decoration: InputDecoration(
+                        labelText: t('Or create one'), hintText: 'Projects'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: () async {
-                  if (_folder.text.trim().isEmpty) return;
-                  final created = await app.createFolder(_folder.text.trim());
-                  _folder.clear();
-                  setState(() => _folderId = created.id);
-                },
-                child: Text(t('Create')),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          FilledButton(
-            onPressed: () async {
-              await app.setTagsAndFolder(
-                _tags.text.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList(),
-                _folderId,
-              );
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: Text(t('Save')),
-          ),
-        ],
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () async {
+                    if (_folder.text.trim().isEmpty) return;
+                    final created = await app.createFolder(_folder.text.trim());
+                    _folder.clear();
+                    setState(() => _folderId = created.id);
+                  },
+                  child: Text(t('Create')),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: () async {
+                await app.setTagsAndFolder(
+                  _tags.text.split(',').map((x) => x.trim()).where((x) => x.isNotEmpty).toList(),
+                  _folderId,
+                );
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text(t('Save')),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -302,7 +322,6 @@ class _TagsSheetState extends State<_TagsSheet> {
 
 Future<void> showStatsSheet(BuildContext context) => showNymSheet<void>(
       context,
-      isScrollControlled: false,
       (_) => const _StatsSheet(),
     );
 
@@ -313,7 +332,7 @@ class _StatsSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final stats = app.currentStats();
-    final usage = app.store.usage();
+    final device = app.deviceStats();
 
     Widget cell(String value, String label) => Expanded(
           child: Container(
@@ -335,7 +354,7 @@ class _StatsSheet extends StatelessWidget {
           ),
         );
 
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -348,13 +367,30 @@ class _StatsSheet extends StatelessWidget {
             cell('${stats.replies}', t('Replies')),
           ]),
           Row(children: [
-            cell('${stats.credits}', t('Credits spent here')),
+            cell(creditFigure(stats.standard), t('Standard credits spent here')),
+            cell(creditFigure(stats.pro), t('Pro credits spent here')),
+          ]),
+          Row(children: [
             cell('${stats.words}', t('Words exchanged')),
           ]),
           Row(children: [
-            cell('${usage.credits}', t('Credits spent overall')),
-            cell('${usage.replies}', t('Replies overall')),
+            cell(creditFigure(device.standard),
+                t('Standard credits spent in chats on this device')),
+            cell(creditFigure(device.pro),
+                t('Pro credits spent in chats on this device')),
           ]),
+          Row(children: [
+            cell('${device.replies}', t('Replies in chats on this device')),
+          ]),
+          Text(
+            t('Standard and Pro are separate balances, so they are counted '
+                'apart. Chats deleted from this device are not counted.'),
+            style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+          ),
+          if (app.current != null && app.capUsedLineOf(app.current!).isNotEmpty)
+            Row(children: [
+              cell(app.capUsedLineOf(app.current!), t('Spending cap')),
+            ]),
         ],
       ),
     );
@@ -374,11 +410,22 @@ class _ShortcutsSheet extends StatelessWidget {
     final rows = <(String, String)>[
       ('?', t('Commands, typed at the start of a message')),
       ('!', t('Send a message without this chat\'s history')),
-      (t('Long press a message'), t('Copy, quote, branch, rate or save it')),
+      (t('Tap a message'), t('Copy, quote, branch, rate or save it')),
+      (t('Press and hold text'), t('Select part of a message to copy it')),
       (t('Swipe from the left'), t('Open the chat list')),
-      (t('Pull the composer'), t('Attach a file')),
+      (t('The paperclip'), t('Attach a file or a picture')),
+      (shortcutLabel('K'), t('Open the command palette')),
+      (shortcutLabel('B / I / E'), t('Bold, italic or code in the composer')),
+      (shortcutLabel('Shift+E'), t('A fenced code block in the composer')),
+      (shortcutLabel('Enter'), t('Send')),
+      (t('Shift+Enter'), t('A new line, when Enter sends')),
+      (shortcutLabel('F'), t('Find in this chat')),
+      (shortcutLabel('Shift+F'), t('Search every chat')),
+      (shortcutLabel('N'), t('New chat')),
+      (t('Esc'), t('Close a sheet or the find bar')),
+      (t('Shift+Esc'), t('Stop the reply being written')),
     ];
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -392,14 +439,21 @@ class _ShortcutsSheet extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Theme.of(context).dividerColor),
-                      borderRadius: BorderRadius.circular(4),
+                  Flexible(
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        border:
+                            Border.all(color: Theme.of(context).dividerColor),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(row.$1,
+                          style: const TextStyle(
+                              fontFamily: kMonoFamily,
+                              fontFamilyFallback: kMonoFallback,
+                              fontSize: 11)),
                     ),
-                    child: Text(row.$1,
-                        style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -432,7 +486,12 @@ Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
                 ('system', Icons.tune, t('Custom instructions')),
                 ('tags', Icons.sell_outlined, t('Tags and folder')),
                 ('stats', Icons.insights_outlined, t('Chat statistics')),
+                ('caps', Icons.savings_outlined, t('Spending caps')),
+                ('share-link', Icons.link, t('Share a link')),
                 ('share', Icons.ios_share, t('Share the transcript')),
+                ('export-md', Icons.description_outlined, t('Export as Markdown')),
+                ('export-txt', Icons.notes, t('Export as plain text')),
+                ('export-json', Icons.data_object, t('Export as JSON')),
                 ('copy', Icons.copy_all_outlined, t('Copy the transcript')),
                 ('clear', Icons.cleaning_services_outlined, t('Clear this chat')),
                 ('delete', Icons.delete_outline, t('Delete')),

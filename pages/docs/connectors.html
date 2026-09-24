@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connectors (MCP) - Nymbot Knowledge Base</title>
+    <meta name="description" content="Connect outside tools to Nymbot over MCP: adding a connector, approving each tool call, Always allow, and how connector tokens are kept.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Connectors (MCP) - Nymbot Knowledge Base">
+    <meta property="og:description" content="Connect outside tools to Nymbot over MCP: adding a connector, approving each tool call, Always allow, and how connector tokens are kept.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/connectors/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Connectors (MCP) - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Connect outside tools to Nymbot over MCP: adding a connector, approving each tool call, Always allow, and how connector tokens are kept.">
+    <link rel="canonical" href="https://nymbot.ai/docs/connectors/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Connectors (MCP)</h1>
+            <p class="docs-lede">A connector gives a Pro model tools from another service, over the Model
+                Context Protocol. Nothing runs without your say-so unless you choose otherwise.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-they-are">What a connector is</h2>
+            <p>Many services now publish an MCP server: an address that lists tools a model can call, such
+                as searching an issue tracker, reading a calendar or querying a database. Add one to Nymbot and
+                a <a href="/docs/models/#pro">Pro</a> reply can use those tools while it answers.</p>
+            <p>The Nymbot worker is what talks to the server, so the server sees the worker rather than your
+                device. What a tool returns is passed to the model marked as outside data, and the model is
+                told never to follow instructions inside it.</p>
+            <p>Connectors need a Pro model pinned. Standard and free replies do not use them.</p>
+
+            <h2 id="adding">Adding one</h2>
+            <p>Open <strong>Connectors</strong> from the menu or the toolbar chip and add one with a name and
+                the server's address. The address has to be <code>https</code> and publicly reachable; a
+                local or private address is refused, because the worker could not reach it. For sign-in,
+                choose no authentication, a bearer token, or a custom header. Keep credentials in those
+                fields rather than in the address.</p>
+            <p>Nymbot connects to the server and lists the tools it offers. Uncheck any tool you do not want
+                Nymbot to have. Each tool also shows what the server says about it: that it only reads, or
+                that it can delete things.</p>
+            <p>A connector you add is available to every chat. Pick which ones a chat uses from the chip, up
+                to three at a time.</p>
+
+            <h2 id="approving">Approving a tool call</h2>
+            <p>When the model wants to use a tool, the reply pauses and shows a card: which connector,
+                which tool, and exactly what it would send. You choose:</p>
+            <ul>
+                <li><strong>Allow once</strong> runs that one call, and the reply carries on from where it
+                    stopped.</li>
+                <li><strong>Always allow this tool</strong> runs it and stops asking about that tool on
+                    that connector from now on.</li>
+                <li><strong>Deny</strong> runs nothing. The reply carries on without it.</li>
+            </ul>
+            <p>A card left too long expires. Ask again and Nymbot starts fresh. If carrying on could go past
+                the chat's <a href="/docs/credits/#caps">spending cap</a>, it stops instead.</p>
+
+            <h2 id="always-allow">Letting a tool run without asking</h2>
+            <p>In the connector's settings, each tool has an <strong>Always allow</strong> switch, and
+                <strong>Always allow all tools</strong> covers the whole connector. Tools you allow this way
+                run without a card.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Always asks</span>
+                <p>A tool the server marks as able to change or delete things always asks, whatever you have
+                    allowed. It cannot be allowed ahead of time, and its card says why.</p>
+            </div>
+
+            <h2 id="secrets">Where the secrets live</h2>
+            <p>A connector's token, header value and address are kept on your devices. They sync between
+                your devices inside your end-to-end encrypted settings, sealed with your key, so the server
+                stores only a copy it cannot read. That also means a chat that uses a connector works on every
+                device you sign in on, without setting it up again.</p>
+            <p>The secret travels to the worker with each request that uses the connector, because the worker
+                is what calls the server. It is not stored there. With
+                <a href="/docs/identity/#encryption-at-rest">identity encryption</a> on, it is encrypted on
+                the device too. Removing a connector removes it, and its secrets, from your other devices as
+                well.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

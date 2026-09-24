@@ -73,10 +73,10 @@ class HighlightedCode extends StatelessWidget {
       height: 1.45,
       color: DefaultTextStyle.of(context).style.color,
     );
-    return RichText(
+    return Text.rich(
+      TextSpan(style: style, children: spans(context, code, language, style)),
       softWrap: wrap,
       overflow: wrap ? TextOverflow.clip : TextOverflow.visible,
-      text: TextSpan(style: style, children: spans(context, code, language, style)),
     );
   }
 

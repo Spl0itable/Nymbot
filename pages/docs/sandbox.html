@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Running code on your device - Nymbot Knowledge Base</title>
+    <meta name="description" content="The Run button on Python and JavaScript code blocks: code runs in a sandbox on your device, with no network, and nothing leaves unless you send it.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Running code on your device - Nymbot Knowledge Base">
+    <meta property="og:description" content="The Run button on Python and JavaScript code blocks: code runs in a sandbox on your device, with no network, and nothing leaves unless you send it.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/sandbox/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot wordmark in ASCII block letters, above the words Private. Paid in sats. Yours alone.">
+    <meta name="twitter:title" content="Running code on your device - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="The Run button on Python and JavaScript code blocks: code runs in a sandbox on your device, with no network, and nothing leaves unless you send it.">
+    <link rel="canonical" href="https://nymbot.ai/docs/sandbox/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Running code on your device</h1>
+            <p class="docs-lede">Python and JavaScript in a reply can be run right where they are, in a
+                sandbox on your own device. It is free, and nothing leaves the device.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="run-button">The Run button</h2>
+            <p>Python and JavaScript code blocks in Nymbot's replies have a <strong>Run</strong> button.
+                Press it and the code runs in a sandbox inside the app: a locked-down frame that cannot see
+                your keys, your chats or the rest of the app, running in the background so a runaway loop
+                never freezes anything.</p>
+            <p>JavaScript starts at once. Python is loaded onto your device from Nymbot's own site the
+                first time you run something, about 14 MB plus any libraries the code imports, and starts
+                faster after that.</p>
+            <p>For other languages, or for code that needs the internet or more time, use
+                <a href="/docs/server-runs/">Run on server</a> instead.</p>
+
+            <h2 id="what-comes-back">What comes back</h2>
+            <p>The results appear under the code block: what it printed, any errors, and the value of the
+                last line. Tables are shown as tables, charts are drawn as pictures, and files the code wrote
+                get a <strong>Save</strong> button.</p>
+            <p><strong>Send output to Nymbot</strong> puts the output in the composer, so you can ask about
+                it. It is not sent until you send it.</p>
+
+            <h2 id="files">Using attached files</h2>
+            <p>The text of the documents attached to the chat is available to the code as files, by name,
+                so you can attach a CSV and ask for code that reads it. The files are handed to the sandbox on
+                your device and are not uploaded anywhere.</p>
+
+            <h2 id="limits">What it cannot do</h2>
+            <ul>
+                <li><strong>No network.</strong> The code cannot fetch web pages, call APIs or install
+                    packages from the internet. Python can import only the libraries Nymbot serves for
+                    it.</li>
+                <li><strong>30 seconds.</strong> A run that takes longer is stopped and its sandbox thrown
+                    away.</li>
+                <li><strong>A fresh sandbox per chat.</strong> Moving to another chat throws the old sandbox
+                    away, so nothing from one chat's runs is left for another's.</li>
+                <li><strong>Only what the device can do.</strong> It runs in the app on your device, so heavy
+                    work is limited by your device's speed and memory.</li>
+            </ul>
+            <p>What the code works on, and what it produces, stays on your device.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

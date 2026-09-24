@@ -95,11 +95,20 @@
         } catch (_) { return null; }
     }
 
-    function newest(events) {
+    function newest(events, address, kind) {
+        const T = NT();
         let best = null;
         for (const ev of events || []) {
-            if (!ev || typeof ev.created_at !== 'number') continue;
-            if (!best || ev.created_at > best.created_at) best = ev;
+            if (!ev || typeof ev.created_at !== 'number' || !ev.sig) continue;
+            if (!address || ev.pubkey !== address.pubkey || ev.kind !== kind) continue;
+            const d = (Array.isArray(ev.tags) ? ev.tags : []).find(tag => Array.isArray(tag) && tag[0] === 'd');
+            if (!d || d[1] !== address.identifier) continue;
+            if (best && ev.created_at <= best.created_at) continue;
+            try {
+                if (T.getEventHash(ev) !== ev.id) continue;
+                if (!T.verifyEvent(ev)) continue;
+            } catch (_) { continue; }
+            best = ev;
         }
         return best;
     }
@@ -164,7 +173,7 @@
             const events = [].concat(
                 await Relays.fetch(filter, 5000),
                 await Relays.fetchFrom(where, filter, 6000));
-            const announcement = newest(events);
+            const announcement = newest(events, address, KIND_REPO);
             if (!announcement) {
                 throw new Error(t('No repository announcement was found at that address. It may be on relays this app is not connected to.'));
             }
@@ -214,7 +223,7 @@
                     await Relays.fetch(filter, 4000),
                     await Relays.fetchFrom(where, filter, 5000));
             } catch (_) { events = []; }
-            const state = newest(events);
+            const state = newest(events, address, KIND_STATE);
             if (!state) return { head: '', refs: {} };
             const refs = {};
             for (const tag of state.tags || []) {

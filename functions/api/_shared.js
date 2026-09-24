@@ -2681,6 +2681,10 @@ function canonicalAuthBody(body) {
   return out;
 }
 
+var AUTH_MAX_AGE_S = 120;
+var AUTH_MAX_FUTURE_S = 15;
+var AUTH_REPLAY_TTL_S = AUTH_MAX_AGE_S + AUTH_MAX_FUTURE_S + 15;
+
 function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
     if (!auth || typeof auth !== "object") return false;
@@ -2688,7 +2692,8 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
     if (auth.kind !== 27235) return false;
     var nowSec = Math.floor(Date.now() / 1000);
     // Tightened window (was 300s) — auth events are short-lived request proofs.
-    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > 120) return false;
+    if (!auth.created_at || Math.abs(nowSec - auth.created_at) > AUTH_MAX_AGE_S) return false;
+    if (auth.created_at - nowSec > AUTH_MAX_FUTURE_S) return false;
     if (getEventHash(auth) !== auth.id) return false;
     if (!schnorr.verify(auth.sig, auth.id, auth.pubkey)) return false;
     // Optional request binding (NIP-98 style): tie the signature to the exact
@@ -2725,7 +2730,7 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
 }
 
 async function enforceAuthReplay(ledgerCall, env, authId, ttl) {
-  var rp = await ledgerCall(env, { op: "replay", id: authId, ttl: ttl || 130 });
+  var rp = await ledgerCall(env, { op: "replay", id: authId, ttl: Math.max(Number(ttl) || 0, AUTH_REPLAY_TTL_S) });
   if (rp && rp._noLedger) return { ok: false, status: 503, error: "Service temporarily unavailable." };
   if (!rp || !rp.fresh) return { ok: false, status: 401, error: "This authorization was already used. Please retry." };
   return { ok: true };
@@ -3039,6 +3044,7 @@ export {
   canonicalAuthBody,
   authPayloadHashHex,
   enforceAuthReplay,
+  AUTH_REPLAY_TTL_S,
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,

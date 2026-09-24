@@ -4,9 +4,12 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
+import '../core/crypto/keys.dart';
 import '../models/nostr_event.dart';
 import '../models/notice.dart';
 import 'nostr/event_signer.dart';
+import 'server_runs.dart';
+import 'signed_body.dart';
 
 typedef ApiResult = ({int status, Map<String, dynamic> data});
 
@@ -26,6 +29,13 @@ class NymbotApi {
     'clear-history',
     'voucher-issue',
     'voucher-redeem',
+    'pm-revert',
+    'git-apply',
+    'mcp-probe',
+    'runner-run',
+    'gift-create',
+    'gift-redeem',
+    'gift-cancel',
   };
 
   final http.Client _client;
@@ -53,10 +63,13 @@ class NymbotApi {
     return mine;
   }
 
-  Future<NostrEvent> _auth(String action, EventSigner signer) async {
+  static bool signsFresh(String action) => _money.contains(action);
+
+  Future<NostrEvent> _auth(String action, EventSigner signer, String payload) async {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final key = '$action|${signer.pubkey}';
-    if (!_money.contains(action)) {
+    final key = '$action|${signer.pubkey}|$payload';
+    final fresh = _money.contains(action);
+    if (!fresh) {
       final hit = _authCache[key];
       // Well inside the worker's 120s window, so an edge-of-window reject is
       // not something a cached signature can cause.
@@ -71,11 +84,22 @@ class NymbotApi {
         const ['method', 'POST'],
         ['u', NymbotConfig.botUrl],
         ['action', action],
+        ['payload', payload],
+        if (fresh) ['nonce', bytesToHex(randomBytes(16))],
       ],
       content: 'nymbot-pm-auth',
     ));
-    if (!_money.contains(action)) _authCache[key] = signed;
+    if (!fresh) {
+      _authCache.removeWhere((_, held) => nowSec - held.createdAt >= 90);
+      _authCache[key] = signed;
+    }
     return signed;
+  }
+
+  Future<String> signedBody(String action, EventSigner signer, Map<String, dynamic> extra) async {
+    final text = SignedBody.text({'action': action, 'pubkey': signer.pubkey, ...extra});
+    final auth = await _auth(action, signer, SignedBody.hash(text));
+    return SignedBody.withAuth(text, auth.toJson());
   }
 
   /// Deletes this account's Nymbot rows on the server, on the way out of a
@@ -84,6 +108,11 @@ class NymbotApi {
   Future<bool> purgeAccount(EventSigner signer, {Duration? timeout}) async {
     try {
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final text = SignedBody.text({
+        'action': 'account-purge',
+        'app': 'nymbot',
+        'pubkey': signer.pubkey,
+      });
       final auth = await signer.sign(UnsignedEvent(
         pubkey: signer.pubkey,
         createdAt: nowSec,
@@ -93,6 +122,7 @@ class NymbotApi {
           const ['method', 'POST'],
           ['u', NymbotConfig.storageUrl],
           const ['action', 'account-purge'],
+          ['payload', SignedBody.hash(text)],
         ],
         content: 'nymbot-sync-auth',
       ));
@@ -103,12 +133,7 @@ class NymbotApi {
               'Content-Type': 'application/json',
               'User-Agent': NymbotConfig.userAgent,
             },
-            body: jsonEncode({
-              'action': 'account-purge',
-              'app': 'nymbot',
-              'pubkey': signer.pubkey,
-              'auth': auth.toJson(),
-            }),
+            body: SignedBody.withAuth(text, auth.toJson()),
           )
           .timeout(timeout ?? const Duration(seconds: 5));
       final decoded = jsonDecode(resp.body);
@@ -136,13 +161,7 @@ class NymbotApi {
     Duration? timeout,
   }) async {
     try {
-      final auth = await _auth(action, signer);
-      final body = <String, dynamic>{
-        'action': action,
-        'pubkey': signer.pubkey,
-        'auth': auth.toJson(),
-        ...extra,
-      };
+      final body = await signedBody(action, signer, extra);
       final resp = await _client
           .post(
             Uri.parse(NymbotConfig.botUrl),
@@ -150,7 +169,7 @@ class NymbotApi {
               'Content-Type': 'application/json',
               'User-Agent': NymbotConfig.userAgent,
             },
-            body: jsonEncode(body),
+            body: body,
           )
           .timeout(timeout ?? const Duration(seconds: 30));
       final decoded = jsonDecode(resp.body);
@@ -192,6 +211,87 @@ class NymbotApi {
       return decoded;
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<ApiResult> teamEstimate(Map<String, dynamic> body) async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.botUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({'action': 'team-estimate', ...body}),
+          )
+          .timeout(const Duration(seconds: 20));
+      Object? decoded;
+      try {
+        decoded = jsonDecode(resp.body);
+      } catch (_) {
+        decoded = null;
+      }
+      return (
+        status: resp.statusCode,
+        data: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{}
+      );
+    } catch (_) {
+      return (status: 0, data: <String, dynamic>{'error': 'network error'});
+    }
+  }
+
+  Future<RunnerInfo> runnerInfo() async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.botUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({'action': 'runner-info'}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return const RunnerInfo();
+      return RunnerInfo.fromJson(jsonDecode(resp.body));
+    } catch (_) {
+      return const RunnerInfo();
+    }
+  }
+
+  Future<ServerRunResponse> runnerRun(EventSigner signer, Map<String, dynamic> extra) async {
+    try {
+      final request = http.Request('POST', Uri.parse(NymbotConfig.botUrl))
+        ..headers['Content-Type'] = 'application/json'
+        ..headers['User-Agent'] = NymbotConfig.userAgent
+        ..body = await signedBody('runner-run', signer, extra);
+      final resp = await _client.send(request).timeout(const Duration(seconds: 60));
+      final type = resp.headers['content-type'] ?? '';
+      if (resp.statusCode == 200 && type.contains('ndjson')) {
+        final events = resp.stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .map(ServerRuns.decodeLine)
+            .where((e) => e != null)
+            .cast<ServerRunEvent>();
+        return ServerRunResponse(status: 200, events: events);
+      }
+      final text = await resp.stream.bytesToString().timeout(const Duration(seconds: 30));
+      Object? decoded;
+      try {
+        decoded = jsonDecode(text);
+      } catch (_) {
+        decoded = null;
+      }
+      return ServerRunResponse(
+        status: resp.statusCode == 200 ? 502 : resp.statusCode,
+        error: decoded is Map<String, dynamic> ? decoded : {'error': 'The request failed.'},
+      );
+    } on TimeoutException {
+      return const ServerRunResponse(status: 0, error: {'error': 'timed out'});
+    } catch (_) {
+      return const ServerRunResponse(status: 0, error: {'error': 'network error'});
     }
   }
 
@@ -237,6 +337,22 @@ class NymbotApi {
 
   Future<ApiResult> transferCredits(EventSigner signer, String targetPubkey) =>
       call('transfer-credits', signer, extra: {'targetPubkey': targetPubkey});
+
+  Future<ApiResult> giftCreate(EventSigner signer,
+          {required String tier, required int amount, required String code}) =>
+      call('gift-create', signer,
+          extra: {'tier': tier, 'amount': amount, 'code': code});
+
+  Future<ApiResult> giftRedeem(EventSigner signer, String code) =>
+      call('gift-redeem', signer, extra: {'code': code});
+
+  Future<ApiResult> giftCancel(EventSigner signer, String id) =>
+      call('gift-cancel', signer, extra: {'id': id});
+
+  Future<ApiResult> giftList(EventSigner signer) => call('gift-list', signer);
+
+  Future<ApiResult> giftPeek(EventSigner signer, String code) =>
+      call('gift-peek', signer, extra: {'code': code});
 
   Future<ApiResult> voucherKeys(EventSigner signer) =>
       call('voucher-keys', signer);

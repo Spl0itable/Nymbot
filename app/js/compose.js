@@ -593,8 +593,8 @@
         el.addEventListener('compositionstart', () => { state.composing = true; });
         el.addEventListener('compositionend', () => {
             state.composing = false;
-            readCaret();
             state.text = readText(el);
+            readCaret();
             draw(state.start, state.end);
             el.dispatchEvent(new Event('input', { bubbles: true }));
         });
@@ -606,8 +606,8 @@
             if (state.composing) return;
             const shown = readText(el);
             if (shown === state.text) return;
-            readCaret();
             state.text = shown;
+            readCaret();
             draw(state.start, state.end);
         });
 

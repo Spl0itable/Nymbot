@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../app.dart';
 import '../models/artifact.dart';
+import 'artifact_preview.dart';
 import 'code_highlight.dart';
 import 'markdown_body.dart';
 import 'i18n/i18n.dart';
@@ -66,85 +67,126 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
     ];
     final active = tabs.any((x) => x.$1 == _tab) ? _tab : 1;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: TextField(
-          controller: _title,
-          decoration: const InputDecoration(border: InputBorder.none, isDense: true),
-          style: Theme.of(context).textTheme.titleMedium,
-          onSubmitted: (v) => app.renameArtifact(artifact.id, v),
-          onTapOutside: (_) => app.renameArtifact(artifact.id, _title.text),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                border: Border.all(color: Theme.of(context).dividerColor),
-                borderRadius: BorderRadius.circular(4),
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final navigator = Navigator.of(context);
+        final choice = await _askToKeep(context);
+        if (choice == null || !mounted) return;
+        if (choice) await app.updateArtifact(artifact.id, _body.text);
+        if (!mounted) return;
+        setState(() => _dirty = false);
+        navigator.pop();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: TextField(
+            controller: _title,
+            decoration: const InputDecoration(border: InputBorder.none, isDense: true),
+            style: Theme.of(context).textTheme.titleMedium,
+            onSubmitted: (v) => app.renameArtifact(artifact.id, v),
+            onTapOutside: (_) => app.renameArtifact(artifact.id, _title.text),
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(artifact.lang.isEmpty ? 'text' : artifact.lang,
+                    style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
               ),
-              child: Text(artifact.lang.isEmpty ? 'text' : artifact.lang,
-                  style: const TextStyle(fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback, fontSize: 11)),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy_all_outlined, size: 20),
-            tooltip: t('Copy'),
-            onPressed: () => Clipboard.setData(ClipboardData(text: _body.text)),
-          ),
-          IconButton(
-            icon: const Icon(Icons.ios_share, size: 20),
-            tooltip: t('Share'),
-            onPressed: () => Share.share(_body.text, subject: artifact.title),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              children: [
-                for (final tab in tabs)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      label: Text(tab.$2, style: const TextStyle(fontSize: 12)),
-                      selected: active == tab.$1,
-                      visualDensity: VisualDensity.compact,
-                      onSelected: (_) => setState(() => _tab = tab.$1),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Expanded(child: _view(context, artifact, active)),
-        ],
-      ),
-      floatingActionButton: (_dirty && active == 1)
-          ? FloatingActionButton.extended(
-              icon: const Icon(Icons.save_outlined, size: 18),
-              label: Text(t('Save version')),
+            IconButton(
+              icon: const Icon(Icons.copy_all_outlined, size: 20),
+              tooltip: t('Copy'),
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
-                await app.updateArtifact(artifact.id, _body.text);
-                if (!mounted) return;
-                setState(() => _dirty = false);
-                final saved = app.artifacts
-                    .where((a) => a.id == artifact.id)
-                    .map((a) => a.versions.length)
-                    .followedBy(const [1])
-                    .first;
-                messenger.showSnackBar(
-                  SnackBar(content: Text(t('Saved as version {n}.', {'n': saved}))),
-                );
+                await Clipboard.setData(ClipboardData(text: _body.text));
+                messenger
+                  ..clearSnackBars()
+                  ..showSnackBar(SnackBar(
+                      content: Text(t('Copied.')),
+                      duration: const Duration(seconds: 2)));
               },
-            )
-          : null,
+            ),
+            IconButton(
+              icon: const Icon(Icons.ios_share, size: 20),
+              tooltip: t('Share'),
+              onPressed: () => Share.share(_body.text, subject: artifact.title),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                children: [
+                  for (final tab in tabs)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text(tab.$2, style: const TextStyle(fontSize: 12)),
+                        selected: active == tab.$1,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => setState(() => _tab = tab.$1),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Expanded(child: _view(context, artifact, active)),
+          ],
+        ),
+        floatingActionButton: (_dirty && active == 1)
+            ? FloatingActionButton.extended(
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: Text(t('Save version')),
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  await app.updateArtifact(artifact.id, _body.text);
+                  if (!mounted) return;
+                  setState(() => _dirty = false);
+                  final saved = app.artifacts
+                      .where((a) => a.id == artifact.id)
+                      .map((a) => a.versions.length)
+                      .followedBy(const [1])
+                      .first;
+                  messenger.showSnackBar(
+                    SnackBar(content: Text(t('Saved as version {n}.', {'n': saved}))),
+                  );
+                },
+              )
+            : null,
+      ),
     );
   }
+
+  Future<bool?> _askToKeep(BuildContext context) => showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t('Keep your changes?')),
+          content: Text(
+              t('The source has edits that are not saved as a version yet.')),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(t('Keep editing'))),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(t('Discard'))),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(t('Save version'))),
+          ],
+        ),
+      );
 
   Widget _view(BuildContext context, Artifact artifact, int tab) {
     if (tab == 0) {
@@ -154,14 +196,15 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
           child: MarkdownBody(artifact.body),
         );
       }
-      // A phone has no sandboxed frame to render a page in without a webview,
-      // and pulling one in for a preview is not worth the surface. The source
-      // reads it instead, highlighted.
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: HighlightedCode(code: artifact.body, language: artifact.lang),
+      return ArtifactWebPreview(
+        body: artifact.body,
+        lang: artifact.lang,
+        fallback: SingleChildScrollView(
+          padding: const EdgeInsets.all(12),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: HighlightedCode(code: artifact.body, language: artifact.lang),
+          ),
         ),
       );
     }

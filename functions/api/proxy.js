@@ -15,6 +15,8 @@
 import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
+import { handleShareBlob, handleShareDelete } from './_share.js';
+import { mcpIpv6Blocked } from './_mcp.js';
 
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 
@@ -84,6 +86,10 @@ export async function onRequest(context) {
       return await handleBlossomUpload(request, url.searchParams.get('server'));
     } else if (action === 'mirror') {
       return await handleBlossomMirror(request, url.searchParams.get('server'));
+    } else if (action === 'share-blob') {
+      return await handleShareBlob(request, url.searchParams, CORS_HEADERS);
+    } else if (action === 'delete') {
+      return await handleShareDelete(request, url.searchParams, CORS_HEADERS);
     } else if (action === 'geo-relays') {
       return await handleGeoRelays(context);
     } else if (action === 'geocode') {
@@ -237,7 +243,9 @@ async function handleJsonProxy(targetUrl, request) {
   }
 
   const ct = (resp.headers.get('content-type') || '').toLowerCase();
-  const allowed = ct.includes('json') || ct.includes('text/plain') || ct === '';
+  const essence = ct.split(';')[0].trim();
+  const plain = essence === 'text/plain';
+  const allowed = plain || essence === '' || essence === 'application/json' || /^application\/[a-z0-9.+-]+\+json$/.test(essence);
   if (!allowed) {
     return jsonResponse({ error: 'Upstream content-type not allowed: ' + ct }, 415);
   }
@@ -248,8 +256,10 @@ async function handleJsonProxy(targetUrl, request) {
   }
 
   const headers = new Headers(CORS_HEADERS);
-  headers.set('Content-Type', resp.headers.get('content-type') || 'application/json');
+  headers.set('Content-Type', plain ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8');
   headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', "sandbox; default-src 'none'");
+  headers.set('Content-Disposition', 'attachment');
   return new Response(text, { status: resp.status, headers });
 }
 
@@ -798,9 +808,34 @@ async function fetchIconBytes(url) {
   if (!resp.ok) return null;
   const cl = parseInt(resp.headers.get('content-length') || '', 10);
   if (Number.isFinite(cl) && cl > FAVICON_MAX_BYTES) return null;
-  const buf = new Uint8Array(await resp.arrayBuffer());
-  if (!buf.length || buf.length > FAVICON_MAX_BYTES) return null;
+  const buf = await readBytesCapped(resp, FAVICON_MAX_BYTES);
+  if (!buf || !buf.length) return null;
   return buf;
+}
+
+async function readBytesCapped(resp, max) {
+  if (!resp.body || typeof resp.body.getReader !== 'function') {
+    const all = new Uint8Array(await resp.arrayBuffer());
+    return all.length > max ? null : all;
+  }
+  const reader = resp.body.getReader();
+  const parts = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.length;
+    if (total > max) {
+      try { await reader.cancel(); } catch { }
+      return null;
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
 }
 
 async function handleFavicon(hostParam, context) {
@@ -1046,6 +1081,7 @@ function ipv6IsPrivate(host) {
   const pct = h.indexOf('%');
   if (pct !== -1) h = h.slice(0, pct);
   if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true;
+  if (mcpIpv6Blocked(h) === true) return true;
   // IPv4-mapped/compat ::ffff:a.b.c.d or ::a.b.c.d
   const mapped = h.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
   if (mapped) {

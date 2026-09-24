@@ -5,6 +5,8 @@
         { name: 'help', args: '', group: 'local', hint: () => t('List every command') },
         { name: 'balance', args: '', group: 'local', hint: () => t('Check your credit balance') },
         { name: 'buy', args: '[credits]', group: 'local', hint: () => t('Buy credits over Lightning') },
+        { name: 'gift', args: '[code]', group: 'local', hint: () => t('Gift an amount of your credits as a link, or redeem a gift code') },
+        { name: 'transfer', args: '[npub]', group: 'local', hint: () => t('Move your whole balance to another key') },
         { name: 'model', args: '[name|off]', group: 'local', hint: () => t('Pin a Pro model, or go back to auto-routing') },
         { name: 'compare', args: '', group: 'local', hint: () => t('Ask two models the same thing') },
         { name: 'git', args: '[add|list|use|writes on|off|disconnect]', group: 'local', hint: () => t('Manage the repositories this chat can read') },
@@ -40,7 +42,7 @@
     ];
 
     const REMOTE = [
-        { name: 'ask', args: '<question>', group: 'charged', hint: () => t('One question, no history') },
+        { name: 'ask', args: '<question>', group: 'charged', hint: () => t('Ask Nymbot; plain text does the same') },
         { name: 'image', args: '<prompt>', group: 'charged', hint: () => t('Generate an image') },
         { name: 'video', args: '<prompt>', group: 'charged', hint: () => t('Generate a short video (Pro)') },
         { name: 'speak', args: '<text>', group: 'charged', hint: () => t('Read something aloud') },
@@ -52,6 +54,7 @@
         { name: 'time', args: '[place]', group: 'charged', hint: () => t('The time somewhere') },
         { name: 'btc', args: '', group: 'charged', hint: () => t('The Bitcoin price') },
         { name: 'web', args: '<query>', group: 'charged', hint: () => t('Search the web') },
+        { name: 'research', args: '<question>', group: 'charged', hint: () => t('Deep research with a Pro model, with sources') },
         { name: 'summarize', args: '<text>', group: 'charged', hint: () => t('Summarize something') },
         { name: 'code', args: '<task>', group: 'charged', hint: () => t('Write code') },
         { name: 'review', args: '', group: 'charged', hint: () => t('Review the connected repositories') },

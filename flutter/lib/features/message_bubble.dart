@@ -4,14 +4,23 @@ import 'package:flutter/services.dart';
 import '../core/theme/theme.dart';
 import '../models/artifact.dart';
 import '../models/conversation.dart';
+import '../models/model_maker.dart';
 import '../models/workspace.dart';
+import '../services/server_runs.dart';
 import 'artifact_screen.dart';
+import 'brand_tile.dart';
 import 'citation_cards.dart';
+import 'doc_tray.dart';
 import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
+import 'motion.dart';
 import 'nym_avatar.dart';
 import 'nym_glyph.dart';
+import 'pending_tool_card.dart';
+import 'staged_card.dart';
+import 'sticky_avatar.dart';
+import 'team_view.dart';
 
 enum MessageAction {
   copy,
@@ -39,21 +48,38 @@ class MessageBubble extends StatefulWidget {
     this.selfName,
     this.selfPicture = '',
     this.grouped = false,
+    this.lastInGroup = true,
+    this.avatarGroup,
+    this.modelCatalog,
     this.speaking = false,
     this.highlighted = false,
     this.artifacts = const [],
     this.onOpenArtifact,
     this.onUndoCheckpoint,
+    this.onAllowTool,
+    this.onDenyTool,
+    this.onAlwaysAllowTool,
+    this.onApplyStaged,
+    this.onDiscardStaged,
     this.actionsOpen = false,
     this.onToggleActions,
     this.followUps = const [],
     this.onFollowUp,
     this.onEditFollowUp,
+    this.reveal,
   });
+
+  final int? reveal;
 
   /// Puts back what a repo run changed. Absent when there is nothing to put
   /// back, which is what decides whether the card offers a way.
   final Future<void> Function()? onUndoCheckpoint;
+  final VoidCallback? onAllowTool;
+  final VoidCallback? onDenyTool;
+  final VoidCallback? onAlwaysAllowTool;
+
+  final Future<void> Function()? onApplyStaged;
+  final Future<void> Function()? onDiscardStaged;
 
   final ChatMessage message;
   final String selfPubkey;
@@ -65,6 +91,9 @@ class MessageBubble extends StatefulWidget {
   final AppSettings settings;
   final void Function(MessageAction action, ChatMessage message) onAction;
   final bool grouped;
+  final bool lastInGroup;
+  final Object? avatarGroup;
+  final Map<String, dynamic>? modelCatalog;
   final bool speaking;
   final bool highlighted;
   final List<Artifact> artifacts;
@@ -107,26 +136,23 @@ class _MessageBubbleState extends State<MessageBubble> {
       );
     }
 
-    final avatar = settings.avatars && !widget.grouped
-        ? (m.role == ChatRole.bot
-            ? const NymAvatar(seed: 'nymbot', size: 30, bot: true)
-            : NymAvatar(
-                seed: widget.selfPubkey,
-                size: 30,
-                picture: widget.selfPicture,
-              ))
-        : const SizedBox(width: 30, height: 0);
-
+    final showAvatar = settings.avatars && !(self && settings.bubbles);
     final bubble = Flexible(
       child: Column(
         crossAxisAlignment:
             self && settings.bubbles ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (!widget.grouped) _author(context, m, self),
-          GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: widget.onToggleActions,
-            child: _content(context, m, self, theme),
+          if (!widget.grouped)
+            GestureDetector(
+              onLongPress: widget.onToggleActions,
+              child: _author(context, m, self),
+            ),
+          SelectionArea(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: widget.onToggleActions,
+              child: _content(context, m, self, theme),
+            ),
           ),
           if (widget.followUps.isNotEmpty && widget.onFollowUp != null)
             _followUps(context),
@@ -135,20 +161,42 @@ class _MessageBubbleState extends State<MessageBubble> {
       ),
     );
 
+    final row = Row(
+      textDirection: self && settings.bubbles ? TextDirection.rtl : TextDirection.ltr,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (showAvatar) SizedBox(width: 37, height: widget.grouped ? 0 : 30),
+        bubble,
+      ],
+    );
+
     return Padding(
       padding: EdgeInsets.only(bottom: gap),
-      child: Row(
-        textDirection: self && settings.bubbles ? TextDirection.rtl : TextDirection.ltr,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (settings.avatars && !(self && settings.bubbles))
-            Padding(
-              padding: const EdgeInsets.only(right: 7),
-              child: avatar,
-            ),
-          bubble,
-        ],
-      ),
+      child: showAvatar
+          ? Stack(
+              children: [
+                row,
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 30,
+                  child: StickyAvatar(
+                    group: widget.avatarGroup ?? m.id,
+                    first: !widget.grouped,
+                    last: widget.lastInGroup,
+                    child: m.role == ChatRole.bot
+                        ? const NymAvatar(seed: 'nymbot', size: 30, bot: true)
+                        : NymAvatar(
+                            seed: widget.selfPubkey,
+                            size: 30,
+                            picture: widget.selfPicture,
+                          ),
+                  ),
+                ),
+              ],
+            )
+          : row,
     );
   }
 
@@ -161,8 +209,6 @@ class _MessageBubbleState extends State<MessageBubble> {
         : (published != null && published.isNotEmpty)
             ? published
             : NymIdentity.name(widget.selfPubkey);
-    final suffix = bot ? 'nymbot' : widget.selfPubkey;
-    final showSuffix = bot || published == null || published.isEmpty;
     return Padding(
       padding: const EdgeInsets.only(bottom: 3),
       child: Row(
@@ -173,28 +219,16 @@ class _MessageBubbleState extends State<MessageBubble> {
             style: TextStyle(
               fontSize: 11.5,
               fontWeight: FontWeight.w600,
-              color: bot ? theme.colorScheme.primary : NymIdentity.colour(suffix),
+              color: bot ? theme.colorScheme.primary : NymIdentity.colour(widget.selfPubkey),
             ),
           ),
-          if (showSuffix)
-            Text(
-              '#${bot ? _botSuffix : NymIdentity.suffix(widget.selfPubkey)}',
-              style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w300,
-                color: (bot ? theme.colorScheme.primary : NymIdentity.colour(suffix))
-                    .withValues(alpha: 0.7),
-              ),
-            ),
           // Which tier wrote this.
           if (bot) _tierBadge(theme, m),
           if (bot && m.model != null)
             Flexible(
               child: Padding(
                 padding: const EdgeInsets.only(left: 5),
-                child: Text(m.model!,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+                child: _modelTitle(m, theme),
               ),
             ),
           if (m.edited)
@@ -205,6 +239,30 @@ class _MessageBubbleState extends State<MessageBubble> {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _modelTitle(ChatMessage m, ThemeData theme) {
+    final label = Text(m.model!,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 10.5, color: theme.hintColor));
+    final maker = ModelMaker.ofMessage(m, widget.modelCatalog);
+    if (maker == null) return label;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Flexible(child: label),
+        const SizedBox(width: 3),
+        Tooltip(
+          message: maker.name,
+          child: Semantics(
+            label: maker.name,
+            image: true,
+            child: ExcludeSemantics(child: BrandTile(slug: maker.slug, size: 11)),
+          ),
+        ),
+      ],
     );
   }
 
@@ -243,7 +301,7 @@ class _MessageBubbleState extends State<MessageBubble> {
   /// time, rather than trailing the words it charged for.
   Widget _cost(BuildContext context, ChatMessage m) => InkWell(
         borderRadius: BorderRadius.circular(4),
-        onTap: () => showCostSheet(context, m),
+        onTap: () => showCostSheet(context, m, catalog: widget.modelCatalog),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
@@ -263,7 +321,55 @@ class _MessageBubbleState extends State<MessageBubble> {
         ),
       );
 
-  static const _botSuffix = '4bb2';
+  Widget _runCost(BuildContext context, ChatMessage m) => Container(
+        key: const ValueKey('server-run-cost'),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: NymbotColors.lightning.withValues(alpha: 0.4)),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_outlined, size: 11, color: NymbotColors.lightning),
+            const SizedBox(width: 2),
+            Text(
+                t('{credits} on server runs', {'credits': ServerRuns.credits(m.serverRunCredits)}),
+                style: const TextStyle(fontSize: 10, color: NymbotColors.lightning)),
+          ],
+        ),
+      );
+
+  Widget _serverRunList(BuildContext context, ChatMessage m) {
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final r in m.serverRuns)
+            Text(
+              t('Server run on {image}: {command} — {outcome}, {credits} Pro credits', {
+                'image': '${r['image'] ?? ''}',
+                'command': _short('${r['command'] ?? ''}'),
+                'outcome': r['code'] is num
+                    ? t('exit {code}', {'code': r['code']})
+                    : t('did not finish'),
+                'credits': ServerRuns.credits(((r['milli'] as num?) ?? 0) / 1000),
+              }),
+              style: hint,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _short(String command) {
+    final one = command.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return one.length > 80 ? '${one.substring(0, 80)}…' : one;
+  }
 
   Widget _content(BuildContext context, ChatMessage m, bool self, ThemeData theme) {
     final settings = widget.settings;
@@ -300,6 +406,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (m.attachments.isNotEmpty) _attachments(context, m),
+            if (m.role == ChatRole.self) DocUsageLine(messageId: m.id),
             if (m.repos.isNotEmpty)
               Wrap(
                 spacing: 4,
@@ -315,12 +422,15 @@ class _MessageBubbleState extends State<MessageBubble> {
             // the wrong answer to "can I paste code in here".
             if (m.role == ChatRole.bot || m.role == ChatRole.self)
               MarkdownBody(
-                m.content,
+                revealed(m.content, widget.reveal),
                 monospace: settings.monospaceReplies,
+                wrapCode: settings.codeWrap,
+                lineNumbers: settings.lineNumbers,
                 media: m.task,
+                runnable: m.role == ChatRole.bot,
               )
             else
-              SelectableText(
+              Text(
                 m.content,
                 style: TextStyle(
                   fontSize: 14.5,
@@ -329,6 +439,26 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             if (m.sources.isNotEmpty) _sources(context, m),
             if (m.checkpoint != null) _checkpoint(context, m),
+            if (m.pendingTool != null)
+              PendingToolCard(
+                pending: m.pendingTool!,
+                onAllow: widget.onAllowTool,
+                onDeny: widget.onDenyTool,
+                onAlwaysAllow: widget.onAlwaysAllowTool,
+              ),
+            if (m.serverRuns.isNotEmpty) _serverRunList(context, m),
+            if (m.role == ChatRole.bot && m.team != null)
+              TeamSummary(
+                team: m.team!,
+                leadModel: m.model,
+                catalog: widget.modelCatalog,
+              ),
+            if (m.staged != null)
+              StagedCard(
+                staged: m.staged!,
+                onApply: widget.onApplyStaged,
+                onDiscard: widget.onDiscardStaged,
+              ),
             for (final a in widget.artifacts)
               ArtifactCard(
                 artifact: a,
@@ -347,6 +477,10 @@ class _MessageBubbleState extends State<MessageBubble> {
                   if (m.cost > 0) ...[
                     const SizedBox(width: 6),
                     _cost(context, m),
+                  ],
+                  if (m.serverRunCredits > 0) ...[
+                    const SizedBox(width: 6),
+                    _runCost(context, m),
                   ],
                 ],
               ),
@@ -511,7 +645,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             ),
             child: SingleChildScrollView(
-              child: SelectableText(
+              child: Text(
                 m.thinking!,
                 style: TextStyle(fontSize: 12.5, color: Theme.of(context).hintColor),
               ),
@@ -671,15 +805,18 @@ class _MessageBubbleState extends State<MessageBubble> {
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: () => widget.onAction(action, m),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                NymGlyph(glyph, size: 15, color: colour, filled: solid),
-                const SizedBox(width: 3),
-                Text(tip, style: TextStyle(fontSize: 10.5, color: colour)),
-              ],
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  NymGlyph(glyph, size: 15, color: colour, filled: solid),
+                  const SizedBox(width: 3),
+                  Text(tip, style: TextStyle(fontSize: 10.5, color: colour)),
+                ],
+              ),
             ),
           ),
         ),
@@ -705,13 +842,15 @@ class _MessageBubbleState extends State<MessageBubble> {
     add('star', t('Save this message'), MessageAction.pin,
         on: m.pinned, solid: m.pinned);
     add('memory', t('Remember this'), MessageAction.remember);
+    buttons.add(const SizedBox(width: 16));
     add('close', t('Delete'), MessageAction.delete);
 
     return Padding(
       padding: const EdgeInsets.only(top: 2),
       child: Wrap(
         spacing: 2,
-        runSpacing: 2,
+        runSpacing: 0,
+        crossAxisAlignment: WrapCrossAlignment.center,
         alignment: self && widget.settings.bubbles
             ? WrapAlignment.end
             : WrapAlignment.start,
@@ -725,6 +864,16 @@ class _MessageBubbleState extends State<MessageBubble> {
     final mm = at.minute.toString().padLeft(2, '0');
     return '$h:$mm ${at.hour < 12 ? 'AM' : 'PM'}';
   }
+}
+
+String revealed(String text, int? upTo) {
+  if (upTo == null || upTo >= text.length) return text;
+  var cut = upTo < 0 ? 0 : upTo;
+  if (cut > 0) {
+    final unit = text.codeUnitAt(cut - 1);
+    if (unit >= 0xD800 && unit <= 0xDBFF) cut--;
+  }
+  return text.substring(0, cut);
 }
 
 class TypingIndicator extends StatelessWidget {
@@ -832,8 +981,18 @@ class _DotState extends State<_Dot> with SingleTickerProviderStateMixin {
   void initState() {
     super.initState();
     Future.delayed(Duration(milliseconds: widget.delayMs), () {
-      if (mounted) _c.repeat();
+      if (mounted && !reducedMotion(context)) _c.repeat();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (reducedMotion(context)) {
+      _c
+        ..stop()
+        ..value = 0;
+    }
   }
 
   @override
