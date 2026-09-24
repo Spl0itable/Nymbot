@@ -618,16 +618,21 @@ export class NymLedger {
     if (from === to) return { error: "You can't transfer credits to your own pubkey." };
     const source = await this._getCredits(from);
     const proSource = await this._getCredits(from, "pro");
-    const moved = source.balance > 0 ? source.balance : 0;
-    const proMoved = proSource.balance > 0 ? proSource.balance : 0;
-    if (moved <= 0 && proMoved <= 0) return { error: "No credits to transfer." };
+    const held = this._holdsOf(from, "standard", null);
+    const proHeld = this._holdsOf(from, "pro", null);
+    const moved = Math.max(0, (source.balance || 0) - held);
+    const proMoved = Math.max(0, (proSource.balance || 0) - proHeld);
+    if (moved <= 0 && proMoved <= 0) {
+      if (held > 0 || proHeld > 0) return { error: "Your credits are paying for a reply that is still running. Try again when it finishes." };
+      return { error: "No credits to transfer." };
+    }
     let targetBalance = 0;
     let targetProBalance = 0;
     if (moved > 0) {
       const dest = await this._getCredits(to);
       dest.balance = (dest.balance || 0) + moved;
       dest.totalPurchased = (dest.totalPurchased || 0) + moved;
-      source.balance = 0;
+      source.balance = (source.balance || 0) - moved;
       await this._putCredits(to, dest);
       await this._putCredits(from, source);
       targetBalance = dest.balance;
@@ -636,14 +641,14 @@ export class NymLedger {
       const proDest = await this._getCredits(to, "pro");
       proDest.balance = (proDest.balance || 0) + proMoved;
       proDest.totalPurchased = (proDest.totalPurchased || 0) + proMoved;
-      proSource.balance = 0;
+      proSource.balance = (proSource.balance || 0) - proMoved;
       await this._putCredits(to, proDest, "pro");
       await this._putCredits(from, proSource, "pro");
       targetProBalance = proDest.balance;
     }
     return {
       transferred: moved, proTransferred: proMoved, target: to,
-      sourceBalance: 0, targetBalance, targetProBalance
+      sourceBalance: Math.max(0, (source.balance || 0)), targetBalance, targetProBalance
     };
   }
 
@@ -841,7 +846,7 @@ export class NymLedger {
     const rows = this.sql.exec(
       "SELECT id FROM credit_holds WHERE id = ? AND pubkey = ? AND tier = ? AND exp > ? LIMIT 1;", id, pubkey, tierKey, Date.now()
     ).toArray();
-    this.sql.exec("DELETE FROM credit_holds WHERE id = ?;", id);
+    this.sql.exec("DELETE FROM credit_holds WHERE id = ? AND pubkey = ?;", id, pubkey);
     return !!(rows && rows.length);
   }
 

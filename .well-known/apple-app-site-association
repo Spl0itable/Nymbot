@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["KJ6U2Y9B2M.ai.nymbot"],
+        "components": [
+          { "/": "/app/" },
+          { "/": "/app/share" },
+          { "/": "/app/share/" }
+        ]
+      }
+    ]
+  }
+}

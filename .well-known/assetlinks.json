@@ -1,0 +1,17 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ai.nymbot",
+      "sha256_cert_fingerprints": [
+        "49:68:37:02:D2:5B:AE:C1:BB:35:82:53:7F:46:55:A2:3A:67:7E:7A:94:8F:90:6B:A3:6C:E1:94:A9:7C:57:55",
+        "60:8F:4B:84:07:89:C4:51:F1:48:93:90:D9:C0:F7:8C:FA:A9:89:39:02:F4:E7:8D:29:7D:D8:2F:D1:53:47:CF",
+        "C5:A9:B0:B1:F5:A9:CE:96:35:08:77:6E:BA:41:1E:95:8D:86:58:2A:F1:42:37:FA:C4:0D:C4:25:DA:99:D9:1A"
+      ]
+    }
+  }
+]
