@@ -1,11 +1,11 @@
-const SANDBOX_PATHS = new Set(["/app/sandbox", "/app/sandbox.html", "/app/js/sandbox-worker.js"]);
+const SANDBOX_PATHS = new Set(["/app/sandbox", "/app/sandbox.html", "/app/sandbox-worker.js"]);
 
 export function sandboxPolicy(origin) {
   const o = String(origin || "").replace(/\/+$/, "");
   const scripts = [
     o + "/app/js/sandbox.js",
     o + "/app/js/pdftext.js",
-    o + "/app/js/sandbox-worker.js",
+    o + "/app/sandbox-worker.js",
     o + "/app/js/vendor/pdfjs/",
     o + "/pyodide/"
   ].join(" ");
@@ -43,6 +43,6 @@ export async function onRequest(context) {
   out.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()");
   out.headers.set("X-Robots-Tag", "noindex");
   out.headers.delete("X-Frame-Options");
-  if (url.pathname === "/app/js/sandbox-worker.js") out.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+  if (url.pathname === "/app/sandbox-worker.js") out.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
   return out;
 }

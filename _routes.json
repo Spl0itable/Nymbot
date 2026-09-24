@@ -1,5 +1,22 @@
 {
   "version": 1,
-  "include": ["/api", "/api/*", "/pyodide/*", "/app/sandbox", "/app/sandbox.html", "/app/js/sandbox-worker.js"],
-  "exclude": []
+  "include": ["/*"],
+  "exclude": [
+    "/app/js/*",
+    "/app/css/*",
+    "/app/icons/*",
+    "/app/i18n/*",
+    "/app/sw.js",
+    "/app/manifest.webmanifest",
+    "/assets/*",
+    "/images/*",
+    "/media/*",
+    "/errors/*",
+    "/sitemaps/*",
+    "/.well-known/*",
+    "/robots.txt",
+    "/sitemap.xml",
+    "/llms.txt",
+    "/llms-full.txt"
+  ]
 }

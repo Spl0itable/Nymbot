@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    const WORKER = '/app/js/sandbox-worker.js';
+    const WORKER = '/app/sandbox-worker.js';
     const PDF_MAX = 40 * 1024 * 1024;
 
     let worker = null;

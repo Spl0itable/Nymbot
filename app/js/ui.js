@@ -153,6 +153,7 @@
         _schedulerTimer: null,
         botEditing: null,
         botIcon: 'robot',
+        botModel: null,
         sharingBot: null,
         pendingBot: null,
         personaIcon: 'robot',
@@ -3690,6 +3691,17 @@
             return (scope && scope.mediaModel) || this.settings.mediaModel || null;
         },
 
+        mediaFor(m, slug) {
+            const media = {
+                key: m.key, label: m.label, kind: m.kind || 'image',
+                credits: m.credits, max: m.max,
+                command: this.generatorCommand(m.command),
+                slug: m.authorSlug || slug || null
+            };
+            if (this.mediaNeedsPro(media)) media.proKey = this.cheapestChatKey();
+            return media;
+        },
+
         mediaNeedsPro(media) {
             return !!(media && (media.kind === 'image' || media.kind === 'video' || media.kind === 'speech'));
         },
@@ -3766,12 +3778,13 @@
             this.modelPick = picking;
             $('modelsTitle').textContent = this.modelPick ? this.modelPick.title : t('Nymbot Pro model');
             $('modelForChatRow').hidden = !!this.modelPick;
-            $('modelOff').hidden = !!this.modelPick;
+            $('modelOff').hidden = !!this.modelPick && !this.modelPick.none;
+            $('modelOff').classList.toggle('is-active', !!this.modelPick && !!this.modelPick.none && !this.modelPick.current);
             for (const b of document.querySelectorAll('#modelFilters .pill')) {
-                b.hidden = !!this.modelPick && MEDIA_FILTERS.includes(b.dataset.filter);
+                b.hidden = !!this.modelPick && !this.modelPick.media && MEDIA_FILTERS.includes(b.dataset.filter);
             }
             if (this.modelPick) {
-                if (MEDIA_FILTERS.includes(this.modelFilter)) this.setModelFilter('all');
+                if (!this.modelPick.media && MEDIA_FILTERS.includes(this.modelFilter)) this.setModelFilter('all');
                 $('modelSearch').value = '';
             }
             $('modelSearchClear').hidden = !$('modelSearch').value;
@@ -3917,7 +3930,7 @@
             const shown = (group) => group.keys
                 .map(k => byKey.get(k))
                 .filter(m => m && this.modelMatchesSearch(m, terms) && this.modelMatchesFilter(m)
-                    && !(picking && (m.command || (m.kind || 'chat') !== 'chat')));
+                    && !(picking && !picking.media && (m.command || (m.kind || 'chat') !== 'chat')));
             const sections = [];
             if (this.modelSort === 'provider') {
                 for (const group of this.models.groups || []) {
@@ -3977,13 +3990,7 @@
                         }
                         if (m.command) {
                             const off = pinned;
-                            const media = off ? null : {
-                                key: m.key, label: m.label, kind: m.kind || 'image',
-                                credits: m.credits, max: m.max,
-                                command: this.generatorCommand(m.command),
-                                slug: m.authorSlug || group.authorSlug || null
-                            };
-                            if (this.mediaNeedsPro(media)) media.proKey = this.cheapestChatKey();
+                            const media = off ? null : this.mediaFor(m, group.authorSlug);
                             this.setMediaModel(media, forChat);
                             this.closeModals();
                             this.toast(off
@@ -5889,23 +5896,40 @@
         },
 
         async fillBotModels() {
-            const sel = $('botModel');
-            if (sel.dataset.filled === '1') return;
             if (!this.models) {
                 try { this.models = await Api.models(); } catch (_) { }
             }
-            sel.innerHTML = '';
-            const auto = document.createElement('option');
-            auto.value = '';
-            auto.textContent = t('Auto-routed (standard)');
-            sel.appendChild(auto);
-            for (const m of (this.models && this.models.models) || []) {
-                const opt = document.createElement('option');
-                opt.value = m.key;
-                opt.textContent = `${m.label} · ${num(m.credits || 1)}`;
-                sel.appendChild(opt);
-            }
-            sel.dataset.filled = '1';
+            this.renderBotModel();
+        },
+
+        botModelFor(key, label) {
+            if (!key) return null;
+            const full = this.models ? (this.models.models || []).find(m => m.key === key) : null;
+            return full || { key, label: label || null };
+        },
+
+        renderBotModel() {
+            this.renderModelSlot($('botModel'), this.botModel || null, {
+                label: t('Model'),
+                empty: t('Auto-routed (standard)'),
+                note: t('Nymbot picks the model for each message')
+            });
+        },
+
+        pickBotModel() {
+            const current = this.botModel || null;
+            this.openModels(null, {
+                over: true,
+                from: $('botModel'),
+                title: t('Pick the bot\'s model'),
+                current: current ? current.key : null,
+                none: true,
+                media: true,
+                pick: (m) => {
+                    this.botModel = m || null;
+                    this.renderBotModel();
+                }
+            });
         },
 
         renderBotIcons() {
@@ -5922,7 +5946,8 @@
             $('botTagline').value = '';
             $('botInstructions').value = '';
             $('botStarters').value = '';
-            $('botModel').value = '';
+            this.botModel = null;
+            this.renderBotModel();
             Caps.fillBotForm(null);
             $('botFormTitle').textContent = t('New bot');
             this.modalStatus('botStatus', '');
@@ -5938,7 +5963,8 @@
             $('botTagline').value = bot.tagline || '';
             $('botInstructions').value = bot.instructions || '';
             $('botStarters').value = (bot.starters || []).join('\n');
-            $('botModel').value = bot.modelKey || '';
+            this.botModel = this.botModelFor(bot.modelKey, bot.modelLabel);
+            this.renderBotModel();
             Caps.fillBotForm(bot);
             $('botFormTitle').textContent = t('Edit bot');
             this.modalStatus('botStatus', '');
@@ -6011,10 +6037,8 @@
                 this.modalStatus('botStatus', t('Caps are whole numbers of sats.'), 'warn');
                 return;
             }
-            const key = $('botModel').value || null;
-            const found = key && this.models
-                ? (this.models.models || []).find(m => m.key === key)
-                : null;
+            const found = this.botModel || null;
+            const key = found ? found.key : null;
             const saved = Bots.save({
                 id: this.botEditing || undefined,
                 name,
@@ -6022,7 +6046,7 @@
                 icon: this.botIcon,
                 instructions: ($('botInstructions').value || '').trim(),
                 modelKey: key,
-                modelLabel: found ? found.label : null,
+                modelLabel: found ? (found.label || null) : null,
                 starters: ($('botStarters').value || '').split('\n')
                     .map(x => x.trim()).filter(Boolean),
                 ...caps
@@ -6037,13 +6061,23 @@
             if (!this.conv) return;
             const bot = id ? Bots.get(id) : null;
             const patch = { botId: id };
+            const botMedia = this.conv.mediaModel && this.conv.mediaModel.fromBot;
             if (bot && bot.modelKey) {
                 const full = this.models
                     ? (this.models.models || []).find(m => m.key === bot.modelKey)
                     : null;
-                patch.proModel = full || { key: bot.modelKey, label: bot.modelLabel || bot.modelKey };
+                if (full && full.command) {
+                    const maker = this.makerOf(full);
+                    patch.mediaModel = Object.assign(this.mediaFor(full, maker && maker.slug), { fromBot: true });
+                } else {
+                    patch.proModel = full || { key: bot.modelKey, label: bot.modelLabel || bot.modelKey };
+                    if (botMedia) patch.mediaModel = null;
+                }
             } else if (!id) {
                 patch.proModel = null;
+                if (botMedia) patch.mediaModel = null;
+            } else if (botMedia) {
+                patch.mediaModel = null;
             }
             this.conv = Store.updateConversation(this.conv.id, patch);
             this.renderBots();
@@ -6455,36 +6489,44 @@
             const busy = !!this._compareBusy;
             for (const [slot, id, tag] of [['a', 'compareA', t('Model A')], ['b', 'compareB', t('Model B')]]) {
                 const button = $(id);
-                const m = picks[slot];
-                button.innerHTML = '';
                 button.disabled = busy;
-                button.dataset.key = m ? m.key : '';
-                const maker = m ? this.makerOf(m) : null;
-                const name = m ? (m.label || m.key) : t('Pick a model');
-                button.setAttribute('aria-label', t('{slot}: {name}', { slot: tag, name }));
-                if (maker) {
-                    button.appendChild(Icons.brand(maker.slug, { size: 32 }));
-                } else {
-                    const glyph = el('span', 'compare-slot-glyph');
-                    glyph.appendChild(Icons.node('model', { size: 20 }));
-                    button.appendChild(glyph);
-                }
-                const text = el('span', 'compare-slot-text');
-                const kicker = el('span', 'compare-slot-kicker');
-                kicker.appendChild(el('span', 'compare-slot-tag', tag));
-                if (maker) kicker.appendChild(document.createTextNode(' · ' + maker.name));
-                text.appendChild(kicker);
-                text.appendChild(el('span', 'compare-slot-name', name));
-                if (m) text.appendChild(el('span', 'compare-slot-cost', this.modelPrice(m)));
-                button.appendChild(text);
-                const change = el('span', 'compare-slot-change', t('Change'));
-                change.appendChild(Icons.node('chevron', { size: 16 }));
-                button.appendChild(change);
-                for (const child of button.children) child.setAttribute('aria-hidden', 'true');
+                this.renderModelSlot(button, picks[slot], { tag, empty: t('Pick a model') });
             }
             const total = $('compareTotal');
             total.hidden = !(picks.a && picks.b);
             total.textContent = picks.a && picks.b ? this.compareTotalLabel(picks.a, picks.b) : '';
+        },
+
+        renderModelSlot(button, m, opts) {
+            const o = opts || {};
+            button.innerHTML = '';
+            button.dataset.key = m ? m.key : '';
+            const maker = m ? this.makerOf(m) : null;
+            const name = m ? (m.label || m.key) : o.empty;
+            button.setAttribute('aria-label', t('{slot}: {name}', { slot: o.tag || o.label, name }));
+            if (maker) {
+                button.appendChild(Icons.brand(maker.slug, { size: 32 }));
+            } else {
+                const glyph = el('span', 'compare-slot-glyph');
+                glyph.appendChild(Icons.node('model', { size: 20 }));
+                button.appendChild(glyph);
+            }
+            const text = el('span', 'compare-slot-text');
+            if (o.tag || maker) {
+                const kicker = el('span', 'compare-slot-kicker');
+                if (o.tag) kicker.appendChild(el('span', 'compare-slot-tag', o.tag));
+                if (maker) kicker.appendChild(document.createTextNode((o.tag ? ' · ' : '') + maker.name));
+                text.appendChild(kicker);
+            }
+            text.appendChild(el('span', 'compare-slot-name', name));
+            const priced = m && (m.credits != null || this.modelTurnCredits(m));
+            if (priced) text.appendChild(el('span', 'compare-slot-cost', this.modelPrice(m)));
+            else if (!m && o.note) text.appendChild(el('span', 'compare-slot-note', o.note));
+            button.appendChild(text);
+            const change = el('span', 'compare-slot-change', t('Change'));
+            change.appendChild(Icons.node('chevron', { size: 16 }));
+            button.appendChild(change);
+            for (const child of button.children) child.setAttribute('aria-hidden', 'true');
         },
 
         pickCompare(slot) {
@@ -8119,6 +8161,7 @@
                 'open-bots': () => this.openBots(),
                 'bot-save': () => this.saveBot(),
                 'bot-reset': () => this.resetBotForm(),
+                'bot-model-pick': () => this.pickBotModel(),
                 'bot-copy-link': () => this.writeClipboard($('shareBotLink').value),
                 'bot-publish': () => this.publishBot(),
                 'bot-fetch': () => this.fetchBot(),
@@ -8176,6 +8219,13 @@
                 },
                 'first-lang-skip': () => { this.markLanguageChosen(); this.closeModals(); },
                 'model-off': () => {
+                    const picking = this.modelPick;
+                    if (picking && picking.none) {
+                        this.modelPick = null;
+                        if (picking.over) this.closeTop();
+                        picking.pick(null);
+                        return;
+                    }
                     this.dropProMedia();
                     this.setModel(null);
                     this.closeModals();

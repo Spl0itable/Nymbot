@@ -44,7 +44,7 @@
   ! X-Frame-Options
   ! Referrer-Policy
   ! Permissions-Policy
-  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
   X-Robots-Tag: noindex
@@ -54,7 +54,7 @@
   ! X-Frame-Options
   ! Referrer-Policy
   ! Permissions-Policy
-  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
   X-Robots-Tag: noindex
@@ -67,10 +67,10 @@
   ! Cross-Origin-Resource-Policy
   Cross-Origin-Resource-Policy: cross-origin
 
-/app/js/sandbox-worker.js
+/app/sandbox-worker.js
   ! Content-Security-Policy
   ! Cross-Origin-Resource-Policy
-  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/js/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
   Cross-Origin-Resource-Policy: cross-origin
 
 # The Cloudflare error pages. These are not browsed to — Cloudflare fetches each

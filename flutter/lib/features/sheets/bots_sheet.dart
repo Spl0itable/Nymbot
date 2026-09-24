@@ -10,6 +10,7 @@ import '../i18n/i18n.dart';
 import '../../core/theme/theme.dart';
 import '../nym_glyph.dart';
 import '../nym_glyphs.dart';
+import 'models_sheet.dart';
 import 'sheet.dart';
 
 Future<void> showBotsSheet(BuildContext context) => showNymSheet<void>(
@@ -35,6 +36,7 @@ class _BotsSheetState extends State<_BotsSheet> {
   String _icon = 'robot';
   String _status = '';
   String? _modelKey;
+  String? _modelLabel;
   Map<String, dynamic>? _catalog;
 
   @override
@@ -64,11 +66,36 @@ class _BotsSheetState extends State<_BotsSheet> {
   List<Map<String, dynamic>> get _models =>
       (_catalog?['models'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
 
+  Map<String, dynamic>? get _model {
+    final key = _modelKey;
+    if (key == null) return null;
+    for (final m in _models) {
+      if (m['key'] == key) return m;
+    }
+    return {'key': key, 'label': _modelLabel};
+  }
+
+  Future<void> _chooseModel() async {
+    final picked = await showModelChoice(
+      context,
+      title: t('Pick the bot\'s model'),
+      catalog: _catalog,
+      current: _modelKey,
+      noneLabel: t('Auto-routed (standard)'),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _modelKey = picked['key'] as String?;
+      _modelLabel = picked['label'] as String?;
+    });
+  }
+
   void _reset() => setState(() {
         _editingId = null;
         _icon = 'robot';
         _status = '';
         _modelKey = null;
+        _modelLabel = null;
         _name.clear();
         _tagline.clear();
         _body.clear();
@@ -82,6 +109,7 @@ class _BotsSheetState extends State<_BotsSheet> {
         _icon = bot.icon;
         _status = '';
         _modelKey = bot.modelKey;
+        _modelLabel = bot.modelLabel;
         _name.text = bot.name;
         _tagline.text = bot.tagline;
         _body.text = bot.instructions;
@@ -107,10 +135,7 @@ class _BotsSheetState extends State<_BotsSheet> {
     final bot = existing.isEmpty
         ? Bot(id: bytesToHex(randomBytes(8)))
         : existing.first;
-    Map<String, dynamic>? model;
-    for (final m in _models) {
-      if (m['key'] == _modelKey) model = m;
-    }
+    final model = _model;
     bot.name = name;
     bot.tagline = _tagline.text.trim();
     bot.icon = _icon;
@@ -280,23 +305,14 @@ class _BotsSheetState extends State<_BotsSheet> {
               ),
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<String?>(
-              value: _modelKey,
-              isExpanded: true,
-              decoration: InputDecoration(labelText: t('Model')),
-              items: [
-                DropdownMenuItem(
-                    value: null, child: Text(t('Auto-routed (standard)'))),
-                for (final m in _models)
-                  DropdownMenuItem(
-                    value: m['key'] as String,
-                    child: Text(
-                      '${m['label']} · ${figure((m['credits'] as num?)?.toInt() ?? 1)}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
-              onChanged: (v) => setState(() => _modelKey = v),
+            ModelSlot(
+              key: const ValueKey('bot-model'),
+              title: t('Model'),
+              model: _model,
+              catalog: _catalog,
+              emptyLabel: t('Auto-routed (standard)'),
+              emptyNote: t('Nymbot picks the model for each message'),
+              onTap: _catalog == null ? null : _chooseModel,
             ),
             const SizedBox(height: 12),
             TextField(

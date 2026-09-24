@@ -7,6 +7,7 @@ import '../../state/app_controller.dart';
 import '../brand_tile.dart';
 import '../../models/model_maker.dart';
 import '../i18n/i18n.dart';
+import '../nym_glyph.dart';
 import 'sheet.dart';
 
 Future<void> showModelsSheet(BuildContext context, {String filter = ''}) =>
@@ -202,6 +203,204 @@ class ModelPicker {
     final b = others.where((m) => maker(m) != maker(a)).firstOrNull ??
         others.firstOrNull;
     return (a['key'] as String, b?['key'] as String?);
+  }
+}
+
+Future<Map<String, dynamic>?> showModelChoice(
+  BuildContext context, {
+  required String title,
+  required Map<String, dynamic>? catalog,
+  String? current,
+  Map<String, String> unavailable = const {},
+  String? noneLabel,
+}) =>
+    showNymSheet<Map<String, dynamic>>(
+      context,
+      (_) => _ModelChoice(
+        title: title,
+        catalog: catalog,
+        current: current,
+        unavailable: unavailable,
+        noneLabel: noneLabel,
+      ),
+    );
+
+class ModelSlot extends StatelessWidget {
+  const ModelSlot({
+    super.key,
+    required this.title,
+    required this.model,
+    required this.catalog,
+    required this.onTap,
+    this.emptyLabel,
+    this.emptyNote,
+  });
+
+  final String title;
+  final Map<String, dynamic>? model;
+  final Map<String, dynamic>? catalog;
+  final VoidCallback? onTap;
+  final String? emptyLabel;
+  final String? emptyNote;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final m = model;
+    final maker = ModelMaker.of(m, catalog);
+    final name = m == null
+        ? (emptyLabel ?? t('Pick a model'))
+        : '${m['label'] ?? m['key']}';
+    final priced = m != null &&
+        (m['credits'] != null ||
+            ChatEngine.nominalTurnRange(m, catalog) != null);
+    return Semantics(
+      button: true,
+      label: '$title: $name',
+      excludeSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              border: Border.all(color: theme.dividerColor),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                maker == null
+                    ? const SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: Center(child: NymGlyph('model', size: 20)),
+                      )
+                    : BrandTile(slug: maker.slug, size: 32),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        maker == null
+                            ? title.toUpperCase()
+                            : '${title.toUpperCase()} · ${maker.name}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11,
+                            letterSpacing: 1,
+                            color: theme.hintColor),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      if (m != null && priced)
+                        Text(
+                          ModelPicker.turnLabel(m, catalog),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: NymbotColors.lightning),
+                        )
+                      else if (m == null && emptyNote != null)
+                        Text(
+                          emptyNote!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              TextStyle(fontSize: 12, color: theme.hintColor),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(t('Change'),
+                    style: TextStyle(
+                        fontSize: 13, color: theme.colorScheme.primary)),
+                Icon(Icons.chevron_right,
+                    size: 18, color: theme.colorScheme.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelChoice extends StatelessWidget {
+  const _ModelChoice({
+    required this.title,
+    required this.catalog,
+    required this.current,
+    required this.unavailable,
+    required this.noneLabel,
+  });
+
+  final String title;
+  final Map<String, dynamic>? catalog;
+  final String? current;
+  final Map<String, String> unavailable;
+  final String? noneLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.95,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (context, controller) => Padding(
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 12,
+          top: 12,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ModelList(
+                catalog: catalog,
+                loading: false,
+                chatOnly: true,
+                filters: ModelPicker.chatFilters,
+                selectedKeys: {if (current != null) current!},
+                unavailable: unavailable,
+                scrollController: controller,
+                onPick: (m, _) => Navigator.pop(context, m),
+              ),
+            ),
+            if (noneLabel != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton(
+                key: const ValueKey('model-choice-none'),
+                style: current == null
+                    ? OutlinedButton.styleFrom(
+                        side: BorderSide(
+                            color: Theme.of(context).colorScheme.primary))
+                    : null,
+                onPressed: () =>
+                    Navigator.pop(context, const <String, dynamic>{}),
+                child: Text(noneLabel!),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
