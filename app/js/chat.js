@@ -25,6 +25,23 @@
         return { thinking: null, body: text || '' };
     }
 
+    function followUpsOf(raw) {
+        if (!Array.isArray(raw)) return null;
+        const out = [];
+        const seen = new Set();
+        for (const item of raw) {
+            if (typeof item !== 'string') continue;
+            const text = item.replace(/\s+/g, ' ').trim();
+            const key = text.toLowerCase();
+            if (text.length < 2 || text.length > 80 || /^[?!/]/.test(text)
+                || /[<>\x00-\x1f\x7f]|https?:\/\//i.test(text) || seen.has(key)) continue;
+            seen.add(key);
+            out.push(text);
+            if (out.length === 3) break;
+        }
+        return out.length ? out : null;
+    }
+
     function titleFor(text) {
         let title = String(text || '')
             .replace(/```[\s\S]*?```/g, ' ')
@@ -552,7 +569,8 @@
             const extra = {
                 eventId: wrap.id,
                 wrap,
-                fresh: isFresh
+                fresh: isFresh,
+                followUps: true
             };
             // Every event the question was split across, in order. The last is
             // `eventId`, which is what a single-event message has always sent
@@ -695,6 +713,7 @@
                 taskType: data.taskType || null,
                 modelLabel: data.modelLabel || null,
                 sources: Array.isArray(data.sources) ? data.sources : null,
+                followUps: followUpsOf(data.followUps),
                 // What the day's free allowance has left, when this reply came
                 // out of it rather than out of a balance.
                 free: data.free || null,
@@ -763,6 +782,7 @@
 
         titleFor,
         splitThinking,
+        followUpsOf,
         reposFor,
         workspaceFor,
         botFor,

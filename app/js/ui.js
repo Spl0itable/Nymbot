@@ -15,6 +15,10 @@
     const LEG_GAP_MS = 3500;
     const LEG_GAP_JITTER_MS = 1500;
     const LEG_STALL_WAITS_MS = [8000, 20000, 45000];
+    const NOTICE_EVERY_MS = 15 * 60 * 1000;
+    const NOTICE_MIN_GAP_MS = 60 * 1000;
+    const NOTICE_KEEP = 200;
+    const REPLY_PIN_MARGIN = 8;
     const MD = window.NymbotMarkdown;
     const QR = window.NymbotQR;
     const Avatar = window.NymbotAvatar;
@@ -109,6 +113,11 @@
         editing: null,
         convFilter: 'all',
         modelFilter: 'all',
+        modelSort: 'provider',
+        notices: [],
+        _noticesAt: 0,
+        _noticeSeq: 0,
+        _noticeTimer: null,
         favourites: [],
         findMatches: [],
         findAt: 0,
@@ -120,6 +129,7 @@
         artifact: null,
         artifactTab: 'preview',
         compare: null,
+        openCitations: new Set(),
         stopped: false,
         _turnWatch: null,
         personaEditing: null,
@@ -135,6 +145,7 @@
         promptEditing: null,
         _lastGroup: null,
         _lastKey: null,
+        _pinnedReply: null,
 
         // --- boot -----------------------------------------------------------
 
@@ -221,6 +232,85 @@
             this.startScheduler();
             setTimeout(() => this.runDueSchedules().catch(() => { }), 4000);
             this.startSync();
+            this.startNotices();
+        },
+
+        startNotices() {
+            if (this._noticeTimer) clearInterval(this._noticeTimer);
+            this._noticeTimer = setInterval(() => this.refreshNotices(true), NOTICE_EVERY_MS);
+            if (!this._noticeWatch) {
+                this._noticeWatch = true;
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden) this.refreshNotices();
+                });
+            }
+            this.refreshNotices(true);
+        },
+
+        async refreshNotices(force) {
+            if (this.settings.notices === false) {
+                this.renderNotice();
+                return;
+            }
+            const now = Date.now();
+            if (!force && now - this._noticesAt < NOTICE_MIN_GAP_MS) return;
+            this._noticesAt = now;
+            const seq = ++this._noticeSeq;
+            const list = await Api.notices();
+            if (seq !== this._noticeSeq) return;
+            this.notices = Array.isArray(list) ? list : [];
+            this.renderNotice();
+        },
+
+        dismissedNotices() {
+            const list = Store.read('dismissedNotices', []);
+            return Array.isArray(list) ? list : [];
+        },
+
+        currentNotice() {
+            if (this.settings.notices === false) return null;
+            const gone = new Set(this.dismissedNotices());
+            return (this.notices || []).find(n => n && n.id != null && !gone.has(n.id)) || null;
+        },
+
+        renderNotice() {
+            const box = $('noticeBanner');
+            if (!box) return;
+            const n = this.currentNotice();
+            box.hidden = !n;
+            if (!n) return;
+            box.dataset.level = (n.level === 'success' || n.level === 'warning') ? n.level : 'info';
+            box.dataset.id = String(n.id);
+            const title = $('noticeTitle');
+            title.textContent = n.title || '';
+            title.hidden = !n.title;
+            $('noticeBody').textContent = n.body || '';
+            const link = $('noticeLink');
+            const url = typeof n.url === 'string' && /^https?:\/\//i.test(n.url) ? n.url : null;
+            link.hidden = !url;
+            if (url) {
+                link.href = url;
+                link.textContent = n.linkLabel || t('Learn more');
+            } else {
+                link.removeAttribute('href');
+            }
+            $('noticeTry').hidden = !(n.kind === 'model' && n.model);
+        },
+
+        dismissNotice() {
+            const n = this.currentNotice();
+            if (!n) return;
+            const list = this.dismissedNotices().filter(id => id !== n.id);
+            list.push(n.id);
+            Store.write('dismissedNotices', list.slice(-NOTICE_KEEP));
+            this.renderNotice();
+        },
+
+        tryNoticeModel() {
+            const n = this.currentNotice();
+            if (!n || !n.model) return;
+            this.setModelFilter('all');
+            this.openModels(n.model);
         },
 
         // --- the same app on every device --------------------------------------
@@ -253,6 +343,7 @@
             if (set.has('settings')) {
                 this.settings = Store.settings();
                 this.applyAppearance();
+                this.refreshNotices(true);
             }
             if (set.has('chats')) this.renderList();
             if (this.conv && set.has('chat-' + this.conv.id)) {
@@ -450,6 +541,7 @@
                 this.appendMessage(m, true);
             }
             this.mountTurn();
+            this.syncFollowUps();
             this.scrollToBottom(true);
         },
 
@@ -628,9 +720,9 @@
             }
             body.appendChild(text);
 
-            if (m.sources && m.sources.length) {
-                body.appendChild(this.citationCards(m.sources));
-            }
+            const cites = Array.isArray(m.sources) && m.sources.length
+                ? this.citationCards(m.sources, m.id) : null;
+            if (cites) body.appendChild(cites);
             if (m.checkpoint) {
                 body.appendChild(this.checkpointCard(m));
             }
@@ -759,7 +851,14 @@
             group.querySelector('.message-group-stack').appendChild(node);
             const spinner = box.querySelector('#thinkingNode');
             if (spinner) box.appendChild(spinner);
-            if (!quiet) this.scrollToBottom();
+            if (!quiet) {
+                if (m.role === 'bot') {
+                    this._pinnedReply = node;
+                    this.pinReply(node);
+                } else if (m.role === 'self' || !(this._pinnedReply && this._pinnedReply.isConnected)) {
+                    this.scrollToBottom();
+                }
+            }
             return node;
         },
 
@@ -769,6 +868,7 @@
             const grouped = old.classList.contains('bubble-grouped');
             const node = this.messageNode(m, grouped);
             old.replaceWith(node);
+            this.syncFollowUps();
             return node;
         },
 
@@ -890,6 +990,7 @@
                     model: next.modelLabel
                         || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: next.sources || null,
+                    followUps: next.followUps || null,
                     calls: next.modelCalls || 1,
                     task: next.taskType || null,
                     continued: true,
@@ -1059,6 +1160,7 @@
         },
 
         scrollToBottom(instant) {
+            this._pinnedReply = null;
             const box = $('messages');
             if (instant) {
                 const before = box.style.scrollBehavior;
@@ -1076,6 +1178,23 @@
             return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
         },
 
+        replyTop(node) {
+            const box = $('messages');
+            const top = node.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+            return Math.max(0, Math.round(top - REPLY_PIN_MARGIN));
+        },
+
+        pinReply(node) {
+            const box = $('messages');
+            if (!node || !node.isConnected) return box.scrollTop;
+            const before = box.style.scrollBehavior;
+            box.style.scrollBehavior = 'auto';
+            box.scrollTop = Math.min(this.replyTop(node), box.scrollHeight - box.clientHeight);
+            box.style.scrollBehavior = before;
+            $('jumpBtn').hidden = this.nearBottom();
+            return box.scrollTop;
+        },
+
         typeInto(node, message) {
             const speeds = { slow: 26, normal: 12, fast: 5 };
             const step = speeds[this.settings.typewriterSpeed] || 12;
@@ -1084,10 +1203,13 @@
             if (!text) return Promise.resolve();
             const caret = el('span', 'stream-caret');
             let at = 0;
-            const stick = this.nearBottom();
+            const box = $('messages');
+            let follow = true;
+            let placed = box.scrollTop;
             return new Promise((resolve) => {
                 const tick = () => {
                     if (!node.isConnected) { resolve(); return; }
+                    if (follow && Math.abs(box.scrollTop - placed) > 2) follow = false;
                     at = Math.min(target.length, at + Math.max(2, Math.round(target.length / 90)));
                     const partial = target.slice(0, at);
                     text.innerHTML = MD.render(partial, {
@@ -1096,7 +1218,7 @@
                         media: message.task || null
                     });
                     text.appendChild(caret);
-                    if (stick) $('messages').scrollTop = $('messages').scrollHeight;
+                    if (follow) placed = this.pinReply(node);
                     if (at >= target.length) {
                         caret.remove();
                         resolve();
@@ -1110,12 +1232,14 @@
 
         // --- sending ----------------------------------------------------------
 
-        async send(override, target) {
+        async send(override, target, opts) {
             const conv = target || this.conv;
             if (!conv) return;
             const input = $('input');
             const typed = override != null ? override : input.value.trim();
+            const bare = !!(opts && opts.bare);
             if (!typed) return;
+            this._pinnedReply = null;
             const here = () => !!(this.conv && this.conv.id === conv.id);
 
             // Commands run whatever else is happening: they are free, instant,
@@ -1129,12 +1253,13 @@
                 return;
             }
 
-            const text = this.withMediaModel(typed, conv);
+            const text = bare ? typed : this.withMediaModel(typed, conv);
 
             // Typing while it is still writing used to do nothing at all — the
             // message was dropped on the floor with no sign it had been. It
             // waits its turn instead, and says that it is waiting.
             if (this.sendingIn(conv.id)) {
+                if (bare) return;
                 this.queueFor(conv.id, true).push(typed);
                 if (here()) this.renderQueue();
                 if (override == null) {
@@ -1155,7 +1280,7 @@
                 this.hideSuggest();
             }
 
-            const composing = here();
+            const composing = here() && !bare;
             const attachments = composing ? this.attachments.slice() : [];
             const quote = composing ? this.quote : null;
 
@@ -1243,7 +1368,7 @@
             this.showMessage(conv.id, mine);
             // Read for standing facts before the reply comes back, so what is
             // remembered is offered while the message is still on screen.
-            this.noticeMemories(typed, conv);
+            if (!bare) this.noticeMemories(typed, conv);
 
             let live = conv;
             if (!live.title) {
@@ -1276,6 +1401,7 @@
                     model: res.modelLabel
                         || (res.pro ? ((live.proModel || this.settings.proModel || {}).label || null) : null),
                     sources: res.sources || null,
+                    followUps: res.followUps || null,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
                     // Kept so the cost breakdown reports what the worker said
                     // it did rather than re-deriving a guess after the fact.
@@ -1394,6 +1520,7 @@
                 row.appendChild(drop);
                 strip.appendChild(row);
             });
+            this.syncFollowUps();
         },
 
         /// Sends the next thing that was waiting. One at a time: they were
@@ -1442,6 +1569,7 @@
             };
             this.turns.set(conv.id, turn);
             this.mountTurn();
+            this.syncFollowUps();
             this.refreshComposer();
             this.renderList();
             return turn;
@@ -1456,6 +1584,7 @@
             }
             this.refreshComposer();
             this.renderList();
+            this.syncFollowUps();
         },
 
         mountTurn() {
@@ -1466,6 +1595,104 @@
             $('messages').appendChild(turn.node);
             this.renderProgress(turn);
             this.scrollToBottom();
+        },
+
+        latestReply(convId) {
+            const msgs = Store.messages(convId);
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].role === 'self') return null;
+                if (msgs[i].role === 'bot') return msgs[i];
+            }
+            return null;
+        },
+
+        syncFollowUps() {
+            const box = $('messages');
+            const conv = this.conv;
+            const m = conv && !this.sendingIn(conv.id) && !this.queueFor(conv.id).length ? this.latestReply(conv.id) : null;
+            const items = m && Chat.followUpsOf(m.followUps);
+            const node = items && items.length ? box.querySelector(`.chat-message[data-id="${m.id}"]`) : null;
+            const key = node ? m.id + '\n' + items.join('\n') : '';
+            let kept = null;
+            for (const row of box.querySelectorAll('.follow-ups')) {
+                if (!kept && key && row.parentNode === node && row.dataset.key === key) kept = row;
+                else row.remove();
+            }
+            if (kept || !node) return;
+            const follow = this.nearBottom();
+            const row = el('div', 'follow-ups');
+            row.dataset.key = key;
+            row.setAttribute('role', 'group');
+            row.setAttribute('aria-label', t('Suggested replies'));
+            for (const text of items) row.appendChild(this.followUpChip(conv.id, m.id, text));
+            node.insertBefore(row, node.querySelector('.msg-actions'));
+            if (follow) {
+                const pin = this._pinnedReply;
+                if (pin && pin.isConnected && pin.getBoundingClientRect().top >= box.getBoundingClientRect().top - 2) this.pinReply(pin);
+                else this.scrollToBottom();
+            }
+        },
+
+        followUpChip(convId, id, text) {
+            const chip = el('button', 'follow-up');
+            chip.type = 'button';
+            chip.title = t('Sends this now. Right-click or long-press to edit it first.');
+            chip.appendChild(Icons.node('send', { size: 11 }));
+            const label = el('span', 'follow-up-text', text);
+            label.dir = 'auto';
+            chip.appendChild(label);
+            let hold = null;
+            let held = false;
+            const edit = () => {
+                clearTimeout(hold);
+                held = true;
+                this.editFollowUp(text);
+            };
+            chip.addEventListener('pointerdown', (e) => {
+                held = false;
+                if (e.pointerType !== 'mouse') hold = setTimeout(edit, 500);
+            });
+            for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+                chip.addEventListener(type, () => clearTimeout(hold));
+            }
+            chip.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (!held) edit();
+            });
+            chip.addEventListener('click', (e) => {
+                if (held) {
+                    held = false;
+                    if (e.detail) return;
+                }
+                if (e.shiftKey) {
+                    this.editFollowUp(text);
+                    return;
+                }
+                this.followUp(convId, id, text);
+            });
+            return chip;
+        },
+
+        followUp(convId, id, text) {
+            if (!this.conv || this.conv.id !== convId) return;
+            if (this.sendingIn(convId) || this.queueFor(convId).length) return;
+            const m = this.latestReply(convId);
+            const items = m && m.id === id ? Chat.followUpsOf(m.followUps) : null;
+            if (!items || !items.includes(text)) return;
+            for (const row of $('messages').querySelectorAll('.follow-ups')) row.remove();
+            this.send(text, this.conv, { bare: true });
+        },
+
+        editFollowUp(text) {
+            if (!this.conv) return;
+            const input = $('input');
+            const draft = input.value.trim();
+            input.value = draft ? draft + ' ' + text : text;
+            Store.setDraft(this.conv.id, input.value);
+            this.autoGrow();
+            this.updateHints();
+            input.focus();
+            input.setSelectionRange(input.value.length);
         },
 
         turnLabel(turn, label) {
@@ -1498,7 +1725,9 @@
 
         showMessage(convId, m) {
             if (!this.conv || this.conv.id !== convId) return null;
-            return this.appendMessage(m);
+            const node = this.appendMessage(m);
+            this.syncFollowUps();
+            return node;
         },
 
         stop() {
@@ -1734,7 +1963,7 @@
             if (!m) return false;
             const cmd = m[1].toLowerCase();
             const arg = m[2].trim();
-            if ((cmd === 'image' || cmd === 'video') && /^off$/i.test(arg)) {
+            if ((cmd === 'image' || cmd === 'video' || cmd === 'speak') && /^off$/i.test(arg)) {
                 this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
                 this.note(t('Back to answering in words.'));
                 return true;
@@ -2440,7 +2669,9 @@
                 composer.setAttribute('placeholder', media
                     ? (media.kind === 'video'
                         ? t('Describe the video to make')
-                        : t('Describe the picture to make'))
+                        : (media.kind === 'speech'
+                            ? t('Type what to read aloud')
+                            : t('Describe the picture to make')))
                     : t('Ask something, or type ? for commands'));
             }
 
@@ -2630,7 +2861,7 @@
         },
 
         mediaNeedsPro(media) {
-            return !!(media && (media.kind === 'image' || media.kind === 'video'));
+            return !!(media && (media.kind === 'image' || media.kind === 'video' || media.kind === 'speech'));
         },
 
         generatorCommand(command) {
@@ -2715,41 +2946,59 @@
             this.renderModels();
         },
 
-        cheapChatCeiling() {
-            if (this._cheapCeilingFor === this.models) return this._cheapCeiling;
-            const rates = ((this.models && this.models.models) || [])
-                .filter(m => (m.kind || 'chat') === 'chat' && !m.command
-                    && Number(m.outUsdPerMTok) > 0)
-                .map(m => Number(m.outUsdPerMTok))
-                .sort((a, b) => a - b);
-            this._cheapCeilingFor = this.models;
-            this._cheapCeiling = rates.length ? rates[Math.floor(rates.length / 2)] : null;
-            return this._cheapCeiling;
-        },
-
-        modelIsCheap(m) {
-            const ceiling = this.cheapChatCeiling();
-            const rate = Number(m.outUsdPerMTok);
-            if (ceiling != null) return rate > 0 && rate <= ceiling;
-            return (m.credits || 0) <= 2;
+        setModelFilter(filter) {
+            this.modelFilter = filter || 'all';
+            for (const b of document.querySelectorAll('#modelFilters .pill')) {
+                b.classList.toggle('is-active', b.dataset.filter === this.modelFilter);
+            }
         },
 
         modelMatchesFilter(m) {
             const text = `${m.key} ${m.label} ${m.description || ''}`.toLowerCase();
             const kind = m.kind || 'chat';
-            // The generators are not chat models, so they answer only to their
-            // own two filters rather than turning up wherever you look.
-            if (this.modelFilter === 'image') return kind === 'image';
-            if (this.modelFilter === 'video') return kind === 'video';
-            if (kind !== 'chat') return false;
             switch (this.modelFilter) {
-                case 'cheap': return this.modelIsCheap(m);
-                case 'reasoning': return /reason|think|o\d|r1|deep/.test(text);
-                case 'vision': return /vision|image|multimodal|omni|4o|gemini|claude|gpt-4/.test(text);
-                case 'code': return /code|coder|dev|engineer|sonnet|opus|qwen|kimi/.test(text);
+                case 'image':
+                case 'video':
+                case 'speech':
+                    return kind === this.modelFilter;
+                case 'reasoning':
+                    return kind === 'chat' && (!!m.reasoning || /reason|think|o\d|r1|deep/.test(text));
+                case 'vision':
+                    return kind === 'chat' && (!!m.vision || /vision|image|multimodal|omni|4o|gemini|claude|gpt-4/.test(text));
+                case 'code':
+                    return kind === 'chat' && /code|coder|dev|engineer|sonnet|opus|qwen|kimi/.test(text);
                 case 'favourites': return this.favourites.includes(m.key);
                 default: return true;
             }
+        },
+
+        modelSearchTerms() {
+            return ($('modelSearch').value || '').toLowerCase().split(/\s+/).filter(Boolean);
+        },
+
+        modelMatchesSearch(m, terms) {
+            if (!terms.length) return true;
+            const hay = [m.key, m.label, m.description, m.author, m.kind || 'chat']
+                .filter(Boolean).join(' ').toLowerCase();
+            return terms.every(term => hay.includes(term));
+        },
+
+        modelSortPrice(m) {
+            const turn = (m.kind || 'chat') === 'chat' ? this.modelTurnCredits(m) : null;
+            return turn != null ? turn.low : (Number(m.credits) || 0);
+        },
+
+        sortModels(rows) {
+            const byName = (a, b) => String(a.label || '').localeCompare(String(b.label || ''));
+            if (this.modelSort === 'name') return rows.slice().sort(byName);
+            const dir = this.modelSort === 'price-high' ? -1 : 1;
+            return rows.slice().sort((a, b) => {
+                const price = this.modelSortPrice(a) - this.modelSortPrice(b);
+                if (price) return price * dir;
+                const most = (Number(a.max) || Number(a.credits) || 0) - (Number(b.max) || Number(b.credits) || 0);
+                if (most) return most * dir;
+                return byName(a, b);
+            });
         },
 
         /// "3 credits", or "1–4 credits" where the reply's length moves it.
@@ -2792,22 +3041,34 @@
         },
 
         renderModels() {
-            const term = ($('modelSearch').value || '').toLowerCase().trim();
+            const terms = this.modelSearchTerms();
             const list = $('modelList');
             list.innerHTML = '';
             const current = (this.conv && this.conv.proModel) || this.settings.proModel;
             const media = this.mediaModel();
             const forChat = $('modelForChat').checked;
             const byKey = new Map(this.models.models.map(m => [m.key, m]));
-            for (const group of this.models.groups || []) {
-                const rows = group.keys
-                    .map(k => byKey.get(k))
-                    .filter(m => m
-                        && (!term || m.key.toLowerCase().includes(term) || m.label.toLowerCase().includes(term))
-                        && this.modelMatchesFilter(m));
-                if (!rows.length) continue;
-                list.appendChild(el('div', 'model-group', group.author));
-                for (const m of rows) {
+            const shown = (group) => group.keys
+                .map(k => byKey.get(k))
+                .filter(m => m && this.modelMatchesSearch(m, terms) && this.modelMatchesFilter(m));
+            const sections = [];
+            if (this.modelSort === 'provider') {
+                for (const group of this.models.groups || []) {
+                    const rows = shown(group);
+                    if (rows.length) sections.push({ heading: group.author, rows: rows.map(m => ({ m, group })) });
+                }
+            } else {
+                const rows = [];
+                for (const group of this.models.groups || []) {
+                    for (const m of shown(group)) rows.push({ m, group });
+                }
+                const groupOf = new Map(rows.map(r => [r.m.key, r.group]));
+                const sorted = this.sortModels(rows.map(r => r.m)).map(m => ({ m, group: groupOf.get(m.key) }));
+                if (sorted.length) sections.push({ heading: null, rows: sorted });
+            }
+            for (const section of sections) {
+                if (section.heading) list.appendChild(el('div', 'model-group', section.heading));
+                for (const { m, group } of section.rows) {
                     const pinned = m.command
                         ? !!(media && media.key === m.key)
                         : !!(current && current.key === m.key);
@@ -2851,7 +3112,9 @@
                                 ? t('Back to answering in words.')
                                 : (m.kind === 'video'
                                     ? t('{name} pinned. Every message now makes a video.', { name: m.label })
-                                    : t('{name} pinned. Every message now makes a picture.', { name: m.label })));
+                                    : (m.kind === 'speech'
+                                        ? t('{name} pinned. Every message now comes back as a voice clip.', { name: m.label })
+                                        : t('{name} pinned. Every message now makes a picture.', { name: m.label }))));
                             $('input').focus();
                             return;
                         }
@@ -3800,6 +4063,7 @@
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
             $('setProgress').checked = s.showProgress !== false;
+            $('setNotices').checked = s.notices !== false;
             $('setSync').checked = s.sync !== false;
             this.renderVoices();
             this.renderLanguages();
@@ -3850,8 +4114,10 @@
                 autoDeleteDays: Number($('setAutoDelete').value) || 0,
                 autoContinue: Number($('setAutoContinue').value) || 0,
                 showProgress: $('setProgress').checked,
+                notices: $('setNotices').checked,
                 sync: $('setSync').checked
             });
+            this.refreshNotices(true);
             // Turning it on mid-session starts it; turning it off stops writing,
             // and leaves what is already there for another device.
             if (this.settings.sync !== false) this.startSync();
@@ -4141,51 +4407,93 @@
 
         /// A chip only ever showed a title. A card shows where it came from
         /// and what it said, which is what makes a citation checkable rather
-        /// than decorative. The mark is a letter, never a fetched favicon, so
-        /// a citation cannot become a tracking pixel.
-        citationCards(sources) {
-            const wrap = el('div', 'citations');
-            const cards = sources.slice(0, 8);
-            wrap.appendChild(el('p', 'citations-head', cards.length === 1
+        /// than decorative.
+        citationCards(sources, id) {
+            const cards = sources.filter(s => s && typeof s === 'object' && !Array.isArray(s)).slice(0, 8);
+            if (!cards.length) return null;
+            const label = cards.length === 1
                 ? t('1 source')
-                : t('{n} sources', { n: cards.length })));
-            cards.forEach((s, i) => {
-                const url = typeof s.url === 'string' ? s.url : '';
-                let host = '';
-                try {
-                    host = url ? new URL(url).hostname.replace(/^www\./, '') : '';
-                } catch (_) { }
-                const title = s.title || s.name || host || t('source');
-                const card = el(url ? 'a' : 'div', 'citation');
-                if (url) {
-                    card.href = url;
-                    card.target = '_blank';
-                    card.rel = 'noopener noreferrer';
-                }
-                const mark = el('span', 'citation-mark',
-                    (host || title).slice(0, 1).toUpperCase());
-                if (host) {
-                    const icon = el('img', 'citation-icon');
-                    icon.src = `https://${C.apiHost}/api/proxy?action=favicon&host=`
-                        + encodeURIComponent(host);
-                    icon.alt = '';
-                    icon.loading = 'lazy';
-                    icon.referrerPolicy = 'no-referrer';
-                    icon.addEventListener('load', () => mark.classList.add('has-icon'));
-                    icon.addEventListener('error', () => { icon.remove(); window.NymbotEdge.nudge(); });
-                    mark.appendChild(icon);
-                }
-                card.appendChild(mark);
-                const main = el('span', 'citation-main');
-                main.appendChild(el('strong', null, `${i + 1}. ${title}`));
-                if (host) main.appendChild(el('span', 'citation-host', host));
-                const snippet = s.snippet || s.description || s.excerpt || '';
-                if (snippet) main.appendChild(el('span', 'citation-snippet', snippet));
-                card.appendChild(main);
-                if (url) card.appendChild(Icons.node('link', { size: 12 }));
-                wrap.appendChild(card);
-            });
+                : t('{n} sources', { n: cards.length });
+            const wrap = el('div', 'citations');
+            const list = el('div', 'citations-list');
+            cards.forEach((s, i) => list.appendChild(this.citationCard(s, i)));
+            if (cards.length <= 2) {
+                wrap.appendChild(el('p', 'citations-head', label));
+                wrap.appendChild(list);
+                return wrap;
+            }
+            const toggle = el('button', 'citations-toggle');
+            toggle.type = 'button';
+            list.id = 'citations-' + id;
+            toggle.setAttribute('aria-controls', list.id);
+            const marks = el('span', 'citations-marks');
+            marks.setAttribute('aria-hidden', 'true');
+            for (const s of cards) {
+                const { host, title } = this.citationInfo(s);
+                marks.appendChild(this.citationMark(host, title));
+            }
+            toggle.appendChild(marks);
+            toggle.appendChild(el('span', 'citations-count', label));
+            toggle.appendChild(Icons.node('chevron', { size: 12 }));
+            const show = (open) => {
+                list.hidden = !open;
+                toggle.setAttribute('aria-expanded', String(open));
+                toggle.title = open ? t('Hide sources') : t('Show sources');
+                wrap.classList.toggle('is-open', open);
+                if (open) this.openCitations.add(id);
+                else this.openCitations.delete(id);
+            };
+            toggle.addEventListener('click', () => show(list.hidden));
+            wrap.appendChild(toggle);
+            wrap.appendChild(list);
+            show(this.openCitations.has(id));
             return wrap;
+        },
+
+        citationInfo(s) {
+            const url = typeof s.url === 'string' ? s.url : '';
+            let host = '';
+            try {
+                host = url ? new URL(url).hostname.replace(/^www\./, '') : '';
+            } catch (_) { }
+            const title = s.title || s.name || host || t('source');
+            return { url, host, title };
+        },
+
+        citationMark(host, title) {
+            const mark = el('span', 'citation-mark',
+                (host || title).slice(0, 1).toUpperCase());
+            if (host) {
+                const icon = el('img', 'citation-icon');
+                icon.src = `https://${C.apiHost}/api/proxy?action=favicon&host=`
+                    + encodeURIComponent(host);
+                icon.alt = '';
+                icon.loading = 'lazy';
+                icon.referrerPolicy = 'no-referrer';
+                icon.addEventListener('load', () => mark.classList.add('has-icon'));
+                icon.addEventListener('error', () => { icon.remove(); window.NymbotEdge.nudge(); });
+                mark.appendChild(icon);
+            }
+            return mark;
+        },
+
+        citationCard(s, i) {
+            const { url, host, title } = this.citationInfo(s);
+            const card = el(url ? 'a' : 'div', 'citation');
+            if (url) {
+                card.href = url;
+                card.target = '_blank';
+                card.rel = 'noopener noreferrer';
+            }
+            card.appendChild(this.citationMark(host, title));
+            const main = el('span', 'citation-main');
+            main.appendChild(el('strong', null, `${i + 1}. ${title}`));
+            if (host) main.appendChild(el('span', 'citation-host', host));
+            const snippet = s.snippet || s.description || s.excerpt || '';
+            if (snippet) main.appendChild(el('span', 'citation-snippet', snippet));
+            card.appendChild(main);
+            if (url) card.appendChild(Icons.node('link', { size: 12 }));
+            return card;
         },
 
         // --- what a reply cost -------------------------------------------------
@@ -5266,6 +5574,7 @@
                 pro: run.result.pro !== false,
                 model: run.model.label,
                 sources: run.result.sources || null,
+                followUps: run.result.followUps || null,
                 calls: run.result.modelCalls || 1,
                 task: run.result.taskType || null,
                 ts: Date.now()
@@ -6354,12 +6663,11 @@
                     this.renderList();
                 },
                 'model-filter': (target) => {
-                    this.modelFilter = target.dataset.filter;
-                    for (const b of document.querySelectorAll('#modelFilters .pill')) {
-                        b.classList.toggle('is-active', b === target);
-                    }
+                    this.setModelFilter(target.dataset.filter);
                     this.renderModels();
                 },
+                'notice-dismiss': () => this.dismissNotice(),
+                'notice-try': () => this.tryNoticeModel(),
                 'tier': (target) => {
                     if (target.dataset.tier === 'pro') { this.openModels(); return; }
                     this.dropProMedia();
@@ -6789,6 +7097,10 @@
 
             $('convSearch').addEventListener('input', () => this.renderList());
             $('modelSearch').addEventListener('input', () => this.renderModels());
+            $('modelSort').addEventListener('change', () => {
+                this.modelSort = $('modelSort').value || 'provider';
+                if (this.models && this.models.models) this.renderModels();
+            });
             $('promptSearch').addEventListener('input', () => this.renderPrompts());
             $('repoBrowseFilter').addEventListener('input', () => this.renderBrowsedRepos());
             $('memorySearch').addEventListener('input', () => this.renderMemories());

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -27,6 +28,7 @@ import 'sheets/workspaces_sheet.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'message_bubble.dart';
+import 'notice_banner.dart';
 import 'nym_avatar.dart';
 import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
@@ -50,7 +52,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // Styles the markdown you write while you write it, so what is in the
   // field looks like what will be sent.
   final _input = MarkdownEditingController();
@@ -73,12 +75,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _openActions;
   bool _atBottom = true;
   String? _findTerm;
+  bool _followingUp = false;
 
   AppController? _app;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       final near = _scroll.position.maxScrollExtent - _scroll.offset < 140;
@@ -99,7 +103,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_app?.refreshNotices());
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final app = _app;
     final conv = app?.current;
     if (app != null && conv != null) {
@@ -126,6 +136,37 @@ class _HomeScreenState extends State<HomeScreen> {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
     });
+  }
+
+  void _toReply() {
+    if (!mounted) return;
+    final messages = AppScope.read(context).messages;
+    if (messages.isEmpty || messages.last.role != ChatRole.bot) {
+      _toBottom();
+      return;
+    }
+    final id = messages.last.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _alignTop(id, 4));
+  }
+
+  void _alignTop(String id, int tries) {
+    if (!mounted || !_scroll.hasClients) return;
+    final box = _keys[id]?.currentContext?.findRenderObject();
+    final viewport = box == null ? null : RenderAbstractViewport.maybeOf(box);
+    if (box == null || viewport == null) {
+      if (tries <= 0) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _alignTop(id, tries - 1));
+      return;
+    }
+    final position = _scroll.position;
+    final top = viewport.getOffsetToReveal(box, 0).offset - 8;
+    _scroll.animateTo(
+      top.clamp(position.minScrollExtent, position.maxScrollExtent),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
   }
 
   void _say(String text) {
@@ -156,7 +197,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (m == null) return false;
     final cmd = m.group(1)!.toLowerCase();
     final arg = m.group(2)!.trim();
-    if ((cmd == 'image' || cmd == 'video') &&
+    if ((cmd == 'image' || cmd == 'video' || cmd == 'speak') &&
         RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
       await app.setMediaModel(null, forChat: app.current?.mediaModel != null);
       await app.note(t('Back to answering in words.'));
@@ -465,12 +506,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _composerHint(Map<String, dynamic>? media) {
     if (media == null) return t('Ask something, or type ? for commands');
-    return media['kind'] == 'video'
-        ? t('Describe the video to make')
-        : t('Describe the picture to make');
+    return switch (media['kind']) {
+      'video' => t('Describe the video to make'),
+      'speech' => t('Type what to read aloud'),
+      _ => t('Describe the picture to make'),
+    };
   }
 
-  Future<void> _send([String? override]) async {
+  Future<void> _send([String? override, bool bare = false]) async {
     final text = override ?? _input.markdown.trim();
     if (text.isEmpty) return;
     final app = AppScope.read(context);
@@ -486,31 +529,69 @@ class _HomeScreenState extends State<HomeScreen> {
     _toBottom();
     // Read for standing facts before the reply comes back, so what is
     // remembered is offered while the message is still on screen.
-    final noticed = await app.noticeMemories(text);
-    if (noticed.isNotEmpty && mounted) {
-      _sayUndo(
-        noticed.length == 1
-            ? t('Remembered: {what}', {'what': noticed.first.text})
-            : t('Remembered {n} things from that.', {'n': noticed.length}),
-        () {
-          for (final entry in noticed) {
-            app.deleteMemory(entry.id);
-          }
-        },
-      );
+    if (!bare) {
+      final noticed = await app.noticeMemories(text);
+      if (noticed.isNotEmpty && mounted) {
+        _sayUndo(
+          noticed.length == 1
+              ? t('Remembered: {what}', {'what': noticed.first.text})
+              : t('Remembered {n} things from that.', {'n': noticed.length}),
+          () {
+            for (final entry in noticed) {
+              app.deleteMemory(entry.id);
+            }
+          },
+        );
+      }
     }
     // A message typed while it was still writing is held, not sent, so nothing
     // below should read out a reply that has not happened yet.
-    final went = await app.send(text);
-    _toBottom();
+    final asked = app.current?.id;
+    final went = await app.send(text, bare: bare);
+    if (went && app.current?.id == asked) {
+      _toReply();
+    } else {
+      _toBottom();
+    }
     if (!mounted || !went) return;
     if (app.settings.hapticOnReply) unawaited(HapticFeedback.lightImpact());
-    if (app.settings.autoSpeak && app.messages.isNotEmpty) {
+    if (app.settings.autoSpeak &&
+        app.current?.id == asked &&
+        app.messages.isNotEmpty) {
       final last = app.messages.last;
       if (last.role == ChatRole.bot) {
         await _voice.speak(last.id, last.content, rate: app.settings.speechRate);
       }
     }
+  }
+
+  Future<void> _followUp(ChatMessage m, String text) async {
+    final app = AppScope.read(context);
+    if (_followingUp || app.sending || app.queued.isNotEmpty) return;
+    final at = followUpsAt(app.messages);
+    if (at < 0 || app.messages[at].id != m.id || !m.followUps.contains(text)) return;
+    unawaited(HapticFeedback.selectionClick());
+    setState(() => _followingUp = true);
+    try {
+      await _send(text, true);
+    } finally {
+      if (mounted) setState(() => _followingUp = false);
+    }
+  }
+
+  void _editFollowUp(String text) {
+    final app = AppScope.read(context);
+    final draft = _input.markdown.trim();
+    final next = draft.isEmpty ? text : '$draft $text';
+    _input.setMarkdown(next);
+    _lastInput = _input.text;
+    setState(() {
+      _suggestTerm = '';
+      _hasText = true;
+    });
+    final conv = app.current;
+    if (conv != null) unawaited(app.store.setDraft(conv.id, next));
+    _inputFocus.requestFocus();
   }
 
   Future<void> _messageAction(MessageAction action, ChatMessage m) async {
@@ -523,7 +604,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await _voice.toggleSpeak(m.id, m.content, rate: app.settings.speechRate);
       case MessageAction.regenerate:
         await app.regenerate(m);
-        _toBottom();
+        _toReply();
       case MessageAction.resend:
         await _send(m.content);
       case MessageAction.edit:
@@ -771,6 +852,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          const NoticeBanner(),
           const NymbotToolbar(),
           const ContextBar(),
           if (_findTerm != null) _findBar(context, app),
@@ -849,6 +931,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final selfPubkey =
         anonymous ? (app.anon.pubkey ?? app.identity.pubkey) : app.identity.pubkey;
     final me = anonymous ? null : app.profiles.of(selfPubkey);
+    final offer = app.sending || app.queued.isNotEmpty || _followingUp
+        ? -1
+        : followUpsAt(app.messages);
 
     return ListView.builder(
       controller: _scroll,
@@ -890,6 +975,9 @@ class _HomeScreenState extends State<HomeScreen> {
             speaking: _voice.speakingId == m.id,
             highlighted: _highlighted == m.id,
             onAction: _messageAction,
+            followUps: i == offer ? m.followUps : const [],
+            onFollowUp: (text) => _followUp(m, text),
+            onEditFollowUp: _editFollowUp,
           ),
         );
       },
@@ -1460,6 +1548,15 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (app.sendingIn(conv))
+              const Padding(
+                padding: EdgeInsets.only(right: 6),
+                child: SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                ),
+              ),
             if (conv.anon)
               const Text('anon', style: TextStyle(fontSize: 11)),
             IconButton(

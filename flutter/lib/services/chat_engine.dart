@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../config.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
+import '../core/crypto/pq.dart' as pqc;
 import '../core/crypto/keys.dart';
 import '../models/bot.dart';
 import '../models/conversation.dart';
@@ -56,6 +57,7 @@ typedef TurnResult = ({
   bool lowBalance,
   List<String> repos,
   List<Map<String, dynamic>> sources,
+  List<String> followUps,
   /// What the day's free allowance has left, when this reply came out of it
   /// rather than out of a balance.
   FreeAllowance? free,
@@ -85,6 +87,17 @@ typedef TurnStep = ({
 
 typedef CostEstimate = ({String tier, double low, double high, bool metered});
 
+class TurnControl {
+  TurnControl({this.onStatus});
+
+  void Function(String? status)? onStatus;
+  bool cancelled = false;
+
+  void cancel() => cancelled = true;
+
+  void say(String? status) => onStatus?.call(status);
+}
+
 /// One turn, end to end: seal, publish, ask the worker, open the reply.
 class ChatEngine {
   ChatEngine({
@@ -101,15 +114,6 @@ class ChatEngine {
   final NymbotApi api;
   final AnonMode anon;
 
-  void Function(String? status)? onStatus;
-
-  bool _cancelled = false;
-  bool sending = false;
-
-  void abort() {
-    _cancelled = true;
-    sending = false;
-  }
 
   static ({String? thinking, String body}) splitThinking(String text) {
     for (final tag in const ['think', 'thinking', 'reasoning']) {
@@ -596,10 +600,10 @@ class ChatEngine {
     return '${trimmed.replaceFirst(RegExp(r'[,;:.\-]$'), '')}…';
   }
 
-  Future<void> _wait(Duration total) async {
+  Future<void> _wait(Duration total, TurnControl control) async {
     const slice = Duration(milliseconds: 250);
     var left = total;
-    while (left > Duration.zero && !_cancelled) {
+    while (left > Duration.zero && !control.cancelled) {
       final step = left < slice ? left : slice;
       await Future<void>.delayed(step);
       left -= step;
@@ -632,11 +636,11 @@ class ChatEngine {
     /// Answers the message outside the conversation, the way a '!' question is answered.
     bool fresh = false,
     required void Function(List<String> ids) onThreadIds,
+    TurnControl? control,
   }) async {
     final rootId = conv.rootId;
     final anonymous = conv.anon;
-    _cancelled = false;
-    sending = true;
+    final turn = control ?? TurnControl();
     if (pq.botKey == null) {
       try {
         await pq.resolveBot();
@@ -724,6 +728,7 @@ class ChatEngine {
       'eventId': wrap!.id,
       'wrap': wrap.toJson(),
       'fresh': freshTurn,
+      'followUps': true,
       // Every event the question was split across, in order. The last is
       // `eventId`, which is what a message that fits has always sent.
       if (partIds.length > 1) 'parts': partIds,
@@ -731,6 +736,10 @@ class ChatEngine {
         'wraps': [for (final w in partWraps) w.toJson()],
       if (resume != null && resume.isNotEmpty) 'resume': resume,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
+      if (announcement == null &&
+          !useAnon &&
+          (identity.rootLocked || identity.kem == null))
+        'pqClassical': true,
       if (webSearch) 'web': true,
       if (attachments.isNotEmpty)
         'attachments': attachments.map((a) => a.toPayload()).toList(),
@@ -751,12 +760,12 @@ class ChatEngine {
     var held = 0;
     var waited = 0;
     while (true) {
-      if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+      if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
       res = await api.call('pm', signer,
           extra: extra, timeout: NymbotConfig.pmTimeout);
       if (res.data['pending'] == true && held++ < 5) {
-        onStatus?.call(t('Still working on that one…'));
-        await _wait(const Duration(seconds: 3));
+        turn.say(t('Still working on that one…'));
+        await _wait(const Duration(seconds: 3), turn);
         continue;
       }
       final failed = res.status >= 400 || res.data['error'] != null;
@@ -765,15 +774,15 @@ class ChatEngine {
           waited < busyWaits.length &&
           NymbotApi.busy(res.status, res.data)) {
         final wait = busyWaits[waited++];
-        onStatus?.call(t(
+        turn.say(t(
             'Too many requests just now — waiting {n} seconds rather than asking again straight away.',
             {'n': wait.inSeconds}));
-        await _wait(wait);
+        await _wait(wait, turn);
         continue;
       }
       break;
     }
-    if (_cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+    if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
     final data = res.data;
 
     if (data['pending'] == true) {
@@ -820,14 +829,19 @@ class ChatEngine {
       }
     }
 
-    final recipient = useAnon ? await anon.recipient() : identity.pqIdentity;
+    final recipients = useAnon
+        ? [await anon.recipient()]
+        : (identity.pqCandidates().isEmpty
+            ? <pqc.PqIdentity?>[null]
+            : identity.pqCandidates());
     final opened = await giftwrap.unwrapGiftWrap(replyEvent, [
-      (
-        sk: senderSk,
-        bitchat: false,
-        kemSk: recipient?.kemSecretKey,
-        kemPk: recipient?.kemPublicKey,
-      ),
+      for (final recipient in recipients)
+        (
+          sk: senderSk,
+          bitchat: false,
+          kemSk: recipient?.kemSecretKey,
+          kemPk: recipient?.kemPublicKey,
+        ),
     ]);
     if (opened == null) {
       throw ChatFailure(t('Nymbot replied, but this device could not decrypt it.'));
@@ -855,6 +869,7 @@ class ChatEngine {
       repos: repos.map((r) => r.repo).toList(),
       sources: (data['sources'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
           const <Map<String, dynamic>>[],
+      followUps: ChatMessage.followUpsOf(data['followUps']),
       truncated: data['truncated'] == true,
       resumeToken: data['resumeToken'] as String?,
       nextReserve: (data['nextReserve'] as num?)?.toInt() ?? 0,

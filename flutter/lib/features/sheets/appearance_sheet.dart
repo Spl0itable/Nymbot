@@ -190,6 +190,21 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                 app.saveSettings(s);
               },
             ),
+            const SizedBox(height: 6),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              value: s.notices,
+              title: Text(t('Show announcements'),
+                  style: const TextStyle(fontSize: 13)),
+              onChanged: app.setNotices,
+            ),
+            Text(
+              t('Notices about new models and other news, pinned to the top '
+                  'of the chat. Each one can be dismissed.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
             const SizedBox(height: 16),
             Text(t('Long tasks'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),

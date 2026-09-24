@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/theme/theme.dart';
 import '../models/artifact.dart';
@@ -45,6 +46,9 @@ class MessageBubble extends StatefulWidget {
     this.onUndoCheckpoint,
     this.actionsOpen = false,
     this.onToggleActions,
+    this.followUps = const [],
+    this.onFollowUp,
+    this.onEditFollowUp,
   });
 
   /// Puts back what a repo run changed. Absent when there is nothing to put
@@ -71,6 +75,9 @@ class MessageBubble extends StatefulWidget {
   /// open at a time.
   final bool actionsOpen;
   final VoidCallback? onToggleActions;
+  final List<String> followUps;
+  final ValueChanged<String>? onFollowUp;
+  final ValueChanged<String>? onEditFollowUp;
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
@@ -121,6 +128,8 @@ class _MessageBubbleState extends State<MessageBubble> {
             onTap: widget.onToggleActions,
             child: _content(context, m, self, theme),
           ),
+          if (widget.followUps.isNotEmpty && widget.onFollowUp != null)
+            _followUps(context),
           if (widget.actionsOpen) _actions(context, m),
         ],
       ),
@@ -407,7 +416,63 @@ class _MessageBubbleState extends State<MessageBubble> {
       );
 
   Widget _sources(BuildContext context, ChatMessage m) =>
-      CitationCards(sources: m.sources);
+      CitationCards(sources: m.sources, storageId: m.id);
+
+  Widget _followUps(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Semantics(
+        container: true,
+        label: t('Suggested replies'),
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final text in widget.followUps)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+                child: GestureDetector(
+                  onSecondaryTap: widget.onEditFollowUp == null
+                      ? null
+                      : () => widget.onEditFollowUp!(text),
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      final edit = widget.onEditFollowUp;
+                      if (edit != null &&
+                          HardwareKeyboard.instance.isShiftPressed) {
+                        edit(text);
+                        return;
+                      }
+                      widget.onFollowUp!(text);
+                    },
+                    onLongPress: widget.onEditFollowUp == null
+                        ? null
+                        : () {
+                            HapticFeedback.selectionClick();
+                            widget.onEditFollowUp!(text);
+                          },
+                    icon: Icon(Icons.send_rounded,
+                        size: 14, color: theme.colorScheme.primary),
+                    label: Text(text, softWrap: true),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      alignment: AlignmentDirectional.centerStart,
+                      shape: const StadiumBorder(),
+                      side: BorderSide(color: theme.dividerColor),
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _reasoning(BuildContext context, ChatMessage m) {
     final open = _reasoningOpen ?? widget.settings.showReasoningByDefault;

@@ -611,6 +611,7 @@ class AppSettings {
     this.autoContinue = 0,
     this.showProgress = true,
     this.sync = true,
+    this.notices = true,
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
@@ -652,6 +653,7 @@ class AppSettings {
   bool showProgress;
 
   bool sync;
+  bool notices;
 
   SidebarGrouping grouping;
   String? defaultPersonaId;
@@ -684,6 +686,7 @@ class AppSettings {
         'autoContinue': autoContinue,
         'showProgress': showProgress,
         'sync': sync,
+        'notices': notices,
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
@@ -723,6 +726,7 @@ class AppSettings {
         autoContinue: (j['autoContinue'] as num?)?.toInt() ?? 0,
         showProgress: j['showProgress'] as bool? ?? true,
         sync: j['sync'] as bool? ?? true,
+        notices: j['notices'] != false,
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:

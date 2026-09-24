@@ -7,6 +7,7 @@ class CompareRun {
     this.thinking,
     this.cost = 0,
     this.sources = const [],
+    this.followUps = const [],
     this.error,
   });
 
@@ -15,6 +16,7 @@ class CompareRun {
   final String? thinking;
   final double cost;
   final List<Map<String, dynamic>> sources;
+  final List<String> followUps;
   final String? error;
 
   bool get ok => error == null;

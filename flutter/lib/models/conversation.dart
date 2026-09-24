@@ -154,10 +154,12 @@ class ChatMessage {
     List<Attachment>? attachments,
     List<String>? repos,
     List<Map<String, dynamic>>? sources,
+    List<String>? followUps,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         repos = repos ?? const [],
         sources = sources ?? const [],
+        followUps = followUps ?? const [],
         at = at ?? DateTime.now();
 
   final String id;
@@ -186,6 +188,7 @@ class ChatMessage {
   final List<Attachment> attachments;
   final List<String> repos;
   final List<Map<String, dynamic>> sources;
+  final List<String> followUps;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -209,6 +212,7 @@ class ChatMessage {
         attachments: attachments,
         repos: repos,
         sources: sources,
+        followUps: followUps,
         at: at,
       );
 
@@ -231,6 +235,7 @@ class ChatMessage {
         'attachments': attachments.map((a) => a.toJson()).toList(),
         'repos': repos,
         'sources': sources,
+        if (followUps.isNotEmpty) 'followUps': followUps,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -259,8 +264,26 @@ class ChatMessage {
             .toList(),
         repos: (j['repos'] as List?)?.map((e) => '$e').toList(),
         sources: (j['sources'] as List?)?.whereType<Map<String, dynamic>>().toList(),
+        followUps: followUpsOf(j['followUps']),
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
+
+  static List<String> followUpsOf(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final item in raw) {
+      if (item is! String) continue;
+      final text = item.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.length < 2 || text.length > 80) continue;
+      if (RegExp(r'^[?!/]').hasMatch(text)) continue;
+      if (RegExp(r'[<>\x00-\x1f\x7f]|https?://', caseSensitive: false).hasMatch(text)) continue;
+      if (!seen.add(text.toLowerCase())) continue;
+      out.add(text);
+      if (out.length == 3) break;
+    }
+    return out;
+  }
 
   static String encodeList(List<ChatMessage> list) =>
       jsonEncode(list.map((m) => m.toJson()).toList());
@@ -275,4 +298,13 @@ class ChatMessage {
       return [];
     }
   }
+}
+
+int followUpsAt(List<ChatMessage> messages) {
+  for (var i = messages.length - 1; i >= 0; i--) {
+    final role = messages[i].role;
+    if (role == ChatRole.self) return -1;
+    if (role == ChatRole.bot) return messages[i].followUps.isEmpty ? -1 : i;
+  }
+  return -1;
 }

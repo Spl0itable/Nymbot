@@ -360,6 +360,20 @@ class Store {
   Future<void> saveFavouriteModels(List<String> keys) =>
       _watched(_prefs.setString('favouriteModels', jsonEncode(keys)));
 
+  List<int> dismissedNotices() {
+    try {
+      return (jsonDecode(_prefs.getString('dismissedNotices') ?? '[]') as List)
+          .whereType<num>()
+          .map((e) => e.toInt())
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> saveDismissedNotices(List<int> ids) =>
+      _prefs.setString('dismissedNotices', jsonEncode(ids));
+
   Future<void> recordUsage(double cost) async {
     final u = usage();
     await _prefs.setInt('usageCredits', (u.credits + cost).round());

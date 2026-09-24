@@ -38,6 +38,13 @@ class Identity {
   /// and replies come back classical until the root is linked.
   bool rootLocked = false;
 
+  bool _rootUnreadable = false;
+
+  bool get rootUnreadable => _rootUnreadable;
+
+  static const int epochScan = 12;
+  static const int previousEpochs = 3;
+
   bool get present => _sk != null;
   String get pubkey => _pubkey ?? '';
   Uint8List? get privkey => _sk;
@@ -70,14 +77,90 @@ class Identity {
   /// has asked D1 whether the account already has one.
   Future<Uint8List?> _readRoot() async {
     final code = await _store.secret(_rootKey);
+    _rootUnreadable = false;
     if (code == null || code.isEmpty) return null;
     try {
       return bech32.decodeNymPq(code);
     } catch (_) {
       // Unreadable is not "no root": generating over it would split the
       // account. Say nothing and let the record check decide.
+      _rootUnreadable = true;
       return null;
     }
+  }
+
+  Uint8List? kemAt(int epoch) {
+    final root = _root;
+    if (root == null) return null;
+    try {
+      return pq.pqKeypairFromRoot(root, epoch < 0 ? 0 : epoch).publicKey;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int? epochMatching(Uint8List announced, {int? hint}) {
+    if (_root == null) return null;
+    final order = <int>[
+      if (hint != null && hint >= 0) hint,
+      for (var e = 0; e <= epochScan; e++) e,
+    ];
+    final tried = <int>{};
+    for (final epoch in order) {
+      if (!tried.add(epoch)) continue;
+      final pk = kemAt(epoch);
+      if (pk != null && _sameBytes(pk, announced)) return epoch;
+    }
+    return null;
+  }
+
+  Future<void> adoptEpoch(int epoch) async {
+    final next = epoch < 0 ? 0 : epoch;
+    if (next == _epoch && _kem != null) return;
+    _epoch = next;
+    _deriveKem();
+    await _store.setInt(_epochKey, _epoch);
+  }
+
+  List<({Uint8List kemSk, Uint8List kemPk})> kemCandidates() {
+    final out = <({Uint8List kemSk, Uint8List kemPk})>[];
+    final floor = _epoch - previousEpochs < 0 ? 0 : _epoch - previousEpochs;
+    final root = _root;
+    if (root != null) {
+      for (var e = _epoch; e >= floor; e--) {
+        try {
+          final kp = pq.pqKeypairFromRoot(root, e);
+          out.add((kemSk: kp.secretKey, kemPk: kp.publicKey));
+        } catch (_) {}
+      }
+    }
+    final sk = _sk;
+    if (sk != null) {
+      for (var e = _epoch; e >= floor; e--) {
+        try {
+          final kp = pq.pqKeypairFromPrivkey(sk, e);
+          out.add((kemSk: kp.secretKey, kemPk: kp.publicKey));
+        } catch (_) {}
+      }
+    }
+    return out;
+  }
+
+  List<pq.PqIdentity> pqCandidates() {
+    final sk = _sk;
+    if (sk == null) return const [];
+    return [
+      for (final c in kemCandidates())
+        pq.PqIdentity(privkey: sk, kemSecretKey: c.kemSk, kemPublicKey: c.kemPk),
+    ];
+  }
+
+  static bool _sameBytes(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Whether this device has settled what the account's root is — either it
@@ -130,6 +213,7 @@ class Identity {
   /// Mints one now, for an account that turns out not to have one.
   Future<String> mintRoot() async {
     final root = pq.pqGenerateRoot();
+    _rootUnreadable = false;
     _epoch = 0;
     await _store.setInt(_epochKey, 0);
     await _store.setSecret(_rootKey, bech32.encodeNymPq(root));
@@ -182,6 +266,7 @@ class Identity {
     final bytes = bech32.decodeNymPq(code.trim());
     if (epoch != null) _epoch = epoch < 0 ? 0 : epoch;
     _root = bytes;
+    _rootUnreadable = false;
     _deriveKem();
     rootLocked = false;
     await _store.setInt(_epochKey, _epoch);
@@ -228,6 +313,7 @@ class Identity {
     _kem = null;
     _pubkey = null;
     _epoch = 0;
+    _rootUnreadable = false;
     rootLocked = false;
   }
 }

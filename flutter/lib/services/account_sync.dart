@@ -83,10 +83,18 @@ class AccountSync {
   }
 
   Future<String> _open(String blob) async {
-    final self = _identity.pqIdentity;
     if (pq.isPq2Payload(blob)) {
-      if (self == null) throw StateError('needs the local key');
-      return pq.pq2Decrypt(blob, _identity.pubkey, self);
+      final selves = _identity.pqCandidates();
+      if (selves.isEmpty) throw StateError('needs the local key');
+      Object? lastErr;
+      for (final self in selves) {
+        try {
+          return await pq.pq2Decrypt(blob, _identity.pubkey, self);
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr ?? StateError('the post-quantum layer did not open');
     }
     return _identity.signer.nip44Decrypt(_identity.pubkey, blob);
   }

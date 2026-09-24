@@ -213,6 +213,17 @@
                     <span>Drop to attach</span>
                 </div>
             </div>
+            <div class="notice-banner" id="noticeBanner" role="status" aria-live="polite" hidden>
+                <div class="notice-text">
+                    <strong class="notice-title" id="noticeTitle"></strong>
+                    <span class="notice-body" id="noticeBody"></span>
+                </div>
+                <div class="notice-actions">
+                    <button class="btn btn-small" type="button" data-act="notice-try" id="noticeTry" hidden>Try it</button>
+                    <a class="btn btn-small btn-ghost" id="noticeLink" target="_blank" rel="noopener noreferrer" hidden>Learn more</a>
+                    <button class="icon-btn notice-close" type="button" data-act="notice-dismiss" aria-label="Dismiss" title="Dismiss">&times;</button>
+                </div>
+            </div>
             <header class="chat-head">
                 <button class="icon-btn only-narrow" type="button" data-act="toggle-sidebar" aria-label="Chats">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
@@ -408,18 +419,28 @@
     <div class="modal" id="modalModels" hidden>
         <div class="modal-card">
             <header><h2>Nymbot Pro model</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
-            <input type="search" id="modelSearch" placeholder="Search models" autocomplete="off">
+            <input type="search" id="modelSearch" placeholder="Search names and descriptions" autocomplete="off">
             <div class="filter-row" id="modelFilters">
                 <button class="pill is-active" type="button" data-act="model-filter" data-filter="all">All</button>
-                <button class="pill" type="button" data-act="model-filter" data-filter="cheap">Cheapest</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="reasoning">Reasoning</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="vision">Vision</button>
+                <button class="pill" type="button" data-act="model-filter" data-filter="code">Code</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="image">Image</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="video">Video</button>
-                <button class="pill" type="button" data-act="model-filter" data-filter="code">Code</button>
+                <button class="pill" type="button" data-act="model-filter" data-filter="speech">Speech</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="favourites">Starred</button>
             </div>
-            <label class="check"><input type="checkbox" id="modelForChat"> Only for this chat</label>
+            <div class="model-tools">
+                <label class="check"><input type="checkbox" id="modelForChat"> Only for this chat</label>
+                <label class="model-sort">Sort
+                    <select id="modelSort">
+                        <option value="provider">Provider</option>
+                        <option value="price-low">Price: low to high</option>
+                        <option value="price-high">Price: high to low</option>
+                        <option value="name">Name</option>
+                    </select>
+                </label>
+            </div>
             <div class="model-list" id="modelList"></div>
             <p class="hint">An estimate for one reply at the rates shown: the low end is a short answer, the high end a long one. Whatever the model has to read pushes it up &mdash; web results, repository files, attachments, and a long chat behind you &mdash; and a task that takes several passes costs more again. You pay for the tokens actually used, never a flat price per message. A full breakdown of every model and what it costs is in the <a href="https://nymbot.ai/docs/credits/" target="_blank" rel="noopener">pricing knowledge base</a>.</p>
             <footer>
@@ -932,6 +953,8 @@
             <h3 class="section-head">Behavior</h3>
             <label class="check"><input type="checkbox" id="setEnter"> Enter sends, Shift+Enter starts a line</label>
             <label class="check"><input type="checkbox" id="setEstimate"> Show what the next reply will cost</label>
+            <label class="check"><input type="checkbox" id="setNotices"> Show announcements</label>
+            <p class="hint">Notices about new models and other news, pinned to the top of the chat. Each one can be dismissed.</p>
             <label class="check"><input type="checkbox" id="setSound"> Sound when a reply lands</label>
             <label class="check"><input type="checkbox" id="setHaptic"> Vibrate when a reply lands</label>
             <label class="check"><input type="checkbox" id="setAutoSpeak"> Read every reply aloud</label>

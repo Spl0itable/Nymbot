@@ -109,6 +109,7 @@ import {
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
 import { noteUsage, denied } from "./_usage.js";
+import { liveNotices } from "./_notices.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -602,7 +603,17 @@ var BOT_GEN_AUTHORS = {
   "pixverse": "Pixverse",
   "lightricks": "Lightricks",
   "vidu": "Vidu",
-  "runwayml": "Runway"
+  "runwayml": "Runway",
+  "deepgram": "Deepgram",
+  "myshell-ai": "MyShell"
+};
+
+var BOT_PRO_SPEECH_DEFAULT = "aura-2";
+var BOT_PRO_SPEECH_MODELS = {
+  "aura-2": { label: "Aura 2", model: "@cf/deepgram/aura-2-en", credits: 1, author: "Deepgram",
+    description: "Natural, expressive English voices." },
+  "melotts": { label: "MeloTTS", model: "@cf/myshell-ai/melotts", credits: 1, author: "MyShell",
+    description: "Fast multilingual text to speech." }
 };
 
 function botGeneratorCeiling(table) {
@@ -614,14 +625,15 @@ function botGeneratorCeiling(table) {
 }
 var BOT_GENERATOR_DEFAULTS = {
   image: botGeneratorCeiling(BOT_PRO_IMAGE_MODELS),
-  video: botGeneratorCeiling(BOT_PRO_VIDEO_MODELS)
+  video: botGeneratorCeiling(BOT_PRO_VIDEO_MODELS),
+  speech: botGeneratorCeiling(BOT_PRO_SPEECH_MODELS)
 };
 
 async function botProGenerators(env) {
   var live = null;
   try { live = await catalogGenerators(env); } catch (e) { live = null; }
   return catalogMergeGenerators(
-    { image: BOT_PRO_IMAGE_MODELS, video: BOT_PRO_VIDEO_MODELS },
+    { image: BOT_PRO_IMAGE_MODELS, video: BOT_PRO_VIDEO_MODELS, speech: BOT_PRO_SPEECH_MODELS },
     live, BOT_GENERATOR_DEFAULTS);
 }
 
@@ -632,7 +644,7 @@ function botGeneratorCatalog(gens) {
   var add = function (kind, command, table) {
     Object.keys(table).forEach(function (k) {
       var m = table[k];
-      var slug = String(m.model || "").split("/")[0].toLowerCase();
+      var slug = String(m.model || "").replace(/^@cf\//, "").split("/")[0].toLowerCase();
       out.push({
         key: kind + ":" + k,
         // --model, not a bare key: the parser reads the generator only from
@@ -653,6 +665,7 @@ function botGeneratorCatalog(gens) {
   };
   add("image", "?image", (gens && gens.image) || BOT_PRO_IMAGE_MODELS);
   add("video", "?video", (gens && gens.video) || BOT_PRO_VIDEO_MODELS);
+  add("speech", "?speak", (gens && gens.speech) || BOT_PRO_SPEECH_MODELS);
   out.sort(function (a, b) {
     if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
     if (a.author !== b.author) return a.author < b.author ? -1 : 1;
@@ -987,6 +1000,33 @@ function botProImageModel(key, table) {
   return null;
 }
 
+function botProSpeechModel(key, table) {
+  var models = table || BOT_PRO_SPEECH_MODELS;
+  var k = String(key || "").trim().toLowerCase();
+  if (!k) return BOT_PRO_SPEECH_MODELS[BOT_PRO_SPEECH_DEFAULT];
+  if (Object.prototype.hasOwnProperty.call(models, k)) return models[k];
+  for (var mk in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, mk)) continue;
+    if (mk.indexOf(k) !== -1 || models[mk].label.toLowerCase().indexOf(k) !== -1) {
+      return models[mk];
+    }
+  }
+  return null;
+}
+
+function botProSpeechList(table) {
+  var models = table || BOT_PRO_SPEECH_MODELS;
+  var out = [];
+  for (var k in models) {
+    if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
+    var m = models[k];
+    var c = m.credits || BOT_MEDIA_COSTS.speak.pro;
+    out.push(k + " \u2014 " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s")
+      + (m.priced === false ? ", estimated" : "") + ")");
+  }
+  return out;
+}
+
 function botProImageList(table) {
   var models = table || BOT_PRO_IMAGE_MODELS;
   var out = [];
@@ -1256,10 +1296,10 @@ async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel) 
   return await botBlossomUpload(env, bytes, botSniffImageMime(bytes), privkey, pubkey, sourceUrl);
 }
 
-async function botGenerateSpeech(env, text, tier, privkey, pubkey) {
+async function botGenerateSpeech(env, text, tier, privkey, pubkey, voice) {
   var ai = env.AI;
   if (!ai) throw new Error("Speech generation is not configured on this server.");
-  var model = BOT_TTS_MODELS[tier] || BOT_TTS_MODELS.standard;
+  var model = (voice && voice.model) || BOT_TTS_MODELS[tier] || BOT_TTS_MODELS.standard;
   var clipped = truncateText(String(text), BOT_TTS_MAX_CHARS);
   // melotts takes { prompt }, Deepgram Aura takes { text } — send both so the
   // same call works across the two hosted voices.
@@ -1279,7 +1319,7 @@ function parseBotMediaCommand(message) {
     : ((verb === "video" || verb === "animate" || verb === "clip") ? "video" : "speak");
   var rest = (m[2] || "").trim();
   var modelKey = "";
-  if (kind === "image" || kind === "video") {
+  if (kind === "image" || kind === "video" || kind === "speak") {
     // ?image models / ?video models — list the generators instead of running one.
     if (/^models?$/i.test(rest)) return { kind: kind, list: true, prompt: "" };
     // --model <key> <prompt> (also -m).
@@ -2265,7 +2305,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
       BOT_EFFORT_PLAN_TOKENS, null);
     outputTokens += planned.outputTokens || 0;
     botUsageAdd(usage, planned.usage);
-    var planText = proMessageText(planned.msg);
+    var planText = botTakeFollowUps(proMessageText(planned.msg)).text;
     if (planText) {
       progress({ kind: "thinking", text: truncateText(planText, 600) });
       convo.push({ role: "assistant", content: planText });
@@ -2283,16 +2323,17 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "checking" });
+    var drafted = botTakeFollowUps(reply).text || reply;
     var revised = await proGatewayChat(env, proModel,
       convo.concat([
-        { role: "assistant", content: reply },
+        { role: "assistant", content: drafted },
         { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
       ]), proModel.maxTokens, null);
     outputTokens += revised.outputTokens || 0;
     botUsageAdd(usage, revised.usage);
     var better = proMessageWithThinking(revised.msg);
     // A revision that came back empty is a failed pass, not a better answer.
-    if (better && better.trim()) reply = better;
+    if (better && better.trim()) reply = botCarryFollowUps(reply, better);
   }
 
   return { reply: reply, modelCalls: calls, outputTokens: outputTokens, usage: usage };
@@ -3330,7 +3371,22 @@ var NYMBOT_PM_ELSEWHERE = [
   "Mention it when it is the actual answer to what someone asked — they want to keep chats apart, work on a document, save a persona, compare two models, have something run daily — and when you do, say the one thing that solves their problem rather than reciting the list. Say it once. Never open a reply with it, never add it to an answer it has nothing to do with, and never imply this chat is the lesser one: a PM is the whole product for plenty of people."
 ];
 
-function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp, webDenied) {
+var NYMBOT_PM_FOLLOW_UPS = [
+  "",
+  "=== SUGGESTED REPLIES ===",
+  "The app can show up to three buttons under your reply. Tapping one sends its text as the user's next message.",
+  "When your reply ends by offering to do something more, or by asking which of a few concrete ways to continue, keep that offer or question in the reply as usual, then finish with a follow-ups block as the very last thing: <followups> alone on a line, one to three options one per line, then </followups> alone on a line. For example:",
+  "<followups>",
+  "Add the unit tests",
+  "Show the TypeScript version",
+  "</followups>",
+  "Write each option as the exact message the user would send to take you up on it, in their voice and in the language of their newest message (\"Add the unit tests\", never \"I can add tests\" or \"Want me to add tests?\"): at most eight words, plain text, no markdown, links, @mentions, numbering or bullets, and never a command starting with ? or !.",
+  "Only offer what you can do in your very next reply by writing: never a picture, a voice clip or a video, never a setting or switch the user changes in the app, and never the answer to a question you asked them to work out themselves.",
+  "Leave the block out when there is no natural next step (most replies have none), when your closing question needs something only the user knows, or when you only ask whether the answer helped. Never put it inside a code block, never write anything after it, and never mention it, the tags or the buttons."
+];
+var BOT_FOLLOW_UPS_REMINDER = " If your reply ends with an offer or a choice of next steps, finish it with the <followups> block described in your instructions; otherwise leave the block out.";
+
+function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp, webDenied, followUps) {
   var tierSection = freeTurn ? [
     "=== FREE DAILY ALLOWANCE ===",
     "This user is out of credits and this reply is coming from the free tier: " + BOT_FREE_DAILY + " replies a day on a single small model, with a shorter memory of the conversation than a paid reply gets. Be as useful as you can inside that.",
@@ -3361,7 +3417,7 @@ function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp, webDenied) 
   var elsewhere = inApp ? [] : NYMBOT_PM_ELSEWHERE;
   var head = inApp ? NYMBOT_APP_PROMPT_HEAD : NYMBOT_PM_PROMPT_HEAD;
   var tail = inApp ? NYMBOT_APP_PROMPT_TAIL : NYMBOT_PM_PROMPT_TAIL;
-  return head.concat(tierSection, web, elsewhere, tail)
+  return head.concat(tierSection, web, elsewhere, tail, followUps ? NYMBOT_PM_FOLLOW_UPS : [])
     .filter(function (line) { return line !== ""; }).join("\n");
 }
 
@@ -3410,7 +3466,7 @@ var NYMBOT_PM_PROMPT_TAIL = [
   "- ?model — lists the Pro models and their per-reply Pro credit costs; ?model <name> selects one; ?model off returns to standard routing.",
   "- ?git — connects a git repo to Pro replies (GitHub, GitLab, or Gitea/Forgejo incl. Codeberg and self-hosted; paste a personal access token, pick a repo/branch, optionally enable writes). The token stays on the user's device and is never published or stored server-side.",
   "- ?image <description> — generates a picture from the description and sends it back as an image. Costs " + BOT_MEDIA_COSTS.image.standard + " standard credits. With a Pro model selected the user can also pick a frontier generator with ?image --model <name> <description> (Nano Banana Pro, Nano Banana 2, Imagen 4, FLUX 2 Max, FLUX 2 Pro, Seedream 5 Pro, GPT Image 2, Grok Imagine, Recraft v4 Pro) for 2-3 Pro credits depending on the generator; ?image models lists them with their prices and is free. Nothing is charged if generation fails.",
-  "- ?speak <text> — reads the text aloud and sends back a voice clip (up to " + BOT_TTS_MAX_CHARS + " characters). Costs " + BOT_MEDIA_COSTS.speak.standard + " standard credits, or " + BOT_MEDIA_COSTS.speak.pro + " Pro credit when a Pro model is selected.",
+  "- ?speak <text> — reads the text aloud and sends back a voice clip (up to " + BOT_TTS_MAX_CHARS + " characters). Costs " + BOT_MEDIA_COSTS.speak.standard + " standard credits, or " + BOT_MEDIA_COSTS.speak.pro + " Pro credit when a Pro model is selected. With a Pro model selected the user can pick a voice with ?speak --model <name> <text>; ?speak models lists them with their prices and is free.",
   "- ?video <description> \u2014 generates a short clip and sends it back. Pro only: every video model is provider-hosted, so there is no standard-tier generator. Pick one with ?video --model <name> <description> (Veo 3.1, Seedance 2.5, Hailuo 2.3, Wan 3.0, Grok Imagine Video, Pixverse v6, LTX-2.5, Vidu Q3, FLUX 3 Video, Runway Gen-4.5) for 10-30 Pro credits depending on the generator; ?video models lists them with their prices and is free. Send a picture in the same message to animate it rather than starting from nothing. Nothing is charged if generation fails.",
   "- Images in a message: if the user links or sends a picture you receive the actual image, not just its URL. On Pro that depends on the selected model \u2014 Claude, GPT, Gemini, Grok and Kimi can see; Qwen and MiniMax cannot, and the reply should say so and suggest ?model. On standard routing a picture reroutes the message to a model that can see, whatever the question was about, so you can always describe and answer about it there.",
   "- Links in a message: any http(s) link the user includes is fetched and its readable text is handed to you before you answer, under a LINKED PAGES heading. So you CAN read a page the user links \u2014 never reply that you are unable to open URLs. What you get is extracted text: no layout, no images, and nothing a page renders with JavaScript. If a link could not be read you are told which, and should say so rather than guessing from the URL.",
@@ -3481,7 +3537,7 @@ var NYMBOT_APP_PROMPT_TAIL = [
   "- Links in a message: any http(s) link the user includes is fetched and its readable text is handed to you before you answer, under a LINKED PAGES heading. So you CAN read a page the user links — never reply that you are unable to open URLs. What you get is extracted text: no layout, no images, and nothing a page renders with JavaScript. If a link could not be read you are told which, and should say so rather than guessing from the URL.",
   "- ?image <description> — generates a picture from the description and sends it back as an image. Costs " + BOT_MEDIA_COSTS.image.standard + " standard credits. With a Pro model pinned the user can also pick a frontier generator with ?image --model <name> <description>; ?image models lists them with their prices and is free. Picking a generator in the model picker pins it, so every message after that draws until it is unpinned. Nothing is charged if generation fails.",
   "- ?video <description> — generates a short clip and sends it back. Pro only: every video model is provider-hosted, so there is no standard-tier generator. ?video --model <name> <description> picks one and ?video models lists them with their prices, free. Send a picture in the same message to animate it rather than starting from nothing. Nothing is charged if generation fails.",
-  "- ?speak <text> — reads the text aloud and sends back a voice clip (up to " + BOT_TTS_MAX_CHARS + " characters). Costs " + BOT_MEDIA_COSTS.speak.standard + " standard credits, or " + BOT_MEDIA_COSTS.speak.pro + " Pro credit when a Pro model is pinned.",
+  "- ?speak <text> — reads the text aloud and sends back a voice clip (up to " + BOT_TTS_MAX_CHARS + " characters). Costs " + BOT_MEDIA_COSTS.speak.standard + " standard credits, or " + BOT_MEDIA_COSTS.speak.pro + " Pro credit when a Pro model is pinned. ?speak --model <name> <text> picks a voice on Pro and ?speak models lists them, free. Picking a voice in the model picker pins it, so every message after that comes back as a voice clip until it is unpinned.",
   "- Credits: ?balance shows the standard and Pro balances (also in the chat header); ?buy opens the purchase flow (Bitcoin Lightning) with a Standard/Pro switch. A free daily allowance answers on one small model when the balance is empty. The whole balance can be moved to another key from the Credits screen.",
   "- Keys and data: the private key (nsec) is shown under Identity in Settings, along with the post-quantum recovery code that lets a second device hold the same encryption key. 'Export everything' in Settings backs the device up. There is no account on a server to recover from, so remind users to save their nsec — credits and history are tied to it.",
   "",
@@ -3841,7 +3897,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var split = parsed.split;
   var question = parsed.question;
 
-  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true, runOpts.webDenied === true) }];
+  var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true, runOpts.webDenied === true, runOpts.followUps === true) }];
 
   var dropped = [];
   var keptTurns = [];
@@ -3949,7 +4005,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
   messages.push({ role: "assistant", content: "Understood." });
   if (taskType !== "translation") {
-    messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." });
+    messages.push({ role: "user", content: "LANGUAGE RULE: Reply in the same language as the user's message below. Quoted messages and earlier history may be in another language — read them for content only, but match your reply language to the user's newest message below." + (runOpts.followUps === true ? BOT_FOLLOW_UPS_REMINDER : "") });
     messages.push({ role: "assistant", content: "Understood." });
   } else {
     messages.push({ role: "user", content: "TRANSLATION RULE: The user has asked for a translation or language-target output. Produce the requested target-language text in full — written in that target language's native script (use kana/kanji for Japanese, Hangul for Korean, Hanzi for Chinese, Cyrillic for Russian, Arabic script for Arabic, etc.). Do NOT leave any target-language line blank or substitute it with a placeholder. Labels (\"Japanese:\", \"Spanish:\", etc.) and any commentary may stay in the user's input language." });
@@ -4080,7 +4136,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   });
   var seesToo = {};
   BOT_PM_VISION_FALLBACKS.forEach(function (m) { seesToo[m] = true; });
-  for (var f = 0; f < fallbacks.length && !reply.trim(); f++) {
+  for (var f = 0; f < fallbacks.length && !botTakeFollowUps(reply).text.trim(); f++) {
     if (fallbacks[f] === pmModel) continue;
     try {
       var fb = await aiRun(ai, fallbacks[f], {
@@ -4089,7 +4145,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       });
       botUsageAdd(usage, proCallUsage(fb));
       reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
-      if (reply.trim()) billedModel = fallbacks[f];
+      if (botTakeFollowUps(reply).text.trim()) billedModel = fallbacks[f];
     } catch (e) { }
   }
   return { reply: reply, taskType: taskType, sources: pmCitations,
@@ -4208,6 +4264,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         };
       })
     });
+  }
+
+  if (body.action === "notices") {
+    return json({ notices: await liveNotices(env, body.platform) });
   }
 
   if (body.action === "voucher-keys") {
@@ -5087,7 +5147,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // ?image models — a free listing, so it returns before any charge.
       if (media.list) {
         var listText;
-        if (media.kind === "video") {
+        if (media.kind === "speak") {
+          listText = mediaTier === "pro"
+            ? "Voices \u2014 use ?speak --model <name> <text to read aloud>:\n\u2022 "
+              + botProSpeechList(gens.speech).join("\n\u2022 ")
+              + "\nDefault: " + BOT_PRO_SPEECH_MODELS[BOT_PRO_SPEECH_DEFAULT].label + "."
+            : "Picking a voice needs a Pro model selected (?model <name>). Standard ?speak uses the built-in voice for "
+              + BOT_MEDIA_COSTS.speak.standard + " credits.";
+        } else if (media.kind === "video") {
           listText = mediaTier === "pro"
             ? "Video models — use ?video --model <name> <description>:\n\u2022 "
               + botProVideoList(gens.video).join("\n\u2022 ")
@@ -5145,6 +5212,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // clear error rather than a silently ignored argument.
       var proImage = null;
       var proVideo = null;
+      var proSpeech = null;
       if (media.kind === "video") {
         // Every video model in the catalog is provider-hosted, so there is no
         // standard-tier route to fall back to: this is a Pro command outright.
@@ -5165,11 +5233,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         }
       } else if (media.kind === "image" && media.modelKey) {
         return await turnFail({ error: "Picking an image model needs Nymbot Pro \u2014 select one with ?model first, or drop --model to use the standard generator." }, 400);
+      } else if (media.kind === "speak" && media.modelKey) {
+        if (mediaTier !== "pro") {
+          return await turnFail({ error: "Picking a voice needs Nymbot Pro \u2014 select a model with ?model first, or drop --model to use the standard voice." }, 400);
+        }
+        proSpeech = botProSpeechModel(media.modelKey, gens.speech);
+        if (!proSpeech) {
+          return await turnFail({ error: "Unknown voice '" + media.modelKey + "'. Type ?speak models to see them." }, 400);
+        }
       }
       var mediaCost = proVideo ? proVideo.credits
         : (media.kind === "image" && proImage && proImage.credits
           ? proImage.credits
-          : BOT_MEDIA_COSTS[media.kind][mediaTier]);
+          : (proSpeech && proSpeech.credits
+            ? proSpeech.credits
+            : BOT_MEDIA_COSTS[media.kind][mediaTier]));
       var mediaRecord = proModel ? proRecord : record;
       if ((mediaRecord.balance || 0) < mediaCost) {
         return await turnFail({
@@ -5193,7 +5271,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         } else if (media.kind === "image") {
           mediaUrl = await botGenerateImage(env, media.prompt, mediaTier, botPrivkey, botPubkey, proImage);
         } else {
-          mediaUrl = await botGenerateSpeech(env, media.prompt, mediaTier, botPrivkey, botPubkey);
+          mediaUrl = await botGenerateSpeech(env, media.prompt, mediaTier, botPrivkey, botPubkey, proSpeech);
         }
       } catch (e) {
         // Nothing is charged when generation or upload fails.
@@ -5244,7 +5322,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         pro: !!proModel,
         proModel: proModel ? proModelKey : undefined,
         modelLabel: proVideo ? proVideo.label
-          : (proImage ? proImage.label : botMediaModelLabel(env, media.kind, mediaTier)),
+          : (proImage ? proImage.label
+            : (proSpeech ? proSpeech.label : botMediaModelLabel(env, media.kind, mediaTier))),
         lowBalance: mediaRecord.balance <= 3
       };
       // Charged and delivered: record it so a resend collects this generation
@@ -5272,6 +5351,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         taskType = "general";
       }
     }
+    var wantsFollowUps = body.followUps === true && !parsed.freshOnly && taskType !== "translation";
     var cost = freeTurn ? 0
       : (proModel ? (proModel.baseCredits || 1) : botCreditsForTask(taskType))
         + botPartSurcharge(askedIds.length);
@@ -5356,12 +5436,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         webDenied: body.web === true && freeTurn,
         // Which of the two products is asking. Only ever decides whether the
         // reply may mention the other one.
-        inApp: isStandaloneNymbot(context.request, env)
+        inApp: isStandaloneNymbot(context.request, env),
+        followUps: wantsFollowUps
       });
     } catch (e) {
       return await turnFailResumable({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
     }
-    var reply = chatResult && chatResult.reply;
+    var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
+    var reply = taken.text;
     if (!reply) return await turnFailResumable({ error: "Nymbot returned an empty response" }, 500);
     var costMilli = 0;
     if (!proModel && !freeTurn && stdRates && botUsageBilled(chatResult.usage)) {
@@ -5380,7 +5462,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     if (proModel) {
       var landed = chatResult.modelCalls == null ? 1 : chatResult.modelCalls;
-      var outTok = chatResult.outputTokens || Math.ceil(String(reply).length / 4);
+      var outTok = chatResult.outputTokens || Math.ceil(String(chatResult.reply || reply).length / 4);
       var capMilli = proRequired * BOT_MILLI_PER_CREDIT;
       var metered = landed > 0 && botUsageBilled(chatResult.usage)
         ? botMeteredCharge(proModel, chatResult.usage, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT)
@@ -5484,6 +5566,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // Where the reply's [1] and [2] point, so a claim can be checked rather
       // than taken on trust. Only ever present when the chat asked for search.
       sources: (chatResult.sources && chatResult.sources.length) ? chatResult.sources : undefined,
+      followUps: wantsFollowUps && !chatResult.truncated && taken.followUps.length ? taken.followUps : undefined,
       // What the day's allowance has left, on the reply that just spent one of
       // it — so the count on screen is what the ledger says and not the
       // client's own tally.
@@ -5633,7 +5716,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "notices" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -6506,6 +6589,143 @@ function sanitizeBotResponse(text, keepThinking) {
     return "<think>\n" + thinking + "\n</think>\n" + text;
   }
   return text;
+}
+
+var BOT_FOLLOW_UPS_MAX = 3;
+var BOT_FOLLOW_UP_CHARS = 80;
+var BOT_FOLLOW_UP_OPEN = "(?:\\\\?<|&lt;)[ \\t]*follow[-_ ]?ups\\b[^<>\\n]*?\\\\?(?:>|&gt;)";
+var BOT_FOLLOW_UP_CLOSE = "(?:\\\\?<|&lt;)[ \\t]*\\\\?\\/[ \\t]*follow[-_ ]?ups[ \\t]*\\\\?(?:>|&gt;)";
+var BOT_FOLLOW_UP_TAG = "(?:\\\\?<|&lt;)[ \\t]*\\\\?\\/?[ \\t]*follow[-_ ]?ups\\b[^<>\\n]*?\\\\?(?:>|&gt;)";
+var BOT_FOLLOW_UP_VOICE = /^(?:i can|i could|i'll|i will|i'd|let me|shall i|should i|want me to|would you like|do you want|if you(?:'d| would) like)\b/i;
+var BOT_FOLLOW_UP_BARE_FENCE = /^(?:|te?xt|plain(?:text)?|markdown|md)$/i;
+
+function botFollowUpKey(s) {
+  return String(s || "").toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
+}
+
+function botCleanFollowUp(raw) {
+  if (typeof raw !== "string") return "";
+  var s = raw
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/g, " ")
+    .replace(/<[^<>]*>/g, " ")
+    .replace(/\s+/g, " ").trim()
+    .replace(/^(?:(?:[-*+\u2022\u00B7]|\d{1,2}[.)])\s+)+/, "")
+    .replace(/(\*\*|`)(.+?)\1/g, "$2")
+    .replace(/^__(.+)__$/, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  var wrapped = /^["'\u201C\u201D\u2018\u2019\u00AB\u00BB]+([\s\S]*?)["'\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/.exec(s);
+  if (wrapped && !/["'\u201C\u201D\u2018\u2019\u00AB\u00BB]/.test(wrapped[1].replace(/([\p{L}\p{N}])['\u2019](?=[\p{L}\p{N}])/gu, "$1"))) s = wrapped[1].trim();
+  if (s.length < 2 || s.length > BOT_FOLLOW_UP_CHARS) return "";
+  if (!/[\p{L}\p{N}]/u.test(s)) return "";
+  if (/^[?!\/]/.test(s) || /[:\uFF1A]$/.test(s)) return "";
+  if (/[<>@`\\]|https?:\/\/|www\./i.test(s)) return "";
+  if (BOT_FOLLOW_UP_VOICE.test(s)) return "";
+  if (parseBotMediaCommand(s) || parseBotMediaIntent(s)) return "";
+  return s;
+}
+
+function botFollowUpItems(inner) {
+  var body = String(inner || "").trim();
+  if (/^\[[\s\S]*\]$/.test(body)) {
+    try {
+      var listed = JSON.parse(body);
+      if (Array.isArray(listed)) return listed;
+    } catch (e) { }
+  }
+  var lines = body.split("\n").filter(function (line) {
+    return line.trim() && !/^\s*(?:```|~~~)/.test(line);
+  });
+  return lines.length === 1 ? lines[0].split("|") : lines;
+}
+
+function botTakeFollowUps(text, question) {
+  if (typeof text !== "string") return { text: "", followUps: [] };
+  var anyTag = new RegExp(BOT_FOLLOW_UP_TAG, "gi");
+  var think = /^\s*<think>[\s\S]*?<\/think>\s*/i.exec(text);
+  var headRaw = think ? think[0] : "";
+  var head = headRaw.replace(anyTag, "");
+  var changed = head !== headRaw;
+  var lines = text.slice(headRaw.length).replace(/\r\n/g, "\n").split("\n");
+  var held = [];
+  var kept = [];
+  for (var i = 0; i < lines.length; i++) {
+    var fence = /^\s*(```|~~~)(.*)$/.exec(lines[i]);
+    if (!fence) { kept.push(lines[i]); continue; }
+    var endRe = new RegExp("^(.*?)\\s*" + fence[1] + "\\s*$");
+    var j = i;
+    if (!(fence[2].trim() && endRe.test(fence[2]))) {
+      j = i + 1;
+      while (j < lines.length && !endRe.test(lines[j])) j++;
+    }
+    var inner = lines.slice(i + 1, j).join("\n").trim();
+    if (j > i && !lines.slice(j + 1).join("").trim()
+      && BOT_FOLLOW_UP_BARE_FENCE.test(fence[2].trim())
+      && new RegExp("^" + BOT_FOLLOW_UP_OPEN, "i").test(inner)) {
+      kept.push(inner);
+      changed = true;
+    } else {
+      kept.push("\u0000" + held.length + "\u0000");
+      held.push(lines.slice(i, j + 1).join("\n"));
+    }
+    i = j;
+  }
+  var fenced = held.length;
+  var body = kept.join("\n").replace(/`[^`\n]+`/g, function (span) {
+    held.push(span);
+    return "\u0000" + (held.length - 1) + "\u0000";
+  });
+  var restore = function (s) {
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, n) { return held[Number(n)]; });
+  };
+  var trailing = /\n?([^\n]*)\s*$/.exec(body.replace(/\s+$/, ""));
+  var stub = trailing ? trailing[1].trim().replace(/\\/g, "").toLowerCase() : "";
+  if (stub && stub.charAt(0) === "<" && stub.slice(-1) !== ">" && ("<followups>".indexOf(stub) === 0 || "</followups>".indexOf(stub) === 0)) {
+    body = body.replace(/\s+$/, "").slice(0, -trailing[1].length);
+    changed = true;
+  }
+  var picked = null;
+  var lineStart = function (before) { return /(?:^|\n)[ \t]*$/.test(before); };
+  body = body.replace(new RegExp(BOT_FOLLOW_UP_OPEN + "([\\s\\S]*?)" + BOT_FOLLOW_UP_CLOSE, "gi"), function (match, inner, at, whole) {
+    changed = true;
+    var starts = lineStart(whole.slice(0, at));
+    if (starts || !whole.slice(at + match.length).trim()) picked = inner;
+    return starts ? "\n" : "";
+  });
+  var openRe = new RegExp(BOT_FOLLOW_UP_OPEN, "gi");
+  var found;
+  while ((found = openRe.exec(body))) {
+    if (lineStart(body.slice(0, found.index)) && !(body.slice(found.index).match(/\u0000\d+\u0000/g) || []).some(function (p) { return Number(p.slice(1, -1)) < fenced; })) {
+      body = body.slice(0, found.index);
+      changed = true;
+      break;
+    }
+  }
+  body = body.replace(anyTag, function () { changed = true; return ""; });
+  if (!changed) return { text: text, followUps: [] };
+  body = restore(body.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n")).replace(/^\s*\n/, "").replace(/\s+$/, "");
+  if (!body.trim()) return { text: "", followUps: [] };
+  var seen = {};
+  if (question) seen[botFollowUpKey(question)] = true;
+  var out = [];
+  var list = picked === null ? [] : botFollowUpItems(restore(picked));
+  for (var k = 0; k < list.length && out.length < BOT_FOLLOW_UPS_MAX; k++) {
+    var item = botCleanFollowUp(list[k]);
+    var key = botFollowUpKey(item);
+    if (!item || !key || seen[key]) continue;
+    seen[key] = true;
+    out.push(item);
+  }
+  return { text: head + body, followUps: out };
+}
+
+function botCarryFollowUps(before, after) {
+  var had = botTakeFollowUps(before).followUps;
+  if (!had.length || typeof after !== "string") return after;
+  var now = botTakeFollowUps(after);
+  if (now.followUps.length || !now.text) return after;
+  var carried = now.text.replace(/\s+$/, "") + "\n\n<followups>\n" + had.join("\n") + "\n</followups>";
+  return botTakeFollowUps(carried).followUps.length ? carried : after;
 }
 
 var MAX_CONVERSATION_HISTORY = 20;
@@ -9251,7 +9471,10 @@ export {
   handleBotPMAction,
   botReleaseStrandedTurn,
   botTurnKey,
-  botTurnMsgKey
+  botTurnMsgKey,
+  botTakeFollowUps,
+  botCarryFollowUps,
+  buildNymbotPmSystemPrompt
 };
 /*! Bundled license information:
 

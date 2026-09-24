@@ -72,6 +72,7 @@
         // -1 is whatever the balance holds.
         autoContinue: 0,
         showProgress: true,
+        notices: true,
         // Your settings, library and conversations, sealed to your own key and
         // kept where every device you sign in on can read them back.
         sync: true,

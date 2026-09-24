@@ -330,7 +330,14 @@ export async function catalogMediaParams(env, opts) {
 var GENERATOR_TASKS = {
   "text-to-image": "image",
   "text-to-video": "video",
-  "image-to-video": "video"
+  "image-to-video": "video",
+  "text-to-speech": "speech"
+};
+
+var GENERATOR_HOSTING = {
+  image: "third-party",
+  video: "third-party",
+  speech: "cloudflare-hosted"
 };
 
 var GENERATOR_FAMILIES = {
@@ -370,7 +377,7 @@ export async function catalogGenerators(env, opts) {
   try {
     var rs = await replica(db).prepare(
       "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND beta = 0 " +
-      "AND hosting = 'third-party' AND task_slug IN (" +
+      "AND hosting IN ('third-party', 'cloudflare-hosted') AND task_slug IN (" +
       tasks.map(function () { return "?"; }).join(", ") + ") ORDER BY author_slug, slug"
     ).bind(...tasks).all();
     rows = rs.results || [];
@@ -384,15 +391,15 @@ export async function catalogGenerators(env, opts) {
     });
   } catch (e) { }
 
-  var out = { image: {}, video: {} };
+  var out = { image: {}, video: {}, speech: {} };
   rows.forEach(function (r) {
     var kind = GENERATOR_TASKS[r.task_slug];
-    if (!kind) return;
+    if (!kind || r.hosting !== GENERATOR_HOSTING[kind]) return;
     var patch = overrides[r.id] || {};
     if (patch.hidden || patch.available === false) return;
     var key = generatorKey(r.slug);
     if (!key) return;
-    var vendor = String(r.id || "").split("/")[0].toLowerCase();
+    var vendor = String(r.id || "").replace(/^@cf\//, "").split("/")[0].toLowerCase();
     if (out[kind][key]) key = (r.author_slug || vendor || "x") + "-" + key;
     if (out[kind][key]) key = key + "-" + Object.keys(out[kind]).length;
     var pc = patch.credits || {};
@@ -414,14 +421,15 @@ export async function catalogGenerators(env, opts) {
       source: "catalog"
     };
   });
-  if (!Object.keys(out.image).length && !Object.keys(out.video).length) return null;
+  if (!Object.keys(out.image).length && !Object.keys(out.video).length
+    && !Object.keys(out.speech).length) return null;
   generatorCache = { at: now, data: out };
   return out;
 }
 
 export function catalogMergeGenerators(builtin, live, defaults) {
   var out = {};
-  ["image", "video"].forEach(function (kind) {
+  ["image", "video", "speech"].forEach(function (kind) {
     var table = {};
     var byModel = {};
     var stat = (builtin && builtin[kind]) || {};

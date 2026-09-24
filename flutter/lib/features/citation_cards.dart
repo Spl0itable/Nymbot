@@ -61,32 +61,118 @@ class Citation {
   }
 }
 
-class CitationCards extends StatelessWidget {
-  const CitationCards({super.key, required this.sources, this.max = 8});
+class CitationCards extends StatefulWidget {
+  const CitationCards(
+      {super.key, required this.sources, this.max = 8, this.storageId});
 
   final List<Map<String, dynamic>> sources;
   final int max;
+  final String? storageId;
+
+  static const collapseAbove = 2;
+
+  @override
+  State<CitationCards> createState() => _CitationCardsState();
+}
+
+class _CitationCardsState extends State<CitationCards> {
+  bool _open = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _open = widget.storageId != null &&
+        PageStorage.maybeOf(context)?.readState(context,
+                identifier: 'sources:${widget.storageId}') ==
+            true;
+  }
+
+  void _toggle() {
+    setState(() => _open = !_open);
+    if (widget.storageId != null) {
+      PageStorage.maybeOf(context)?.writeState(context, _open,
+          identifier: 'sources:${widget.storageId}');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cards = sources.take(max).map(Citation.fromJson).toList();
+    final cards = widget.sources.take(widget.max).map(Citation.fromJson).toList();
     if (cards.isEmpty) return const SizedBox.shrink();
+    final label = cards.length == 1
+        ? t('1 source')
+        : t('{n} sources', {'n': cards.length});
+
+    if (cards.length <= CitationCards.collapseAbove) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(fontSize: 10.5, color: theme.hintColor),
+            ),
+            const SizedBox(height: 4),
+            for (var i = 0; i < cards.length; i++)
+              _Card(index: i + 1, citation: cards[i]),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            cards.length == 1
-                ? t('1 source')
-                : t('{n} sources', {'n': cards.length}),
-            style: TextStyle(fontSize: 10.5, color: theme.hintColor),
+          Semantics(
+            button: true,
+            expanded: _open,
+            label: label,
+            hint: _open ? t('Hide sources') : t('Show sources'),
+            excludeSemantics: true,
+            onTap: _toggle,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: _toggle,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 40),
+                padding: const EdgeInsetsDirectional.fromSTEB(6, 4, 10, 4),
+                decoration: BoxDecoration(
+                  border: Border.all(color: theme.dividerColor),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Wrap(
+                        spacing: 3,
+                        runSpacing: 3,
+                        children: [
+                          for (final c in cards) _Mark(citation: c),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      label,
+                      style: TextStyle(fontSize: 10.5, color: theme.hintColor),
+                    ),
+                    Icon(_open ? Icons.expand_less : Icons.expand_more,
+                        size: 16, color: theme.hintColor),
+                  ],
+                ),
+              ),
+            ),
           ),
-          const SizedBox(height: 4),
-          for (var i = 0; i < cards.length; i++)
-            _Card(index: i + 1, citation: cards[i]),
+          if (_open) ...[
+            const SizedBox(height: 4),
+            for (var i = 0; i < cards.length; i++)
+              _Card(index: i + 1, citation: cards[i]),
+          ],
         ],
       ),
     );

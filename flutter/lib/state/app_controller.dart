@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../config.dart';
 import '../core/crypto/bech32_codec.dart';
@@ -15,6 +16,7 @@ import '../models/conversation.dart';
 import '../models/memory.dart';
 import '../models/schedule.dart';
 import '../models/nostr_event.dart';
+import '../models/notice.dart';
 import '../models/workspace.dart';
 import '../services/account_sync.dart';
 import '../services/anon.dart';
@@ -24,6 +26,7 @@ import '../services/free_tier.dart';
 import '../services/memory_keeper.dart';
 import '../services/nostr/event_signer.dart';
 import '../services/nymbot_api.dart';
+import '../core/crypto/pq.dart' as pq_crypto;
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
 import '../services/relay_pool.dart';
@@ -34,6 +37,16 @@ import 'store.dart';
 /// What the account already holds, as the sign-in gate needs to know it.
 /// [read] is false when neither D1 nor the relays could be reached — which is
 /// not the same answer as "there is no root".
+class RootLinkVerdict {
+  const RootLinkVerdict(this.status,
+      {this.probe, this.epoch = 0, this.announcedOnly = false});
+
+  final String status;
+  final AccountRoot? probe;
+  final int epoch;
+  final bool announcedOnly;
+}
+
 typedef AccountRoot = ({
   bool read,
   bool present,
@@ -49,12 +62,12 @@ class AppController extends ChangeNotifier {
     sync = AccountSync(store: store, identity: identity, storage: storage);
   }
 
-  static Future<AppController> boot() async {
+  static Future<AppController> boot({http.Client? client}) async {
     final store = await Store.open();
     final identity = Identity(store);
     final relays = RelayPool();
     final pq = PqAnnounce(relays, store: store);
-    final api = NymbotApi();
+    final api = NymbotApi(client: client);
     final anon = AnonMode(store, api, pq);
     final storage = StorageSync();
     final c = AppController._(store, identity, relays, pq, api, anon, storage);
@@ -93,10 +106,32 @@ class AppController extends ChangeNotifier {
   bool _entered = false;
   Timer? _bootWork;
   Timer? _syncTimer;
-  bool sending = false;
+  Timer? _noticeTimer;
+  int _noticeSeq = 0;
   bool _topping = false;
-  String? status;
   int relaysUp = 0;
+
+  final Map<String, ChatTurn> turns = {};
+  final Map<String, List<String>> _queues = {};
+
+  ChatTurn? turnOf(Conversation? conv) =>
+      conv == null ? null : turns[conv.id];
+
+  bool sendingIn(Conversation? conv) => turnOf(conv) != null;
+
+  bool get sending => sendingIn(current);
+
+  String? get status => turnOf(current)?.status;
+
+  List<TurnStep> get progressSteps => turnOf(current)?.steps ?? const [];
+
+  List<String> get queued => _queues[current?.id] ?? const [];
+
+  @visibleForTesting
+  void holdForTest(Conversation conv) {
+    turns[conv.id] = ChatTurn(conv);
+    notifyListeners();
+  }
 
   List<Conversation> conversations = [];
   Conversation? current;
@@ -119,6 +154,8 @@ class AppController extends ChangeNotifier {
   String convFilter = 'all';
   String convSearch = '';
   List<String> favouriteModels = [];
+  List<Notice> notices = [];
+  List<int> dismissedNotices = [];
   String? quote;
   List<Attachment> attachments = [];
 
@@ -148,6 +185,7 @@ class AppController extends ChangeNotifier {
       } catch (_) {}
     }
     favouriteModels = store.favouriteModels();
+    dismissedNotices = store.dismissedNotices();
   }
 
   Future<void> _saveModel() => store.setString(
@@ -185,12 +223,17 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Map<String, dynamic>? get activeModel => current?.proModel ?? proModel;
+  Map<String, dynamic>? modelOf(Conversation? conv) =>
+      conv?.proModel ?? proModel;
+
+  Map<String, dynamic>? get activeModel => modelOf(current);
 
   bool get repoNeedsPro => activeRepos.isNotEmpty && activeModel == null;
 
-  Map<String, dynamic>? get activeMediaModel =>
-      current?.mediaModel ?? mediaModel;
+  Map<String, dynamic>? mediaModelOf(Conversation? conv) =>
+      conv?.mediaModel ?? mediaModel;
+
+  Map<String, dynamic>? get activeMediaModel => mediaModelOf(current);
 
   Future<void> setMediaModel(Map<String, dynamic>? model,
       {bool forChat = false}) async {
@@ -228,16 +271,21 @@ class AppController extends ChangeNotifier {
   /// The key that says the turn is Pro. A generator is named inside the
   /// message, never in that field, so a Pro generator carries the key it
   /// should be billed against rather than putting a chat model in the picker.
-  Map<String, dynamic>? get proModelForTurn {
-    final model = activeModel;
+  Map<String, dynamic>? get proModelForTurn => proModelForTurnOf(current);
+
+  Map<String, dynamic>? proModelForTurnOf(Conversation? conv) {
+    final model = modelOf(conv);
     if (model != null) return model;
-    final media = activeMediaModel;
+    final media = mediaModelOf(conv);
     final key = media?['proKey'] as String?;
     return (mediaNeedsPro(media) && key != null) ? {'key': key} : null;
   }
 
   static bool mediaNeedsPro(Map<String, dynamic>? media) =>
-      media != null && (media['kind'] == 'image' || media['kind'] == 'video');
+      media != null &&
+      (media['kind'] == 'image' ||
+          media['kind'] == 'video' ||
+          media['kind'] == 'speech');
 
   Future<void> clearMediaModel() async {
     if (activeMediaModel == null) return;
@@ -262,8 +310,8 @@ class AppController extends ChangeNotifier {
   static final RegExp _commandHead = RegExp(r'^\?(\w+)\s*([\s\S]*)$');
   static final RegExp _listsModels = RegExp(r'^models?$', caseSensitive: false);
 
-  String withMediaModel(String text) {
-    final media = activeMediaModel;
+  String withMediaModel(String text, {Conversation? conv}) {
+    final media = mediaModelOf(conv ?? current);
     final command = media?['command'] as String?;
     if (command == null || command.isEmpty) return text;
     final verb = _commandVerb.firstMatch(command)?.group(1) ?? '';
@@ -404,27 +452,20 @@ class AppController extends ChangeNotifier {
 
   // --- carrying a capped run on --------------------------------------------
 
-  /// Credits already spent carrying the current chat's run on, so a budget is
-  /// a budget for the task rather than for each leg of it.
-  double continuedSpend = 0;
-
-  /// What the running turn is doing, newest last. Advisory: it is emptied the
-  /// moment a turn ends, and an empty list simply shows the plain spinner.
-  List<TurnStep> progressSteps = [];
-  bool _watching = false;
-  bool _stopped = false;
+  double get continueBudget =>
+      continueBudgetAfter(turnOf(current)?.continuedSpend ?? 0);
 
   /// What is left of this chat's continuation budget. A budget of -1 is
   /// "whatever the balance holds", which is still a real ceiling — it is just
   /// the user's own balance rather than a number they typed.
-  double get continueBudget {
+  double continueBudgetAfter(double spent) {
     final cap = settings.autoContinue;
     if (cap == 0) return 0;
     if (cap < 0) {
       final have = proBalance;
       return have == null || have < 0 ? 0 : have;
     }
-    final left = cap - continuedSpend;
+    final left = cap - spent;
     return left < 0 ? 0 : left;
   }
 
@@ -452,23 +493,53 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Notice? get visibleNotice =>
+      settings.notices ? Notice.newest(notices, dismissedNotices) : null;
+
+  Future<void> setNotices(bool on) async {
+    settings.notices = on;
+    await store.saveSettings(settings);
+    if (on) {
+      unawaited(refreshNotices());
+    } else {
+      notices = [];
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshNotices() async {
+    if (!settings.notices) return;
+    final seq = ++_noticeSeq;
+    final fresh = await api.notices();
+    if (seq != _noticeSeq) return;
+    if (!settings.notices || (fresh.isEmpty && notices.isEmpty)) return;
+    notices = fresh;
+    notifyListeners();
+  }
+
+  Future<void> dismissNotice(int id) async {
+    dismissedNotices = Notice.dismiss(dismissedNotices, id);
+    notifyListeners();
+    await store.saveDismissedNotices(dismissedNotices);
+  }
+
   /// Polls the worker for what the turn is doing. Stops the moment the turn is
   /// over, and never keeps the send waiting on it.
-  void _watchTurn(String eventId) {
+  void _watchTurn(ChatTurn turn, String eventId) {
     if (!settings.showProgress) return;
-    _watching = true;
-    progressSteps = [];
+    turn.watching = true;
+    turn.steps = [];
     () async {
       var after = 0;
-      while (_watching) {
-        final signer = current?.anon == true && anon.enabled
+      while (turn.watching) {
+        final signer = turn.conv.anon && anon.enabled
             ? await anon.signer()
             : identity.signer;
         final steps = await chat.progress(signer, eventId, after: after);
-        if (!_watching) return;
+        if (!turn.watching) return;
         if (steps.isNotEmpty) {
           after = steps.last.n;
-          progressSteps = [...progressSteps, ...steps];
+          turn.steps = [...turn.steps, ...steps];
           notifyListeners();
         }
         await Future<void>.delayed(const Duration(seconds: 2));
@@ -477,10 +548,10 @@ class AppController extends ChangeNotifier {
         .catchError((_) {});
   }
 
-  void _stopWatching() {
-    if (!_watching && progressSteps.isEmpty) return;
-    _watching = false;
-    progressSteps = [];
+  void _stopWatching(ChatTurn turn) {
+    if (!turn.watching && turn.steps.isEmpty) return;
+    turn.watching = false;
+    turn.steps = [];
     notifyListeners();
   }
 
@@ -537,14 +608,19 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Workspace? get activeWorkspace => store.workspace(current?.workspaceId);
+  Workspace? get activeWorkspace => workspaceOf(current);
+
+  Workspace? workspaceOf(Conversation? conv) =>
+      store.workspace(conv?.workspaceId);
+
+  List<GitRepo> get activeRepos => reposOf(current);
 
   /// A chat sees its own repositories plus the ones its workspace carries, in
   /// that order and without duplicates.
-  List<GitRepo> get activeRepos {
+  List<GitRepo> reposOf(Conversation? conv) {
     final ids = [
-      ...current?.repoIds ?? const <String>[],
-      ...activeWorkspace?.repoIds ?? const <String>[],
+      ...conv?.repoIds ?? const <String>[],
+      ...workspaceOf(conv)?.repoIds ?? const <String>[],
     ];
     final out = <GitRepo>[];
     final seen = <String>{};
@@ -612,8 +688,10 @@ class AppController extends ChangeNotifier {
 
   List<Persona> get personas => store.personas();
 
-  Persona? get activePersona =>
-      store.persona(current?.personaId ?? activeWorkspace?.personaId);
+  Persona? get activePersona => personaOf(current);
+
+  Persona? personaOf(Conversation? conv) =>
+      store.persona(conv?.personaId ?? workspaceOf(conv)?.personaId);
 
   Future<void> setPersona(String? id) async {
     final conv = current;
@@ -648,7 +726,9 @@ class AppController extends ChangeNotifier {
 
   List<Bot> get bots => store.bots();
 
-  Bot? get activeBot => store.bot(current?.botId);
+  Bot? get activeBot => botOf(current);
+
+  Bot? botOf(Conversation? conv) => store.bot(conv?.botId);
 
   Future<void> setBot(String? id, {Map<String, dynamic>? model}) async {
     final conv = current;
@@ -1025,6 +1105,21 @@ class AppController extends ChangeNotifier {
         } catch (_) {}
         return;
       }
+      if (identity.rootUnreadable) {
+        identity.rootLocked = true;
+        return;
+      }
+      PqKey? announced;
+      try {
+        relays.connect();
+        announced = await pq.resolve(signer.pubkey);
+      } catch (_) {
+        announced = null;
+      }
+      if (announced != null) {
+        identity.rootLocked = true;
+        return;
+      }
       // A sign-in that could not reach the worker left this device without a
       // root rather than minting one blind. The account turns out to have none,
       // so this is the moment to make it.
@@ -1041,6 +1136,97 @@ class AppController extends ChangeNotifier {
     // fingerprint the record names is proof we hold THAT one.
     if (row.fingerprint == null || row.fingerprint == held) return;
     identity.rootLocked = true;
+  }
+
+  Future<RootLinkVerdict> checkRootCode(String code) async {
+    final root = Identity.rootFromCode(code);
+    if (root == null) return const RootLinkVerdict('invalid');
+    if (!identity.present) return const RootLinkVerdict('invalid');
+    if (identity.rootCode == code.trim() && !identity.rootLocked) {
+      return const RootLinkVerdict('same');
+    }
+    final probe = await probeAccountRoot(identity.signer);
+    final fingerprint = pq_crypto.pqRootFingerprint(root);
+    if (probe.fingerprint != null && probe.fingerprint != fingerprint) {
+      return RootLinkVerdict('mismatch', probe: probe);
+    }
+    var epoch = 0;
+    final announced = probe.announced;
+    if (announced != null) {
+      final matched = _epochOfCode(code, announced);
+      if (matched == null && probe.fingerprint == null) {
+        return RootLinkVerdict('mismatch', probe: probe, announcedOnly: true);
+      }
+      if (matched != null) epoch = matched;
+    }
+    return RootLinkVerdict('ok', probe: probe, epoch: epoch);
+  }
+
+  int? _epochOfCode(String code, Uint8List announced) {
+    for (var epoch = 0; epoch <= Identity.epochScan; epoch++) {
+      final derived = Identity.kemForCode(code, epoch);
+      if (derived != null && _sameBytes(derived, announced)) return epoch;
+    }
+    return null;
+  }
+
+  static bool _sameBytes(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  Future<bool> linkRootCode(String code, RootLinkVerdict verdict) async {
+    if (verdict.status != 'ok') return false;
+    try {
+      await identity.adoptRootCode(code, epoch: verdict.epoch);
+    } catch (_) {
+      return false;
+    }
+    final probe = verdict.probe;
+    if (probe == null || !probe.present || probe.fingerprint == null) {
+      final root = identity.root;
+      if (root != null) {
+        try {
+          await storage.publishPqRootRecord(identity.signer, root);
+        } catch (_) {}
+      }
+    }
+    sync.blocked = false;
+    try {
+      identity.rootLocked =
+          await pq.announceRoot(identity.signer, identity) == null;
+    } catch (_) {}
+    unawaited(sync.run().then((_) => notifyListeners()));
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> replaceRootCode(String code) async {
+    final root = Identity.rootFromCode(code);
+    if (root == null || !identity.present) return false;
+    try {
+      await identity.adoptRootCode(code, epoch: 0);
+    } catch (_) {
+      return false;
+    }
+    identity.rootLocked = false;
+    var recorded = false;
+    try {
+      recorded = await storage.publishPqRootRecord(identity.signer, root);
+    } catch (_) {
+      recorded = false;
+    }
+    if (!recorded) return false;
+    sync.blocked = false;
+    try {
+      await pq.announceRoot(identity.signer, identity, force: true);
+    } catch (_) {}
+    unawaited(sync.run().then((_) => notifyListeners()));
+    notifyListeners();
+    return true;
   }
 
   /// Mints the root for an account that turns out not to have one, and records
@@ -1087,6 +1273,9 @@ class AppController extends ChangeNotifier {
     }));
     _syncTimer = Timer.periodic(
         const Duration(minutes: 5), (_) => unawaited(sync.run()));
+    unawaited(refreshNotices());
+    _noticeTimer = Timer.periodic(
+        const Duration(minutes: 15), (_) => unawaited(refreshNotices()));
 
     // The announcement and the bot's key are what make a reply post-quantum;
     // neither blocks the first message. Held so it can be cancelled: a wipe or
@@ -1104,14 +1293,13 @@ class AppController extends ChangeNotifier {
       try {
         await settleRoot();
       } catch (_) {}
-      final kem = identity.kem;
       // A locked device holds a root that is not this account's — already
       // settled against the account's own record, which the relays cannot
       // contradict. Announcing over the real key would strand every device.
-      if (kem != null && !identity.rootLocked) {
+      if (identity.kem != null && !identity.rootLocked) {
         try {
           identity.rootLocked =
-              !await pq.announce(identity.signer, kem, epoch: identity.epoch);
+              await pq.announceRoot(identity.signer, identity) == null;
         } catch (_) {}
       }
       await refreshBalance();
@@ -1152,6 +1340,7 @@ class AppController extends ChangeNotifier {
   void dispose() {
     _bootWork?.cancel();
     _syncTimer?.cancel();
+    _noticeTimer?.cancel();
     _scheduler?.cancel();
     sync.stop();
     relays.close();
@@ -1181,8 +1370,6 @@ class AppController extends ChangeNotifier {
     messages = store.messages(conv.id);
     artifacts = store.artifacts(conv.id);
     attachments = [];
-    // A queue belongs to the chat it was typed into, not to the app.
-    queued = [];
     quote = null;
     notifyListeners();
   }
@@ -1190,13 +1377,18 @@ class AppController extends ChangeNotifier {
   List<Artifact> artifactsOf(String messageId) =>
       artifacts.where((a) => a.messageId == messageId).toList();
 
-  Future<List<Artifact>> harvestArtifacts(ChatMessage message) async {
+  Future<List<Artifact>> harvestArtifacts(ChatMessage message,
+      {Conversation? conv}) async {
     if (message.role != ChatRole.bot) return const [];
+    final target = conv ?? current;
+    if (target == null) return const [];
+    final shown = target.id == current?.id;
+    var list = shown ? artifacts : store.artifacts(target.id);
     final made = <Artifact>[];
     for (final block in ArtifactHarvest.fences(message.content)) {
       if (!ArtifactHarvest.worthLifting(block.body, block.lang)) continue;
       final title = ArtifactHarvest.titleFor(block.lang, block.body);
-      final at = artifacts.indexWhere((a) => a.title == title && a.lang == block.lang);
+      final at = list.indexWhere((a) => a.title == title && a.lang == block.lang);
       if (at == -1) {
         final entry = Artifact(
           id: bytesToHex(randomBytes(8)),
@@ -1206,10 +1398,10 @@ class AppController extends ChangeNotifier {
           messageId: message.id,
           versions: [ArtifactVersion(at: DateTime.now(), body: block.body)],
         );
-        artifacts = [...artifacts, entry];
+        list = [...list, entry];
         made.add(entry);
       } else {
-        final entry = artifacts[at];
+        final entry = list[at];
         if (entry.body != block.body) {
           entry.versions = [
             ...entry.versions,
@@ -1225,7 +1417,8 @@ class AppController extends ChangeNotifier {
       }
     }
     if (made.isNotEmpty) {
-      await store.saveArtifacts(current!.id, artifacts);
+      if (shown) artifacts = list;
+      await store.saveArtifacts(target.id, list);
       notifyListeners();
     }
     return made;
@@ -1467,13 +1660,20 @@ class AppController extends ChangeNotifier {
     conversations.insert(0, conv);
   }
 
-  Future<void> _add(ChatMessage m) async {
-    messages = [...messages, m];
-    await store.saveMessages(current!.id, messages);
+  Future<void> _add(ChatMessage m) => _addTo(current!, m);
+
+  Future<void> _addTo(Conversation conv, ChatMessage m) async {
+    if (conv.id == current?.id) {
+      messages = [...messages, m];
+      await store.saveMessages(conv.id, messages);
+    } else {
+      await store.saveMessages(conv.id, [...store.messages(conv.id), m]);
+    }
     notifyListeners();
   }
 
-  Future<void> note(String text) => _add(ChatMessage(
+  Future<void> note(String text, {Conversation? conv}) =>
+      _addTo(conv ?? current!, ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.note,
         content: text,
@@ -1585,15 +1785,25 @@ class AppController extends ChangeNotifier {
 
   // --- sending -------------------------------------------------------------------
 
-  void stop() {
+  void stop({Conversation? target}) {
+    final conv = target ?? current;
+    if (conv == null) return;
     // Stop means stop: a run carrying itself on must not start another leg
     // after the one being aborted, and nothing waiting behind it goes either.
-    _stopped = true;
-    queued = [];
-    _stopWatching();
-    chat.abort();
-    sending = false;
-    status = null;
+    _queues.remove(conv.id);
+    final turn = turns.remove(conv.id);
+    if (turn != null) {
+      turn.stopped = true;
+      turn.control.cancel();
+      _stopWatching(turn);
+      turn.status = null;
+    }
+    notifyListeners();
+  }
+
+  void _endTurn(ChatTurn turn) {
+    if (turns[turn.conv.id] == turn) turns.remove(turn.conv.id);
+    turn.status = null;
     notifyListeners();
   }
 
@@ -1622,8 +1832,8 @@ class AppController extends ChangeNotifier {
     final body = text.trim();
     if (body.isEmpty) return const [];
 
-    sending = true;
-    status = null;
+    final turn = ChatTurn(conv);
+    turns[conv.id] = turn;
     notifyListeners();
 
     final seed = compareSeed();
@@ -1662,6 +1872,7 @@ class AppController extends ChangeNotifier {
           // carries what was said, and the real chat is untouched until one of
           fresh: true,
           onThreadIds: (_) {},
+          control: turn.control,
         );
         return CompareRun(
           model: model,
@@ -1669,6 +1880,7 @@ class AppController extends ChangeNotifier {
           thinking: res.thinking,
           cost: res.cost,
           sources: res.sources,
+          followUps: res.followUps,
         );
       } on ChatFailure catch (e) {
         return CompareRun(model: model, error: e.message);
@@ -1678,8 +1890,7 @@ class AppController extends ChangeNotifier {
     }
 
     final out = await Future.wait(models.map(once));
-    sending = false;
-    status = null;
+    _endTurn(turn);
 
     final spent = out.fold<double>(0, (n, r) => n + r.cost);
     if (spent > 0) await store.recordUsage(spent);
@@ -1709,6 +1920,7 @@ class AppController extends ChangeNotifier {
       pro: true,
       model: run.label,
       sources: run.sources,
+      followUps: run.followUps,
     );
     await _add(reply);
     await harvestArtifacts(reply);
@@ -1727,30 +1939,34 @@ class AppController extends ChangeNotifier {
   /// What was typed while a reply was still being written, in the order it was
   /// typed. Held rather than dropped: typing mid-reply used to do nothing at
   /// all, with no sign the message had gone anywhere.
-  List<String> queued = [];
-
-  void unqueue(int at) {
-    if (at < 0 || at >= queued.length) return;
-    queued.removeAt(at);
+  void unqueue(int at, {Conversation? target}) {
+    final conv = target ?? current;
+    final queue = conv == null ? null : _queues[conv.id];
+    if (queue == null || at < 0 || at >= queue.length) return;
+    queue.removeAt(at);
+    if (queue.isEmpty) _queues.remove(conv!.id);
     notifyListeners();
   }
 
   /// Sends the next thing that was waiting. One at a time: they were typed as
   /// a conversation, so they have to arrive as one.
-  Future<void> _sendQueued() async {
-    if (_stopped || sending || queued.isEmpty) return;
-    final next = queued.removeAt(0);
+  Future<void> _sendQueued(Conversation conv) async {
+    final queue = _queues[conv.id];
+    if (queue == null || queue.isEmpty || turns.containsKey(conv.id)) return;
+    final next = queue.removeAt(0);
+    if (queue.isEmpty) _queues.remove(conv.id);
     notifyListeners();
-    await send(next);
+    await send(next, target: conv);
   }
 
   /// Returns false when the message was held for later rather than sent, so a
   /// caller does not go on to read out a reply that has not happened yet.
-  Future<bool> send(String text) async {
-    final conv = current;
+  Future<bool> send(String text, {Conversation? target, bool bare = false}) async {
+    final conv = target ?? current;
     if (conv == null || text.trim().isEmpty) return false;
-    if (sending) {
-      queued.add(text.trim());
+    if (turns.containsKey(conv.id)) {
+      if (bare) return false;
+      (_queues[conv.id] ??= []).add(text.trim());
       notifyListeners();
       return false;
     }
@@ -1760,33 +1976,36 @@ class AppController extends ChangeNotifier {
     // spent, whichever key is signed in. A speed bump, never reported to the
     // worker: see AppController.freeAllows.
     if (!freeAllows) {
-      await note(freeSpentMessage());
+      await note(freeSpentMessage(), conv: conv);
       return false;
     }
-    _stopped = false;
-    continuedSpend = 0;
     final typed = text.trim();
-    final body = withMediaModel(typed);
-    final sent = [...attachments];
-    final quoted = quote;
+    final body = bare ? typed : withMediaModel(typed, conv: conv);
+    final composing = !bare && conv.id == current?.id;
+    final sent = composing ? [...attachments] : <Attachment>[];
+    final quoted = composing ? quote : null;
 
     // A picture has to be uploaded before the message goes, since it is the link
     // that travels and the link the model is handed.
     if (sent.any((a) => a.kind == AttachmentKind.image && a.url == null)) {
       final stranded = await settleAttachments(sent);
       if (stranded.isNotEmpty) {
-        await note(stranded.length == 1
-            ? t('{name} could not be uploaded, so Nymbot will not be able to see it.',
-                {'name': stranded.first.name})
-            : t('{names} could not be uploaded, so Nymbot will not be able to see them.',
-                {'names': stranded.map((a) => a.name).join(', ')}));
+        await note(
+            stranded.length == 1
+                ? t('{name} could not be uploaded, so Nymbot will not be able to see it.',
+                    {'name': stranded.first.name})
+                : t('{names} could not be uploaded, so Nymbot will not be able to see them.',
+                    {'names': stranded.map((a) => a.name).join(', ')}),
+            conv: conv);
       }
     }
 
-    attachments = [];
-    quote = null;
+    if (composing) {
+      attachments = [];
+      quote = null;
+    }
 
-    await _add(ChatMessage(
+    await _addTo(conv, ChatMessage(
       id: bytesToHex(randomBytes(8)),
       role: ChatRole.self,
       content: typed,
@@ -1800,36 +2019,39 @@ class AppController extends ChangeNotifier {
       await store.saveConversations(conversations);
     }
 
-    sending = true;
-    status = null;
+    final turn = ChatTurn(conv);
+    turns[conv.id] = turn;
     notifyListeners();
-    chat.onStatus = (s) {
-      status = s;
+    turn.control.onStatus = (s) {
+      turn.status = s;
       notifyListeners();
     };
 
-    final scoped = activeRepos;
+    final scoped = reposOf(conv);
+    final model = modelOf(conv);
+    TurnResult? carry;
     try {
       final res = await chat.send(
         conv: conv,
         text: body,
-        proModel: proModelForTurn,
+        proModel: proModelForTurnOf(conv),
         repos: scoped,
-        persona: activePersona,
-        workspace: activeWorkspace,
-        bot: activeBot,
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
         memories: store.memories(),
         attachments: sent,
         quote: quoted,
         webSearch: settings.webSearch,
         firstTurn: store.thread(conv.id).isEmpty,
-        onTurn: _watchTurn,
+        onTurn: (eventId) => _watchTurn(turn, eventId),
         onThreadIds: (ids) {
           final thread = [...store.thread(conv.id), ...ids];
           unawaited(store.setThread(conv.id, thread));
         },
+        control: turn.control,
       );
-      _stopWatching();
+      _stopWatching(turn);
       final reply = ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.bot,
@@ -1837,16 +2059,17 @@ class AppController extends ChangeNotifier {
         thinking: res.thinking,
         cost: res.cost,
         pro: res.pro,
-        model: res.pro ? (activeModel?['label'] as String?) : null,
+        model: res.pro ? (model?['label'] as String?) : null,
         calls: res.modelCalls,
         // What it changed in a repository, and where the branch stood before
         // it did — so the run can be put back.
         checkpoint: res.checkpoint,
         repos: res.repos.length > 1 ? res.repos : const [],
         sources: res.sources,
+        followUps: res.followUps,
       );
-      await _add(reply);
-      await harvestArtifacts(reply);
+      await _addTo(conv, reply);
+      await harvestArtifacts(reply, conv: conv);
       if (conv.seed != null) conv.seed = null;
       conv.messageCount += 1;
       conv.creditsSpent += res.cost;
@@ -1870,23 +2093,22 @@ class AppController extends ChangeNotifier {
         // transfer is for.
         final topped = conv.anon ? await autoTopUp() : null;
         if (topped != null) {
-          await note(describeTopUp(topped));
+          await note(describeTopUp(topped), conv: conv);
         } else {
-          await note(res.pro
-              ? t('Pro credits running low: {n} left. Tap Buy to top up.',
-                  {'n': res.balance})
-              : t('Credits running low: {n} left. Tap Buy to top up.',
-                  {'n': res.balance}));
+          await note(
+              res.pro
+                  ? t('Pro credits running low: {n} left. Tap Buy to top up.',
+                      {'n': res.balance})
+                  : t('Credits running low: {n} left. Tap Buy to top up.',
+                      {'n': res.balance}),
+              conv: conv);
         }
       }
-      if (res.truncated) {
-        // Out of the try's finally, so the loop runs with `sending` under its
-        // own control rather than fighting the one being unwound.
-        unawaited(Future<void>.microtask(() => _carryOn(res)));
-      }
+      if (res.truncated) carry = res;
     } on ChatFailure catch (e) {
       if (e.cancelled) {
-        await note(t('Stopped. That reply was not charged for unless it had already finished.'));
+        await note(t('Stopped. That reply was not charged for unless it had already finished.'),
+            conv: conv);
       } else if (e.noCredits) {
         _creditBalance(e.pro, e.balance, anonKey: conv.anon && anon.ready);
         // The worker says the day is spent. Believe it over the device's own
@@ -1898,18 +2120,18 @@ class AppController extends ChangeNotifier {
         if (e.free != null && !e.pro) {
           // The allowance ran out, not a balance: that is a time, not a wall,
           // and there is nothing to top up from.
-          await note(freeSpentMessage());
+          await note(freeSpentMessage(), conv: conv);
         } else {
           final topped = conv.anon ? await autoTopUp(force: true) : null;
           if (topped != null) {
             await note('${describeTopUp(topped)} '
-                '${t('Send that again when you are ready.')}');
+                '${t('Send that again when you are ready.')}', conv: conv);
           } else {
-            await note(e.message);
+            await note(e.message, conv: conv);
           }
         }
       } else {
-        await _add(ChatMessage(
+        await _addTo(conv, ChatMessage(
           id: bytesToHex(randomBytes(8)),
           role: ChatRole.error,
           content: e.message,
@@ -1917,19 +2139,20 @@ class AppController extends ChangeNotifier {
         ));
       }
     } catch (e) {
-      await _add(ChatMessage(
+      await _addTo(conv, ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.error,
         content: t('Something went wrong sending that message.'),
         retry: typed,
       ));
     } finally {
-      _stopWatching();
-      sending = false;
-      status = null;
+      _stopWatching(turn);
+      turn.status = null;
       notifyListeners();
     }
-    await _sendQueued();
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry);
+    _endTurn(turn);
+    await _sendQueued(conv);
     return true;
   }
 
@@ -1942,9 +2165,9 @@ class AppController extends ChangeNotifier {
   ];
   final _rng = math.Random();
 
-  Future<void> _legPause(Duration total) async {
+  Future<void> _legPause(ChatTurn turn, Duration total) async {
     final until = DateTime.now().add(total);
-    while (!_stopped) {
+    while (!turn.stopped) {
       final left = until.difference(DateTime.now());
       if (left <= Duration.zero) break;
       await Future<void>.delayed(
@@ -1957,98 +2180,95 @@ class AppController extends ChangeNotifier {
   /// A repo run stopped at its tool-call cap with work left. Spend the budget
   /// the user set on carrying it on, one leg at a time, saying what each leg
   /// cost as it goes — never silently.
-  Future<void> _carryOn(TurnResult first) async {
-    final conv = current;
-    if (conv == null) return;
+  Future<void> _carryOn(ChatTurn turn, TurnResult first) async {
+    final conv = turn.conv;
     var token = first.resumeToken;
     var reserve = first.nextReserve;
     if (token == null || token.isEmpty) {
-      await note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'));
+      await note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'),
+          conv: conv);
       return;
     }
-    var left = continueBudget;
+    var left = continueBudgetAfter(turn.continuedSpend);
     if (left <= 0) {
       await note(t('That answer stopped early — the task needs more steps than one '
           'turn holds. Set “When a repo task runs out of room” in Settings and '
-          'Nymbot will carry on by itself.'));
+          'Nymbot will carry on by itself.'), conv: conv);
       return;
     }
     if (reserve > left) {
       await note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-          {'n': reserve - left}));
+          {'n': reserve - left}), conv: conv);
       return;
     }
 
+    final model = modelOf(conv);
     var legs = 0;
     var stalls = 0;
-    while (token != null && token.isNotEmpty && left > 0 && !_stopped) {
+    while (token != null && token.isNotEmpty && left > 0 && !turn.stopped) {
       if (legs++ > 0) {
         final gap = _legGapMs + _rng.nextInt(_legGapJitterMs);
-        sending = true;
-        status = t('Pausing a moment so the next step does not crowd the last');
+        turn.status = t('Pausing a moment so the next step does not crowd the last');
         notifyListeners();
-        await _legPause(Duration(milliseconds: gap));
-        if (_stopped) break;
+        await _legPause(turn, Duration(milliseconds: gap));
+        if (turn.stopped) break;
       }
-      sending = true;
-      status = t('Carrying on where it left off');
+      turn.status = t('Carrying on where it left off');
       notifyListeners();
       TurnResult next;
       try {
         next = await chat.send(
           conv: conv,
           text: t('Continue.'),
-          proModel: activeModel,
-          repos: activeRepos,
-          persona: activePersona,
-          workspace: activeWorkspace,
-          bot: activeBot,
+          proModel: model,
+          repos: reposOf(conv),
+          persona: personaOf(conv),
+          workspace: workspaceOf(conv),
+          bot: botOf(conv),
           memories: store.memories(),
           webSearch: settings.webSearch,
           firstTurn: false,
           resume: token,
-          onTurn: _watchTurn,
+          onTurn: (eventId) => _watchTurn(turn, eventId),
           onThreadIds: (ids) {
             final thread = [...store.thread(conv.id), ...ids];
             unawaited(store.setThread(conv.id, thread));
           },
+          control: turn.control,
         );
       } on ChatFailure catch (e) {
-        _stopWatching();
-        sending = false;
-        status = null;
+        _stopWatching(turn);
+        turn.status = null;
         final again = e.resumeToken;
         if (again != null &&
             again.isNotEmpty &&
             stalls < _legStallWaits.length &&
-            !_stopped) {
+            !turn.stopped) {
           final wait = _legStallWaits[stalls++];
           token = again;
           legs = 0;
           await note(t('That step could not go out — the gateway is busy. '
               'Nothing is lost; trying again in {n} seconds.',
-              {'n': wait.inSeconds}));
-          await _legPause(wait);
+              {'n': wait.inSeconds}), conv: conv);
+          await _legPause(turn, wait);
           continue;
         }
         if (again != null && again.isNotEmpty) {
           await note(t('Stopped there — the gateway stayed busy. The work so '
-              'far is saved, so ask it to carry on later.'));
+              'far is saved, so ask it to carry on later.'), conv: conv);
           return;
         }
-        await note(e.message);
+        await note(e.message, conv: conv);
         return;
       } catch (_) {
-        _stopWatching();
-        sending = false;
-        status = null;
-        await note(t('Could not carry on from there.'));
+        _stopWatching(turn);
+        turn.status = null;
+        await note(t('Could not carry on from there.'), conv: conv);
         return;
       }
       stalls = 0;
-      _stopWatching();
-      sending = false;
-      status = null;
+      _stopWatching(turn);
+      turn.status = null;
 
       final more = ChatMessage(
         id: bytesToHex(randomBytes(8)),
@@ -2057,39 +2277,40 @@ class AppController extends ChangeNotifier {
         thinking: next.thinking,
         cost: next.cost,
         pro: next.pro,
-        model: next.pro ? (activeModel?['label'] as String?) : null,
+        model: next.pro ? (model?['label'] as String?) : null,
         calls: next.modelCalls,
         sources: next.sources,
+        followUps: next.followUps,
       );
-      await _add(more);
-      await harvestArtifacts(more);
+      await _addTo(conv, more);
+      await harvestArtifacts(more, conv: conv);
       conv.messageCount += 1;
       conv.creditsSpent += next.cost;
       _touch(conv);
       await store.saveConversations(conversations);
       await store.recordUsage(next.cost);
-      continuedSpend += next.cost;
+      turn.continuedSpend += next.cost;
       _creditBalance(next.pro, next.balance,
           anonKey: conv.anon && anon.ready);
 
-      left = continueBudget;
+      left = continueBudgetAfter(turn.continuedSpend);
       token = next.truncated ? next.resumeToken : null;
       reserve = next.nextReserve;
 
       if (token != null && token.isNotEmpty && reserve > left) {
         await note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-            {'n': reserve, 'left': left}));
+            {'n': reserve, 'left': left}), conv: conv);
         return;
       }
       if (token != null && token.isNotEmpty && left <= 0) {
         await note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-            {'n': continuedSpend}));
+            {'n': turn.continuedSpend}), conv: conv);
         return;
       }
     }
-    if (continuedSpend > 0) {
-      await note(t('Finished. Carrying on cost {n} extra credits.', {'n': continuedSpend}));
-      continuedSpend = 0;
+    if (turn.continuedSpend > 0) {
+      await note(t('Finished. Carrying on cost {n} extra credits.', {'n': turn.continuedSpend}),
+          conv: conv);
     }
   }
 
@@ -2346,6 +2567,7 @@ class AppController extends ChangeNotifier {
   Future<void> wipe() async {
     _bootWork?.cancel();
     _syncTimer?.cancel();
+    _noticeTimer?.cancel();
     sync.stop();
     sync.forget();
     // Signed while the key is still here; bounded so a signer that never
@@ -2362,9 +2584,31 @@ class AppController extends ChangeNotifier {
     conversations = [];
     messages = [];
     repos = [];
+    notices = [];
+    dismissedNotices = [];
     current = null;
+    turns.clear();
+    _queues.clear();
     signedIn = false;
     _entered = false;
     notifyListeners();
   }
+}
+
+class ChatTurn {
+  ChatTurn(this.conv);
+
+  final Conversation conv;
+  final TurnControl control = TurnControl();
+  String? status;
+
+  /// What the running turn is doing, newest last. Advisory: it is emptied the
+  /// moment a turn ends, and an empty list simply shows the plain spinner.
+  List<TurnStep> steps = [];
+  bool watching = false;
+  bool stopped = false;
+
+  /// Credits already spent carrying the current chat's run on, so a budget is
+  /// a budget for the task rather than for each leg of it.
+  double continuedSpend = 0;
 }

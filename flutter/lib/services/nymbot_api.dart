@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../config.dart';
 import '../models/nostr_event.dart';
+import '../models/notice.dart';
 import 'nostr/event_signer.dart';
 
 typedef ApiResult = ({int status, Map<String, dynamic> data});
@@ -191,6 +192,28 @@ class NymbotApi {
       return decoded;
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<List<Notice>> notices({String platform = 'app'}) async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.botUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({'action': 'notices', 'platform': platform}),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return const [];
+      final decoded = jsonDecode(resp.body);
+      final list = decoded is Map ? decoded['notices'] : null;
+      if (list is! List) return const [];
+      return list.map(Notice.fromJson).whereType<Notice>().toList();
+    } catch (_) {
+      return const [];
     }
   }
 

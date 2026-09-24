@@ -149,14 +149,63 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             const SizedBox(height: 8),
             OutlinedButton(
               onPressed: () async {
+                final code = _link.text.trim();
+                if (code.isEmpty) return;
+                setState(() {
+                  _status = t('Checking the code against the account…');
+                  _warn = false;
+                });
+                final verdict = await app.checkRootCode(code);
+                if (!mounted) return;
                 try {
-                  await identity.adoptRootCode(_link.text);
-                  final kem = identity.kem;
-                  if (kem != null) {
-                    await app.pq
-                        .announce(identity.signer, kem, epoch: identity.epoch);
+                  if (verdict.status == 'invalid') {
+                    throw const FormatException('not a code');
                   }
+                  if (verdict.status == 'same') {
+                    setState(() {
+                      _status = t('This device already uses that code.');
+                      _warn = false;
+                    });
+                    return;
+                  }
+                  if (verdict.status == 'mismatch') {
+                    if (verdict.announcedOnly) {
+                      setState(() {
+                        _status = t('That code does not match the key this '
+                            'account advertises. Check you copied it from '
+                            'the right account.');
+                        _warn = true;
+                      });
+                      return;
+                    }
+                    final replace = await _confirmReplace();
+                    if (!mounted) return;
+                    if (!replace) {
+                      setState(() {
+                        _status = t('That code does not match the root this '
+                            'account recorded. Check you copied it from the '
+                            'right account.');
+                        _warn = true;
+                      });
+                      return;
+                    }
+                    final replaced = await app.replaceRootCode(code);
+                    if (!mounted) return;
+                    setState(() {
+                      _status = replaced
+                          ? t('Replaced. This account now uses the code you '
+                              'pasted.')
+                          : t('The code could not be saved to your account '
+                              'right now. Check your connection and try '
+                              'again.');
+                      _warn = !replaced;
+                      if (replaced) _link.clear();
+                    });
+                    return;
+                  }
+                  final linked = await app.linkRootCode(code, verdict);
                   if (!mounted) return;
+                  if (!linked) throw const FormatException('not a code');
                   setState(() {
                     _status = t('Linked. This device now derives the same '
                         'post-quantum key.');
@@ -250,6 +299,34 @@ class _IdentitySheetState extends State<_IdentitySheet> {
       _warn = res.data['error'] != null;
     });
     await app.refreshBalance();
+  }
+
+  Future<bool> _confirmReplace() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t('Replace the recovery code?')),
+        content: Text(
+          t('This code does not match the recovery code the account currently '
+              'uses.\n\nIf the current code was created by mistake, you can '
+              'replace it with this one. Every device on this account — Nymbot '
+              'or Nymchat — will then need this code, and anything sealed to '
+              'the current code stays readable only on devices that still '
+              'hold it.'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(t('Keep the current code'))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(t('Replace')),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
   }
 
   Future<void> _wipe(AppController app) async {

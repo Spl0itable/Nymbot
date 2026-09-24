@@ -9,9 +9,10 @@ import '../core/crypto/schnorr.dart' as schnorr;
 import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
 import 'relay_pool.dart';
+import '../state/identity.dart';
 import '../state/store.dart';
 
-typedef PqKey = ({Uint8List pk, String fmt});
+typedef PqKey = ({Uint8List pk, String fmt, int epoch});
 
 /// Post-quantum capability announcements (kind 30078, d-tag `nym-pq`).
 ///
@@ -64,10 +65,11 @@ class PqAnnounce {
       if (payload['retracted'] == true) return null;
       final exp = (payload['exp'] as num?)?.toInt() ?? 0;
       if (exp <= DateTime.now().millisecondsSinceEpoch ~/ 1000) return null;
+      final epoch = (payload['epoch'] as num?)?.toInt() ?? 0;
       final pk2 = _readKey(payload['pk2']);
-      if (pk2 != null) return (pk: pk2, fmt: 'pq2');
+      if (pk2 != null) return (pk: pk2, fmt: 'pq2', epoch: epoch);
       final pk1 = _readKey(payload['pk']);
-      if (pk1 != null) return (pk: pk1, fmt: 'pq1');
+      if (pk1 != null) return (pk: pk1, fmt: 'pq1', epoch: epoch);
       return null;
     } catch (_) {
       return null;
@@ -117,6 +119,7 @@ class PqAnnounce {
             botKey = (
               pk: hexToBytes(j['pk'] as String),
               fmt: j['fmt'] as String? ?? 'pq2',
+              epoch: 0,
             );
           }
         }
@@ -175,6 +178,24 @@ class PqAnnounce {
     await relays.publish(event);
     selfAnnouncement = event;
     return true;
+  }
+
+  Future<int?> announceRoot(EventSigner signer, Identity identity,
+      {bool force = false}) async {
+    var kem = identity.kem;
+    if (kem == null) return null;
+    final existing = force ? null : await resolve(signer.pubkey);
+    if (existing != null && !_sameBytes(existing.pk, kem.publicKey)) {
+      final epoch = identity.epochMatching(existing.pk, hint: existing.epoch);
+      if (epoch == null) return null;
+      await identity.adoptEpoch(epoch);
+      kem = identity.kem;
+      if (kem == null) return null;
+    }
+    final event = await build(signer, kem, epoch: identity.epoch);
+    await relays.publish(event);
+    selfAnnouncement = event;
+    return identity.epoch;
   }
 
   static bool _sameBytes(Uint8List a, Uint8List b) {

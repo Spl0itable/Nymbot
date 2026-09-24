@@ -114,6 +114,18 @@
             } catch (_) { return null; }
         },
 
+        async notices() {
+            try {
+                const resp = await Edge.fetch(url(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'notices', platform: 'web' })
+                });
+                const data = await resp.json();
+                return Array.isArray(data && data.notices) ? data.notices : [];
+            } catch (_) { return []; }
+        },
+
         createInvoice(amountSats, tier, recipientPubkey, opts) {
             return this.call('create-invoice', {
                 amountSats, tier,
