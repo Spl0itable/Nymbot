@@ -7296,8 +7296,8 @@
                 const ext = { js: 'js', ts: 'ts', dart: 'dart', py: 'py', json: 'json', html: 'html', css: 'css', sh: 'sh', sql: 'sql', md: 'md' }[lang] || 'txt';
                 Exporter.download('snippet.' + ext, 'text/plain', body);
             } else if (act === 'code-preview') {
-                this.showPreview('previewFrame', body);
                 this.openModal('modalPreview');
+                this.showPreview('previewFrame', body);
             }
         },
 
