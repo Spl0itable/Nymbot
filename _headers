@@ -59,7 +59,31 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
   X-Robots-Tag: noindex
 
+/app/preview.html
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/preview.js 'unsafe-inline' 'unsafe-eval' https: data: blob:; style-src 'unsafe-inline' https: data: blob:; img-src https: data: blob:; font-src https: data: blob:; media-src https: data: blob:; connect-src https: data: blob:; worker-src blob: data:; child-src blob:; frame-src 'none'; object-src 'none'; base-uri https:; form-action 'none'; frame-ancestors 'self'
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
+  X-Robots-Tag: noindex
+
+/app/preview
+  ! Content-Security-Policy
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/preview.js 'unsafe-inline' 'unsafe-eval' https: data: blob:; style-src 'unsafe-inline' https: data: blob:; img-src https: data: blob:; font-src https: data: blob:; media-src https: data: blob:; connect-src https: data: blob:; worker-src blob: data:; child-src blob:; frame-src 'none'; object-src 'none'; base-uri https:; form-action 'none'; frame-ancestors 'self'
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
+  X-Robots-Tag: noindex
+
 /app/js/sandbox.js
+  ! Cross-Origin-Resource-Policy
+  Cross-Origin-Resource-Policy: cross-origin
+
+/app/js/preview.js
   ! Cross-Origin-Resource-Policy
   Cross-Origin-Resource-Policy: cross-origin
 

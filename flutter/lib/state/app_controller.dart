@@ -337,6 +337,21 @@ class AppController extends ChangeNotifier {
   void watchTurnForTest(ChatTurn turn, String eventId) => _watchTurn(turn, eventId);
 
   @visibleForTesting
+  void draftForTest(ChatTurn turn, String text) {
+    turn.draft = text;
+    turn.drafted = true;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<void> landForTest(ChatTurn turn, ChatMessage reply) async {
+    _stopWatching(turn, keepDraft: true);
+    if (turn.drafted) streamedReplies.add(reply.id);
+    turn.draft = null;
+    await _addTo(turn.conv, reply);
+  }
+
+  @visibleForTesting
   void endTurnForTest(ChatTurn turn) {
     turn.watching = false;
     _endTurn(turn);
@@ -914,11 +929,11 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _stopWatching(ChatTurn turn) {
-    if (!turn.watching && turn.steps.isEmpty && turn.draft == null) return;
+  void _stopWatching(ChatTurn turn, {bool keepDraft = false}) {
+    if (!turn.watching && turn.steps.isEmpty && (keepDraft || turn.draft == null)) return;
     turn.watching = false;
     turn.steps = [];
-    turn.draft = null;
+    if (!keepDraft) turn.draft = null;
     notifyListeners();
   }
 
@@ -1326,7 +1341,7 @@ class AppController extends ChangeNotifier {
         },
         control: turn.control,
       );
-      _stopWatching(turn);
+      _stopWatching(turn, keepDraft: true);
       final reply = ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.bot,
@@ -1348,6 +1363,7 @@ class AppController extends ChangeNotifier {
         team: Team.normalize(res.team),
       );
       if (turn.drafted) streamedReplies.add(reply.id);
+      turn.draft = null;
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
@@ -3080,7 +3096,7 @@ class AppController extends ChangeNotifier {
         },
         control: turn.control,
       );
-      _stopWatching(turn);
+      _stopWatching(turn, keepDraft: true);
       final reply = ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.bot,
@@ -3106,6 +3122,7 @@ class AppController extends ChangeNotifier {
         team: Team.normalize(res.team),
       );
       if (turn.drafted) streamedReplies.add(reply.id);
+      turn.draft = null;
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       if (conv.seed != null) conv.seed = null;

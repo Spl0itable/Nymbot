@@ -5323,7 +5323,7 @@
         closeArtifact() {
             this.artifact = null;
             $('artifactPanel').hidden = true;
-            $('artifactFrame').srcdoc = '';
+            this.clearPreview('artifactFrame');
             document.querySelector('.shell').classList.remove('has-artifact');
             this.renderArtifactStrip();
         },
@@ -5361,9 +5361,43 @@
             }
             reader.hidden = true;
             frame.hidden = false;
-            frame.srcdoc = lang === 'svg'
+            this.showPreview('artifactFrame', lang === 'svg'
                 ? `<link rel="stylesheet" href="${location.origin}/app/css/svg-frame.css"><body>${entry.body}</body>`
-                : entry.body;
+                : entry.body);
+        },
+
+        showPreview(id, html) {
+            const old = $(id);
+            if (!old) return null;
+            const frame = old.cloneNode(false);
+            frame.removeAttribute('srcdoc');
+            this._previewWaits = this._previewWaits || {};
+            if (this._previewWaits[id]) window.removeEventListener('message', this._previewWaits[id]);
+            const ready = (e) => {
+                if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'nymbot-preview-ready') return;
+                window.removeEventListener('message', ready);
+                if (this._previewWaits[id] === ready) delete this._previewWaits[id];
+                frame.contentWindow.postMessage({ type: 'nymbot-preview', html: String(html || '') }, '*');
+            };
+            this._previewWaits[id] = ready;
+            window.addEventListener('message', ready);
+            frame.src = '/app/preview.html';
+            old.replaceWith(frame);
+            return frame;
+        },
+
+        clearPreview(id) {
+            const old = $(id);
+            if (!old) return;
+            this._previewWaits = this._previewWaits || {};
+            if (this._previewWaits[id]) {
+                window.removeEventListener('message', this._previewWaits[id]);
+                delete this._previewWaits[id];
+            }
+            const frame = old.cloneNode(false);
+            frame.removeAttribute('src');
+            frame.removeAttribute('srcdoc');
+            old.replaceWith(frame);
         },
 
         renderArtifactVersions() {
@@ -7262,8 +7296,7 @@
                 const ext = { js: 'js', ts: 'ts', dart: 'dart', py: 'py', json: 'json', html: 'html', css: 'css', sh: 'sh', sql: 'sql', md: 'md' }[lang] || 'txt';
                 Exporter.download('snippet.' + ext, 'text/plain', body);
             } else if (act === 'code-preview') {
-                const frame = $('previewFrame');
-                frame.srcdoc = body;
+                this.showPreview('previewFrame', body);
                 this.openModal('modalPreview');
             }
         },
@@ -8390,8 +8423,7 @@
             $('palette').hidden = true;
             for (const m of document.querySelectorAll('.modal')) m.hidden = true;
             this.closeChatMenu();
-            const frame = $('previewFrame');
-            if (frame) frame.srcdoc = '';
+            if ($('previewFrame')) this.clearPreview('previewFrame');
         },
 
         ask(options) {

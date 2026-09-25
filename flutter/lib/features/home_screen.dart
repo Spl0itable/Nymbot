@@ -89,6 +89,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _scroll = ScrollController();
   final _voice = Voice();
   final _keys = <String, GlobalKey>{};
+  final _draftKey = GlobalKey();
+  ChatTurn? _draftTurn;
+  bool _followDraft = false;
 
   String _suggestTerm = '';
   bool _hasText = false;
@@ -600,20 +603,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) => _alignTop(id, 4));
   }
 
+  double? _topOf(GlobalKey? key) {
+    final box = key?.currentContext?.findRenderObject();
+    final viewport = box == null ? null : RenderAbstractViewport.maybeOf(box);
+    if (box == null || viewport == null) return null;
+    final position = _scroll.position;
+    return (viewport.getOffsetToReveal(box, 0).offset - 8)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+  }
+
   void _alignTop(String id, int tries) {
     if (!mounted || !_scroll.hasClients) return;
-    final box = _keys[id]?.currentContext?.findRenderObject();
-    final viewport = box == null ? null : RenderAbstractViewport.maybeOf(box);
-    if (box == null || viewport == null) {
+    final top = _topOf(_keys[id]);
+    if (top == null) {
       if (tries <= 0) return;
       _scroll.jumpTo(_scroll.position.maxScrollExtent);
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _alignTop(id, tries - 1));
       return;
     }
-    final position = _scroll.position;
-    final top = (viewport.getOffsetToReveal(box, 0).offset - 8)
-        .clamp(position.minScrollExtent, position.maxScrollExtent);
     if (reducedMotion(context)) {
       _scroll.jumpTo(top);
       return;
@@ -624,6 +632,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       curve: Curves.easeOut,
     );
   }
+
+  void _trackDraft(AppController app) {
+    final turn = app.turnOf(app.current);
+    final shown = turn != null &&
+        turn.team == null &&
+        turn.research == null &&
+        (turn.draft?.trim() ?? '').isNotEmpty;
+    if (!shown) return;
+    if (_draftTurn != turn) {
+      _draftTurn = turn;
+      _followDraft = _atBottom;
+    }
+    if (_followDraft) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _pinDraft());
+    }
+  }
+
+  void _pinDraft() {
+    if (!mounted || !_followDraft || !_scroll.hasClients) return;
+    final top = _topOf(_draftKey);
+    if (top == null || (top - _scroll.offset).abs() < 0.5) return;
+    _scroll.jumpTo(top);
+  }
+
+  bool _threadScrolled(ScrollNotification n) {
+    if (n.depth != 0) return false;
+    final dragged = (n is ScrollStartNotification && n.dragDetails != null) ||
+        (n is ScrollUpdateNotification && n.dragDetails != null) ||
+        (n is OverscrollNotification && n.dragDetails != null);
+    if (dragged ||
+        (n is UserScrollNotification && n.direction != ScrollDirection.idle)) {
+      _followDraft = false;
+    }
+    if (dragged && _inputFocus.hasFocus) _inputFocus.unfocus();
+    return false;
+  }
+
+  bool get _touchKeyboard => switch (Theme.of(context).platform) {
+        TargetPlatform.iOS || TargetPlatform.android => true,
+        _ => false,
+      };
 
   void _say(String text) {
     if (!mounted) return;
@@ -1037,14 +1086,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final enter = key == LogicalKeyboardKey.enter ||
           key == LogicalKeyboardKey.numpadEnter;
       if (enter && mod) {
-        _send();
+        _send(null, false, true);
         return KeyEventResult.handled;
       }
       if (enter &&
           !keys.isShiftPressed &&
           !keys.isAltPressed &&
           AppScope.read(context).settings.sendOnEnter) {
-        if (!_pickMention()) _send();
+        if (!_pickMention()) _send(null, false, true);
         return KeyEventResult.handled;
       }
     }
@@ -1215,10 +1264,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
   }
 
-  Future<void> _send([String? override, bool bare = false]) async {
+  Future<void> _send(
+      [String? override, bool bare = false, bool fromKey = false]) async {
     final text = override ?? _input.markdown.trim();
     if (text.isEmpty) return;
     final app = AppScope.read(context);
+    if (_touchKeyboard &&
+        (!fromKey || MediaQuery.viewInsetsOf(context).bottom > 0)) {
+      _inputFocus.unfocus();
+    }
     if (override == null) {
       _input.clear();
       setState(() => _suggestTerm = '');
@@ -1257,7 +1311,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() => _hasText = true);
     }
     if (went && app.current?.id == asked) {
-      _toReply();
+      final last = app.messages.isEmpty ? null : app.messages.last;
+      final streamed = last != null && app.streamedReplies.contains(last.id);
+      if (!streamed || _followDraft) _toReply();
+      _followDraft = false;
     } else {
       _toBottom();
     }
@@ -1842,78 +1899,118 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       groupStart[j] = together ? groupStart[j - 1] : j;
     }
 
+    _trackDraft(app);
     return StickyAvatarScope(
-      child: ListView.builder(
-        controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-        itemCount: app.messages.length + (app.sending ? 1 : 0),
-        itemBuilder: (context, i) {
-          if (i >= app.messages.length && app.teaming) {
-            return TeamProgress(
-              label: app.status ?? t('Nymbot is leading a team'),
-              showAvatar: app.settings.avatars,
-              steps: app.progressSteps,
-              workers: app.teamWorkers,
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _threadScrolled,
+        child: ListView.builder(
+          controller: _scroll,
+          physics: const AlwaysScrollableScrollPhysics(),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+          itemCount: app.messages.length + (app.sending ? 1 : 0),
+          itemBuilder: (context, i) {
+            if (i >= app.messages.length && app.teaming) {
+              return TeamProgress(
+                label: app.status ?? t('Nymbot is leading a team'),
+                showAvatar: app.settings.avatars,
+                steps: app.progressSteps,
+                workers: app.teamWorkers,
+              );
+            }
+            if (i >= app.messages.length && app.researching) {
+              return ResearchProgress(
+                label: app.status ?? t('Nymbot is researching'),
+                showAvatar: app.settings.avatars,
+                steps: app.progressSteps,
+              );
+            }
+            if (i >= app.messages.length) {
+              final status = TypingIndicator(
+                label: app.status ??
+                    (app.activeRepos.isNotEmpty && app.activeModel != null
+                        ? t('Nymbot is reading your repositories')
+                        : t('Nymbot is thinking')),
+                showAvatar: app.settings.avatars,
+                steps: _progressLines(app.progressSteps),
+              );
+              final partial = app.progressDraft?.trim() ?? '';
+              if (partial.isEmpty) return status;
+              final model = app.activeModel;
+              final previous = messages.isEmpty ? null : messages.last;
+              final together = previous != null &&
+                  previous.role == ChatRole.bot &&
+                  DateTime.now().difference(previous.at).inMinutes.abs() < 10;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  KeyedSubtree(
+                    key: _draftKey,
+                    child: MessageBubble(
+                      key: const ValueKey('reply-draft'),
+                      message: ChatMessage(
+                        id: 'reply-draft',
+                        role: ChatRole.bot,
+                        content: partial,
+                        pro: model != null,
+                        model: model?['label'] as String?,
+                      ),
+                      draft: true,
+                      selfPubkey: selfPubkey,
+                      settings: app.settings,
+                      onAction: (_, __) {},
+                      grouped: together,
+                      avatarGroup: together
+                          ? messages[groupStart[messages.length - 1]].id
+                          : 'reply-draft',
+                      modelCatalog: app.mentionCatalog,
+                    ),
+                  ),
+                  status,
+                ],
+              );
+            }
+            final m = messages[i];
+            final grouped = groupStart[i] != i;
+            final lastInGroup =
+                i + 1 >= messages.length || groupStart[i + 1] != groupStart[i];
+            final key = _keys.putIfAbsent(m.id, () => GlobalKey());
+            return KeyedSubtree(
+              key: key,
+              child: MessageBubble(
+                message: m,
+                artifacts: app.artifactsOf(m.id),
+                actionsOpen: _openActions == m.id,
+                onToggleActions: () => setState(
+                    () => _openActions = _openActions == m.id ? null : m.id),
+                onOpenArtifact: (a) => showArtifact(context, a),
+                onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
+                onAllowTool: m.pendingTool == null ? null : () => app.allowPendingTool(m),
+                onDenyTool: m.pendingTool == null ? null : () => app.denyPendingTool(m),
+                onAlwaysAllowTool:
+                    app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
+                onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
+                onDiscardStaged: m.staged == null ? null : () => AppScope.read(context).discardStaged(m),
+                selfPubkey: selfPubkey,
+                selfName: app.selfNameIn(app.current, me?.name),
+                selfPicture: me?.picture ?? '',
+                settings: app.settings,
+                grouped: grouped,
+                lastInGroup: lastInGroup,
+                avatarGroup: messages[groupStart[i]].id,
+              modelCatalog: app.mentionCatalog,
+                speaking: _voice.speakingId == m.id,
+                highlighted: _highlighted == m.id,
+                onAction: _messageAction,
+                followUps: i == offer ? m.followUps : const [],
+                onFollowUp: (text) => _followUp(m, text),
+                onEditFollowUp: _editFollowUp,
+                reveal: _revealId == m.id ? _revealAt : null,
+              ),
             );
-          }
-          if (i >= app.messages.length && app.researching) {
-            return ResearchProgress(
-              label: app.status ?? t('Nymbot is researching'),
-              showAvatar: app.settings.avatars,
-              steps: app.progressSteps,
-            );
-          }
-          if (i >= app.messages.length) {
-            return TypingIndicator(
-              label: app.status ??
-                  (app.activeRepos.isNotEmpty && app.activeModel != null
-                      ? t('Nymbot is reading your repositories')
-                      : t('Nymbot is thinking')),
-              showAvatar: app.settings.avatars,
-              steps: _progressLines(app.progressSteps),
-              draft: app.progressDraft,
-              wrapCode: app.settings.codeWrap,
-            );
-          }
-          final m = messages[i];
-          final grouped = groupStart[i] != i;
-          final lastInGroup =
-              i + 1 >= messages.length || groupStart[i + 1] != groupStart[i];
-          final key = _keys.putIfAbsent(m.id, () => GlobalKey());
-          return KeyedSubtree(
-            key: key,
-            child: MessageBubble(
-              message: m,
-              artifacts: app.artifactsOf(m.id),
-              actionsOpen: _openActions == m.id,
-              onToggleActions: () => setState(
-                  () => _openActions = _openActions == m.id ? null : m.id),
-              onOpenArtifact: (a) => showArtifact(context, a),
-              onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
-              onAllowTool: m.pendingTool == null ? null : () => app.allowPendingTool(m),
-              onDenyTool: m.pendingTool == null ? null : () => app.denyPendingTool(m),
-              onAlwaysAllowTool:
-                  app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
-              onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
-              onDiscardStaged: m.staged == null ? null : () => AppScope.read(context).discardStaged(m),
-              selfPubkey: selfPubkey,
-              selfName: app.selfNameIn(app.current, me?.name),
-              selfPicture: me?.picture ?? '',
-              settings: app.settings,
-              grouped: grouped,
-              lastInGroup: lastInGroup,
-              avatarGroup: messages[groupStart[i]].id,
-            modelCatalog: app.mentionCatalog,
-              speaking: _voice.speakingId == m.id,
-              highlighted: _highlighted == m.id,
-              onAction: _messageAction,
-              followUps: i == offer ? m.followUps : const [],
-              onFollowUp: (text) => _followUp(m, text),
-              onEditFollowUp: _editFollowUp,
-              reveal: _revealId == m.id ? _revealAt : null,
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -1942,58 +2039,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (t('Generate a picture'), '?image a lighthouse at dusk, long exposure, muted palette'),
           ];
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 20),
-          const NymAvatar(seed: 'nymbot', size: 52, bot: true),
-          const SizedBox(height: 12),
-          Text(bot?.name ?? t('Ask Nymbot anything'),
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Text(
-            bot != null
-                ? (bot.tagline.isNotEmpty
-                    ? bot.tagline
-                    : t('This chat answers the way that bot was written to.'))
-                : t('End-to-end encrypted, paid a reply at a time. Type ? for '
-                    'commands, or start with one of these.'),
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
-          ),
-          const SizedBox(height: 16),
-          for (final s in starters)
-            Card(
-              margin: const EdgeInsets.only(bottom: 6),
-              child: ListTile(
-                dense: true,
-                title: Text(s.$1, style: const TextStyle(fontSize: 14)),
-                subtitle: Text(s.$2, style: const TextStyle(fontSize: 12)),
-                onTap: () {
-                  _input.setMarkdown(s.$2);
-                  setState(() {});
-                },
-              ),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _threadScrolled,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 20),
+            const NymAvatar(seed: 'nymbot', size: 52, bot: true),
+            const SizedBox(height: 12),
+            Text(bot?.name ?? t('Ask Nymbot anything'),
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              bot != null
+                  ? (bot.tagline.isNotEmpty
+                      ? bot.tagline
+                      : t('This chat answers the way that bot was written to.'))
+                  : t('End-to-end encrypted, paid a reply at a time. Type ? for '
+                      'commands, or start with one of these.'),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
             ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            alignment: WrapAlignment.center,
-            children: [
-              for (final tip in const ['?help', '?balance', '?model', '?git', '?prompt', '?anon'])
-                ActionChip(
-                  label: Text(tip, style: const TextStyle(fontSize: 12)),
-                  onPressed: () {
-                    _input.setMarkdown(tip);
-                    setState(() => _suggestTerm = tip);
+            const SizedBox(height: 16),
+            for (final s in starters)
+              Card(
+                margin: const EdgeInsets.only(bottom: 6),
+                child: ListTile(
+                  dense: true,
+                  title: Text(s.$1, style: const TextStyle(fontSize: 14)),
+                  subtitle: Text(s.$2, style: const TextStyle(fontSize: 12)),
+                  onTap: () {
+                    _input.setMarkdown(s.$2);
+                    setState(() {});
                   },
                 ),
-            ],
-          ),
-        ],
+              ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final tip in const ['?help', '?balance', '?model', '?git', '?prompt', '?anon'])
+                  ActionChip(
+                    label: Text(tip, style: const TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      _input.setMarkdown(tip);
+                      setState(() => _suggestTerm = tip);
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2745,9 +2847,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         ),
       ),
     ];
-    final foot = <Widget>[
+    final toggle = <Widget>[
       const Divider(height: 1),
       InkWell(
+        key: const ValueKey('drawer-menu-toggle'),
         onTap: _toggleMenu,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
@@ -2774,6 +2877,8 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           ),
         ),
       ),
+    ];
+    final menu = <Widget>[
       if (_libraryOpen)
         for (final entry in <(String, String, Future<void> Function())>[
           ('repositories', t('Repositories'),
@@ -2819,8 +2924,11 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             },
             onTap: entry.$3,
           ),
+    ];
+    final profile = <Widget>[
       const Divider(height: 1),
       ListTile(
+        key: const ValueKey('drawer-profile'),
         leading: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -2894,7 +3002,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
       child: SafeArea(
         child: LayoutBuilder(
           builder: (context, box) {
-            final needed = (_libraryOpen ? 900.0 : 380.0) * scale;
+            final needed = 380.0 * scale;
             if (box.maxHeight >= needed) {
               return Column(
                 children: [
@@ -2902,7 +3010,21 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                   Expanded(
                     child: rows.isEmpty ? empty : _FadedChatList(children: rows),
                   ),
-                  ...foot,
+                  ...toggle,
+                  if (menu.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: math.min(
+                            box.maxHeight * 0.4, box.maxHeight - needed + 60 * scale),
+                      ),
+                      child: ListView(
+                        key: const ValueKey('drawer-menu-list'),
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        children: menu,
+                      ),
+                    ),
+                  ...profile,
                 ],
               );
             }
@@ -2914,7 +3036,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                     ...head,
                     if (rows.isEmpty) empty,
                     ...rows,
-                    ...foot,
+                    ...toggle,
+                    ...menu,
+                    ...profile,
                   ]),
                 ),
               ],

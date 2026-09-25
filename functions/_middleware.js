@@ -1,4 +1,4 @@
-import { isSandboxPath } from "./app/_middleware.js";
+import { isSandboxPath, isPreviewPath } from "./app/_middleware.js";
 
 const NONCE_BYTES = 16;
 
@@ -15,7 +15,7 @@ export function withNonce(policy, nonce) {
 }
 
 export function skipsNonce(pathname) {
-  return isSandboxPath(pathname) || pathname === "/api" || pathname.startsWith("/api/") || pathname.startsWith("/pyodide/");
+  return isSandboxPath(pathname) || isPreviewPath(pathname) || pathname === "/api" || pathname.startsWith("/api/") || pathname.startsWith("/pyodide/");
 }
 
 export async function onRequest(context) {

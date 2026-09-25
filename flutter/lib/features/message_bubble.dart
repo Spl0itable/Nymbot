@@ -67,9 +67,11 @@ class MessageBubble extends StatefulWidget {
     this.onFollowUp,
     this.onEditFollowUp,
     this.reveal,
+    this.draft = false,
   });
 
   final int? reveal;
+  final bool draft;
 
   /// Puts back what a repo run changed. Absent when there is nothing to put
   /// back, which is what decides whether the card offers a way.
@@ -427,7 +429,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                 wrapCode: settings.codeWrap,
                 lineNumbers: settings.lineNumbers,
                 media: m.task,
-                runnable: m.role == ChatRole.bot,
+                runnable: m.role == ChatRole.bot && !widget.draft,
               )
             else
               Text(
@@ -880,15 +882,10 @@ class TypingIndicator extends StatelessWidget {
     required this.label,
     this.showAvatar = true,
     this.steps = const [],
-    this.draft,
-    this.wrapCode = false,
   });
 
   final String label;
   final bool showAvatar;
-
-  final String? draft;
-  final bool wrapCode;
 
   /// What the worker has reported doing, newest last. Shown under the label
   /// rather than instead of it: the spinner is still the answer to "is it
@@ -899,7 +896,6 @@ class TypingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final recent = steps.length > 4 ? steps.sublist(steps.length - 4) : steps;
-    final partial = draft?.trim() ?? '';
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -917,17 +913,8 @@ class TypingIndicator extends StatelessWidget {
               // Centered: this is a status, not a message, and the lines under
               // it change length every couple of seconds — ragged against a left
               child: Column(
-                crossAxisAlignment: partial.isEmpty
-                    ? CrossAxisAlignment.center
-                    : CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (partial.isNotEmpty)
-                    Padding(
-                      key: const ValueKey('reply-draft'),
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: MarkdownBody(partial, wrapCode: wrapCode),
-                    ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
