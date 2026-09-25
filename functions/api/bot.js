@@ -132,6 +132,7 @@ import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_ru
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
 import { apnsSendReply } from "./_apns.js";
+import { webPushSendReply, webPushToken, webPushPublicKey, webPushConfigured } from "./_webpush.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -4972,7 +4973,8 @@ async function botTurnFinish(env, key, body, status, context) {
 
 function botTurnNotify(context, env, r) {
   if (!r || !r.notify) return;
-  var work = apnsSendReply(env, r.notify).then(function () { }, function () { });
+  var work = (r.notify.env === "web" ? webPushSendReply(env, r.notify) : apnsSendReply(env, r.notify))
+    .then(function () { }, function () { });
   if (context && typeof context.waitUntil === "function") {
     try { context.waitUntil(work); } catch (e) { }
   }
@@ -6044,6 +6046,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // against, so what the apps show is exactly what the worker will charge.
   // Unauthenticated on purpose — it is public catalog data and the picker has
   // to render before a user has a balance.
+  if (body.action === "push-key") {
+    var pushKey = webPushConfigured(env) ? webPushPublicKey(env) : "";
+    return json(pushKey ? { key: pushKey } : { key: null });
+  }
+
   if (body.action === "models") {
     var cat = await botProCatalog(env);
     var researchBtc = await botBtcPrice();
@@ -6307,9 +6314,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "notify-turn") {
     if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
-    var nToken = typeof body.token === "string" ? body.token.toLowerCase() : "";
-    if (!/^[0-9a-f]{64,200}$/.test(nToken)) return json({ error: "Invalid device token" }, 400);
-    if (body.env !== "production" && body.env !== "sandbox") return json({ error: "Invalid push environment" }, 400);
+    if (body.env !== "production" && body.env !== "sandbox" && body.env !== "web") return json({ error: "Invalid push environment" }, 400);
+    var nWeb = body.env === "web";
+    if (nWeb && !webPushConfigured(env)) return json({ error: "Reply notifications are not available right now." }, 503);
+    var nToken = nWeb ? webPushToken(body.subscription) : (typeof body.token === "string" ? body.token.toLowerCase() : "");
+    if (!nWeb && !/^[0-9a-f]{64,200}$/.test(nToken)) return json({ error: "Invalid device token" }, 400);
+    if (nWeb && !nToken) return json({ error: "Invalid push subscription" }, 400);
     if (typeof body.chat !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(body.chat)) return json({ error: "Invalid chat" }, 400);
     if (body.text != null && (typeof body.text !== "string" || body.text.length > 80)) return json({ error: "Invalid text" }, 400);
     if (!(await botRateOk("notify", String(userPubkey).toLowerCase(), BOT_NOTIFY_RATE_LIMIT, BOT_NOTIFY_RATE_WINDOW_MS))) {
@@ -8071,7 +8081,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn")) {
+  if (body && (body.action === "models" || body.action === "push-key" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {

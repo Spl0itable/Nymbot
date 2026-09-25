@@ -43,6 +43,7 @@
     const Team = window.NymbotTeam;
     const GitRun = window.NymbotGitRun;
     const ServerRun = window.NymbotServerRun;
+    const Notify = window.NymbotNotify;
     const NT = () => window.NostrTools;
 
     /// Credits and sats, with their thousands separated. Never abbreviated —
@@ -250,6 +251,18 @@
             };
             Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
             this.offerBotFromUrl();
+            Notify.attach({
+                enabled: () => this.settings.replyNotify !== false,
+                titleOf: (id) => {
+                    const c = Store.conversation(id);
+                    return c ? c.title || '' : '';
+                },
+                open: (id) => {
+                    const c = Store.conversation(id);
+                    if (c) this.open(c);
+                }
+            });
+            if (this.conv) Notify.viewingChat(this.conv.id);
             window.NymbotGift.fromUrl(this);
             this.watchScrolling();
             this.startScheduler();
@@ -435,6 +448,7 @@
             if (!conv) return;
             if (this.conv && !this.editing) Store.setDraft(this.conv.id, $('input') ? $('input').value : '');
             this.conv = conv;
+            Notify.viewingChat(conv.id);
             this.attachments = [];
             this.quote = null;
             this.editing = null;
@@ -1018,6 +1032,10 @@
             }
             const { group, grouped } = this.groupFor(m);
             const node = this.messageNode(m, grouped);
+            if (this._draftHandoff) {
+                this._draftHandoff = false;
+                if (m.role === 'bot') node.classList.add('from-draft');
+            }
             group.querySelector('.message-group-stack').appendChild(node);
             const spinner = box.querySelector('#thinkingNode');
             if (spinner) box.appendChild(spinner);
@@ -1369,12 +1387,12 @@
             if (!box) return;
             if (turn.team) {
                 Team.render(box, turn.steps, turn.team);
-                this.scrollToBottom();
+                this.followTurn(turn);
                 return;
             }
             if (turn.research) {
                 Research.render(box, turn.steps);
-                this.scrollToBottom();
+                this.followTurn(turn);
                 return;
             }
             box.innerHTML = '';
@@ -1388,13 +1406,15 @@
                     + (step.kind === 'thinking' ? ' is-thought' : ''), line);
                 box.appendChild(row);
             }
-            this.scrollToBottom();
+            this.followTurn(turn);
         },
 
         /// Polls the worker for what the turn is doing. Stops the moment the
         /// turn is over, and never keeps the send waiting on it.
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
+            turn.eventId = eventId;
+            Notify.watch(turn.convId, eventId, signer);
             turn.steps = (turn.steps || []).filter(s => s && s.local);
             let after = 0;
             let draftAfter = 0;
@@ -1432,29 +1452,77 @@
         },
 
         renderDraft(turn) {
-            const node = turn && turn.node;
-            if (!node || !node.isConnected) return;
-            let box = node.querySelector('.bot-draft');
+            if (!turn) return;
             if (!turn.draft) {
-                if (box) box.remove();
-                node.classList.remove('has-draft');
+                this.dropDraft(turn);
                 return;
             }
-            if (!box) {
-                box = el('div', 'bot-draft');
-                box.appendChild(el('div', 'msg-text'));
-                node.insertBefore(box, node.querySelector('.bot-thinking-head'));
-                node.classList.add('has-draft');
+            const node = turn.node;
+            if (!node || !node.isConnected) return;
+            if (!turn.pin) turn.pin = { follow: this.nearBottom(), placed: $('messages').scrollTop };
+            let msg = turn.draftNode && turn.draftNode.msg;
+            if (!msg || !msg.isConnected) {
+                const last = this._lastGroup;
+                const grouped = !!(last && this._lastKey === 'bot' && last.isConnected);
+                msg = el('div', 'chat-message is-draft' + (grouped ? ' bubble-grouped' : ''));
+                msg.dataset.role = 'bot';
+                msg.appendChild(el('span', 'message-author bot-author', C.botName));
+                const body = el('span', 'message-content');
+                body.appendChild(el('div', 'msg-text'));
+                msg.appendChild(body);
+                let group = null;
+                if (grouped) {
+                    last.querySelector('.message-group-stack').appendChild(msg);
+                } else {
+                    group = el('div', 'message-group');
+                    const avatarBox = el('div', 'message-group-avatar');
+                    const img = document.createElement('img');
+                    img.className = 'avatar-bubble';
+                    img.alt = '';
+                    img.src = C.botAvatar;
+                    avatarBox.appendChild(img);
+                    const stack = el('div', 'message-group-stack');
+                    stack.appendChild(msg);
+                    group.appendChild(avatarBox);
+                    group.appendChild(stack);
+                    $('messages').insertBefore(group, node);
+                }
+                turn.draftNode = { msg, group };
             }
-            const text = box.querySelector('.msg-text');
-            const follow = this.nearBottom();
+            const text = msg.querySelector('.msg-text');
             text.innerHTML = MD.render(turn.draft, {
                 wrap: this.settings.codeWrap,
                 lineNumbers: this.settings.lineNumbers
             });
             text.appendChild(el('span', 'stream-caret'));
             turn.drafted = true;
-            if (follow) this.scrollToBottom();
+            this.followTurn(turn);
+        },
+
+        dropDraft(turn) {
+            const d = turn && turn.draftNode;
+            if (!d) return;
+            turn.draftNode = null;
+            if (d.group) d.group.remove();
+            else if (d.msg) d.msg.remove();
+            this._draftHandoff = true;
+        },
+
+        followTurn(turn) {
+            const d = turn && turn.draftNode;
+            const node = d && d.msg;
+            if (!turn || !turn.pin || !node || !node.isConnected) {
+                this.scrollToBottom();
+                return;
+            }
+            if (!turn.pin.follow) return;
+            const box = $('messages');
+            if (Math.abs(box.scrollTop - turn.pin.placed) > 2) {
+                turn.pin.follow = false;
+                return;
+            }
+            this._pinnedReply = node;
+            turn.pin.placed = this.pinReply(node);
         },
 
         stopWatchingTurn(turn) {
@@ -1462,9 +1530,9 @@
                 try { turn.watch(); } catch (_) { }
                 turn.watch = null;
             }
-            if (turn && turn.draft) {
+            if (turn) {
                 turn.draft = null;
-                this.renderDraft(turn);
+                this.dropDraft(turn);
             }
         },
 
@@ -1549,6 +1617,7 @@
             const typed = override != null ? override : input.value.trim();
             const bare = !!(opts && opts.bare);
             if (!typed) return;
+            Notify.askOnce();
             this._pinnedReply = null;
             const here = () => !!(this.conv && this.conv.id === conv.id);
 
@@ -2396,6 +2465,7 @@
         beginTurn(conv, label, opts) {
             const turn = {
                 convId: conv.id,
+                startedAt: Date.now(),
                 controller: new AbortController(),
                 label: label || t('Nymbot is thinking'),
                 quiet: !!(opts && opts.quiet),
@@ -2419,6 +2489,11 @@
             if (!turn) return;
             if (this.turns.get(turn.convId) === turn) this.turns.delete(turn.convId);
             if (window.NymbotTasks) window.NymbotTasks.ended(this, turn);
+            if (turn.eventId) {
+                const last = Store.messages(turn.convId).slice(-1)[0];
+                const replied = !!(last && last.role === 'bot' && (last.ts || 0) >= (turn.startedAt || 0));
+                Notify.settled(turn.convId, { replied, stopped: !!turn.stopped }).catch(() => { });
+            }
             if (turn.node) {
                 turn.node.remove();
                 turn.node = null;
@@ -5140,6 +5215,8 @@
             $('setSound').checked = !!s.soundOnReply;
             $('setHaptic').checked = !!s.hapticOnReply;
             $('setAutoSpeak').checked = !!s.autoSpeak;
+            $('replyNotifyField').hidden = !Notify.supported();
+            $('setReplyNotify').checked = s.replyNotify !== false && Notify.permission() !== 'denied';
             $('setRate').value = String(s.speechRate || 1);
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
@@ -5171,6 +5248,12 @@
         },
 
         readAppearance() {
+            const notifyWas = this.settings.replyNotify !== false;
+            const notifyOn = $('setReplyNotify').checked;
+            if (notifyOn !== notifyWas) Notify.settingChanged(notifyOn);
+            if (notifyOn && Notify.permission() === 'denied') {
+                this.toast(t('Notifications are blocked for this site. Allow them in your browser settings.'));
+            }
             this.saveSettings({
                 theme: $('setTheme').value,
                 density: $('setDensity').value,
@@ -5190,6 +5273,7 @@
                 soundOnReply: $('setSound').checked,
                 hapticOnReply: $('setHaptic').checked,
                 autoSpeak: $('setAutoSpeak').checked,
+                replyNotify: notifyOn,
                 voiceUri: $('setVoice').value || null,
                 speechRate: Number($('setRate').value) || 1,
                 autoDeleteDays: Number($('setAutoDelete').value) || 0,

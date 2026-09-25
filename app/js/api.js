@@ -178,6 +178,16 @@
             } catch (_) { return null; }
         },
 
+        async pushKey() {
+            const resp = await Edge.fetch(url(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'push-key' })
+            });
+            if (!resp.ok) throw new Error('push-key ' + resp.status);
+            return await resp.json();
+        },
+
         async runnerInfo() {
             try {
                 const resp = await Edge.fetch(url(), {

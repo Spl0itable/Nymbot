@@ -1,7 +1,7 @@
 // Caches the shell so the app opens offline. Conversations are read from local
 // storage, so what you have already said is there without a network; a reply is
 // not, because the model is not on the device.
-const CACHE = 'nymbot-shell-v48';
+const CACHE = 'nymbot-shell-v50';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -50,6 +50,7 @@ const SHELL = [
     '/app/js/mention.js',
     '/app/js/picedit.js',
     '/app/js/vault.js',
+    '/app/js/notify.js',
     '/app/js/ui.js',
     '/app/share.html',
     '/app/js/share-view.js',
@@ -340,6 +341,45 @@ self.addEventListener('message', (e) => {
         const done = wipeMedia();
         if (e.waitUntil) e.waitUntil(done);
     }
+});
+
+const CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function appClients() {
+    return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+        .then(list => list.filter(c => new URL(c.url).pathname.startsWith('/app/')));
+}
+
+self.addEventListener('push', (e) => {
+    let data = {};
+    try { data = e.data ? e.data.json() : {}; } catch (_) { data = {}; }
+    const chat = typeof data.chat === 'string' && CHAT_RE.test(data.chat) ? data.chat : '';
+    const title = typeof data.title === 'string' && data.title ? data.title.slice(0, 60) : 'Nymbot';
+    const body = typeof data.body === 'string' && data.body ? data.body.slice(0, 120) : '';
+    e.waitUntil(appClients().then((list) => {
+        if (list.some(c => c.focused && c.visibilityState === 'visible')) return undefined;
+        return self.registration.showNotification(title, {
+            body,
+            tag: chat ? 'reply-' + chat : 'reply',
+            data: { chat },
+            icon: '/app/icons/nymbot-192.png',
+            badge: '/app/icons/nymbot-192.png'
+        });
+    }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+    const chat = e.notification && e.notification.data && CHAT_RE.test(e.notification.data.chat || '')
+        ? e.notification.data.chat : '';
+    e.notification.close();
+    e.waitUntil(appClients().then((list) => {
+        const open = list[0];
+        if (open) {
+            if (chat) open.postMessage({ type: 'open-chat', chat });
+            return open.focus ? open.focus() : undefined;
+        }
+        return self.clients.openWindow('/app/' + (chat ? '#chat=' + chat : ''));
+    }));
 });
 
 function keep(request, res) {

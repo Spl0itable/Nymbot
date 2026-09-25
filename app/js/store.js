@@ -98,6 +98,7 @@
         soundOnReply: false,
         hapticOnReply: true,
         autoSpeak: false,
+        replyNotify: true,
         voiceUri: null,
         speechRate: 1,
         showReasoningByDefault: false,

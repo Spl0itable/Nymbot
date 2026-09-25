@@ -131,6 +131,19 @@
 
     <section class="gate" id="vaultGate" hidden>
         <div class="gate-card">
+            <pre class="wordmark" aria-label="Nymbot">
+                                  ##\                  ##\
+                                  ## |                 ## |
+#######\  ##\   ##\ ######\####\  #######\   ######\ ######\
+##  __##\ ## |  ## |##  _##  _##\ ##  __##\ ##  __##\\_##  _|
+## |  ## |## |  ## |## / ## / ## |## |  ## |## /  ## | ## |
+## |  ## |## |  ## |## | ## | ## |## |  ## |## |  ## | ## |##\
+## |  ## |\####### |## | ## | ## |#######  |\######  | \####  |
+\__|  \__| \____## |\__| \__| \__|\_______/  \______/   \____/
+          ##\   ## |
+          \######  |
+           \______/
+</pre>
             <h1 class="gate-title">Unlock your identity</h1>
             <p class="gate-lede" id="vaultGateLede">Your Nymbot identity is encrypted on this device. Enter your passphrase to
                 unlock it.</p>
@@ -1251,6 +1264,10 @@
             <label class="check"><input type="checkbox" id="setSound"> Sound when a reply lands</label>
             <label class="check"><input type="checkbox" id="setHaptic"> Vibrate when a reply lands</label>
             <label class="check"><input type="checkbox" id="setAutoSpeak"> Read every reply aloud</label>
+            <div id="replyNotifyField" hidden>
+                <label class="check"><input type="checkbox" id="setReplyNotify"> Notify me when a reply is ready</label>
+                <p class="hint">Leave Nymbot while it works and get a notification when the reply is ready. This sends your browser&rsquo;s push address, held only until that reply, and never your chat titles.</p>
+            </div>
 
             <div class="field-grid" id="voiceFields">
                 <div>
@@ -1654,6 +1671,7 @@
     <script src="/app/js/serverrun.js"></script>
     <script src="/app/js/tasks.js"></script>
     <script src="/app/js/vault.js"></script>
+    <script src="/app/js/notify.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>
 </body>

@@ -894,6 +894,8 @@ html[data-avatars="off"] .message-group { gap: 0; }
 .chat-message.is-hit .message-content { box-shadow: 0 0 0 2px var(--lightning); }
 .chat-message.is-editing .message-content { border: 1px dashed var(--primary); }
 
+.chat-message.from-draft { animation: none; opacity: 1; }
+
 @keyframes messageSlideIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1465,9 +1467,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     animation: caretBlink 1s steps(2) infinite;
 }
 @keyframes caretBlink { 50% { opacity: 0; } }
-.bot-thinking.has-draft { justify-items: stretch; width: auto; max-width: min(46rem, 92%); }
-.bot-thinking.has-draft > .bot-thinking-head { justify-content: flex-start; }
-.bot-draft { min-width: 0; max-width: 100%; margin-bottom: 0.45rem; overflow-wrap: anywhere; }
 
 .user-color-0 { color: #FF6B35; }
 .user-color-1 { color: #F7931A; }
