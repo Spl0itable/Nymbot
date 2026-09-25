@@ -1,5 +1,16 @@
 import { clientOriginAllowed, socketRateOk } from './_client.js';
 import { mcpIpv6Blocked } from './_mcp.js';
+import { poolEventShapeOk } from './relay-pool.js';
+
+export const KEY_BACKUP_D_TAG = 'nym-key-backup';
+export const KEY_BACKUP_KIND = 30078;
+export const KEY_BACKUP_MAX_CONTENT = 2048;
+
+export function relayBackupEventOk(ev) {
+  if (!poolEventShapeOk(ev) || ev.kind !== KEY_BACKUP_KIND) return false;
+  if (ev.content.length === 0 || ev.content.length > KEY_BACKUP_MAX_CONTENT) return false;
+  return ev.tags.length === 1 && ev.tags[0].length === 2 && ev.tags[0][0] === 'd' && ev.tags[0][1] === KEY_BACKUP_D_TAG;
+}
 
 export const RELAY_LIMITS = Object.freeze({
   maxUrlLength: 512,
@@ -58,6 +69,7 @@ export function relayClientFrameOk(raw) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return false; }
   if (!Array.isArray(msg)) return false;
+  if (msg[0] === 'EVENT') return msg.length === 2 && relayBackupEventOk(msg[1]);
   const sub = msg[1];
   if (typeof sub !== 'string' || !sub || sub.length > 64) return false;
   if (msg[0] === 'CLOSE') return msg.length === 2;

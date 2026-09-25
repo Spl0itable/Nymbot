@@ -293,6 +293,10 @@ html[data-motion="reduce"] *::after {
 .gate-connect { margin-top: 0.75rem; }
 .gate-connect canvas { display: block; margin: 0 auto 0.6rem; border-radius: 8px; max-width: 100%; height: auto; }
 .gate-nickname { margin-top: 1.25rem; }
+.gate-google, .gate-passkey { margin-top: 0.25rem; }
+.pin-warn { color: var(--text); margin-top: 0.75rem; }
+.pin-pick { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.pin-pick .btn { justify-content: center; font-family: var(--mono); }
 
 .reveal-label { display: block; margin: 1rem 0 0.35rem; color: var(--text-dim); font-size: 0.85rem; }
 .reveal-row { display: flex; gap: 0.4rem; align-items: center; }

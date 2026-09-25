@@ -418,6 +418,73 @@ class RelayPool {
     return done.future;
   }
 
+  Future<int> publishTo(List<String> urls, NostrEvent event,
+      {Duration? timeout}) {
+    final list = urls.where((u) => u.startsWith('wss://')).toSet().toList();
+    if (list.isEmpty || _closed) return Future.value(0);
+    final done = Completer<int>();
+    final channels = <WebSocketChannel>[];
+    final taps = <StreamSubscription>[];
+    var accepted = 0;
+    var ended = 0;
+
+    void finish() {
+      if (done.isCompleted) return;
+      for (final t in taps) {
+        t.cancel();
+      }
+      for (final c in channels) {
+        try {
+          c.sink.close();
+        } catch (_) {}
+      }
+      done.complete(accepted);
+    }
+
+    void give() {
+      if (++ended >= list.length) finish();
+    }
+
+    final frame = jsonEncode(['EVENT', event.toJson()]);
+    for (final url in list) {
+      WebSocketChannel channel;
+      try {
+        channel = _connect(Uri.parse(
+            'wss://${NymbotConfig.apiHost}/api/relay?relay=${Uri.encodeComponent(url)}'));
+      } catch (_) {
+        give();
+        continue;
+      }
+      channels.add(channel);
+      var over = false;
+      void end() {
+        if (over) return;
+        over = true;
+        give();
+      }
+
+      taps.add(channel.stream.listen((raw) {
+        List<dynamic> reply;
+        try {
+          reply = jsonDecode(raw as String) as List<dynamic>;
+        } catch (_) {
+          return;
+        }
+        if (reply.length < 3 || reply[0] != 'OK' || reply[1] != event.id) return;
+        if (reply[2] == true) accepted++;
+        end();
+      }, onError: (_) => end(), onDone: end, cancelOnError: true));
+      channel.ready.then((_) {}, onError: (_) => end());
+      try {
+        channel.sink.add(frame);
+      } catch (_) {
+        end();
+      }
+    }
+    _track(Timer(timeout ?? const Duration(seconds: 6), finish));
+    return done.future;
+  }
+
   /// A standing subscription, replayed onto relays as they reconnect.
   void Function() subscribe(
       Map<String, dynamic> filter, void Function(NostrEvent) onEvent) {

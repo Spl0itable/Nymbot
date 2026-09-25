@@ -15,6 +15,9 @@
     const MAX_CHATS = 400;
     // Messages per conversation.
     const MAX_MESSAGES = 400;
+    const ART_VERSIONS = 5;
+    const ART_KEEP_VERSIONS = 30;
+    const ART_MAX_CHARS = 300000;
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
 
@@ -281,6 +284,38 @@
 
     /// Merges two lists of {id} records: the union, newest of each, minus
     /// anything either side has since deleted.
+    function fitArtifacts(convId, list) {
+        let arts = list.map(a => Object.assign({}, a, { versions: (a.versions || []).slice(-ART_VERSIONS) }));
+        const size = () => JSON.stringify({ id: convId, artifacts: arts }).length;
+        if (size() > ART_MAX_CHARS) arts = arts.map(a => Object.assign({}, a, { versions: (a.versions || []).slice(-1) }));
+        arts.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        while (arts.length && size() > ART_MAX_CHARS) arts.shift();
+        return arts;
+    }
+
+    function mergeVersions(a, b) {
+        const seen = new Map();
+        for (const v of [].concat(a || [], b || [])) {
+            if (!v || typeof v.body !== 'string') continue;
+            const key = (Number(v.at) || 0) + '|' + v.body;
+            if (!seen.has(key)) seen.set(key, v);
+        }
+        return [...seen.values()].sort((x, y) => (Number(x.at) || 0) - (Number(y.at) || 0)).slice(-ART_KEEP_VERSIONS);
+    }
+
+    function mergeArtifacts(mine, theirs, graves) {
+        const byId = new Map();
+        for (const a of mine) if (a && a.id && !graves[a.id]) byId.set(a.id, a);
+        for (const t of theirs) {
+            if (!t || typeof t.id !== 'string' || !t.id || graves[t.id]) continue;
+            const m = byId.get(t.id);
+            if (!m) { byId.set(t.id, Object.assign({}, t, { versions: mergeVersions([], t.versions) })); continue; }
+            const newer = (Number(t.updatedAt) || 0) > (Number(m.updatedAt) || 0) ? t : m;
+            byId.set(t.id, Object.assign({}, newer, { versions: mergeVersions(m.versions, t.versions) }));
+        }
+        return [...byId.values()].sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+    }
+
     function mergeById(mine, theirs, graves) {
         const out = new Map();
         for (const record of [].concat(theirs || [], mine || [])) {
@@ -385,6 +420,13 @@
                 if (!msgs.length) continue;
                 out['chat-' + conv.id] = { id: conv.id, messages: msgs.slice(-MAX_MESSAGES) };
             }
+            const Artifacts = window.NymbotArtifacts;
+            if (Artifacts) {
+                for (const conv of chats) {
+                    const arts = Artifacts.all(conv.id).filter(a => a && a.id && !graves[a.id]);
+                    if (arts.length) out['arts-' + conv.id] = { id: conv.id, artifacts: fitArtifacts(conv.id, arts) };
+                }
+            }
             out['graves'] = graves;
             return out;
         },
@@ -477,6 +519,20 @@
                     touched.push(key);
                 }
             }
+
+            const Artifacts = window.NymbotArtifacts;
+            for (const key of Object.keys(remote)) {
+                if (key.indexOf('arts-') !== 0 || !Artifacts) continue;
+                const entry = remote[key];
+                if (!entry || typeof entry.id !== 'string' || !entry.id || !Array.isArray(entry.artifacts)) continue;
+                if (graves[entry.id] || Store.isGhost(entry.id)) continue;
+                const mine = Artifacts.all(entry.id);
+                const merged = mergeArtifacts(mine, entry.artifacts, graves);
+                if (JSON.stringify(merged) !== JSON.stringify(mine)) {
+                    Artifacts.save(entry.id, merged);
+                    touched.push(key);
+                }
+            }
             return touched;
         },
 
@@ -485,7 +541,6 @@
             const data = await call('settings-get', {});
             if (!data || !data.categories || typeof data.categories !== 'object') return null;
             const out = {};
-            const remote = Identity.isRemote;
             let unreadable = 0;
             for (const [category, entry] of Object.entries(data.categories)) {
                 if (!entry || typeof entry.blob !== 'string') continue;
@@ -502,7 +557,7 @@
                 if (name === PQ_ROOT_D_TAG) continue;
                 delete payload.__cat;
                 out[name] = payload.v !== undefined ? payload.v : payload;
-                if (remote && category === await categoryFor(name)) {
+                if (category === await categoryFor(name)) {
                     const plain = JSON.stringify({ __cat: name, v: out[name] });
                     const mode = NC().isPq2Payload(entry.blob) ? 'pq' : 'c';
                     this._hashes.set(category, await sha256Hex(Identity.pubkey + '|' + mode + '|' + plain));

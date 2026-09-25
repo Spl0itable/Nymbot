@@ -44,6 +44,7 @@
     const GitRun = window.NymbotGitRun;
     const ServerRun = window.NymbotServerRun;
     const Notify = window.NymbotNotify;
+    const KB = window.NymbotKeyBackup;
     const NT = () => window.NostrTools;
 
     /// Credits and sats, with their thousands separated. Never abbreviated —
@@ -188,6 +189,8 @@
             if (!Identity.restore()) {
                 $('gate').hidden = false;
                 if (window.nostr) $('gateExtension').hidden = false;
+                $('gateGoogleRow').hidden = !KB.enabled;
+                $('gatePasskeyRow').hidden = !KB.passkey.available();
                 this.maybeFirstLanguage();
                 return;
             }
@@ -392,6 +395,7 @@
                 this.renderMessages();
                 $('messages').scrollTop = at;
             }
+            if (this.conv && set.has('arts-' + this.conv.id)) this.renderArtifactStrip();
             this.refreshToolbar();
         },
 
@@ -7796,6 +7800,8 @@
                     ? t('Signed in with: Remote signer')
                     : t('Your key lives on this device and nowhere else.');
             $('signerRow').hidden = !Identity.isRemote;
+            $('googleBackupRow').hidden = !(KB.enabled && Identity.isLocal && !!Identity._sk);
+            $('passkeyBackupRow').hidden = !(KB.passkey.available() && Identity.isLocal && !!Identity._sk);
             $('setNpub').value = Identity.pubkey
                 ? NT().nip19.npubEncode(Identity.pubkey)
                 : '';
@@ -8608,6 +8614,13 @@
                 'gate-cancel-import': () => { $('gateImport').hidden = true; },
                 'gate-import': () => this.gateImport(),
                 'gate-extension': () => this.gateExtension(),
+                'gate-google': () => this.gateGoogle(),
+                'gate-passkey': () => this.gatePasskey(),
+                'passkey-backup': () => this.backupWithPasskey(),
+                'keybackup-save': () => this.backupToGoogle(),
+                'keybackup-remove': () => this.removeGoogleBackups(),
+                'pin-submit': () => this.submitPin(),
+                'pin-cancel': () => { if (!this._pinBusy) this.closePin(null); },
                 'nickname-save': () => this.saveNicknameField(),
                 'nickname-clear': () => this.clearNicknameField(),
                 'reveal-done': () => { $('reveal').hidden = true; this.enter(); },
@@ -9181,6 +9194,12 @@
             $('gateNsec').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') this.gateImport();
             });
+            for (const id of ['pinInput', 'pinAgain']) {
+                $(id).addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); this.submitPin(); }
+                    if (e.key === 'Escape' && !this._pinBusy) this.closePin(null);
+                });
+            }
             $('setNickname').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') this.saveNicknameField();
             });
@@ -9217,37 +9236,438 @@
             node.hidden = !message;
         },
 
-        gateGenerate() {
+        async gateGenerate() {
+            const sk = NT().generateSecretKey();
             try {
-                Identity.generate();
-                this.takeGateNickname();
-                // A key nobody has seen before cannot already have a root, so
-                // there is nothing to ask D1 — only a row to write, so the next
-                // device to sign in finds it and asks for the code instead of
-                // minting a second one.
-                Sync.publishRootRecord().catch(() => { });
-                $('revealNsecRow').hidden = false;
-                $('revealNsec').value = NT().nip19.nsecEncode(Identity._sk);
-                $('revealRoot').value = Identity.rootCode() || '';
-                $('gate').hidden = true;
-                $('reveal').hidden = false;
+                await this.signInWithSecret(sk, { pq: Identity.newRootCode(), fresh: true });
             } catch (e) {
                 this.gateError(e.message || t('Could not create a key.'));
+            } finally {
+                KB.wipe(sk);
             }
         },
 
         async gateImport() {
             try {
                 const sk = Identity.readSecret($('gateNsec').value);
-                const pubkey = NT().getPublicKey(sk);
-                const verdict = await this.rootForSignIn(this.signInAs(pubkey, sk));
-                if (!verdict) return;
-                Identity.importSecret($('gateNsec').value, verdict.root, verdict.epoch);
-                $('gateNsec').value = '';
-                this.takeGateNickname();
-                this.afterSignIn(verdict);
+                if (await this.signInWithSecret(sk)) $('gateNsec').value = '';
             } catch (e) {
                 this.gateError(e.message || t('That key could not be read.'));
+            }
+        },
+
+        async signInWithSecret(sk, restored) {
+            const pubkey = NT().getPublicKey(sk);
+            const carried = this.backupRootCode(restored);
+            const verdict = restored && restored.fresh && carried.code
+                ? { status: 'mint', root: null, adopt: window.NymCrypto.pqRootDecode(carried.code) }
+                : await this.rootForSignIn(this.signInAs(pubkey, sk), carried.code);
+            if (!verdict) return false;
+            Identity.importSecret(sk, verdict.root, verdict.epoch);
+            this.takeGateNickname();
+            this.afterSignIn(verdict, [carried.note, verdict.note].filter(Boolean).join(' '));
+            return true;
+        },
+
+        backupRootCode(restored) {
+            if (!restored || (!restored.pq && !restored.pqBad)) return { code: null, note: '' };
+            if (restored.pq && Identity.kemForCode(restored.pq, 0)) return { code: restored.pq, note: '' };
+            return { code: null, note: t('The post-quantum recovery code in the backup could not be read, so it was skipped.') };
+        },
+
+        pinDialog(o) {
+            this.closePin(null);
+            $('pinTitle').textContent = o.title || '';
+            $('pinBody').textContent = o.body || '';
+            $('pinBody').hidden = !o.body;
+            $('pinFields').hidden = false;
+            $('pinAgainRow').hidden = !o.twice;
+            $('pinWarn').hidden = !o.twice;
+            $('pinPick').hidden = true;
+            $('pinSubmit').hidden = false;
+            $('pinSubmit').disabled = false;
+            $('pinSubmit').textContent = o.confirm || t('Continue');
+            this.modalStatus('pinStatus', '');
+            $('pinScrim').hidden = false;
+            $('pinDialog').hidden = false;
+            this._pin = o;
+            $('pinInput').focus();
+            return new Promise((resolve) => { this._pinResolve = resolve; });
+        },
+
+        pinPick(o) {
+            this.closePin(null);
+            $('pinTitle').textContent = o.title || '';
+            $('pinBody').textContent = o.body || '';
+            $('pinBody').hidden = !o.body;
+            $('pinFields').hidden = true;
+            $('pinWarn').hidden = true;
+            $('pinSubmit').hidden = true;
+            this.modalStatus('pinStatus', '');
+            const list = $('pinPick');
+            list.innerHTML = '';
+            o.items.forEach((label, i) => {
+                const button = el('button', 'btn', label);
+                button.type = 'button';
+                button.addEventListener('click', () => this.closePin(i));
+                list.appendChild(button);
+            });
+            list.hidden = false;
+            $('pinScrim').hidden = false;
+            $('pinDialog').hidden = false;
+            this._pin = o;
+            return new Promise((resolve) => { this._pinResolve = resolve; });
+        },
+
+        closePin(value) {
+            const resolve = this._pinResolve;
+            this._pinResolve = null;
+            this._pin = null;
+            $('pinInput').value = '';
+            $('pinAgain').value = '';
+            $('pinPick').innerHTML = '';
+            $('pinDialog').hidden = true;
+            $('pinScrim').hidden = true;
+            if (resolve) resolve(value);
+        },
+
+        async submitPin() {
+            const o = this._pin;
+            if (!o || !o.check || this._pinBusy) return;
+            const pin = $('pinInput').value;
+            if (!KB.validPin(pin)) {
+                this.modalStatus('pinStatus', t('The PIN must be 4 to 8 digits.'), 'warn');
+                return;
+            }
+            if (o.twice && $('pinAgain').value !== pin) {
+                this.modalStatus('pinStatus', t('The two PINs do not match.'), 'warn');
+                return;
+            }
+            const wait = o.limited ? KB.waitMs() : 0;
+            if (wait) {
+                this.modalStatus('pinStatus', t('Too many wrong PINs. Wait {seconds} s before trying again.', { seconds: Math.ceil(wait / 1000) }), 'warn');
+                return;
+            }
+            this._pinBusy = true;
+            $('pinSubmit').disabled = true;
+            this.modalStatus('pinStatus', o.busy || t('Unlocking…'));
+            let result;
+            try {
+                result = await o.check(pin);
+            } catch (e) {
+                result = { error: e.message || t('Something went wrong. Try again.') };
+            } finally {
+                this._pinBusy = false;
+                $('pinSubmit').disabled = false;
+            }
+            if (this._pin !== o) return;
+            if (result && result.error) {
+                this.modalStatus('pinStatus', result.error, 'warn');
+                $('pinInput').select();
+                return;
+            }
+            this.closePin(result);
+        },
+
+        wrongPinSeconds() {
+            return Math.ceil(KB.failed() / 1000);
+        },
+
+        shortNpub(pubkey) {
+            const npub = NT().nip19.npubEncode(pubkey);
+            return npub.slice(0, 12) + '…' + npub.slice(-6);
+        },
+
+        async googleBackups() {
+            const files = await KB.list();
+            return Promise.all(files.map(async (f) => ({ id: f.id, payload: await KB.download(f.id) })));
+        },
+
+        openBackups(backups, key) {
+            const found = [];
+            for (const b of backups) {
+                const opened = KB.open(b.payload, key);
+                if (!opened) continue;
+                const sk = opened.sk;
+                const pubkey = NT().getPublicKey(sk);
+                const same = found.find((f) => f.pubkey === pubkey);
+                if (same) {
+                    same.ids.push(b.id);
+                    if (!same.pq && opened.pq) { same.pq = opened.pq; same.pqBad = false; }
+                    KB.wipe(sk);
+                } else {
+                    found.push({ pubkey, sk, pq: opened.pq, pqBad: opened.pqBad, ids: [b.id] });
+                }
+            }
+            return found;
+        },
+
+        async gateGoogle() {
+            if (this._googleBusy) return;
+            this._googleBusy = true;
+            this.gateError('');
+            try {
+                this.gateBusy(t('Waiting for Google…'));
+                const account = await KB.signIn();
+                this.gateBusy(t('Looking for a backup in your Google Drive…'));
+                const backups = await this.googleBackups();
+                this.gateBusy('');
+                if (backups.length) await this.restoreFromGoogle(account, backups);
+                else await this.newKeyWithGoogle(account);
+            } catch (e) {
+                this.gateBusy('');
+                this.gateError(e.message || t('Google backup did not work. Try again.'));
+            } finally {
+                KB.signOut();
+                this._googleBusy = false;
+            }
+        },
+
+        async restoreFromGoogle(account, backups) {
+            const found = await this.pinDialog({
+                title: t('Unlock your Google backup'),
+                body: t('Enter the PIN you chose when you backed up your key. The encrypted copy is opened here on this device, and the PIN never leaves it.'),
+                confirm: t('Unlock'),
+                busy: t('Unlocking…'),
+                limited: true,
+                check: async (pin) => {
+                    const key = await KB.deriveKey(pin, account);
+                    const opened = this.openBackups(backups, key);
+                    KB.wipe(key);
+                    if (!opened.length) return { error: t('Wrong PIN. Wait {seconds} s before trying again.', { seconds: this.wrongPinSeconds() }) };
+                    KB.succeeded();
+                    return opened;
+                }
+            });
+            if (!found) return;
+            try {
+                let chosen = found[0];
+                if (found.length > 1) {
+                    const i = await this.pinPick({
+                        title: t('Choose a key'),
+                        body: t('This PIN opens more than one backed-up key. Pick the one to sign in with.'),
+                        items: found.map((f) => this.shortNpub(f.pubkey))
+                    });
+                    if (i == null) return;
+                    chosen = found[i];
+                }
+                await this.signInWithSecret(chosen.sk, chosen);
+            } finally {
+                found.forEach((f) => KB.wipe(f.sk));
+            }
+        },
+
+        async newKeyWithGoogle(account) {
+            const sk = NT().generateSecretKey();
+            const code = Identity.newRootCode();
+            const done = await this.pinDialog({
+                title: t('Choose a PIN for your backup'),
+                body: t('There is no backup in this Google account yet, so a new key is made on this device. Choose a PIN: the key is encrypted with it here, and only that encrypted copy goes to your Google Drive.'),
+                confirm: t('Back up and continue'),
+                busy: t('Encrypting…'),
+                twice: true,
+                check: async (pin) => {
+                    const key = await KB.deriveKey(pin, account);
+                    let payload;
+                    try { payload = KB.encrypt(sk, key, code); } finally { KB.wipe(key); }
+                    this.modalStatus('pinStatus', t('Uploading to Google Drive…'));
+                    await KB.upload(payload);
+                    return true;
+                }
+            });
+            try {
+                if (done) await this.signInWithSecret(sk, { pq: code, fresh: true });
+            } finally {
+                KB.wipe(sk);
+            }
+        },
+
+        async backupToGoogle() {
+            if (!KB.enabled || !Identity.isLocal || !Identity._sk || this._googleBusy) return;
+            this._googleBusy = true;
+            const own = Identity.pubkey;
+            try {
+                this.modalStatus('settingsStatus', t('Waiting for Google…'));
+                const account = await KB.signIn();
+                this.modalStatus('settingsStatus', '');
+                const made = await this.pinDialog({
+                    title: t('Back up to Google'),
+                    body: t('Choose a PIN. Your key and post-quantum recovery code are encrypted with it on this device, and only that encrypted copy is stored in your Google Drive.'),
+                    confirm: t('Back up'),
+                    busy: t('Encrypting…'),
+                    twice: true,
+                    check: async (pin) => {
+                        const key = await KB.deriveKey(pin, account);
+                        try {
+                            const payload = KB.encrypt(Identity._sk, key, Identity.rootCode());
+                            this.modalStatus('pinStatus', t('Uploading to Google Drive…'));
+                            const uploaded = await KB.upload(payload);
+                            const others = (await this.googleBackups()).filter((b) => b.id !== uploaded.id);
+                            const older = [];
+                            for (const f of this.openBackups(others, key)) {
+                                if (f.pubkey === own) older.push(...f.ids);
+                                KB.wipe(f.sk);
+                            }
+                            return { older };
+                        } finally {
+                            KB.wipe(key);
+                        }
+                    }
+                });
+                if (!made) return;
+                if (made.older.length) {
+                    const replace = await this.ask({
+                        title: t('Replace the older backup?'),
+                        body: t('Your Google Drive already had a backup of this key under the same PIN. Remove the older copy and keep only the new one?'),
+                        confirm: t('Replace'),
+                        cancel: t('Keep both')
+                    });
+                    if (replace === true) for (const id of made.older) await KB.remove(id);
+                }
+                this.modalStatus('settingsStatus', t('Backed up to Google.'), 'ok');
+            } catch (e) {
+                this.modalStatus('settingsStatus', e.message || t('Google backup did not work. Try again.'), 'warn');
+            } finally {
+                KB.signOut();
+                this._googleBusy = false;
+            }
+        },
+
+        async removeGoogleBackups() {
+            if (!KB.enabled || !Identity.isLocal || this._googleBusy) return;
+            this._googleBusy = true;
+            const own = Identity.pubkey;
+            try {
+                this.modalStatus('settingsStatus', t('Waiting for Google…'));
+                const account = await KB.signIn();
+                this.modalStatus('settingsStatus', t('Looking for a backup in your Google Drive…'));
+                const backups = await this.googleBackups();
+                if (!backups.length) {
+                    this.modalStatus('settingsStatus', t('There are no backups in this Google account.'), 'ok');
+                    return;
+                }
+                this.modalStatus('settingsStatus', '');
+                const found = await this.pinDialog({
+                    title: t('Remove backups'),
+                    body: t('Enter the PIN of the backups to remove. Only backups of this key that open with it are deleted.'),
+                    confirm: t('Find backups'),
+                    busy: t('Unlocking…'),
+                    limited: true,
+                    check: async (pin) => {
+                        const key = await KB.deriveKey(pin, account);
+                        const ids = [];
+                        for (const f of this.openBackups(backups, key)) {
+                            if (f.pubkey === own) ids.push(...f.ids);
+                            KB.wipe(f.sk);
+                        }
+                        KB.wipe(key);
+                        if (!ids.length) return { error: t('No backup of this key opens with that PIN. Wait {seconds} s before trying again.', { seconds: this.wrongPinSeconds() }) };
+                        KB.succeeded();
+                        return { ids };
+                    }
+                });
+                if (!found) return;
+                const sure = await this.ask({
+                    title: t('Remove backups'),
+                    body: t('Delete the backup of this key from your Google Drive? The key stays on this device; only the encrypted copy in Google Drive is removed.'),
+                    confirm: t('Remove'),
+                    danger: true
+                });
+                if (sure !== true) return;
+                for (const id of found.ids) await KB.remove(id);
+                this.modalStatus('settingsStatus', t('Removed from Google Drive.'), 'ok');
+            } catch (e) {
+                this.modalStatus('settingsStatus', e.message || t('Google backup did not work. Try again.'), 'warn');
+            } finally {
+                KB.signOut();
+                this._googleBusy = false;
+            }
+        },
+
+        async gatePasskey() {
+            if (this._passkeyBusy) return;
+            this._passkeyBusy = true;
+            this.gateError('');
+            let found = null;
+            let offer = null;
+            try {
+                this.gateBusy(t('Waiting for your passkey…'));
+                found = await KB.passkey.restore((text) => this.gateBusy(text));
+                this.gateBusy('');
+                if (found) {
+                    await this.signInWithSecret(found.sk, found);
+                } else {
+                    this.gateError(t('No key backup is linked to this passkey.'));
+                    offer = t('No key backup is linked to this passkey. If you are new here, you can create a key now and back it up with a new passkey.');
+                }
+            } catch (e) {
+                this.gateBusy('');
+                this.gateError(e.message || t('Passkey backup did not work. Try again.'));
+                if (e && e.canceled) offer = t('No passkey was used. If you don\'t have a passkey backup yet, you can create a key now and back it up with a new passkey.');
+            } finally {
+                if (found) KB.wipe(found.sk);
+                this._passkeyBusy = false;
+            }
+            if (!offer) return;
+            const pick = await this.pinPick({
+                title: t('Continue with a passkey'),
+                body: offer,
+                items: [t('Create a new key and back it up with a passkey')]
+            });
+            if (pick === 0) await this.newKeyWithPasskey();
+        },
+
+        async newKeyWithPasskey() {
+            if (this._passkeyBusy) return;
+            this._passkeyBusy = true;
+            this.gateError('');
+            const sk = NT().generateSecretKey();
+            const code = Identity.newRootCode();
+            let note;
+            try {
+                this.gateBusy(t('Creating your passkey…'));
+                const done = await KB.passkey.backup(sk, code, (text) => this.gateBusy(text));
+                note = done.via === 'prf'
+                    ? t('Backed up with your passkey. The encrypted copy is on Nostr relays.')
+                    : t('Backed up inside your passkey.');
+            } catch (e) {
+                note = t('Your new key is signed in, but it was not backed up. {reason} You can try again in Settings → Identity → Back up with a passkey.',
+                    { reason: e.message || t('Passkey backup did not work.') });
+            } finally {
+                this.gateBusy('');
+                this._passkeyBusy = false;
+            }
+            $('revealNote').textContent = note;
+            $('revealNote').hidden = false;
+            try {
+                const signed = await this.signInWithSecret(sk, { pq: code, fresh: true });
+                if (signed && $('reveal').hidden) this.toast(note);
+            } catch (e) {
+                this.gateError(e.message || t('Could not create a key.'));
+            } finally {
+                KB.wipe(sk);
+            }
+        },
+
+        async backupWithPasskey() {
+            if (!KB.passkey.available() || !Identity.isLocal || !Identity._sk || this._passkeyBusy) return;
+            const sure = await this.ask({
+                title: t('Back up with a passkey'),
+                body: t('You\'ll be asked to create a new passkey. There is no PIN: the passkey protects your key. Your key and post-quantum recovery code are encrypted on this device, and only the encrypted copy is kept on Nostr relays, under a separate key that is not linked to your account. Some passkey providers keep it inside the passkey instead.'),
+                confirm: t('Create passkey')
+            });
+            if (sure !== true || !Identity.isLocal || !Identity._sk || this._passkeyBusy) return;
+            this._passkeyBusy = true;
+            try {
+                this.modalStatus('settingsStatus', t('Creating your passkey…'));
+                const done = await KB.passkey.backup(Identity._sk, Identity.rootCode(), (text) => this.modalStatus('settingsStatus', text));
+                this.modalStatus('settingsStatus', done.via === 'prf'
+                    ? t('Backed up with your passkey. The encrypted copy is on Nostr relays.')
+                    : t('Backed up inside your passkey.'), 'ok');
+            } catch (e) {
+                this.modalStatus('settingsStatus', e.message || t('Passkey backup did not work. Try again.'), 'warn');
+            } finally {
+                this._passkeyBusy = false;
             }
         },
 
@@ -9473,7 +9893,7 @@
         /// Returns null to stay on the gate, or the verdict: `link` with the
         /// root to adopt, `locked` for an account whose root this device does
         /// not have, `mint` for one that has none.
-        async rootForSignIn(account) {
+        async rootForSignIn(account, carried) {
             this.gateError('');
             this.gateBusy(t('Checking whether this key already has a post-quantum root…'));
             let stored = null;
@@ -9495,9 +9915,11 @@
             const rowPresent = !!(stored && stored.present);
             const advertised = (announced && announced.pk) || null;
             if (!rowPresent && !advertised) {
+                const own = carried ? window.NymCrypto.pqRootDecode(carried) : null;
                 // D1 answered and holds nothing, and the relays advertise
                 // nothing: a key that has never used Nymbot or Nymchat.
-                if (stored) return { status: 'mint', root: null };
+                if (stored) return { status: 'mint', root: null, adopt: own };
+                if (own) return { status: 'unknown', root: own, epoch: 0 };
                 // Neither source answered. Minting waits — a second root
                 // published over the first strands every settings row, every
                 // synced conversation and every reply sealed to the one it
@@ -9506,9 +9928,16 @@
                 return { status: 'unknown', root: null };
             }
 
+            let note = '';
+            if (carried) {
+                const checked = this.checkRootCode(carried, record, advertised);
+                if (!checked.error) return { status: 'link', root: checked.root, epoch: checked.epoch, rowPresent };
+                note = t('The post-quantum recovery code in the backup does not match this account, so it was skipped.');
+            }
+            const body = t('Your settings and conversations are sealed to it, and so are your replies. Paste the recovery code from the device that made it — Identity → Post-quantum recovery code, in Nymbot or Nymchat.\n\nWithout it this device can still chat, but it cannot open anything the other one saved.');
             const code = await this.ask({
                 title: t('This key already has a post-quantum root'),
-                body: t('Your settings and conversations are sealed to it, and so are your replies. Paste the recovery code from the device that made it — Identity → Post-quantum recovery code, in Nymbot or Nymchat.\n\nWithout it this device can still chat, but it cannot open anything the other one saved.'),
+                body: note ? note + '\n\n' + body : body,
                 prompt: true,
                 label: t('Recovery code'),
                 placeholder: 'nympq1…',
@@ -9518,31 +9947,37 @@
             const typed = code == null ? '' : String(code).trim();
             // Either way of saying "not now": sign in, do not mint, and leave
             // the code to be pasted in Identity later.
-            if (!typed) return { status: 'locked', root: null, rowPresent };
-            if (!Identity.kemForCode(typed, 0)) {
-                this.gateError(t('That is not a recovery code. It starts with nympq1.'));
+            if (!typed) return { status: 'locked', root: null, rowPresent, note };
+            const checked = this.checkRootCode(typed, record, advertised);
+            if (checked.error) {
+                this.gateError(checked.error);
                 return null;
             }
-            const bytes = window.NymCrypto.pqRootDecode(typed);
+            return { status: 'link', root: checked.root, epoch: checked.epoch, rowPresent, note };
+        },
+
+        checkRootCode(code, record, advertised) {
+            if (!Identity.kemForCode(code, 0)) {
+                return { error: t('That is not a recovery code. It starts with nympq1.') };
+            }
+            const bytes = window.NymCrypto.pqRootDecode(code);
             // The record is the account's own statement of which root it uses:
             // exact, and epoch-free.
             if (record && record.fp
                 && window.NymCrypto.pqRootFingerprint(bytes) !== record.fp) {
-                this.gateError(t('That code does not match the root this account recorded. Check you copied it from the right account.'));
-                return null;
+                return { error: t('That code does not match the root this account recorded. Check you copied it from the right account.') };
             }
             // The root is one thing; which epoch of it the account currently
             // advertises is another.
             let epoch = 0;
             if (advertised) {
-                const matched = this.epochMatching(typed, advertised);
+                const matched = this.epochMatching(code, advertised);
                 if (matched == null && !(record && record.fp)) {
-                    this.gateError(t('That code does not match the key this account advertises. Check you copied it from the right account.'));
-                    return null;
+                    return { error: t('That code does not match the key this account advertises. Check you copied it from the right account.') };
                 }
                 if (matched != null) epoch = matched;
             }
-            return { status: 'link', root: bytes, epoch, rowPresent };
+            return { root: bytes, epoch };
         },
 
         /// Which epoch of `code` produces the key the account advertises, or null
@@ -9570,14 +10005,16 @@
 
         /// A key that turned out to have no root gets one made now, and is shown
         /// it — the same reveal a brand new key gets, because it is the same
-        afterSignIn(verdict) {
+        afterSignIn(verdict, note) {
             const status = (verdict && verdict.status) || 'mint';
+            const say = (text) => this.toast([note, text].filter(Boolean).join(' '));
             if (status === 'link' && Identity.kemPk) {
                 // Linked off an announcement the account never recorded a row
                 // for. Write it, so the next device asks for the code instead
                 // of minting a rival root.
                 if (!verdict.rowPresent) Sync.publishRootRecord().catch(() => { });
                 this.enter();
+                if (note) say('');
                 return;
             }
             if (status === 'unknown') {
@@ -9585,13 +10022,14 @@
                 // nobody could be asked. `settleRoot` picks it up.
                 Identity.rootLocked = false;
                 this.enter();
-                this.toast(t('Could not check whether this key already has a post-quantum root. It will be settled the next time this device reaches the network.'));
+                say(t('Could not check whether this key already has a post-quantum root. It will be settled the next time this device reaches the network.'));
                 return;
             }
             if (status === 'mint') {
-                const shown = Identity.mintRoot();
+                const shown = Identity.mintRoot(verdict && verdict.adopt);
                 if (!shown) { this.enter(); return; }
                 Sync.publishRootRecord().catch(() => { });
+                if (note) say('');
                 $('revealNsec').value = Identity._sk ? NT().nip19.nsecEncode(Identity._sk) : '';
                 $('revealNsecRow').hidden = !Identity._sk;
                 $('revealRoot').value = shown;
@@ -9601,7 +10039,7 @@
             }
             // Signed in without the code.
             this.enter();
-            this.toast(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
+            say(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
         },
 
         copy(id) {

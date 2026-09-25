@@ -16,6 +16,7 @@
     const NC = () => window.NymCrypto;
 
     const KEM_PK_LEN = 1184;
+    const WORKER_TIMEOUT_MS = 3000;
 
     function readKey(raw) {
         if (raw == null) return undefined;
@@ -61,19 +62,58 @@
         } catch (_) { return null; }
     }
 
+    function keyOf(parsed) {
+        if (!parsed) return null;
+        if (parsed.pk2) return { pk: parsed.pk2, fmt: 'pq2', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
+        if (parsed.pk1) return { pk: parsed.pk1, fmt: 'pq1', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
+        return null;
+    }
+
+    function hasPqTag(evt) {
+        return !!(evt && Array.isArray(evt.tags)
+            && evt.tags.some(tag => Array.isArray(tag) && tag[0] === 'd' && tag[1] === C.pqDTag));
+    }
+
+    async function fromWorker(pubkey) {
+        const Api = window.NymbotApi;
+        if (!Api || typeof Api.pqKey !== 'function') return null;
+        let evt = null;
+        try { evt = await Api.pqKey(pubkey, { timeout: WORKER_TIMEOUT_MS }); } catch (_) { return null; }
+        if (!hasPqTag(evt)) return null;
+        const newest = verifiedNewest([evt], pubkey);
+        return newest ? keyOf(parse(newest, Math.floor(Date.now() / 1000))) : null;
+    }
+
+    async function fromRelays(pubkey) {
+        const filter = { kinds: [30078], authors: [pubkey], '#d': [C.pqDTag], limit: 3 };
+        let events = await Relays.fetch(filter, 4000);
+        let newest = verifiedNewest(events, pubkey);
+        if (!newest && typeof Relays.fetchFrom === 'function' && Array.isArray(C.relays)) {
+            try { events = (events || []).concat(await Relays.fetchFrom(C.relays, filter, 4000)); } catch (_) { }
+            newest = verifiedNewest(events, pubkey);
+        }
+        return newest ? keyOf(parse(newest, Math.floor(Date.now() / 1000))) : null;
+    }
+
+    async function lookup(pubkey) {
+        const viaWorker = await fromWorker(pubkey);
+        if (viaWorker && viaWorker.pk) return viaWorker;
+        return fromRelays(pubkey);
+    }
+
+    const inflight = new Map();
+
     const PQ = {
         botKey: null,            // { pk, fmt } or null
         selfAnnouncement: null,  // the signed event the worker is handed
 
-        async resolve(pubkey) {
-            const events = await Relays.fetch(
-                { kinds: [30078], authors: [pubkey], '#d': [C.pqDTag], limit: 3 }, 4000);
-            const newest = verifiedNewest(events, pubkey);
-            const parsed = newest ? parse(newest, Math.floor(Date.now() / 1000)) : null;
-            if (!parsed) return null;
-            if (parsed.pk2) return { pk: parsed.pk2, fmt: 'pq2', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
-            if (parsed.pk1) return { pk: parsed.pk1, fmt: 'pq1', epoch: parsed.epoch, rootSeeded: parsed.rootSeeded };
-            return null;
+        resolve(pubkey) {
+            const key = String(pubkey || '');
+            const held = inflight.get(key);
+            if (held) return held;
+            const run = lookup(key).finally(() => { inflight.delete(key); });
+            inflight.set(key, run);
+            return run;
         },
 
         async resolveBot() {

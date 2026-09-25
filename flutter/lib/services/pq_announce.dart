@@ -14,6 +14,8 @@ import '../state/store.dart';
 
 typedef PqKey = ({Uint8List pk, String fmt, int epoch});
 
+typedef PqKeyServer = Future<Map<String, dynamic>?> Function(String pubkey);
+
 /// Post-quantum capability announcements (kind 30078, d-tag `nym-pq`).
 ///
 /// Each side publishes the ML-KEM public key it can decapsulate with; the other
@@ -21,13 +23,18 @@ typedef PqKey = ({Uint8List pk, String fmt, int epoch});
 /// reply is sealed to it deterministically instead of depending on a lookup
 /// that could lose a race and leave the answer classical.
 class PqAnnounce {
-  PqAnnounce(this.relays, {this.store});
+  PqAnnounce(this.relays, {this.store, String? botPubkey, this.keyServer})
+      : botPubkey = botPubkey ?? NymbotConfig.botPubkey;
 
   static const int _kemPkLen = 1184;
 
   final RelayPool relays;
 
   final Store? store;
+
+  final String botPubkey;
+
+  final PqKeyServer? keyServer;
 
   static const String _botKeyPref = 'botPqKey';
 
@@ -76,21 +83,66 @@ class PqAnnounce {
     }
   }
 
-  Future<PqKey?> resolve(String pubkey) async {
-    final events = await relays.fetch({
+  bool _announces(NostrEvent event) => event.tags.any((t) =>
+      t.length > 1 && t[0] == 'd' && t[1] == NymbotConfig.pqDTag);
+
+  Future<PqKey?> _served(String pubkey) async {
+    final ask = keyServer;
+    if (ask == null) return null;
+    try {
+      final raw = await ask(pubkey).timeout(const Duration(seconds: 3));
+      if (raw == null) return null;
+      final event = _verifiedNewest([NostrEvent.fromJson(raw)], pubkey);
+      if (event == null || !_announces(event)) return null;
+      return _parse(event);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<PqKey?> resolve(String pubkey, {bool viaProxy = false}) async {
+    final served = await _served(pubkey);
+    if (served != null) return served;
+    final filter = <String, dynamic>{
       'kinds': [30078],
       'authors': [pubkey],
       '#d': [NymbotConfig.pqDTag],
       'limit': 3,
-    });
-    final newest = _verifiedNewest(events, pubkey);
+    };
+    var events = <NostrEvent>[];
+    try {
+      events = [...await relays.fetch(filter)];
+    } catch (_) {}
+    var newest = _verifiedNewest(events, pubkey);
+    if (newest == null && viaProxy) {
+      try {
+        events = [
+          ...events,
+          ...await relays.fetchFrom(NymbotConfig.relays, filter,
+              timeout: const Duration(seconds: 4)),
+        ];
+      } catch (_) {}
+      newest = _verifiedNewest(events, pubkey);
+    }
     return newest == null ? null : _parse(newest);
   }
 
-  Future<PqKey?> resolveBot() async {
+  Future<PqKey?>? _botLookup;
+
+  Future<PqKey?> resolveBot() {
+    final running = _botLookup;
+    if (running != null) return running;
+    final lookup = _resolveBot();
+    _botLookup = lookup;
+    return lookup.whenComplete(() {
+      if (identical(_botLookup, lookup)) _botLookup = null;
+    });
+  }
+
+  Future<PqKey?> _resolveBot() async {
     PqKey? live;
     try {
-      live = await resolve(NymbotConfig.botPubkey);
+      live = await resolve(botPubkey, viaProxy: true);
     } catch (_) {}
     final held = store;
     if (live != null) {

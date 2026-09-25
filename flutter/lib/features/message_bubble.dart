@@ -156,9 +156,9 @@ class _MessageBubbleState extends State<MessageBubble> {
               child: _content(context, m, self, theme),
             ),
           ),
+          if (widget.actionsOpen) _actions(context, m),
           if (widget.followUps.isNotEmpty && widget.onFollowUp != null)
             _followUps(context),
-          if (widget.actionsOpen) _actions(context, m),
         ],
       ),
     );

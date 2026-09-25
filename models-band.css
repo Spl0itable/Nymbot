@@ -1,0 +1,165 @@
+.models-band {
+    padding: 5rem 0 4rem;
+    overflow: hidden;
+}
+
+.models-band .section-title {
+    padding: 0 1rem;
+}
+
+.models-band-names {
+    max-width: 900px;
+    margin: 0 auto 2.5rem;
+    padding: 0 1rem;
+    text-align: center;
+    color: var(--secondary);
+    font-size: 1.1rem;
+    line-height: 1.6;
+}
+
+.models-band-names:empty {
+    display: none;
+}
+
+.models-band-rows {
+    display: none;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
+.models-band.is-live .models-band-rows {
+    display: flex;
+}
+
+.models-band-row {
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+    mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+
+.models-band-track {
+    display: flex;
+    width: max-content;
+    animation: models-band-scroll 90s linear infinite;
+}
+
+.models-band-row-reverse .models-band-track {
+    animation-direction: reverse;
+    animation-duration: 100s;
+}
+
+.models-band-row:hover .models-band-track,
+.models-band-row:focus-within .models-band-track {
+    animation-play-state: paused;
+}
+
+.models-band-set {
+    display: flex;
+    gap: 0.75rem;
+    margin: 0;
+    padding: 0.2rem 0.75rem 0.2rem 0;
+    list-style: none;
+}
+
+.models-band-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 1.1rem 0.4rem 0.4rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text-white);
+    white-space: nowrap;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.models-band-pill:hover {
+    border-color: var(--primary);
+    background: var(--card-bg-hover);
+}
+
+.models-band-tile {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.models-band-tile svg {
+    width: 100%;
+    height: 100%;
+}
+
+.models-band-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.models-band .section-cta {
+    margin-top: 2.5rem;
+    padding: 0 1rem;
+}
+
+@keyframes models-band-scroll {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+}
+
+@media (max-width: 768px) {
+    .models-band {
+        padding: 3.5rem 0 3rem;
+    }
+
+    .models-band-names {
+        font-size: 1rem;
+        margin-bottom: 1.75rem;
+    }
+
+    .models-band-row {
+        -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+        mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+    }
+
+    .models-band-set {
+        gap: 0.5rem;
+        padding-right: 0.5rem;
+    }
+
+    .models-band-pill {
+        gap: 0.5rem;
+        padding: 0.3rem 0.9rem 0.3rem 0.3rem;
+    }
+
+    .models-band-tile {
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+    }
+
+    .models-band-label {
+        font-size: 0.85rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .models-band-row {
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    .models-band-row::-webkit-scrollbar {
+        display: none;
+    }
+
+    .models-band-track {
+        animation: none;
+        padding: 0 1.5rem;
+    }
+
+    .models-band-set[aria-hidden="true"] {
+        display: none;
+    }
+}

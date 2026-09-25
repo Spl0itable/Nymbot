@@ -26,5 +26,7 @@ window.NymbotConfig = {
 
     pmTimeoutMs: 180000,
 
+    googleClientId: '435441872913-q30ml0k3dlgl65qu9qo6i5obb1v14t0d.apps.googleusercontent.com',
+
     storagePrefix: 'nymbot_'
 };

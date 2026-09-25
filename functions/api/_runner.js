@@ -1,4 +1,5 @@
 import { hasD1 } from "./_d1.js";
+import { RUNNER_DEPS_PY, RUNNER_DEPS_MJS } from "./_runnerdeps.js";
 
 export const RUNNER_RATES = {
   memoryUsdPerGiBSecond: 0.0000025,
@@ -60,10 +61,12 @@ export const RUNNER_FILES_MAX = 200;
 export const RUNNER_FILES_MAX_BYTES = 20 * 1024 * 1024;
 export const RUNNER_COMMAND_MAX = 8000;
 
+export const RUNNER_DEPS_DIR = ".nymbot";
+
 export const RUNNER_LANGUAGES = {
-  python: { image: "python", filename: "main.py", command: "python main.py" },
-  javascript: { image: "node", filename: "main.js", command: "node main.js" },
-  typescript: { image: "node", filename: "main.ts", command: "npx -y tsx main.ts" },
+  python: { image: "python", filename: "main.py", command: "python main.py", deps: "py" },
+  javascript: { image: "node", filename: "main.js", command: "node main.js", deps: "mjs" },
+  typescript: { image: "node", filename: "main.ts", command: "npx -y tsx main.ts", deps: "mjs" },
   bash: { image: "polyglot", filename: "main.sh", command: "bash main.sh" },
   sh: { image: "polyglot", filename: "main.sh", command: "bash main.sh" },
   go: { image: "polyglot", filename: "main.go", command: "go run main.go" },
@@ -76,6 +79,33 @@ const LANGUAGE_ALIASES = {
   py: "python", python3: "python", js: "javascript", node: "javascript", mjs: "javascript",
   ts: "typescript", shell: "bash", zsh: "bash", golang: "go", rs: "rust"
 };
+
+const SHELL_WORD = "(?:^|[\\s;&|(`!])";
+const SHELL_POLYGLOT = new RegExp(SHELL_WORD + "(?:go|cargo|rustc|rustup|javac|java|mvn|gradle)(?=[\\s;&|)`]|$)", "m");
+const SHELL_PYTHON = new RegExp(SHELL_WORD + "(?:pip3?|python3?|pytest|poetry|uv|pipx)(?=[\\s;&|)`]|$)", "m");
+const SHELL_NODE = new RegExp(SHELL_WORD + "(?:npm|npx|node|yarn|pnpm|tsx|corepack)(?=[\\s;&|)`]|$)", "m");
+
+export function runnerShellImage(code) {
+  const text = String(code || "").replace(/^\s*#.*$/gm, "");
+  if (SHELL_POLYGLOT.test(text)) return "polyglot";
+  const py = SHELL_PYTHON.test(text);
+  const js = SHELL_NODE.test(text);
+  if (py && !js) return "python";
+  if (js && !py) return "node";
+  return "polyglot";
+}
+
+export function runnerDepsFile(kind) {
+  if (kind === "py") return { path: RUNNER_DEPS_DIR + "/deps.py", data: runnerBase64(RUNNER_DEPS_PY) };
+  if (kind === "mjs") return { path: RUNNER_DEPS_DIR + "/deps.mjs", data: runnerBase64(RUNNER_DEPS_MJS) };
+  return null;
+}
+
+export function runnerSnippetCommand(lang) {
+  if (lang.deps === "py") return "python " + RUNNER_DEPS_DIR + "/deps.py " + lang.filename + "; " + lang.command;
+  if (lang.deps === "mjs") return "node " + RUNNER_DEPS_DIR + "/deps.mjs " + lang.filename + "; " + lang.command;
+  return lang.command;
+}
 
 export function runnerLanguage(language) {
   const key = String(language || "").trim().toLowerCase();
@@ -278,9 +308,11 @@ export function runnerBuildRequest(body, opts) {
     if (!lang) return refuse("That language can't run on a server.");
     if (typeof body.code !== "string" || !body.code.trim()) return refuse("There is no code to run.");
     if (new TextEncoder().encode(body.code).length > RUNNER_CODE_MAX_BYTES) return refuse("The code is larger than 1 MiB.");
-    image = lang.image;
-    command = lang.command;
+    image = lang.language === "bash" || lang.language === "sh" ? runnerShellImage(body.code) : lang.image;
+    command = runnerSnippetCommand(lang);
     files.push({ path: lang.filename, data: runnerBase64(body.code) });
+    const deps = runnerDepsFile(lang.deps);
+    if (deps) files.push(deps);
   }
   if (!hasImage(image)) return refuse("Unknown server image.");
   if (!runnerImageOpen(settings, image)) return refuse("That server image is turned off right now.");

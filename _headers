@@ -8,13 +8,13 @@
 # just minified, and fails if it has gone missing.
 
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(self), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), idle-detection=()
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
   Cross-Origin-Resource-Policy: same-origin
 
 /.well-known/apple-app-site-association

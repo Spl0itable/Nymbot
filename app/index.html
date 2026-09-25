@@ -81,6 +81,20 @@
                 <button class="btn btn-ghost" type="button" data-act="gate-extension" id="gateExtension" hidden>Use my browser extension</button>
             </div>
 
+            <div class="gate-google" id="gateGoogleRow" hidden>
+                <div class="gate-actions">
+                    <button class="btn" type="button" data-act="gate-google" id="gateGoogle">Continue with Google</button>
+                </div>
+                <p class="hint">Your key is still made on this device and stays yours. Google only keeps a copy of it, encrypted with a PIN you choose, and cannot read it without that PIN. It sits in a hidden app folder of your Google Drive that only Nymbot and Nymchat can see, and never reaches our servers.</p>
+            </div>
+
+            <div class="gate-passkey" id="gatePasskeyRow" hidden>
+                <div class="gate-actions">
+                    <button class="btn" type="button" data-act="gate-passkey" id="gatePasskey">Continue with a passkey</button>
+                </div>
+                <p class="hint">No PIN to remember: your passkey protects your key. An encrypted copy is kept on Nostr relays under a separate key that is not linked to your account, and only your passkey can find and open it.</p>
+            </div>
+
             <div class="gate-import" id="gateImport" hidden>
                 <label for="gateNsec">Your private key</label>
                 <input data-i18n-skip type="password" id="gateNsec" placeholder="nsec1…" autocomplete="off" spellcheck="false">
@@ -196,6 +210,7 @@
             </div>
             <p class="hint">The second one seeds the key that makes your messages quantum-resistant. Paste it
                 into another device to link it to this account.</p>
+            <p class="hint" id="revealNote" hidden></p>
 
             <div class="gate-actions">
                 <button class="btn btn-primary" type="button" data-act="reveal-done">I have saved them</button>
@@ -1536,6 +1551,22 @@
                 <button class="btn btn-small" type="button" data-act="link-root">Link</button>
             </div>
 
+            <div id="googleBackupRow" hidden>
+                <label class="reveal-label">Google backup</label>
+                <p class="hint">Keep a copy of your private key and your post-quantum recovery code in a hidden app folder of your Google Drive, encrypted with a PIN you choose. Google stores only that encrypted copy and cannot read it without the PIN, and it never reaches our servers. On another device, &ldquo;Continue with Google&rdquo; and the PIN bring both back. Back up again after linking a new recovery code.</p>
+                <div class="reveal-row">
+                    <button class="btn btn-small" type="button" data-act="keybackup-save" id="keyBackupSave">Back up to Google&hellip;</button>
+                    <button class="btn btn-small" type="button" data-act="keybackup-remove" id="keyBackupRemove">Remove backups&hellip;</button>
+                </div>
+            </div>
+
+            <div id="passkeyBackupRow" hidden>
+                <label class="reveal-label">Passkey backup</label>
+                <p class="hint">Back up your private key and your post-quantum recovery code with a new passkey. There is no PIN: the passkey protects it. Both are encrypted on this device, and the encrypted copy is kept on Nostr relays under a separate key that is not linked to your account. On another device, &ldquo;Continue with a passkey&rdquo; brings them back.</p>
+                <div class="reveal-row">
+                    <button class="btn btn-small" type="button" data-act="passkey-backup" id="passkeyBackupSave">Back up with a passkey&hellip;</button>
+                </div>
+            </div>
 
             <label class="reveal-label">Identity encryption</label>
             <p class="hint" id="vaultState"></p>
@@ -1606,6 +1637,29 @@
         </div>
     </div>
 
+    <div class="dialog-scrim" id="pinScrim" hidden></div>
+    <div class="dialog" id="pinDialog" hidden role="dialog" aria-modal="true" aria-labelledby="pinTitle">
+        <div class="modal-card">
+            <header><h2 id="pinTitle"></h2><button class="icon-btn" type="button" data-act="pin-cancel" aria-label="Close">&times;</button></header>
+            <p class="dialog-body" id="pinBody"></p>
+            <div id="pinFields">
+                <label for="pinInput">PIN (4 to 8 digits)</label>
+                <input data-i18n-skip type="password" id="pinInput" inputmode="numeric" maxlength="8" autocomplete="off" spellcheck="false">
+                <div id="pinAgainRow">
+                    <label for="pinAgain">Enter the PIN again</label>
+                    <input data-i18n-skip type="password" id="pinAgain" inputmode="numeric" maxlength="8" autocomplete="off" spellcheck="false">
+                </div>
+            </div>
+            <p class="dialog-body pin-warn" id="pinWarn" hidden>Nobody can recover this PIN, not even us. Write it down somewhere safe. Anyone who has both your Google account and this PIN can open your key.</p>
+            <div class="pin-pick" id="pinPick" hidden></div>
+            <p class="modal-status" id="pinStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="pin-submit" id="pinSubmit">Continue</button>
+                <button class="btn btn-ghost" type="button" data-act="pin-cancel">Cancel</button>
+            </footer>
+        </div>
+    </div>
+
     <div class="dialog-scrim" id="capScrim" hidden></div>
     <div class="dialog" id="capDialog" hidden role="dialog" aria-modal="true" aria-labelledby="capDialogTitle">
         <div class="modal-card">
@@ -1671,6 +1725,7 @@
     <script src="/app/js/serverrun.js"></script>
     <script src="/app/js/tasks.js"></script>
     <script src="/app/js/vault.js"></script>
+    <script src="/app/js/keybackup.js"></script>
     <script src="/app/js/notify.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>

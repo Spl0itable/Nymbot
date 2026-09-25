@@ -128,6 +128,54 @@ class SandboxProtocol {
 
   static String? languageOf(String fence) => _languages[fence.trim().toLowerCase()];
 
+  static final pyStdlib = 'abc aifc antigravity argparse array ast asyncio atexit audioop base64 bdb binascii bisect builtins bz2 cProfile calendar cgi cgitb chunk cmath cmd code codecs codeop collections colorsys compileall concurrent configparser contextlib contextvars copy copyreg crypt csv ctypes curses dataclasses datetime dbm decimal difflib dis doctest email encodings ensurepip enum errno faulthandler fcntl filecmp fileinput fnmatch fractions ftplib functools gc genericpath getopt getpass gettext glob graphlib grp gzip hashlib heapq hmac html http idlelib imaplib imghdr importlib inspect io ipaddress itertools json keyword lib2to3 linecache locale logging lzma mailbox mailcap marshal math mimetypes mmap modulefinder msilib msvcrt multiprocessing netrc nis nntplib nt ntpath nturl2path numbers opcode operator optparse os ossaudiodev pathlib pdb pickle pickletools pipes pkgutil platform plistlib poplib posix posixpath pprint profile pstats pty pwd py_compile pyclbr pydoc pydoc_data pyexpat queue quopri random re readline reprlib resource rlcompleter runpy sched secrets select selectors shelve shlex shutil signal site smtplib sndhdr socket socketserver spwd sqlite3 sre_compile sre_constants sre_parse ssl stat statistics string stringprep struct subprocess sunau symtable sys sysconfig syslog tabnanny tarfile telnetlib tempfile termios textwrap this threading time timeit tkinter token tokenize tomllib trace traceback tracemalloc tty turtle turtledemo types typing unicodedata unittest urllib uu uuid venv warnings wave weakref webbrowser winreg winsound wsgiref xdrlib xml xmlrpc zipapp zipfile zipimport zlib zoneinfo'.split(' ').toSet();
+
+  static final pyBundled = 'bs4 contourpy cycler decorator fontTools joblib kiwisolver matplotlib matplotlib_pyodide mpmath networkx numpy packaging pandas patsy PIL pyparsing dateutil pytz yaml regex sklearn scipy setuptools pkg_resources six soupsieve sqlite3 statsmodels sympy threadpoolctl xlrd pyodide js'.split(' ').toSet();
+
+  static const pyServerOnly = {
+    'socket', 'ssl', 'subprocess', 'multiprocessing', 'threading', 'tkinter', 'turtle', 'curses',
+    'readline', 'webbrowser', 'ftplib', 'smtplib', 'poplib', 'imaplib', 'socketserver', 'telnetlib', 'xmlrpc', 'selectors', 'select',
+    'urllib.request', 'http.client', 'http.server', 'http.cookiejar',
+  };
+
+  static final jsServerOnly = RegExp(
+      r'\brequire\s*\(|^\s*import\s[^(]|^\s*export\s[^\n]*\sfrom\s|\bimport\s*\(|\bprocess\.(?:argv|env|exit|stdin|stdout|cwd)\b|\b__dirname\b|\b__filename\b|\bBuffer\.|\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b',
+      multiLine: true);
+
+  static final _pyPlain = RegExp(r'^\s*import\s+([\w.,\s]+?)(?:\s+as\s+\w+)?\s*(?:#.*)?$');
+  static final _pyFrom = RegExp(r'^\s*from\s+([\w.]+)\s+import\b');
+
+  static List<String> pythonImports(String code) {
+    final out = <String>[];
+    for (final line in code.split('\n')) {
+      final plain = _pyPlain.firstMatch(line);
+      if (plain != null) {
+        for (final part in plain.group(1)!.split(',')) {
+          final name = part.trim().split(RegExp(r'\s+as\s+')).first.trim();
+          if (name.isNotEmpty) out.add(name);
+        }
+        continue;
+      }
+      final from = _pyFrom.firstMatch(line);
+      if (from != null) out.add(from.group(1)!);
+    }
+    return out;
+  }
+
+  static bool localOk(String? language, String code) {
+    if (language == 'python') {
+      for (final full in pythonImports(code)) {
+        final parts = full.split('.');
+        final top = parts.first;
+        if (pyServerOnly.contains(top) || pyServerOnly.contains(parts.take(2).join('.'))) return false;
+        if (!pyStdlib.contains(top) && !pyBundled.contains(top)) return false;
+      }
+      return true;
+    }
+    if (language == 'javascript') return !jsServerOnly.hasMatch(code);
+    return false;
+  }
+
   static String encodeRun({
     required String id,
     required String code,

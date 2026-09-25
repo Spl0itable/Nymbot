@@ -191,7 +191,7 @@ String serverRunProblem(int status, Map<String, dynamic> error) {
 }
 
 Future<void> runCodeOnServer(
-    BuildContext context, RunCodeController controller, String code) async {
+    BuildContext context, RunCodeController controller, String code, {int? timeoutSec}) async {
   final language = controller.serverLanguage;
   if (language == null) return;
   final app = AppScope.read(context);
@@ -203,7 +203,7 @@ Future<void> runCodeOnServer(
             : null,
       ));
   final info = await app.refreshRunner();
-  final image = info.image(ServerRuns.imageFor(language));
+  final image = info.image(ServerRuns.imageFor(language, code: code));
   if (!info.available || image == null) {
     say(t('Server runs are not available right now.'));
     return;
@@ -211,7 +211,7 @@ Future<void> runCodeOnServer(
   final conv = app.current;
   final files =
       conv == null || conv.anon ? const <SandboxFile>[] : DocLibrary.instance.files(conv.id);
-  int? timeout;
+  int? timeout = timeoutSec;
   var withFiles = false;
   ServerRunPrice? changed;
   for (var attempt = 0; attempt < 3; attempt++) {
@@ -236,6 +236,8 @@ Future<void> runCodeOnServer(
         if (choice.withFiles && files.isNotEmpty) 'files': ServerRuns.filesPayload(files),
       }),
       onCharged: (state) => app.serverRunCharged(conv, state),
+      image: image,
+      timeoutSec: choice.timeoutSec,
     );
     if (res.events != null) return;
     final error = res.error;

@@ -214,6 +214,28 @@ class NymbotApi {
     }
   }
 
+  Future<Map<String, dynamic>?> pqKey(String pubkey) async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.botUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({'action': 'pq-key', 'pubkey': pubkey}),
+          )
+          .timeout(const Duration(seconds: 3));
+      if (resp.statusCode != 200) return null;
+      final decoded = jsonDecode(resp.body);
+      if (decoded is! Map<String, dynamic>) return null;
+      final event = decoded['event'];
+      return event is Map<String, dynamic> ? event : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<ApiResult> teamEstimate(Map<String, dynamic> body) async {
     try {
       final resp = await _client

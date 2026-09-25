@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../core/crypto/pq.dart' as pq;
+import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/conversation.dart';
 import '../models/memory.dart';
@@ -31,6 +32,12 @@ class AccountSync {
   static const int maxChats = 400;
 
   static const int maxMessages = 400;
+
+  static const int artifactVersions = 5;
+
+  static const int artifactKeptVersions = 30;
+
+  static const int artifactMaxChars = 300000;
 
   static const List<String> libraryNames = [
     'personas',
@@ -90,15 +97,22 @@ class AccountSync {
   final Map<String, String> _opened = {};
 
   Future<String> _open(String blob) async {
-    final signer = _identity.signer;
-    final remember = signer.isRemote;
-    final key = remember ? _sha256Hex(blob) : '';
-    final held = remember ? _opened[key] : null;
+    final key = _sha256Hex(blob);
+    final held = _opened[key];
     if (held != null) return held;
-    final plain = await _openWith(signer, blob);
-    if (remember) _remember(key, plain);
+    final plain = await _openWith(_identity.signer, blob);
+    _remember(key, plain);
     return plain;
   }
+
+  final Map<String, String> _appliedBlobs = {};
+  Map<String, String> _pulledBlobs = {};
+  Map<String, Object?> _unchanged = {};
+
+  bool _alreadyApplied(Map<String, dynamic> remote, String key) =>
+      _unchanged.containsKey(key) && identical(_unchanged[key], remote[key]);
+
+  static Future<void> _breathe() => Future<void>.delayed(Duration.zero);
 
   void _remember(String key, String plain) {
     if (_opened.length >= 2000) _opened.remove(_opened.keys.first);
@@ -149,6 +163,79 @@ class AccountSync {
       if (held == null || _stamp(record) >= _stamp(held)) out[id] = record;
     }
     return out.values.toList();
+  }
+
+  static int _num(Object? v) => v is num ? v.toInt() : 0;
+
+  static List<Map<String, dynamic>> _lastVersions(Object? versions, int n) {
+    final list = _maps(versions);
+    return list.length > n ? list.sublist(list.length - n) : list;
+  }
+
+  static List<Map<String, dynamic>> fitArtifacts(
+      String convId, List<Map<String, dynamic>> list) {
+    var arts = [
+      for (final a in list) {...a, 'versions': _lastVersions(a['versions'], artifactVersions)}
+    ];
+    int size() => jsonEncode({'id': convId, 'artifacts': arts}).length;
+    if (size() > artifactMaxChars) {
+      arts = [
+        for (final a in arts) {...a, 'versions': _lastVersions(a['versions'], 1)}
+      ];
+    }
+    arts.sort((a, b) => _num(a['createdAt']).compareTo(_num(b['createdAt'])));
+    while (arts.isNotEmpty && size() > artifactMaxChars) {
+      arts.removeAt(0);
+    }
+    return arts;
+  }
+
+  static List<Map<String, dynamic>> _mergeVersions(Object? a, Object? b) {
+    final seen = <String, Map<String, dynamic>>{};
+    for (final v in [..._maps(a), ..._maps(b)]) {
+      if (v['body'] is! String) continue;
+      seen.putIfAbsent('${_num(v['at'])}|${v['body']}', () => v);
+    }
+    final out = seen.values.toList()
+      ..sort((x, y) => _num(x['at']).compareTo(_num(y['at'])));
+    return out.length > artifactKeptVersions
+        ? out.sublist(out.length - artifactKeptVersions)
+        : out;
+  }
+
+  static List<Map<String, dynamic>> mergeArtifacts(
+    List<Map<String, dynamic>> mine,
+    List<Map<String, dynamic>> theirs,
+    Map<String, int> graves,
+  ) {
+    final byId = <String, Map<String, dynamic>>{};
+    for (final a in mine) {
+      final id = a['id'];
+      if (id is String && id.isNotEmpty && !graves.containsKey(id)) byId[id] = a;
+    }
+    for (final t in theirs) {
+      final id = t['id'];
+      if (id is! String || id.isEmpty || graves.containsKey(id)) continue;
+      final m = byId[id];
+      if (m == null) {
+        byId[id] = {...t, 'versions': _mergeVersions(const [], t['versions'])};
+        continue;
+      }
+      final newer = _num(t['updatedAt']) > _num(m['updatedAt']) ? t : m;
+      byId[id] = {...newer, 'versions': _mergeVersions(m['versions'], t['versions'])};
+    }
+    return byId.values.toList()
+      ..sort((a, b) => _num(a['createdAt']).compareTo(_num(b['createdAt'])));
+  }
+
+  static List<Artifact> _artifactsFrom(List<Map<String, dynamic>> list) {
+    final out = <Artifact>[];
+    for (final j in list) {
+      try {
+        out.add(Artifact.fromJson(j));
+      } catch (_) {}
+    }
+    return out;
   }
 
   static bool _messagesChanged(List<ChatMessage> mine, List<ChatMessage> merged) {
@@ -411,6 +498,17 @@ class AccountSync {
         ],
       };
     }
+    for (final conv in chats) {
+      final arts = [
+        for (final a in _store.artifacts(conv.id))
+          if (a.id.isNotEmpty && !graves.containsKey(a.id)) a.toJson()
+      ];
+      if (arts.isEmpty) continue;
+      out['arts-${conv.id}'] = {
+        'id': conv.id,
+        'artifacts': fitArtifacts(conv.id, arts),
+      };
+    }
     out['graves'] = graves;
     return out;
   }
@@ -551,7 +649,8 @@ class AccountSync {
     }
 
     for (final key in remote.keys) {
-      if (!key.startsWith('chat-')) continue;
+      if (!key.startsWith('chat-') || _alreadyApplied(remote, key)) continue;
+      await _breathe();
       final entry = remote[key];
       if (entry is! Map) continue;
       final id = entry['id'];
@@ -569,6 +668,23 @@ class AccountSync {
         touched.add(key);
       }
     }
+
+    for (final key in remote.keys) {
+      if (!key.startsWith('arts-') || _alreadyApplied(remote, key)) continue;
+      await _breathe();
+      final entry = remote[key];
+      if (entry is! Map || entry['artifacts'] is! List) continue;
+      final id = entry['id'];
+      if (id is! String || id.isEmpty) continue;
+      if (graves.containsKey(id) || _store.isGhost(id)) continue;
+      final mine = [for (final a in _store.artifacts(id)) a.toJson()];
+      final merged = _artifactsFrom(
+          mergeArtifacts(mine, _maps(entry['artifacts']), graves));
+      if (jsonEncode(mine) != Artifact.encodeList(merged)) {
+        await _store.saveArtifacts(id, merged);
+        touched.add(key);
+      }
+    }
     return touched;
   }
 
@@ -577,13 +693,14 @@ class AccountSync {
     final categories = data == null ? null : data['categories'];
     if (categories is! Map) return null;
     final out = <String, dynamic>{};
-    final remote = _identity.signer.isRemote;
+    final pulled = <String, String>{};
     var unreadable = 0;
     for (final row in categories.entries) {
       final entry = row.value;
       if (entry is! Map) continue;
       final blob = entry['blob'];
       if (blob is! String || blob.isEmpty) continue;
+      await _breathe();
       Object? payload;
       try {
         payload = jsonDecode(await _open(blob));
@@ -596,13 +713,19 @@ class AccountSync {
       if (name is! String || name.isEmpty) continue;
       if (name == StorageSync.pqRootDTag) continue;
       out[name] = payload.containsKey('v') ? payload['v'] : payload;
-      if (remote && row.key == categoryFor(name)) {
+      pulled[name] = _sha256Hex(blob);
+      if (row.key == categoryFor(name)) {
         final plain = jsonEncode({'__cat': name, 'v': out[name]});
         _hashes[row.key as String] = _sha256Hex(
             '${_identity.pubkey}|${pq.isPq2Payload(blob) ? 'pq' : 'c'}|$plain');
       }
     }
     blocked = unreadable > 0 && out.isEmpty;
+    _pulledBlobs = pulled;
+    _unchanged = {
+      for (final e in pulled.entries)
+        if (_appliedBlobs[e.key] == e.value) e.key: out[e.key]
+    };
     return out;
   }
 
@@ -618,7 +741,8 @@ class AccountSync {
         category: category, blob: blob, contentHash: hash);
     if (!ok) return false;
     _hashes[category] = hash;
-    if (_identity.signer.isRemote) _remember(_sha256Hex(blob), plain);
+    _remember(_sha256Hex(blob), plain);
+    _appliedBlobs[dTag] = _sha256Hex(blob);
     return true;
   }
 
@@ -644,6 +768,8 @@ class AccountSync {
       if (remote == null) return const SyncRound.offline();
       _remote = remote;
       touched = await apply(remote);
+      _appliedBlobs.addAll(_pulledBlobs);
+      _unchanged = {};
       if (blocked) return const SyncRound.blocked();
 
       final local = await snapshot();
@@ -653,6 +779,7 @@ class AccountSync {
         }
       }
       for (final entry in local.entries) {
+        await _breathe();
         await push(entry.key, entry.value);
       }
       lastAt = DateTime.now();
@@ -704,6 +831,9 @@ class AccountSync {
   void forget() {
     _hashes.clear();
     _opened.clear();
+    _appliedBlobs.clear();
+    _pulledBlobs = {};
+    _unchanged = {};
     _remote = {};
     blocked = false;
   }

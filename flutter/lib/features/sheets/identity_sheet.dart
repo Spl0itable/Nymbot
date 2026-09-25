@@ -4,9 +4,12 @@ import 'package:flutter/services.dart';
 import '../../app.dart';
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/theme/theme.dart';
+import '../../services/key_backup.dart';
 import '../../services/nickname.dart';
+import '../../services/passkey_backup.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import '../key_backup_ui.dart';
 import '../secret_guard.dart';
 import '../vault_dialog.dart';
 import 'gift_sheet.dart';
@@ -38,11 +41,22 @@ class _IdentitySheetState extends State<_IdentitySheet> {
   String? _status;
   bool _warn = false;
   bool _bioAvailable = false;
+  String? _backupStatus;
+  bool _backupSpin = false;
+  bool _backupWarn = false;
+  bool _backupBusy = false;
+  bool _passkeyReady = false;
 
   @override
   void initState() {
     super.initState();
     _checkBiometrics();
+    _checkPasskey();
+  }
+
+  Future<void> _checkPasskey() async {
+    final ok = await AppScope.read(context).passkeys.available();
+    if (mounted && ok != _passkeyReady) setState(() => _passkeyReady = ok);
   }
 
   Future<void> _checkBiometrics() async {
@@ -335,6 +349,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   ),
                 ),
               ),
+            if (identity.hasNsec && (app.keyBackups.any || _passkeyReady))
+              ..._cloudBackup(app),
             const Divider(height: 32),
             Text(t('Identity encryption'),
                 style: Theme.of(context).textTheme.titleSmall),
@@ -407,6 +423,258 @@ class _IdentitySheetState extends State<_IdentitySheet> {
         ),
       ),
     );
+  }
+
+  List<Widget> _cloudBackup(AppController app) => [
+        const Divider(height: 32),
+        Text(t('Cloud backup'), style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        if (app.keyBackups.any)
+          Text(
+            t('Keep an encrypted copy of this key in your own Google or Apple '
+                'account, locked with a PIN, and sign in on another device with '
+                'Continue with Google or Continue with Apple. The key stays yours: '
+                'Google and Apple only store an encrypted copy they cannot read '
+                'without the PIN.'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        if (_passkeyReady) ...[
+          const SizedBox(height: 6),
+          Text(
+            t('A passkey can hold an encrypted copy of this key too, with no '
+                'PIN. It syncs through your passkey provider, and Continue with '
+                'a passkey brings the key back on another device.'),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ],
+        const SizedBox(height: 8),
+        if (_passkeyReady)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              PasskeyButton(
+                key: const ValueKey('backup-passkey'),
+                label: t('Back up with a passkey'),
+                onPressed: _backupBusy ? null : () => _backUpWithPasskey(app),
+              ),
+              TextButton(
+                key: const ValueKey('backup-passkey-update'),
+                onPressed: _backupBusy ? null : () => _updatePasskeyBackup(app),
+                child: Text(t('Update a passkey backup')),
+              ),
+            ],
+          ),
+        for (final store in app.keyBackups.stores)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ProviderButton(
+                key: ValueKey('backup-to-${store.provider.name}'),
+                provider: store.provider,
+                label: backUpToLabel(store.provider),
+                onPressed: _backupBusy ? null : () => _backUp(app, store),
+              ),
+              TextButton(
+                key: ValueKey('backup-remove-${store.provider.name}'),
+                onPressed: _backupBusy ? null : () => _removeBackups(app, store),
+                child: Text(removeBackupsLabel(store.provider)),
+              ),
+            ],
+          ),
+        if (_backupStatus != null) ...[
+          const SizedBox(height: 8),
+          _backupWarn
+              ? Text(_backupStatus!,
+                  key: const ValueKey('backup-status'),
+                  style: TextStyle(
+                      fontSize: 12, color: Theme.of(context).colorScheme.error))
+              : BackupStatusLine(_backupStatus!, spin: _backupSpin),
+        ],
+      ];
+
+  void _backupNote(String? text, {bool spin = false, bool warn = false}) {
+    if (!mounted) return;
+    setState(() {
+      _backupStatus = text;
+      _backupSpin = spin;
+      _backupWarn = warn;
+    });
+  }
+
+  Future<void> _backUp(AppController app, BackupStore store) async {
+    final secret = app.identity.privkey;
+    if (secret == null || _backupBusy) return;
+    final pubkey = app.identity.pubkey;
+    final provider = store.provider;
+    final label = {'provider': provider.label};
+    setState(() => _backupBusy = true);
+    _backupNote(signingInWith(provider), spin: true);
+    Uint8List? key;
+    var found = <BackupCandidate>[];
+    try {
+      final accountId = await store.signIn();
+      if (!mounted) return;
+      _backupNote(null);
+      final pin = await chooseBackupPin(context, provider);
+      if (pin == null || !mounted) return;
+      _backupNote(t('Encrypting…'), spin: true);
+      key = await app.keyBackups.derive(provider, accountId, pin);
+      final payload = encryptBackup(secret, key, pq: _pqCode(app));
+      _backupNote(t('Checking for an older backup…'), spin: true);
+      found = openBackups(await store.readAll(), key);
+      final older = [
+        for (final candidate in found)
+          if (candidate.pubkey == pubkey) ...candidate.ids,
+      ];
+      if (!mounted) return;
+      if (older.isNotEmpty) {
+        _backupNote(null);
+        final replace = await confirmBackupAction(
+          context,
+          title: t('Replace the older backup?'),
+          body: t('This {provider} account already has a backup of this key '
+              'with the same PIN. Replace it with the new one?', label),
+          action: t('Replace'),
+        );
+        if (!mounted) return;
+        if (!replace) {
+          _backupNote(t('Nothing was changed.'));
+          return;
+        }
+      }
+      _backupNote(t('Saving the backup to {provider}…', label), spin: true);
+      await store.write(payload);
+      for (final id in older) {
+        await store.delete(id);
+      }
+      _backupNote(t('Backed up to {provider}. On another device, choose '
+          'Continue with {provider} and enter this PIN.', label));
+    } on BackupCancelled {
+      _backupNote(null);
+    } catch (e) {
+      _backupNote(backupErrorMessage(e), warn: true);
+    } finally {
+      wipeBytes(key);
+      for (final candidate in found) {
+        candidate.wipe();
+      }
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
+  String? _pqCode(AppController app) {
+    final code = app.identity.rootCode;
+    return code.isEmpty ? null : code;
+  }
+
+  Future<void> _updatePasskeyBackup(AppController app) async {
+    final secret = app.identity.privkey;
+    if (secret == null || _backupBusy) return;
+    setState(() => _backupBusy = true);
+    _backupNote(t('Waiting for your passkey…'), spin: true);
+    try {
+      await app.passkeys.update(secret,
+          pq: _pqCode(app), progress: (text) => _backupNote(text, spin: true));
+      _backupNote(t('Updated the backup in your passkey.'));
+    } on BackupCancelled {
+      _backupNote(null);
+    } on PasskeyOtherKey {
+      _backupNote(
+          t('That passkey does not hold a backup of this key. Use Back up with '
+              'a passkey to make one.'),
+          warn: true);
+    } catch (e) {
+      _backupNote(passkeyErrorMessage(e, google: app.keyBackups.google != null),
+          warn: true);
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
+  Future<void> _backUpWithPasskey(AppController app) async {
+    final secret = app.identity.privkey;
+    if (secret == null || _backupBusy) return;
+    setState(() => _backupBusy = true);
+    _backupNote(t('Creating a passkey…'), spin: true);
+    try {
+      await app.passkeys.backUp(secret,
+          pq: _pqCode(app), progress: (text) => _backupNote(text, spin: true));
+      _backupNote(t('Backed up with your passkey. On another device, choose '
+          'Continue with a passkey.'));
+    } on BackupCancelled {
+      _backupNote(null);
+    } catch (e) {
+      _backupNote(passkeyErrorMessage(e, google: app.keyBackups.google != null),
+          warn: true);
+    } finally {
+      if (mounted) setState(() => _backupBusy = false);
+    }
+  }
+
+  Future<void> _removeBackups(AppController app, BackupStore store) async {
+    if (_backupBusy) return;
+    final pubkey = app.identity.pubkey;
+    final provider = store.provider;
+    final label = {'provider': provider.label};
+    setState(() => _backupBusy = true);
+    _backupNote(signingInWith(provider), spin: true);
+    var found = <BackupCandidate>[];
+    try {
+      final accountId = await store.signIn();
+      if (!mounted) return;
+      _backupNote(t('Looking for a backup…'), spin: true);
+      final files = await store.readAll();
+      if (!mounted) return;
+      if (files.isEmpty) {
+        _backupNote(t('There are no backups in this {provider} account.', label));
+        return;
+      }
+      found = await unlockBackups(
+            context,
+            backups: app.keyBackups,
+            provider: provider,
+            accountId: accountId,
+            files: files,
+            status: _backupNote,
+            keep: (candidate) => candidate.pubkey == pubkey,
+            wrongPin: t('No backup of this key opens with that PIN.'),
+          ) ??
+          [];
+      if (found.isEmpty || !mounted) return;
+      final ids = [for (final candidate in found) ...candidate.ids];
+      final remove = await confirmBackupAction(
+        context,
+        title: t('Remove backups?'),
+        body: ids.length == 1
+            ? t('This deletes the backup of this key from your {provider} '
+                'account. The key itself stays on this device.', label)
+            : t('This deletes {n} backups of this key from your {provider} '
+                'account. The key itself stays on this device.',
+                {...label, 'n': ids.length}),
+        action: t('Remove'),
+      );
+      if (!mounted) return;
+      if (!remove) {
+        _backupNote(t('Nothing was changed.'));
+        return;
+      }
+      _backupNote(t('Removing…'), spin: true);
+      for (final id in ids) {
+        await store.delete(id);
+      }
+      _backupNote(t('Removed the backups of this key from {provider}.', label));
+    } on BackupCancelled {
+      _backupNote(null);
+    } catch (e) {
+      _backupNote(backupErrorMessage(e), warn: true);
+    } finally {
+      for (final candidate in found) {
+        candidate.wipe();
+      }
+      if (mounted) setState(() => _backupBusy = false);
+    }
   }
 
   Widget _row(String label, String value, {required List<Widget> actions}) => Column(

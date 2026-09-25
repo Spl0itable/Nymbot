@@ -31,6 +31,7 @@ import '../services/connectors.dart';
 import '../services/doc_library.dart';
 import '../services/free_tier.dart';
 import '../services/gifts.dart';
+import '../services/key_backup.dart';
 import '../services/git_review.dart';
 import '../services/memory_keeper.dart';
 import '../services/mentions.dart';
@@ -39,6 +40,7 @@ import '../services/nostr/event_signer.dart';
 import '../services/nostr/nip46.dart';
 import '../services/nostr/signer_links.dart';
 import '../services/nymbot_api.dart';
+import '../services/passkey_backup.dart';
 import '../core/crypto/pq.dart' as pq_crypto;
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
@@ -93,17 +95,25 @@ class AppController extends ChangeNotifier {
     DocLibrary.bind(store);
   }
 
+  static PqKeyServer? Function(NymbotApi api) pqKeyServer =
+      (api) => api.pqKey;
+
   static Future<AppController> boot(
-      {http.Client? client, Store? store, Nip46SocketFactory? signerSockets}) async {
+      {http.Client? client,
+      Store? store,
+      Nip46SocketFactory? signerSockets,
+      PqKeyServer? pqKeys,
+      StorageSync? storage}) async {
     store ??= await Store.open();
     final identity = Identity(store,
         restoreSigner: (session) =>
             restoreRemoteSigner(session, sockets: signerSockets));
     final relays = RelayPool();
-    final pq = PqAnnounce(relays, store: store);
     final api = NymbotApi(client: client);
+    final pq = PqAnnounce(relays,
+        store: store, keyServer: pqKeys ?? pqKeyServer(api));
     final anon = AnonMode(store, api, pq);
-    final storage = StorageSync();
+    storage ??= StorageSync();
     final c = AppController._(store, identity, relays, pq, api, anon, storage);
     c.signerSockets = signerSockets;
     c.blossom = Blossom(client: client);
@@ -146,6 +156,10 @@ class AppController extends ChangeNotifier {
   );
 
   Nip46SocketFactory? signerSockets;
+
+  KeyBackups keyBackups = KeyBackups.platform();
+
+  late PasskeyBackup passkeys = PasskeyBackup(relays: relays);
 
   late final ReplyNotify replyNotify = ReplyNotify(
     enabled: () => settings.replyNotify,
@@ -2026,8 +2040,14 @@ class AppController extends ChangeNotifier {
 
   /// Mints the root for an account that turns out not to have one, and records
   /// it, so the next device asks for the code instead of minting a rival.
-  Future<String> mintAndRecordRoot() async {
-    final code = await identity.mintRoot();
+  Future<String> mintAndRecordRoot({String? existing}) async {
+    final String code;
+    if (existing != null && Identity.rootFromCode(existing) != null) {
+      await identity.adoptRootCode(existing, epoch: 0);
+      code = identity.rootCode;
+    } else {
+      code = await identity.mintRoot();
+    }
     final root = identity.root;
     if (root != null) {
       try {
@@ -2035,6 +2055,15 @@ class AppController extends ChangeNotifier {
       } catch (_) {}
     }
     return code;
+  }
+
+  Future<void> carryNewKey() async {
+    final kem = identity.kem;
+    if (!identity.present || kem == null || identity.rootLocked) return;
+    try {
+      pq.selfAnnouncement =
+          await pq.build(identity.signer, kem, epoch: identity.epoch);
+    } catch (_) {}
   }
 
   Future<void> enter() async {
@@ -2131,6 +2160,9 @@ class AppController extends ChangeNotifier {
     final open = current;
     if (open != null && touched.contains('chat-${open.id}')) {
       messages = store.messages(open.id);
+    }
+    if (open != null && touched.contains('arts-${open.id}')) {
+      artifacts = store.artifacts(open.id);
     }
     notifyListeners();
   }
@@ -2260,6 +2292,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteArtifact(String id) async {
+    await store.bury(id);
     artifacts = artifacts.where((a) => a.id != id).toList();
     await store.saveArtifacts(current!.id, artifacts);
     notifyListeners();

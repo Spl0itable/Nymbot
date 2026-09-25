@@ -131,6 +131,7 @@
         },
 
         remove(convId, id) {
+            if (window.NymbotSync && typeof window.NymbotSync.bury === 'function') window.NymbotSync.bury(id);
             this.save(convId, this.all(convId).filter(a => a.id !== id));
         },
 

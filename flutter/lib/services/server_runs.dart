@@ -179,7 +179,29 @@ class ServerRuns {
 
   static String? languageOf(String fence) => _languages[fence.trim().toLowerCase()];
 
-  static String? imageFor(String language) => _images[language];
+  static const _shellWord = r'(?:^|[\s;&|(`!])';
+  static final _shellPolyglot =
+      RegExp('$_shellWord' r'(?:go|cargo|rustc|rustup|javac|java|mvn|gradle)(?=[\s;&|)`]|$)', multiLine: true);
+  static final _shellPython =
+      RegExp('$_shellWord' r'(?:pip3?|python3?|pytest|poetry|uv|pipx)(?=[\s;&|)`]|$)', multiLine: true);
+  static final _shellNode =
+      RegExp('$_shellWord' r'(?:npm|npx|node|yarn|pnpm|tsx|corepack)(?=[\s;&|)`]|$)', multiLine: true);
+
+  static String shellImage(String code) {
+    final text = code.replaceAll(RegExp(r'^\s*#.*$', multiLine: true), '');
+    if (_shellPolyglot.hasMatch(text)) return 'polyglot';
+    final py = _shellPython.hasMatch(text);
+    final js = _shellNode.hasMatch(text);
+    if (py && !js) return 'python';
+    if (js && !py) return 'node';
+    return 'polyglot';
+  }
+
+  static String? imageFor(String language, {String? code}) =>
+      (language == 'bash' || language == 'sh') && code != null ? shellImage(code) : _images[language];
+
+  static bool canRun(RunnerInfo info, String? language, String code) =>
+      language != null && info.available && info.image(imageFor(language, code: code)) != null;
 
   static int clampTimeout(int sec, RunnerImage image) =>
       sec > image.maxTimeoutSec ? image.maxTimeoutSec : sec;

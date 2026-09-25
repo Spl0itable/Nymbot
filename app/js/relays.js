@@ -243,6 +243,60 @@
             });
         },
 
+        publishTo(urls, event, timeoutMs) {
+            const list = Array.from(new Set((urls || []).filter(u => typeof u === 'string' && /^wss:\/\//i.test(u))));
+            if (!list.length) return Promise.resolve(0);
+            return new Promise((resolve) => {
+                const opened = [];
+                let accepted = 0;
+                let done = 0;
+                let settled = false;
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    for (const ws of opened) { try { ws.close(); } catch (_) { } }
+                    resolve(accepted);
+                };
+                const timer = setTimeout(finish, timeoutMs || 6000);
+                const give = () => { if (++done >= list.length) finish(); };
+                const dial = (url) => {
+                    let ws;
+                    const via = C.apiHost ? 'wss://' + C.apiHost + '/api/relay?relay=' + encodeURIComponent(url) : url;
+                    try { ws = new WebSocket(via); } catch (_) { return give(); }
+                    opened.push(ws);
+                    let over = false;
+                    const end = () => { if (over) return; over = true; give(); };
+                    ws.addEventListener('open', () => {
+                        try { ws.send(JSON.stringify(['EVENT', event])); } catch (_) { end(); }
+                    });
+                    ws.addEventListener('message', (m) => {
+                        let data;
+                        try { data = JSON.parse(m.data); } catch (_) { return; }
+                        if (!Array.isArray(data) || data[0] !== 'OK' || data[1] !== event.id) return;
+                        if (data[2] === true) accepted++;
+                        end();
+                    });
+                    ws.addEventListener('error', end);
+                    ws.addEventListener('close', end);
+                };
+                for (const url of list) dial(url);
+            });
+        },
+
+        async fetchEach(urls, filter, timeoutMs) {
+            const list = Array.from(new Set((urls || []).filter(u => typeof u === 'string' && /^wss:\/\//i.test(u))));
+            const chunks = [];
+            for (let i = 0; i < list.length; i += 8) chunks.push(list.slice(i, i + 8));
+            const found = await Promise.all([this.fetch(filter, timeoutMs)]
+                .concat(chunks.map((chunk) => this.fetchFrom(chunk, filter, timeoutMs))));
+            const seen = new Map();
+            for (const events of found) {
+                for (const ev of events || []) if (ev && ev.id) seen.set(ev.id + ':' + ev.sig, ev);
+            }
+            return [...seen.values()];
+        },
+
         /// One-shot query across the pool, de-duplicated by event id.
         fetch(filter, timeoutMs) {
             const open = [...this.sockets.entries()].filter(([, ws]) => ws.readyState === 1);

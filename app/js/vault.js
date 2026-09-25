@@ -107,6 +107,10 @@
 
         _isWebAuthn(method) { return PASSKEYS.includes(method); },
 
+        prfResult(cred) { return prfOutput(cred); },
+
+        passkeyError(e) { return authFailed(e); },
+
         webauthnAvailable() {
             return !!(window.PublicKeyCredential && navigator.credentials &&
                 navigator.credentials.create && navigator.credentials.get);

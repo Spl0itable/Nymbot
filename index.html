@@ -34,6 +34,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Nymbot">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="models-band.css">
     <!--I18N-RUNTIME-->
     <script src="boot.js"></script>
 </head>
@@ -43,7 +44,7 @@
     <section class="hero">
         <div class="hero-content">
             <div class="hero-text">
-                <h1 class="glitch ascii-art"><span class="visually-hidden">Nymbot - private AI chat, no account, paid in Bitcoin</span><span aria-hidden="true" data-i18n-skip>
+                <h1 class="glitch ascii-art hero-wordmark"><svg class="hero-mark" viewBox="0 0 24 24" fill="none" stroke="url(#heroMarkGradient)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" aria-hidden="true" focusable="false"><defs><linearGradient id="heroMarkGradient" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse"><stop offset="0" class="hero-mark-stop-a"/><stop offset="1" class="hero-mark-stop-b"/></linearGradient></defs><path d="M7.96 1.37 9.57 5.07"></path><path d="M15.98 1.37 14.40 5.07"></path><path d="M3.87 5.98H20.09"></path><path d="M2.76 6.41v1.99"></path><path d="M2.76 9.57v4.69"></path><path d="M2.76 15.40v4.62"></path><path d="M21.20 6.41v1.99"></path><path d="M21.20 9.57v4.69"></path><path d="M21.20 15.40v4.62"></path><path d="M6.79 9.32H5.85v3.85h0.94"></path><path d="M17.18 9.32h0.94v3.85h-0.94"></path><path d="m8.16 11.31 0.94-2.05 0.95 2.05"></path><path d="m13.92 11.31 1.01-2.05 1.01 2.05"></path><path d="M8.33 16.05h2.06"></path><path d="M10.94 16.05h2.09"></path><path d="M13.58 16.05h2.06"></path><path d="M8.33 17.01h2.06"></path><path d="M10.94 17.01h2.09"></path><path d="M13.58 17.01h2.06"></path><path d="M3.87 20.47H20.09"></path></svg><span class="visually-hidden">Nymbot - private AI chat, no account, paid in Bitcoin</span><span aria-hidden="true" data-i18n-skip>
                                   ##\                  ##\
                                   ## |                 ## |
 #######\  ##\   ##\ ######\####\  #######\   ######\ ######\
@@ -91,49 +92,75 @@
             <div class="phone-mockup">
                 <div class="phone-frame">
                     <div class="phone-screen">
-                        <div class="screen-header">
-                            <pre class="screen-header-ascii">
-                                  ##\                  ##\
-                                  ## |                 ## |
-#######\  ##\   ##\ ######\####\  #######\   ######\ ######\
-##  __##\ ## |  ## |##  _##  _##\ ##  __##\ ##  __##\\_##  _|
-## |  ## |## |  ## |## / ## / ## |## |  ## |## /  ## | ## |
-## |  ## |## |  ## |## | ## | ## |## |  ## |## |  ## | ## |##\
-## |  ## |\####### |## | ## | ## |#######  |\######  | \####  |
-\__|  \__| \____## |\__| \__| \__|\_______/  \______/   \____/
-          ##\   ## |
-          \######  |
-           \______/
-</pre>
+                        <div class="phone-topbar" aria-hidden="true">
+                            <span class="phone-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                            </span>
+                            <span class="phone-title" id="phoneTitle">Post-quantum wraps</span>
+                            <span class="phone-icon phone-icon-small">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 6.5 5.2 8.2 8 5"></polyline><line x1="11" y1="6.5" x2="20.5" y2="6.5"></line><polyline points="3.5 12.5 5.2 14.2 8 11"></polyline><line x1="11" y1="12.5" x2="20.5" y2="12.5"></line><circle cx="5.6" cy="18.5" r="1.6"></circle><line x1="11" y1="18.5" x2="20.5" y2="18.5"></line></svg>
+                            </span>
+                            <span class="phone-icon phone-icon-small">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            </span>
+                            <span class="phone-icon phone-icon-small">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
+                            </span>
                         </div>
-                        <div class="bot-control-bar" id="phoneToolbar" aria-hidden="true">
-                            <div class="bot-tier-switch">
-                                <span class="bot-tier-btn is-active" data-tier="standard">Standard</span>
-                                <span class="bot-tier-btn" data-tier="pro">Pro</span>
+                        <div class="phone-toolbar" id="phoneToolbar" aria-hidden="true">
+                            <div class="phone-tier">
+                                <span class="phone-tier-btn is-active" data-tier="standard">Standard</span>
+                                <span class="phone-tier-btn" data-tier="pro">Pro</span>
                             </div>
-                            <span class="bot-ctrl-btn" id="phoneModelChip">
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path></svg>
-                                <span class="bot-ctrl-label">Auto-routed</span>
+                            <span class="phone-chip phone-chip-menu">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                             </span>
-                            <span class="bot-ctrl-btn" id="phoneGitChip">
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
-                                <span class="bot-ctrl-label">Git</span>
-                            </span>
-                            <span class="bot-ctrl-btn" id="phoneAnonChip">
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
-                                <span class="bot-ctrl-label">Anon</span>
-                            </span>
-                            <span class="bot-ctrl-btn bot-ctrl-buy">
-                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                                <span class="bot-ctrl-label" id="phoneCredits">240</span>
+                            <div class="phone-rail">
+                                <span class="phone-chip" id="phoneModelChip">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"></path></svg>
+                                    <span class="phone-chip-label">Auto-routed</span>
+                                </span>
+                                <span class="phone-chip" id="phoneGitChip">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+                                    <span class="phone-chip-label" hidden></span>
+                                </span>
+                            </div>
+                            <span class="phone-chip phone-chip-buy">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                <span class="phone-chip-label">Buy</span>
                             </span>
                         </div>
-                        <div class="screen-messages" id="phoneMessages">
-                            <!-- Messages are added by script.js -->
+                        <div class="phone-messages" id="phoneMessages"></div>
+                        <div class="phone-composer" aria-hidden="true">
+                            <span class="phone-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.2-9.2a3.67 3.67 0 0 1 5.18 5.18l-9.2 9.2a1.83 1.83 0 1 1-2.6-2.6l8.5-8.48"></path></svg>
+                            </span>
+                            <span class="phone-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>
+                            </span>
+                            <span class="phone-input">
+                                <span class="phone-placeholder" id="phonePlaceholder">Ask something, or type ? for commands</span>
+                                <span class="phone-draft" id="phoneDraft"></span>
+                            </span>
+                            <span class="phone-send" id="phoneSend">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </span>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
+    </section>
+
+    <section class="models-band" id="modelsBand">
+        <h2 class="section-title glitch">Every Model, One Chat</h2>
+        <p class="models-band-names" id="modelsBandNames" data-i18n-skip></p>
+        <div class="models-band-rows">
+            <div class="models-band-row"><div class="models-band-track"></div></div>
+            <div class="models-band-row models-band-row-reverse"><div class="models-band-track"></div></div>
+        </div>
+        <div class="section-cta">
+            <p class="section-cta-text"><a href="/docs/credits/#every-model">See every model and what a turn costs</a></p>
         </div>
     </section>
 
@@ -634,6 +661,8 @@
     </footer>
 
     <script src="script.js"></script>
+    <script src="brand-marks.js"></script>
+    <script src="models-band.js"></script>
 </body>
 
 </html>

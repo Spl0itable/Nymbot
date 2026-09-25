@@ -7,14 +7,20 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../config.dart';
+import '../core/crypto/bech32_codec.dart' as bech32;
+import '../core/crypto/keys.dart';
+import '../core/crypto/pq.dart' as pq;
 import '../core/theme/theme.dart';
+import '../services/key_backup.dart';
 import '../services/nickname.dart';
+import '../services/passkey_backup.dart';
 import '../services/nostr/event_signer.dart';
 import '../services/nostr/nip46.dart';
 import '../services/nostr/nip55.dart';
 import '../state/app_controller.dart';
 import '../state/identity.dart';
 import 'i18n/i18n.dart';
+import 'key_backup_ui.dart';
 import 'secret_guard.dart';
 import 'nym_glyph.dart';
 
@@ -53,6 +59,20 @@ class _GateScreenState extends State<GateScreen> {
   bool _remoteOpen = false;
   Nip46Signer? _offer;
   String? _signerStatus;
+  String? _backupStatus;
+  bool _backupSpin = false;
+  bool _passkeyReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPasskey();
+  }
+
+  Future<void> _checkPasskey() async {
+    final ok = await AppScope.read(context).passkeys.available();
+    if (mounted && ok != _passkeyReady) setState(() => _passkeyReady = ok);
+  }
 
   @override
   void dispose() {
@@ -260,12 +280,12 @@ class _GateScreenState extends State<GateScreen> {
     if (value.isNotEmpty) await app.setNickname(value);
   }
 
-  Future<void> _generate() async {
+  Future<void> _generate({Uint8List? secret, Uint8List? pqRoot}) async {
     if (_busy) return;
     final app = AppScope.read(context);
     setState(() => _busy = true);
     try {
-      await app.identity.generate();
+      await app.identity.generate(secret: secret, root: pqRoot);
       await _takeNickname(app);
       // A key nobody has seen before cannot already have a root, so there is
       // nothing to ask D1 — only a row to write, so the next device to sign in
@@ -276,6 +296,7 @@ class _GateScreenState extends State<GateScreen> {
             .publishPqRootRecord(app.identity.signer, root)
             .catchError((_) => false));
       }
+      await app.carryNewKey();
       if (mounted) setState(() => _revealing = true);
     } catch (e) {
       if (mounted) setState(() => _error = t('Could not create a key.'));
@@ -291,11 +312,26 @@ class _GateScreenState extends State<GateScreen> {
   /// has been used, since the announcement is replaceable and a second root
   /// published over the first strands every settings row, every synced
   /// conversation and every reply sealed to the one it replaced.
-  Future<void> _import() async {
+  Future<void> _import() => _importKey(_nsec.text);
+
+  void _notice(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text, key: const ValueKey('backup-notice')),
+      duration: const Duration(seconds: 12),
+    ));
+  }
+
+  Future<void> _importKey(String input, {String? pq, bool fresh = false}) async {
     final app = AppScope.read(context);
+    final carried = pq == null ? null : Identity.rootFromCode(pq);
+    if (pq != null && carried == null) {
+      _notice(t('The backup held a post-quantum recovery code that could not be '
+          'read, so it was skipped.'));
+    }
     Uint8List sk;
     try {
-      sk = app.identity.readSecret(_nsec.text);
+      sk = app.identity.readSecret(input);
     } catch (e) {
       setState(() => _error =
           e is FormatException ? e.message : t('That key could not be read.'));
@@ -316,7 +352,7 @@ class _GateScreenState extends State<GateScreen> {
 
     if (!probe.present && probe.announced == null) {
       try {
-        await app.identity.import(_nsec.text);
+        await app.identity.import(input);
       } catch (e) {
         setState(() => _error = t('That key could not be read.'));
         return;
@@ -329,24 +365,45 @@ class _GateScreenState extends State<GateScreen> {
       // first launch that reaches the worker settles it. Not locked either:
       // nothing says the account HAS a root, only that nobody could be asked.
       if (!probe.read) {
+        if (carried != null) await app.identity.adoptRootCode(pq!);
+        if (!mounted) return;
         app.identity.rootLocked = false;
-        app.signIn();
+        if (fresh) {
+          await app.carryNewKey();
+          if (!mounted) return;
+          setState(() => _revealing = true);
+        } else {
+          app.signIn();
+        }
         return;
       }
       // D1 answered and holds nothing, and the relays advertise nothing: a key
       // that has never used Nymbot or Nymchat. One is minted now and shown, the
       // same reveal a brand new key gets, because it is the same thing to lose.
-      await app.mintAndRecordRoot();
+      await app.mintAndRecordRoot(existing: carried == null ? null : pq);
+      if (fresh) await app.carryNewKey();
       if (!mounted) return;
-      setState(() => _revealing = true);
+      if (carried != null && !fresh) {
+        app.signIn();
+      } else {
+        setState(() => _revealing = true);
+      }
       return;
     }
 
-    final linked = await _askForCode(probe);
+    var linked =
+        pq != null && carried != null ? _checkCode(pq, probe) : null;
+    if (linked == null && carried != null) {
+      linked = await _askForCode(probe,
+          note: t('The post-quantum recovery code in the backup does not match '
+              'this account, so it was not used.'));
+    } else {
+      linked ??= await _askForCode(probe);
+    }
     if (!mounted) return;
     try {
       await app.identity.import(
-        _nsec.text,
+        input,
         root: linked?.root,
         epoch: linked?.epoch ?? 0,
       );
@@ -358,11 +415,224 @@ class _GateScreenState extends State<GateScreen> {
     app.signIn();
   }
 
+  void _backupNote(String? text, {bool spin = false}) {
+    if (!mounted) return;
+    setState(() {
+      _backupStatus = text;
+      _backupSpin = spin;
+    });
+  }
+
+  Future<void> _continueWith(BackupStore store) async {
+    if (_busy) return;
+    final app = AppScope.read(context);
+    final provider = store.provider;
+    setState(() {
+      _error = null;
+      _busy = true;
+    });
+    _backupNote(signingInWith(provider), spin: true);
+    var found = <BackupCandidate>[];
+    String? chosenHex;
+    String? chosenPq;
+    ({Uint8List secret, Uint8List root})? fresh;
+    try {
+      final accountId = await store.signIn();
+      if (!mounted) return;
+      _backupNote(t('Looking for a backup…'), spin: true);
+      final files = await store.readAll();
+      if (!mounted) return;
+      if (files.isEmpty) {
+        fresh = await _createBackedUp(app.keyBackups, store, accountId);
+      } else {
+        found = await unlockBackups(
+              context,
+              backups: app.keyBackups,
+              provider: provider,
+              accountId: accountId,
+              files: files,
+              status: _backupNote,
+            ) ??
+            [];
+        if (found.isEmpty || !mounted) return;
+        final chosen = found.length == 1
+            ? found.single
+            : await pickBackupKey(context, provider, found);
+        if (chosen != null) {
+          chosenHex = bytesToHex(chosen.secret);
+          chosenPq = chosen.pq;
+        }
+      }
+    } on BackupCancelled {
+      return;
+    } catch (e) {
+      if (mounted) setState(() => _error = backupErrorMessage(e));
+      return;
+    } finally {
+      for (final candidate in found) {
+        candidate.wipe();
+      }
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _backupStatus = null;
+          _backupSpin = false;
+        });
+      }
+    }
+    if (!mounted) return;
+    if (fresh != null) {
+      await _generate(secret: fresh.secret, pqRoot: fresh.root);
+    } else if (chosenHex != null) {
+      await _importKey(chosenHex, pq: chosenPq);
+    }
+  }
+
+  Future<({Uint8List secret, Uint8List root})?> _createBackedUp(
+      KeyBackups backups, BackupStore store, String accountId) async {
+    final provider = store.provider;
+    _backupNote(null);
+    final pin = await chooseBackupPin(
+      context,
+      provider,
+      intro: t('There is no key backed up in this {provider} account yet. '
+          'Choose a PIN to create a new key and back it up.',
+          {'provider': provider.label}),
+    );
+    if (pin == null || !mounted) return null;
+    _backupNote(t('Encrypting…'), spin: true);
+    final secret = generatePrivateKey();
+    final root = pq.pqGenerateRoot();
+    Uint8List? key;
+    try {
+      key = await backups.derive(provider, accountId, pin);
+      final payload = encryptBackup(secret, key, pq: bech32.encodeNymPq(root));
+      _backupNote(t('Saving the backup to {provider}…',
+          {'provider': provider.label}), spin: true);
+      await store.write(payload);
+    } catch (_) {
+      wipeBytes(secret);
+      rethrow;
+    } finally {
+      wipeBytes(key);
+    }
+    return (secret: secret, root: root);
+  }
+
+  Future<void> _continueWithPasskey() async {
+    if (_busy) return;
+    final app = AppScope.read(context);
+    setState(() {
+      _error = null;
+      _busy = true;
+    });
+    _backupNote(t('Waiting for your passkey…'), spin: true);
+    BackupBundle? bundle;
+    String? missing;
+    try {
+      bundle = await app.passkeys
+          .restore(progress: (text) => _backupNote(text, spin: true));
+    } on BackupCancelled {
+      missing = t('No passkey was chosen.');
+    } on PasskeyNone {
+      missing = t('There is no Nymbot passkey on this device.');
+    } on PasskeyNotFound {
+      missing = t('No key backup is linked to this passkey.');
+    } catch (e) {
+      if (mounted) setState(() => _error = backupErrorMessage(e));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _backupStatus = null;
+          _backupSpin = false;
+        });
+      }
+    }
+    if (!mounted) {
+      bundle?.wipe();
+      return;
+    }
+    if (bundle != null) {
+      final hex = bytesToHex(bundle.secret);
+      bundle.wipe();
+      await _importKey(hex, pq: bundle.pq);
+      return;
+    }
+    if (missing == null) return;
+    final create = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(t('No key backup found')),
+        content: Text(missing!),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(t('Cancel')),
+          ),
+          FilledButton(
+            key: const ValueKey('passkey-offer-create'),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(t('Create a new key and back it up with a passkey')),
+          ),
+        ],
+      ),
+    );
+    if (create == true && mounted) await _createWithPasskey();
+  }
+
+  Future<void> _createWithPasskey() async {
+    if (_busy) return;
+    final app = AppScope.read(context);
+    setState(() {
+      _error = null;
+      _busy = true;
+    });
+    _backupNote(t('Creating a passkey…'), spin: true);
+    final secret = generatePrivateKey();
+    final code = bech32.encodeNymPq(pq.pqGenerateRoot());
+    String? notice;
+    try {
+      await app.passkeys.backUp(secret,
+          pq: code, progress: (text) => _backupNote(text, spin: true));
+    } on BackupCancelled {
+      wipeBytes(secret);
+      return;
+    } catch (e) {
+      notice = t('Your new key is not backed up: {reason} You can try again in '
+          'Settings → Identity → Back up with a passkey.', {
+        'reason': passkeyErrorMessage(e, google: app.keyBackups.google != null),
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _backupStatus = null;
+          _backupSpin = false;
+        });
+      }
+    }
+    if (!mounted) {
+      wipeBytes(secret);
+      return;
+    }
+    final hex = bytesToHex(secret);
+    wipeBytes(secret);
+    if (notice != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(notice, key: const ValueKey('passkey-notice')),
+        duration: const Duration(seconds: 12),
+      ));
+    }
+    await _importKey(hex, pq: code, fresh: true);
+  }
+
   /// The prompt: this account already has a root, and this device does not have
   /// it. Null when the user carried on without it — signed in, nothing minted,
   /// and the code can be pasted in Identity later.
-  Future<({Uint8List root, int epoch})?> _askForCode(AccountRoot probe) async {
-    final field = TextEditingController();
+  Future<({Uint8List root, int epoch})?> _askForCode(AccountRoot probe,
+      {String? note}) async {
+    var entered = '';
     String? error;
     final result = await showDialog<({Uint8List root, int epoch})?>(
       context: context,
@@ -375,6 +645,12 @@ class _GateScreenState extends State<GateScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (note != null) ...[
+                  Text(note,
+                      key: const ValueKey('gate-code-note'),
+                      style: const TextStyle(color: NymbotColors.danger)),
+                  const SizedBox(height: 10),
+                ],
                 Text(t('Your settings and conversations are sealed to it, and '
                     'so are your replies. Paste the recovery code from the '
                     'device that made it — Identity → Post-quantum root, in '
@@ -382,7 +658,7 @@ class _GateScreenState extends State<GateScreen> {
                     'chat, but it cannot open anything the other one saved.')),
                 const SizedBox(height: 14),
                 TextField(
-                  controller: field,
+                  onChanged: (value) => entered = value,
                   autocorrect: false,
                   decoration: InputDecoration(
                     labelText: t('Recovery code'),
@@ -400,7 +676,7 @@ class _GateScreenState extends State<GateScreen> {
             ),
             FilledButton(
               onPressed: () {
-                final typed = field.text.trim();
+                final typed = entered.trim();
                 // Either way of saying "not now".
                 if (typed.isEmpty) {
                   Navigator.of(context).pop(null);
@@ -419,7 +695,6 @@ class _GateScreenState extends State<GateScreen> {
         ),
       ),
     );
-    field.dispose();
     return result;
   }
 
@@ -541,6 +816,7 @@ class _GateScreenState extends State<GateScreen> {
               onPressed: () => setState(() => _importing = true),
               child: Text(t('I already have one')),
             ),
+            ..._backupButtons(),
           ] else ...[
             TextField(
               controller: _nsec,
@@ -599,7 +875,10 @@ class _GateScreenState extends State<GateScreen> {
               child: Text(t('Back')),
             ),
           ],
-          if (_busy) ...[
+          if (_backupStatus != null) ...[
+            const SizedBox(height: 12),
+            BackupStatusLine(_backupStatus!, spin: _backupSpin),
+          ] else if (_busy) ...[
             const SizedBox(height: 12),
             Text(
               t('Checking whether this key already has a post-quantum root…'),
@@ -614,6 +893,52 @@ class _GateScreenState extends State<GateScreen> {
           _agreement(context),
         ],
       );
+
+  List<Widget> _backupButtons() {
+    final stores = AppScope.of(context).keyBackups.stores;
+    if (stores.isEmpty && !_passkeyReady) return const [];
+    return [
+      if (_passkeyReady) ...[
+        const SizedBox(height: 8),
+        PasskeyButton(
+          key: const ValueKey('gate-passkey'),
+          label: t('Continue with a passkey'),
+          onPressed: _busy ? null : _continueWithPasskey,
+        ),
+        TextButton(
+          key: const ValueKey('gate-passkey-new'),
+          onPressed: _busy ? null : _createWithPasskey,
+          child: Text(t('Create a new key and back it up with a passkey')),
+        ),
+      ],
+      for (final store in stores) ...[
+        const SizedBox(height: 8),
+        ProviderButton(
+          key: ValueKey('gate-${store.provider.name}'),
+          provider: store.provider,
+          label: continueWithLabel(store.provider),
+          onPressed: _busy ? null : () => _continueWith(store),
+        ),
+      ],
+      if (stores.isNotEmpty) ...[
+        const SizedBox(height: 6),
+        Text(
+          t('Your key stays yours. Google or Apple only keeps an encrypted copy, '
+              'locked with a PIN they never see, so you can sign in again on '
+              'another device.'),
+          style: const TextStyle(fontSize: 12),
+        ),
+      ],
+      if (_passkeyReady) ...[
+        const SizedBox(height: 6),
+        Text(
+          t('A passkey can hold an encrypted copy of your key too, with no PIN. '
+              'It syncs through your passkey provider.'),
+          style: const TextStyle(fontSize: 12),
+        ),
+      ],
+    ];
+  }
 
   List<Widget> _remotePane() {
     final link = _offer?.connectUri;

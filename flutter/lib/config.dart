@@ -35,4 +35,18 @@ class NymbotConfig {
   /// The shape the worker's client gate looks for (`_client.js`), so the
   /// native builds reach the API the way the Nymchat apps do.
   static const String userAgent = 'NymbotApp/1.0';
+
+  static const String googleIosClientId = String.fromEnvironment(
+      'GOOGLE_IOS_CLIENT_ID',
+      defaultValue:
+          '435441872913-ejlcpebd2jspm0lvg1l8grlatv56e806.apps.googleusercontent.com');
+  static const String googleServerClientId = String.fromEnvironment(
+      'GOOGLE_SERVER_CLIENT_ID',
+      defaultValue:
+          '435441872913-q30ml0k3dlgl65qu9qo6i5obb1v14t0d.apps.googleusercontent.com');
+  static const bool appleBackup =
+      bool.fromEnvironment('APPLE_BACKUP', defaultValue: true);
+  static const String appleKeychainGroup = String.fromEnvironment(
+      'APPLE_KEYCHAIN_GROUP',
+      defaultValue: 'KJ6U2Y9B2M.com.nym.shared');
 }

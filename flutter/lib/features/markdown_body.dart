@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'artifact_preview.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
 import 'i18n/i18n.dart';
@@ -672,6 +673,9 @@ class _CodeBlockState extends State<CodeBlock> {
         (context.getElementForInheritedWidgetOfExactType<AppScope>() != null) &&
         AppScope.of(context).runnerAvailable;
     final runner = _runnerFor(server);
+    final local = runner?.language != null &&
+        (SandboxProtocol.localOk(runner!.language, widget.code) ||
+            !(server && ServerRuns.canRun(AppScope.of(context).runner, runner.serverLanguage, widget.code)));
     final lines = widget.code.split('\n').length;
     final code = HighlightedCode(
       code: widget.code,
@@ -727,9 +731,19 @@ class _CodeBlockState extends State<CodeBlock> {
                   style: TextStyle(fontSize: 11, color: theme.hintColor),
                 ),
                 const Spacer(),
-                if (runner?.language != null) RunButton(controller: runner!, code: widget.code),
+                if (local) RunButton(controller: runner, code: widget.code),
                 if (server && runner?.serverLanguage != null)
                   ServerRunButton(controller: runner!, code: widget.code),
+                if (ArtifactPreview.codePreviewable(widget.language))
+                  IconButton(
+                    key: const ValueKey('code-preview'),
+                    icon: NymGlyph('globe', size: 15, color: theme.colorScheme.primary),
+                    tooltip: t('Preview'),
+                    onPressed: () => showCodePreview(context, widget.code, widget.language),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 30, minHeight: 28),
+                  ),
                 _tiny(
                   icon: 'terse',
                   on: _wrap,
@@ -757,7 +771,11 @@ class _CodeBlockState extends State<CodeBlock> {
                 ? body
                 : SingleChildScrollView(scrollDirection: Axis.horizontal, child: body),
           ),
-          if (runner != null) RunOutputView(controller: runner),
+          if (runner != null)
+            RunOutputView(
+              controller: runner,
+              onMoreTime: (sec) => runCodeOnServer(context, runner, widget.code, timeoutSec: sec),
+            ),
         ],
       ),
     );

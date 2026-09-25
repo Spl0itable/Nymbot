@@ -178,6 +178,26 @@
             } catch (_) { return null; }
         },
 
+        async pqKey(pubkey, opts) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), (opts && opts.timeout) || 3000);
+            try {
+                const resp = await Edge.fetch(url(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'pq-key', pubkey }),
+                    signal: controller.signal
+                });
+                if (!resp.ok) return null;
+                const data = await resp.json();
+                return (data && data.event && typeof data.event === 'object') ? data.event : null;
+            } catch (_) {
+                return null;
+            } finally {
+                clearTimeout(timer);
+            }
+        },
+
         async pushKey() {
             const resp = await Edge.fetch(url(), {
                 method: 'POST',

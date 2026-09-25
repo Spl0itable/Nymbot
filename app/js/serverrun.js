@@ -54,8 +54,25 @@
         return LANGS[lang] || null;
     }
 
-    function imageFor(language) {
-        return language ? imageNamed(IMAGE_FOR[language]) : null;
+    const SHELL_WORD = '(?:^|[\\s;&|(`!])';
+    const SHELL_POLYGLOT = new RegExp(SHELL_WORD + '(?:go|cargo|rustc|rustup|javac|java|mvn|gradle)(?=[\\s;&|)`]|$)', 'm');
+    const SHELL_PYTHON = new RegExp(SHELL_WORD + '(?:pip3?|python3?|pytest|poetry|uv|pipx)(?=[\\s;&|)`]|$)', 'm');
+    const SHELL_NODE = new RegExp(SHELL_WORD + '(?:npm|npx|node|yarn|pnpm|tsx|corepack)(?=[\\s;&|)`]|$)', 'm');
+
+    function shellImage(code) {
+        const text = String(code || '').replace(/^\s*#.*$/gm, '');
+        if (SHELL_POLYGLOT.test(text)) return 'polyglot';
+        const py = SHELL_PYTHON.test(text);
+        const js = SHELL_NODE.test(text);
+        if (py && !js) return 'python';
+        if (js && !py) return 'node';
+        return 'polyglot';
+    }
+
+    function imageFor(language, code) {
+        if (!language) return null;
+        const name = (language === 'bash' || language === 'sh') && code != null ? shellImage(code) : IMAGE_FOR[language];
+        return imageNamed(name);
     }
 
     function load(force) {
@@ -108,8 +125,27 @@
                 if (U) open(U, block);
             });
             const local = actions.querySelector('.code-run');
-            actions.insertBefore(b, local ? local.nextSibling : actions.firstChild);
+            const R = window.NymbotRunner;
+            const source = block.querySelector('.code-source');
+            if (local && R && typeof R.localOk === 'function' && !R.localOk(localLanguage(block), source ? source.value : '')) {
+                local.remove();
+                actions.insertBefore(b, actions.firstChild);
+            } else {
+                actions.insertBefore(b, local ? local.nextSibling : actions.firstChild);
+            }
         }
+    }
+
+    function localLanguage(block) {
+        const language = languageOf(block);
+        return language === 'typescript' ? null : language;
+    }
+
+    function canRun(block) {
+        const language = languageOf(block);
+        if (!language) return false;
+        const source = block.querySelector('.code-source');
+        return !!imageFor(language, source ? source.value : null);
     }
 
     function timesFor(image) {
@@ -215,7 +251,7 @@
         sheet = state;
         await load(true);
         if (sheet !== state) return;
-        const image = imageFor(language);
+        const image = imageFor(language, state.code);
         if (!image) {
             U.toast(t('Server runs are not available right now.'));
             return;
@@ -467,8 +503,18 @@
                     line('run-note server-run-exit', t('Exit code {code} · {ms} ms', {
                         code, ms: window.NymbotI18n.count(ev.runMs)
                     }));
-                    if (ev.timedOut) line('run-note', t('Stopped at the time limit.'));
-                    else if (ev.signal) line('run-note', t('Ended by signal {signal}.', { signal: String(ev.signal) }));
+                    if (ev.timedOut) {
+                        line('run-note', t('Stopped at the time limit.'));
+                        const longer = state.image ? timesFor(state.image).find(s => s > timeoutSec) : null;
+                        if (longer && block.isConnected) {
+                            const again = el('button', 'code-btn server-run-again', t('Run again with more time'));
+                            again.type = 'button';
+                            again.addEventListener('click', () => {
+                                open(U, block, Object.assign({}, state, { timeoutSec: longer, changed: false }));
+                            });
+                            tail.appendChild(again);
+                        }
+                    } else if (ev.signal) line('run-note', t('Ended by signal {signal}.', { signal: String(ev.signal) }));
                     const files = Array.isArray(ev.files) ? ev.files : [];
                     if (files.length) {
                         const list = el('div', 'run-files');
@@ -738,7 +784,7 @@
     }
 
     window.NymbotServerRun = {
-        LANGS, IMAGE_FOR,
+        LANGS, IMAGE_FOR, shellImage, canRun,
         load, available, decorate, refresh, open, go,
         priceFor, timesFor, refreshChip, handlers,
         pendingFrom, pendingCard, resume, summaryNode, totalCost, carry,

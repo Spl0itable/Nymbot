@@ -349,6 +349,7 @@ class Store {
     }
     _ghostArtifacts.remove(convId);
     await _prefs.setString('artifacts_$convId', Artifact.encodeList(kept));
+    _touched();
   }
 
   String draft(String convId) => _prefs.getString('draft_$convId') ?? '';

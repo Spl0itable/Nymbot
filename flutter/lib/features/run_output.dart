@@ -44,22 +44,40 @@ class RunCodeController extends ChangeNotifier {
   int? exitCode;
   bool timedOut = false;
   double? charged;
+  RunnerImage? image;
+  int? timeoutSec;
+
+  int? get longerTimeout {
+    final held = image;
+    final sec = timeoutSec;
+    if (held == null || sec == null) return null;
+    for (final s in ServerRuns.timeoutsFor(held)) {
+      if (s > sec) return s;
+    }
+    return null;
+  }
 
   void _resetServer(bool server) {
     onServer = server;
     exitCode = null;
     timedOut = false;
     charged = null;
+    image = null;
+    timeoutSec = null;
   }
 
   Future<ServerRunResponse> runOnServer(
     Future<ServerRunResponse> Function() start, {
     void Function(ServerRunState state)? onCharged,
+    RunnerImage? image,
+    int? timeoutSec,
   }) async {
     if (running) return const ServerRunResponse(status: 409, error: {'busy': true});
     running = true;
     result = null;
     _resetServer(true);
+    this.image = image;
+    this.timeoutSec = timeoutSec;
     status = t('Starting on a Nymbot server…');
     notifyListeners();
     final res = await start();
@@ -156,9 +174,10 @@ class RunButton extends StatelessWidget {
 }
 
 class RunOutputView extends StatelessWidget {
-  const RunOutputView({super.key, required this.controller});
+  const RunOutputView({super.key, required this.controller, this.onMoreTime});
 
   final RunCodeController controller;
+  final ValueChanged<int>? onMoreTime;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -248,6 +267,16 @@ class RunOutputView extends StatelessWidget {
                   Text(t('Exit code {code}', {'code': controller.exitCode}), style: hint),
                 if (server && controller.timedOut)
                   Text(t('Stopped at the time limit.'), style: hint),
+                if (server && controller.timedOut && !controller.running && onMoreTime != null)
+                  if (controller.longerTimeout case final longer?)
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: TextButton(
+                        key: const ValueKey('server-run-again'),
+                        onPressed: () => onMoreTime!(longer),
+                        child: Text(t('Run again with more time'), style: const TextStyle(fontSize: 12)),
+                      ),
+                    ),
                 const SizedBox(height: 4),
                 if (server) ...[
                   Text(t('Ran on a Nymbot server'), style: hint),

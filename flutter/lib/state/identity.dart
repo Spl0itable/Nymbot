@@ -227,9 +227,9 @@ class Identity {
   /// holds it, or it knows it must be given the code.
   bool get rootSettled => _root != null || rootLocked;
 
-  Future<String> generate() async {
-    final sk = generatePrivateKey();
-    final root = pq.pqGenerateRoot();
+  Future<String> generate({Uint8List? secret, Uint8List? root}) async {
+    final sk = secret ?? generatePrivateKey();
+    root ??= pq.pqGenerateRoot();
     _epoch = 0;
     await _persist(sk, root);
     _adopt(sk, root);

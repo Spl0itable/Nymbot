@@ -67,8 +67,8 @@
             return true;
         },
 
-        generate() {
-            const sk = NT().generateSecretKey();
+        generate(secret) {
+            const sk = secret || NT().generateSecretKey();
             this._adopt(sk, NT().getPublicKey(sk), 'local', NC().pqGenerateRoot());
             return this.rootCode();
         },
@@ -76,6 +76,7 @@
         /// Reads a key without adopting it, so the caller can ask what the
         /// account already has before deciding what root to give it.
         readSecret(input) {
+            if (input instanceof Uint8Array && input.length === 32) return Uint8Array.from(input);
             const text = String(input || '').trim();
             if (/^[0-9a-f]{64}$/i.test(text)) return unhex(text.toLowerCase());
             if (/^nsec1/.test(text)) {
@@ -249,9 +250,13 @@
             } catch (_) { return null; }
         },
 
+        newRootCode() {
+            return NC().pqRootEncode(NC().pqGenerateRoot());
+        },
+
         /// Mints one now, for an account that turns out not to have one.
-        mintRoot() {
-            this._root = NC().pqGenerateRoot();
+        mintRoot(root) {
+            this._root = root || NC().pqGenerateRoot();
             this._epoch = 0;
             this._deriveKem();
             this.rootLocked = false;

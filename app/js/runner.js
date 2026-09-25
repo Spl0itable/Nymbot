@@ -10,6 +10,12 @@
         python: 'python', py: 'python', python3: 'python', py3: 'python',
         javascript: 'javascript', js: 'javascript', mjs: 'javascript', node: 'javascript'
     };
+    const PY_STDLIB = new Set('abc aifc antigravity argparse array ast asyncio atexit audioop base64 bdb binascii bisect builtins bz2 cProfile calendar cgi cgitb chunk cmath cmd code codecs codeop collections colorsys compileall concurrent configparser contextlib contextvars copy copyreg crypt csv ctypes curses dataclasses datetime dbm decimal difflib dis doctest email encodings ensurepip enum errno faulthandler fcntl filecmp fileinput fnmatch fractions ftplib functools gc genericpath getopt getpass gettext glob graphlib grp gzip hashlib heapq hmac html http idlelib imaplib imghdr importlib inspect io ipaddress itertools json keyword lib2to3 linecache locale logging lzma mailbox mailcap marshal math mimetypes mmap modulefinder msilib msvcrt multiprocessing netrc nis nntplib nt ntpath nturl2path numbers opcode operator optparse os ossaudiodev pathlib pdb pickle pickletools pipes pkgutil platform plistlib poplib posix posixpath pprint profile pstats pty pwd py_compile pyclbr pydoc pydoc_data pyexpat queue quopri random re readline reprlib resource rlcompleter runpy sched secrets select selectors shelve shlex shutil signal site smtplib sndhdr socket socketserver spwd sqlite3 sre_compile sre_constants sre_parse ssl stat statistics string stringprep struct subprocess sunau symtable sys sysconfig syslog tabnanny tarfile telnetlib tempfile termios textwrap this threading time timeit tkinter token tokenize tomllib trace traceback tracemalloc tty turtle turtledemo types typing unicodedata unittest urllib uu uuid venv warnings wave weakref webbrowser winreg winsound wsgiref xdrlib xml xmlrpc zipapp zipfile zipimport zlib zoneinfo'.split(' '));
+    const PY_BUNDLED = new Set('bs4 contourpy cycler decorator fontTools joblib kiwisolver matplotlib matplotlib_pyodide mpmath networkx numpy packaging pandas patsy PIL pyparsing dateutil pytz yaml regex sklearn scipy setuptools pkg_resources six soupsieve sqlite3 statsmodels sympy threadpoolctl xlrd pyodide js'.split(' '));
+    const PY_SERVER_ONLY = new Set(['socket', 'ssl', 'subprocess', 'multiprocessing', 'threading', 'tkinter', 'turtle', 'curses',
+        'readline', 'webbrowser', 'ftplib', 'smtplib', 'poplib', 'imaplib', 'socketserver', 'telnetlib', 'xmlrpc', 'selectors', 'select',
+        'urllib.request', 'http.client', 'http.server', 'http.cookiejar']);
+    const JS_SERVER_ONLY = /\brequire\s*\(|^\s*import\s[^(]|^\s*export\s[^\n]*\sfrom\s|\bimport\s*\(|\bprocess\.(?:argv|env|exit|stdin|stdout|cwd)\b|\b__dirname\b|\b__filename\b|\bBuffer\.|\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b/m;
     const PNG = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
     const RISKY = new Set([
         'exe', 'bat', 'cmd', 'com', 'scr', 'msi', 'ps1', 'vbs', 'vbe', 'js', 'jse', 'mjs', 'jar', 'apk', 'app',
@@ -29,6 +35,46 @@
         const pre = block && block.querySelector('pre.code');
         const lang = pre ? String(pre.dataset.lang || '').toLowerCase() : '';
         return LANGS[lang] || null;
+    }
+
+    function pythonImports(code) {
+        const out = [];
+        for (const line of String(code || '').split('\n')) {
+            const plain = /^\s*import\s+([\w.,\s]+?)(?:\s+as\s+\w+)?\s*(?:#.*)?$/.exec(line);
+            if (plain) {
+                for (const part of plain[1].split(',')) {
+                    const name = part.trim().split(/\s+as\s+/)[0].trim();
+                    if (name) out.push(name);
+                }
+                continue;
+            }
+            const from = /^\s*from\s+([\w.]+)\s+import\b/.exec(line);
+            if (from) out.push(from[1]);
+        }
+        return out;
+    }
+
+    function localOk(language, code) {
+        if (language === 'python') {
+            for (const full of pythonImports(code)) {
+                const top = full.split('.')[0];
+                if (PY_SERVER_ONLY.has(top) || PY_SERVER_ONLY.has(full.split('.').slice(0, 2).join('.'))) return false;
+                if (!PY_STDLIB.has(top) && !PY_BUNDLED.has(top)) return false;
+            }
+            return true;
+        }
+        if (language === 'javascript') return !JS_SERVER_ONLY.test(String(code || ''));
+        return false;
+    }
+
+    function codeOf(block) {
+        const source = block && block.querySelector('.code-source');
+        return source ? source.value : '';
+    }
+
+    function serverCanRun(block) {
+        const S = window.NymbotServerRun;
+        return !!(S && typeof S.canRun === 'function' && S.canRun(block));
     }
 
     function el(tag, cls, text) {
@@ -344,7 +390,9 @@
     function decorate(root) {
         if (!root || !root.querySelectorAll) return;
         for (const block of root.querySelectorAll('.code-block')) {
-            if (!languageOf(block)) continue;
+            const language = languageOf(block);
+            if (!language) continue;
+            if (!localOk(language, codeOf(block)) && serverCanRun(block)) continue;
             const actions = block.querySelector('.code-actions');
             if (!actions || actions.querySelector('.code-run')) continue;
             const b = el('button', 'code-btn code-run', t('Run'));
@@ -361,7 +409,7 @@
     }
 
     window.NymbotRunner = {
-        decorate, run, kill, outputText, safeName,
+        decorate, run, kill, outputText, safeName, localOk, pythonImports,
         RUN_TIMEOUT_MS,
         get frame() { return frame; }
     };
