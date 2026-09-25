@@ -15,31 +15,51 @@ const chrome = process.argv[2] || process.env.CHROME || 'chromium';
 const root = new URL('../', import.meta.url).pathname;
 const art = (await readFile(path.join(root, 'images/wordmark.txt'), 'utf8')).trimEnd();
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const home = await readFile(path.join(root, 'index.html'), 'utf8');
+const markSvg = (home.match(/<svg class="hero-mark"[\s\S]*?<\/svg>/) || [''])[0]
+  .replace('class="hero-mark"', 'class="mark"')
+  .replace('class="hero-mark-stop-a"', 'stop-color="#00ff00"')
+  .replace('class="hero-mark-stop-b"', 'stop-color="#00d4ff"');
+if (!markSvg) throw new Error('index.html has no hero-mark svg to put on the card');
 
 const html = `<!doctype html><meta charset="utf-8"><style>
   html,body{margin:0;width:1200px;height:630px;background:#050810;overflow:hidden}
+  body{position:relative}
   body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;
        font-family:'DejaVu Sans Mono','Liberation Mono','Courier New',monospace}
   .glow{position:absolute;inset:0;background:
     radial-gradient(900px 420px at 50% 40%, rgba(0,255,0,.13), transparent 70%),
     radial-gradient(700px 380px at 80% 90%, rgba(0,212,255,.10), transparent 70%)}
+  .brand{position:relative;display:flex;align-items:center;gap:30px}
+  .mark{width:170px;height:170px;flex:none;filter:drop-shadow(0 0 16px rgba(0,255,0,.45))}
   pre{position:relative;margin:0;font-size:19px;line-height:1.02;color:#00ff00;
       text-shadow:0 0 18px rgba(0,255,0,.55);white-space:pre}
-  .tag{position:relative;color:#00d4ff;font-size:31px;letter-spacing:.16em;text-transform:uppercase}
+  .tag{position:relative;color:#00d4ff;font-size:25px;letter-spacing:.06em;text-transform:uppercase;text-align:center;max-width:1100px}
   .sub{position:relative;color:rgba(255,255,255,.5);font-size:19px;letter-spacing:.05em}
-</style><div class="glow"></div><pre>${esc(art)}</pre>
-<div class="tag">Private. Paid in sats. Yours alone.</div>
+</style><div class="glow"></div><div class="brand">${markSvg}<pre>${esc(art)}</pre></div>
+<div class="tag">Private AI chat. No account, no email, no subscription.</div>
 <div class="sub">nymbot.ai</div>`;
 
 const scratch = mkdtempSync(path.join(tmpdir(), 'og-'));
 const page = path.join(scratch, 'og.html');
 writeFileSync(page, html);
 
-execFileSync(chrome, [
-  '--headless', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
-  '--force-device-scale-factor=1', '--window-size=1200,630',
-  `--screenshot=${path.join(root, 'images/og-banner.png')}`,
-  `file://${page}`,
-], { stdio: 'inherit' });
+const out = path.join(root, 'images/og-banner.png');
+let playwright = null;
+try { playwright = await import('playwright-core'); } catch (_) { }
+if (playwright) {
+  const browser = await playwright.chromium.launch(process.argv[2] || process.env.CHROME ? { executablePath: chrome } : {});
+  const tab = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
+  await tab.goto(`file://${page}`);
+  await tab.screenshot({ path: out });
+  await browser.close();
+} else {
+  execFileSync(chrome, [
+    '--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars',
+    '--force-device-scale-factor=1', '--window-size=1200,630',
+    `--screenshot=${out}`,
+    `file://${page}`,
+  ], { stdio: 'inherit' });
+}
 
 console.log('images/og-banner.png written');
