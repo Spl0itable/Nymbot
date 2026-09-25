@@ -59,6 +59,8 @@ import {
 export { NymLedger } from "./_ledger.js";
 export { suppliedWraps, wrapsFor, wrapsToCache, scopeLabelInThread,
   botCachedWraps, fetchGiftWrapsByIds };
+export { botClock, botDraftSink, botDraftText, botQuickTask, suppliedHistoryWraps,
+  botCollectChatStream, botCollectAnthropicStream };
 import {
   creditsGet,
   creditsPut,
@@ -115,7 +117,7 @@ import { noteUsage, denied } from "./_usage.js";
 import { liveNotices } from "./_notices.js";
 import { capMaxCost, capMilli, capRefusal, capClampCharge, capGuard, capStoppedReply } from "./_caps.js";
 import { runResearch, researchEstimate, researchPublicLimits, researchCommand,
-  researchWanted, researchStatedMax, researchFloor, RESEARCH_LIMITS } from "./_research.js";
+  researchWanted, researchStatedMax, researchFloor, RESEARCH_LIMITS, RESEARCH_REPORT_PROMPT } from "./_research.js";
 import { teamParse, teamModeOf, teamEstimate, runTeamResearch, runTeamRepo,
   TEAM_NEEDS_PRO, TEAM_WRONG_TASK } from "./_team.js";
 import { mcpParseServers, mcpParseServer, mcpProbe, mcpPrepare, mcpContextBlock, mcpRedact, runMcpToolLoop, mcpIpv6Blocked,
@@ -129,6 +131,7 @@ import { gitCompactConvo, gitReadRange, gitApplyEdits, gitStageEntry, gitStagePu
 import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_runner.js";
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
+import { apnsSendReply } from "./_apns.js";
 
 
 // NIP-59 unwrap with the bot's key. Accepts every payload the bot can meet:
@@ -2036,8 +2039,22 @@ function proErrorDetail(data) {
   try { return JSON.stringify(e); } catch (x) { return ""; }
 }
 
-async function proHttpChat(url, headers, body) {
+async function proHttpChat(url, headers, body, draft, shape) {
+  var streaming = !!(draft && body && body.stream === true);
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
+  if (streaming && res.ok && res.body && /event-stream/i.test(res.headers.get("Content-Type") || "")) {
+    var onText = function (t) { draft.push(t); };
+    var streamed = shape === "anthropic"
+      ? await botCollectAnthropicStream(res.body, onText)
+      : await botCollectChatStream(res.body, onText);
+    if (botStreamEmpty(streamed)) throw botStreamEmptyError();
+    if (streamed.content) return proCheckedMessage(streamed);
+    var message = { role: "assistant", content: streamed.text };
+    if (streamed.reasoning) message.reasoning_content = streamed.reasoning;
+    var shaped = { choices: [{ message: message }] };
+    if (streamed.usage) shaped.usage = streamed.usage;
+    return proCheckedMessage(shaped);
+  }
   var raw = await res.text();
   var data = null;
   try { data = JSON.parse(raw); } catch (e) { }
@@ -2073,7 +2090,34 @@ function proAnthropicNativeUrl(env) {
 
 // One attempt on one transport. Throws on failure so the runner below can
 // decide whether the next transport is worth trying.
-async function proAttempt(env, step, messages, maxTokens, tools) {
+async function proAttempt(env, step, messages, maxTokens, tools, draft) {
+  if (!draft) return proAttemptOnce(env, step, messages, maxTokens, tools, null);
+  try {
+    return await proAttemptOnce(env, step, messages, maxTokens, tools, draft);
+  } catch (e) {
+    if (!e || !e.streamEmpty) throw e;
+    draft.reset();
+    return proAttemptOnce(env, step, messages, maxTokens, tools, null);
+  }
+}
+
+function botStreamEmpty(got) {
+  if (!got) return true;
+  if (Array.isArray(got.content)) {
+    if (got.stop_reason === "refusal") return false;
+    return !got.content.some(function (b) { return b && ((b.text && b.text.trim()) || (b.thinking && b.thinking.trim())); });
+  }
+  return !String(got.text || "").trim() && !String(got.reasoning || "").trim();
+}
+
+function botStreamEmptyError() {
+  var err = new Error("The streamed reply was empty.");
+  err.streamEmpty = true;
+  return err;
+}
+
+async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
+  var canStream = !!draft && !(tools && tools.length) && step.apiPath !== "responses";
   if (step.kind === "bound") {
     // Anthropic speaks its own request shape even behind the binding — the
     // OpenAI-style body is what loses its content blocks.
@@ -2091,10 +2135,21 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
         ? "max_completion_tokens" : "max_tokens")] = maxTokens;
     }
     var opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
+    var boundStream = canStream && /^@cf\//.test(step.model) && !step.anthropicBody;
+    if (boundStream) boundReq.stream = true;
     var bound;
     try {
       bound = await aiRun(env.AI, step.model, boundReq, opts);
+      if (boundStream && botIsStream(bound)) {
+        var got = await botCollectChatStream(bound, function (t) { draft.push(t); });
+        if (botStreamEmpty(got)) throw botStreamEmptyError();
+        var boundMsg = { role: "assistant", content: got.text };
+        if (got.reasoning) boundMsg.reasoning_content = got.reasoning;
+        bound = { choices: [{ message: boundMsg }] };
+        if (got.usage) bound.usage = got.usage;
+      }
     } catch (e) {
+      if (e && e.streamEmpty) throw e;
       throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
     }
     return proCheckedMessage(bound);
@@ -2108,9 +2163,11 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
       nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
     }
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
+    if (canStream) nativeReq.stream = true;
     return proHttpChat(proAnthropicNativeUrl(env),
       nativeHeaders,
-      Object.assign({ model: proAnthropicModelId(step.model) }, nativeReq));
+      Object.assign({ model: proAnthropicModelId(step.model) }, nativeReq),
+      canStream ? draft : null, "anthropic");
   }
 
   // The unified endpoints take the catalog id verbatim ("anthropic/
@@ -2126,6 +2183,10 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
     if (tools && tools.length) req.tools = tools;
     req[step.maxTokensField || (/^openai\//.test(step.model)
       ? "max_completion_tokens" : "max_tokens")] = maxTokens;
+  }
+  if (canStream) {
+    req.stream = true;
+    if (step.apiPath !== "messages") req.stream_options = { include_usage: true };
   }
 
   var endpoints = proCompatEndpoints(env);
@@ -2147,9 +2208,11 @@ async function proAttempt(env, step, messages, maxTokens, tools) {
     try {
       return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
         proCompatHeaders(env, endpoints[i].kind),
-        Object.assign({ model: step.model }, req));
+        Object.assign({ model: step.model }, req),
+        canStream ? draft : null, step.apiPath === "messages" ? "anthropic" : "chat");
     } catch (e) {
       lastErr = e;
+      if (e && e.streamEmpty) throw e;
       if (!proWorthRetrying(e)) throw e;
     }
   }
@@ -2306,7 +2369,9 @@ function proWait(ms) {
 // returns the first real reply. [proModel] is a BOT_PRO_MODELS entry; nothing
 // is billed unless this resolves, so a route that has moved costs the user
 // nothing.
-async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
+async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) {
+  var draft = watch && watch.draft ? watch.draft : null;
+  var clock = watch && watch.clock ? watch.clock : null;
   var modelId = typeof proModel === "string" ? proModel : proModel.model;
   var transport = typeof proModel === "string" ? "" : (proModel.transport || "");
   var plan = proTransportPlan(env, modelId, transport,
@@ -2322,18 +2387,24 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
   var errors = [];
   var provider = paceProviderOf(modelId);
   var estimate = paceEstimateTokens(messages, tools, maxTokens);
+  var paceFrom = Date.now();
   await proPace(env, provider, estimate);
+  if (clock) clock.since("gate", paceFrom);
   for (var i = 0; i < plan.length; i++) {
     var held = 0;
     while (true) {
       var failure = null;
+      var callFrom = Date.now();
       try {
-        var answered = await proAttempt(env, plan[i], messages, maxTokens, tools);
+        if (draft) draft.reset();
+        var answered = await proAttempt(env, plan[i], messages, maxTokens, tools, draft);
+        if (clock) clock.since("model", callFrom);
         var spent = paceUsageTokens(answered && answered.usage);
         if (spent > 0) await proGateSettle(env, provider, estimate - spent);
         return answered;
       } catch (e) {
         failure = e;
+        if (clock) clock.since("model", callFrom);
       }
       if (proRateLimited(failure)) {
         proLastLimitedAt = Date.now();
@@ -2343,7 +2414,9 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools) {
       var hinted = Number.isFinite(hint) && hint > 0;
       if (proRateLimited(failure) && held < PRO_BUSY_WAITS_MS.length
         && !(hinted && hint > PRO_RETRY_AFTER_MAX_MS)) {
+        var busyFrom = Date.now();
         await proWait(hinted ? hint : PRO_BUSY_WAITS_MS[held]);
+        if (clock) clock.since("gate", busyFrom);
         held++;
         continue;
       }
@@ -2526,13 +2599,17 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
   var outputTokens = 0;
   var convo = messages.slice();
 
+  var watch = opts && opts.watch ? opts.watch : null;
+  var clock = watch && watch.clock ? watch.clock : null;
   if (effort >= 2) {
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "planning" });
+    var planFrom = Date.now();
     var planned = await proGatewayChat(env, proModel,
       convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
-      BOT_EFFORT_PLAN_TOKENS, null);
+      BOT_EFFORT_PLAN_TOKENS, null, clock ? { clock: clock } : null);
+    if (clock) clock.since("plan", planFrom);
     outputTokens += planned.outputTokens || 0;
     botUsageAdd(usage, planned.usage);
     var planText = botTakeFollowUps(proMessageText(planned.msg)).text;
@@ -2559,11 +2636,13 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "checking" });
     var drafted = botTakeFollowUps(reply).text || reply;
+    var checkFrom = Date.now();
     var revised = await proGatewayChat(env, proModel,
       convo.concat([
         { role: "assistant", content: drafted },
         { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
-      ]), proModel.maxTokens, null);
+      ]), proModel.maxTokens, null, watch);
+    if (clock) clock.since("check", checkFrom);
     outputTokens += revised.outputTokens || 0;
     botUsageAdd(usage, revised.usage);
     var better = proMessageWithThinking(revised.msg);
@@ -2600,7 +2679,9 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
     progress({ kind: "model", call: priorCalls + calls, of: of,
       model: proModel.label || proModel.model || "" });
     var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
-      lastTurn ? null : recallToolDefs());
+      lastTurn ? null : recallToolDefs(), opts && opts.watch
+        ? (lastTurn ? opts.watch : { clock: opts.watch.clock })
+        : null);
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
     botUsageAdd(usage, r.usage);
@@ -2630,8 +2711,8 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
   }
 }
 
-async function runProGatewayModel(env, proModel, messages, maxTokens, progress) {
-  var r = await proGatewayChat(env, proModel, messages, maxTokens, null);
+async function runProGatewayModel(env, proModel, messages, maxTokens, progress, watch) {
+  var r = await proGatewayChat(env, proModel, messages, maxTokens, null, watch);
   // Where the provider hands back a reasoning trace, it is the only thing the
   // turn has to say about what the model actually did — so it goes on the
   var thought = proMessageReasoning(r.msg);
@@ -4615,6 +4696,266 @@ function botTurnMsgKey(pubkey, msgId) {
   return "pm:" + String(pubkey).toLowerCase() + ":x:" + String(msgId).toLowerCase();
 }
 
+var BOT_DRAFT_EVERY_MS = 450;
+var BOT_DRAFT_MAX_CHARS = 32000;
+var BOT_HISTORY_SUPPLIED_MAX = 8;
+var BOT_HISTORY_SUPPLIED_BYTES = 192 * 1024;
+
+function botClock() {
+  var t0 = Date.now();
+  var st = {};
+  return {
+    t0: t0,
+    add: function (name, ms) {
+      var n = Math.max(0, Math.round(Number(ms) || 0));
+      st[name] = (st[name] || 0) + n;
+    },
+    since: function (name, from) {
+      this.add(name, Date.now() - from);
+    },
+    mark: function (name) {
+      if (st[name] == null) st[name] = Math.max(0, Date.now() - t0);
+    },
+    time: async function (name, work) {
+      var from = Date.now();
+      try { return await work; } finally { this.add(name, Date.now() - from); }
+    },
+    stages: function () {
+      var out = {};
+      for (var k in st) out[k] = st[k];
+      out.total = Math.max(0, Date.now() - t0);
+      return out;
+    }
+  };
+}
+
+function botDraftText(raw) {
+  var text = sanitizeBotResponse(String(raw || ""), false);
+  if (typeof text !== "string") return "";
+  var open = new RegExp(BOT_FOLLOW_UP_OPEN, "i").exec(text);
+  if (open) text = text.slice(0, open.index);
+  text = text.replace(/(?:\\?<|&lt;)[ \t]*\/?[A-Za-z_-]{0,12}$/, "");
+  text = text.trim();
+  if (text.length > BOT_DRAFT_MAX_CHARS) text = text.slice(0, BOT_DRAFT_MAX_CHARS);
+  return text;
+}
+
+function botDraftSink(env, key, clock, everyMs) {
+  if (!key || !env || !env.NYM_LEDGER) return null;
+  var gap = everyMs > 0 ? everyMs : BOT_DRAFT_EVERY_MS;
+  var seq = 0;
+  var lastAt = 0;
+  var sent = "";
+  var pending = null;
+  var inFlight = null;
+  var timer = null;
+  var closed = false;
+  var used = false;
+  var writes = 0;
+  function send() {
+    timer = null;
+    if (closed || inFlight || pending == null) return;
+    var text = pending;
+    pending = null;
+    if (text === sent) return;
+    seq++;
+    writes++;
+    lastAt = Date.now();
+    sent = text;
+    var call;
+    try { call = Promise.resolve(ledgerCall(env, { op: "progress-draft", key: key, text: text, seq: seq })); } catch (e) { call = Promise.resolve(null); }
+    inFlight = call.then(function (r) {
+      if (r && (r.closed || r._noLedger || r.error)) closed = true;
+    }, function () { }).then(function () {
+      inFlight = null;
+      if (!closed && pending != null) schedule();
+    });
+  }
+  function schedule() {
+    if (timer || inFlight || closed) return;
+    var wait = Math.max(0, lastAt + gap - Date.now());
+    if (wait === 0) send();
+    else timer = setTimeout(send, wait);
+  }
+  return {
+    push: function (raw) {
+      if (closed) return;
+      var text = botDraftText(raw);
+      if (!text.trim()) return;
+      if (!used) {
+        used = true;
+        if (clock) clock.mark("first");
+      }
+      pending = text;
+      schedule();
+    },
+    reset: function () {
+      if (closed || !used) return;
+      pending = "";
+      schedule();
+    },
+    close: function () {
+      closed = true;
+      pending = null;
+      if (timer) { clearTimeout(timer); timer = null; }
+      return inFlight || Promise.resolve();
+    },
+    get used() { return used; },
+    get writes() { return writes; }
+  };
+}
+
+function botQuickTask(question) {
+  var q = String(question || "");
+  if (/```[^\n]*\n[\s\S]*?\S[\s\S]*?```/.test(q)) return "coding";
+  if (/^\s*translate\b/i.test(q)) return "translation";
+  return null;
+}
+
+async function botClassify(ai, question, clock) {
+  var quick = botQuickTask(question);
+  if (quick) return quick;
+  var from = Date.now();
+  try {
+    return await classifyBotTask(ai, question);
+  } catch (e) {
+    return "general";
+  } finally {
+    if (clock) clock.since("classify", from);
+  }
+}
+
+function suppliedHistoryWraps(body, wantIds) {
+  var out = {};
+  if (!body || !Array.isArray(body.history) || !Array.isArray(wantIds) || !wantIds.length) return out;
+  var want = {};
+  for (var w = 0; w < wantIds.length; w++) want[wantIds[w]] = true;
+  var bytes = 0;
+  var taken = 0;
+  for (var i = 0; i < body.history.length && i < BOT_HISTORY_SUPPLIED_MAX * 2; i++) {
+    var evt = body.history[i];
+    if (!evt || typeof evt !== "object") continue;
+    if (evt.kind !== 1059 || !isHex64(evt.id) || !want[evt.id] || out[evt.id]) continue;
+    if (typeof evt.content !== "string" || typeof evt.pubkey !== "string") continue;
+    bytes += evt.content.length;
+    if (bytes > BOT_HISTORY_SUPPLIED_BYTES) break;
+    try { if (getEventHash(evt) !== evt.id) continue; } catch (e) { continue; }
+    out[evt.id] = evt;
+    if (++taken >= BOT_HISTORY_SUPPLIED_MAX) break;
+  }
+  return out;
+}
+
+async function botReadSse(body, onData) {
+  var reader = body.getReader();
+  var dec = new TextDecoder();
+  var buf = "";
+  var event = "";
+  var handle = function (line) {
+    if (!line) { event = ""; return; }
+    if (line.indexOf("event:") === 0) { event = line.slice(6).trim(); return; }
+    if (line.indexOf("data:") !== 0) return;
+    var data = line.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    var obj;
+    try { obj = JSON.parse(data); } catch (e) { return; }
+    onData(obj, event);
+  };
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buf += typeof chunk.value === "string" ? chunk.value : dec.decode(chunk.value, { stream: true });
+    var nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      var line = buf.slice(0, nl).replace(/\r$/, "");
+      buf = buf.slice(nl + 1);
+      handle(line);
+    }
+  }
+  buf += dec.decode();
+  if (buf) handle(buf.replace(/\r$/, ""));
+}
+
+function botIsStream(x) {
+  return !!(x && typeof x === "object" && typeof x.getReader === "function");
+}
+
+function botStreamError(obj) {
+  var e = obj && obj.error;
+  if (!e) return null;
+  var msg = typeof e === "string" ? e : (e.message || JSON.stringify(e));
+  var err = new Error("Pro model request failed: " + String(msg).slice(0, 300));
+  if (e && e.type === "overloaded_error") err.httpStatus = 529;
+  return err;
+}
+
+async function botCollectChatStream(body, onText) {
+  var text = "";
+  var reasoning = "";
+  var usage = null;
+  var failure = null;
+  await botReadSse(body, function (obj) {
+    if (failure) return;
+    failure = botStreamError(obj);
+    if (failure) return;
+    if (obj.usage && typeof obj.usage === "object") usage = obj.usage;
+    var piece = "";
+    if (typeof obj.response === "string") piece += obj.response;
+    var choice = Array.isArray(obj.choices) ? obj.choices[0] : null;
+    var delta = choice && (choice.delta || choice.message);
+    if (delta) {
+      if (typeof delta.content === "string") piece += delta.content;
+      var r = delta.reasoning_content != null ? delta.reasoning_content : delta.reasoning;
+      if (typeof r === "string") reasoning += r;
+    }
+    if (piece) {
+      text += piece;
+      if (onText) onText(text);
+    }
+  });
+  if (failure) throw failure;
+  return { text: text, reasoning: reasoning, usage: usage };
+}
+
+async function botCollectAnthropicStream(body, onText) {
+  var text = "";
+  var thinking = "";
+  var usage = {};
+  var stop = null;
+  var model = "";
+  var failure = null;
+  await botReadSse(body, function (obj, event) {
+    if (failure) return;
+    var type = obj.type || event;
+    if (type === "error") { failure = botStreamError(obj) || new Error("Pro model request failed."); return; }
+    if (type === "message_start" && obj.message) {
+      if (obj.message.usage) Object.assign(usage, obj.message.usage);
+      model = obj.message.model || "";
+      return;
+    }
+    if (type === "content_block_delta" && obj.delta) {
+      if (obj.delta.type === "text_delta" && typeof obj.delta.text === "string") {
+        text += obj.delta.text;
+        if (onText) onText(text);
+      } else if (obj.delta.type === "thinking_delta" && typeof obj.delta.thinking === "string") {
+        thinking += obj.delta.thinking;
+      }
+      return;
+    }
+    if (type === "message_delta") {
+      if (obj.delta && obj.delta.stop_reason) stop = obj.delta.stop_reason;
+      if (obj.usage) Object.assign(usage, obj.usage);
+    }
+  });
+  if (failure) throw failure;
+  var content = [];
+  if (thinking) content.push({ type: "thinking", thinking: thinking });
+  content.push({ type: "text", text: text });
+  var out = { content: content, usage: usage, stop_reason: stop };
+  if (model) out.model = model;
+  return out;
+}
+
 async function botTurnBegin(env, key) {
   var r;
   try { r = await ledgerCall(env, { op: "turn-begin", key: key }); } catch (e) { r = null; }
@@ -4622,23 +4963,41 @@ async function botTurnBegin(env, key) {
   return r;
 }
 
-async function botTurnFinish(env, key, body, status) {
+async function botTurnFinish(env, key, body, status, context) {
   try {
-    await ledgerCall(env, { op: "turn-finish", key: key, result: { body: body, status: status || 200 } });
+    var done = await ledgerCall(env, { op: "turn-finish", key: key, result: { body: body, status: status || 200 } });
+    botTurnNotify(context, env, done);
   } catch (e) { /* the turn itself succeeded; only the replay copy is lost */ }
+}
+
+function botTurnNotify(context, env, r) {
+  if (!r || !r.notify) return;
+  var work = apnsSendReply(env, r.notify).then(function () { }, function () { });
+  if (context && typeof context.waitUntil === "function") {
+    try { context.waitUntil(work); } catch (e) { }
+  }
 }
 
 // Release a claim whose attempt failed before it charged for an answer, so the
 // next try runs now instead of waiting out a lease nobody is honoring.
-async function botTurnAbort(env, key) {
-  try { await ledgerCall(env, { op: "turn-abort", key: key }); } catch (e) { }
+async function botTurnAbort(env, key, context) {
+  try { botTurnNotify(context, env, await ledgerCall(env, { op: "turn-abort", key: key })); } catch (e) { }
 }
 
 // Keeps this attempt's claim alive while it generates. Returns a stop().
 // Self-limiting at both ends: it stops once the claim is no longer ours, and
 // never beats past the longest a turn can run — one that outlived its request
 // would pin a dead claim forever, which is worse than the duplicate.
-var BOT_TURN_MAX_HEARTBEATS = Math.ceil(600000 / BOT_TURN_HEARTBEAT_MS);
+var BOT_TURN_MAX_MS = 600000;
+var BOT_TURN_MAX_HEARTBEATS = Math.ceil(BOT_TURN_MAX_MS / BOT_TURN_HEARTBEAT_MS);
+var BOT_NOTIFY_RATE_LIMIT = 30;
+var BOT_NOTIFY_RATE_WINDOW_MS = 60000;
+
+function botKeepTurnAlive(context) {
+  if (!context || typeof context.waitUntil !== "function" || context._botPmKept) return false;
+  try { context._botPmKept = true; } catch (e) { return false; }
+  return context._botPmKept === true;
+}
 
 function botTurnHeartbeat(env, keys, maxMs) {
   var beats = 0;
@@ -4963,7 +5322,7 @@ async function botResearchTurn(env, proModel, question, history, runOpts) {
   var budget = runOpts.researchBudget || null;
   var result = await runResearch({
     chat: async function (messages, maxTokens) {
-      var r = await proGatewayChat(env, proModel, messages, maxTokens, null);
+      var r = await proGatewayChat(env, proModel, messages, maxTokens, null, botReportWatch(runOpts, messages, null));
       return { text: proMessageText(r.msg), usage: r.usage, outputTokens: r.outputTokens };
     },
     search: function (query, kind) { return botResearchSearch(env, query, kind); },
@@ -5002,9 +5361,18 @@ function botTeamPrice(btcUsd, repoTask) {
   };
 }
 
-function botTeamChat(env) {
+function botReportWatch(runOpts, messages, tools) {
+  var clock = runOpts && runOpts.clock ? runOpts.clock : null;
+  var first = messages && messages[0];
+  var report = !!(runOpts && runOpts.draft) && !(tools && tools.length) && first && first.role === "system"
+    && typeof first.content === "string" && first.content.indexOf(RESEARCH_REPORT_PROMPT) === 0;
+  if (report) return { draft: runOpts.draft, clock: clock };
+  return clock ? { clock: clock } : null;
+}
+
+function botTeamChat(env, runOpts) {
   return async function (model, messages, maxTokens, tools) {
-    var r = await proGatewayChat(env, model, messages, maxTokens, tools || null);
+    var r = await proGatewayChat(env, model, messages, maxTokens, tools || null, botReportWatch(runOpts, messages, tools));
     return { text: proMessageText(r.msg), msg: r.msg, usage: r.usage, outputTokens: r.outputTokens };
   };
 }
@@ -5101,7 +5469,7 @@ async function botTeamResearchTurn(env, proModel, question, history, runOpts) {
   var leadKit = await botTeamLeadTools(runOpts, null);
   var said = botTeamApproval(runOpts);
   var result = await runTeamResearch({
-    chat: botTeamChat(env),
+    chat: botTeamChat(env, runOpts),
     search: function (query, kind) { return botResearchSearch(env, query, kind); },
     fetchPage: function (url, limit) {
       if (isPrivateHostUrl(url) || LINK_SKIP_EXT.test(url)) return Promise.resolve(null);
@@ -5178,7 +5546,7 @@ async function botTeamRepoTurn(context, proModel, messages, ghConfig, runOpts) {
     return { rec: rec, br: br, path: path };
   };
   var result = await runTeamRepo({
-    chat: botTeamChat(env),
+    chat: botTeamChat(env, runOpts),
     exec: async function (name, args, scope) {
       var picked = gitPickRepo(ghConfig, args && args.repo);
       if (!picked) {
@@ -5382,10 +5750,21 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var pmSearchAttempted = false;
   var pmSearchedQuery = question;
   var pmChangelogCtx = "";
+  var pmClock = runOpts.clock || null;
+  var pmLinkFrom = Date.now();
+  var pmLinkRead = botReadLinkedPages(question, runOpts.progress).then(function (got) {
+    if (pmClock) pmClock.since("pages", pmLinkFrom);
+    return got;
+  }, function () {
+    if (pmClock) pmClock.since("pages", pmLinkFrom);
+    return null;
+  });
+  var pmSearchFrom = Date.now();
   try {
     if (needsChangelogContext(question)) {
       var pmReleases = await fetchNymchatReleases(15);
       pmChangelogCtx = buildChangelogContext(pmReleases);
+      if (pmClock) pmClock.since("search", pmSearchFrom);
     } else {
       var pmTurns = (history || []).map(function (h) {
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
@@ -5395,6 +5774,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
         pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
+        if (pmClock) pmClock.since("search", pmSearchFrom);
         // Only a search that actually reached a source counts as one having
         // happened. A search nothing answered is our plumbing failing, and a
         // reply must not report that to the user as a fact about the web.
@@ -5434,7 +5814,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // handed over the page, so fetching it is not a search, it is doing as asked.
   var pmLinkCtx = "";
   try {
-    var linkRead = await botReadLinkedPages(question, runOpts.progress);
+    var linkRead = await pmLinkRead;
     pmLinkCtx = linkedPagesBlock(linkRead);
   } catch (e) { }
   if (pmLinkCtx) {
@@ -5451,7 +5831,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     messages.push({ role: "assistant", content: "Understood." });
   }
 
-  var taskType = proModel ? "pro" : (preTaskType || await classifyBotTask(ai, question));
+  var taskType = proModel ? "pro" : (preTaskType || await botClassify(ai, question, pmClock));
 
   messages.push({ role: "user", content: "CONTEXT: The current date is " + new Date().toUTCString() + ". Treat that as 'now' and 'today'. Anything dated on or before it has already happened — never call a recent event 'future', 'fictional', or 'speculative' because of your training cutoff." });
   messages.push({ role: "assistant", content: "Understood." });
@@ -5540,21 +5920,23 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     // checking compose with looking back past the window rather than competing
     // with it for the same call.
     var effort = botEffortLevel(runOpts.effort);
+    var proWatch = { draft: runOpts.draft || null, clock: runOpts.clock || null };
     var wrapped = await runProEffort(context.env, proModel, messages, effort, {
       progress: runOpts.progress,
       extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0,
-      capGuard: runOpts.capGuard || null
+      capGuard: runOpts.capGuard || null,
+      watch: proWatch
     }, async function (convo, done, of) {
       if (canRecall) {
         return await runProRecallChat(context.env, proModel, convo, dropped, {
-          progress: runOpts.progress, priorCalls: done, of: of
+          progress: runOpts.progress, priorCalls: done, of: of, watch: proWatch
         });
       }
       if (runOpts.progress) {
         runOpts.progress({ kind: "model", call: done + 1, of: of, model: proModel.label || proModel.model || "" });
       }
       var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens,
-        runOpts.progress);
+        runOpts.progress, proWatch);
       return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens,
         usage: one.usage };
     });
@@ -5586,11 +5968,29 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var reply = "";
   var usage = botUsageZero();
   var billedModel = pmModel;
+  var stdDraft = runOpts.draft || null;
+  var stdFrom = Date.now();
   try {
-    var primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
+    var primary = null;
+    if (stdDraft) {
+      try {
+        primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut, stream: true });
+        if (botIsStream(primary)) {
+          var got = await botCollectChatStream(primary, function (t) { stdDraft.push(t); });
+          primary = got.text ? { response: got.text } : null;
+          if (primary && got.usage) primary.usage = got.usage;
+        }
+      } catch (e) {
+        primary = null;
+        stdDraft.reset();
+      }
+    }
+    if (!primary) primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
     botUsageAdd(usage, proCallUsage(primary));
     reply = primary && primary.response ? sanitizeBotResponse(primary.response, true) : "";
   } catch (e) { }
+  if (pmClock) pmClock.since("model", stdFrom);
+  if (stdDraft && !botTakeFollowUps(reply).text.trim()) stdDraft.reset();
   // Fall back down the ladder rather than to a single model: the route model
   // and the free-tier default are both reasoning models, so a reply truncated
   // mid-<think> sanitizes to nothing on either. The utility model doesn't think,
@@ -5610,6 +6010,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   BOT_PM_VISION_FALLBACKS.forEach(function (m) { seesToo[m] = true; });
   for (var f = 0; f < fallbacks.length && !botTakeFollowUps(reply).text.trim(); f++) {
     if (fallbacks[f] === pmModel) continue;
+    var fbFrom = Date.now();
     try {
       var fb = await aiRun(ai, fallbacks[f], {
         messages: seesToo[fallbacks[f]] ? messages : textOnly,
@@ -5619,11 +6020,19 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
       if (botTakeFollowUps(reply).text.trim()) billedModel = fallbacks[f];
     } catch (e) { }
+    if (pmClock) pmClock.since("model", fbFrom);
   }
   return { reply: reply, taskType: taskType, sources: pmCitations,
     usage: usage, billedModel: billedModel };
 }
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
+  if (body && body.action === "pm" && botKeepTurnAlive(context)) {
+    var kept = handleBotPMAction(context, body, botPrivkey, botPubkey);
+    try {
+      context.waitUntil(kept.then(function () { }, function () { return botReleaseStrandedTurn(context); }));
+    } catch (e) { }
+    return kept;
+  }
   var env = context.env;
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
@@ -5885,10 +6294,41 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var progRead = await ledgerCall(env, {
       op: "progress-read",
       key: botTurnKey(userPubkey, body.eventId),
-      after: Number(body.after) || 0
+      after: Number(body.after) || 0,
+      draftAfter: Number(body.draftAfter) || 0
     });
     if (!progRead || progRead._noLedger) return json({ steps: [] });
-    return json({ steps: Array.isArray(progRead.steps) ? progRead.steps : [] });
+    var progOut = { steps: Array.isArray(progRead.steps) ? progRead.steps : [] };
+    if (progRead.draft && typeof progRead.draft.text === "string") {
+      progOut.draft = { text: progRead.draft.text, seq: Number(progRead.draft.seq) || 0 };
+    }
+    return json(progOut);
+  }
+
+  if (body.action === "notify-turn") {
+    if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
+    var nToken = typeof body.token === "string" ? body.token.toLowerCase() : "";
+    if (!/^[0-9a-f]{64,200}$/.test(nToken)) return json({ error: "Invalid device token" }, 400);
+    if (body.env !== "production" && body.env !== "sandbox") return json({ error: "Invalid push environment" }, 400);
+    if (typeof body.chat !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(body.chat)) return json({ error: "Invalid chat" }, 400);
+    if (body.text != null && (typeof body.text !== "string" || body.text.length > 80)) return json({ error: "Invalid text" }, 400);
+    if (!(await botRateOk("notify", String(userPubkey).toLowerCase(), BOT_NOTIFY_RATE_LIMIT, BOT_NOTIFY_RATE_WINDOW_MS))) {
+      return json({ error: "Slow down — too many requests. Try again in a minute." }, 429);
+    }
+    var nPut = await ledgerCall(env, {
+      op: "notify-put",
+      key: botTurnKey(userPubkey, body.eventId),
+      owner: String(userPubkey).toLowerCase(),
+      token: nToken,
+      env: body.env,
+      chat: body.chat,
+      text: typeof body.text === "string" ? body.text : null,
+      ttl: Math.ceil(BOT_TURN_MAX_MS / 1000)
+    });
+    if (!nPut || nPut._noLedger || nPut.error) return json({ error: "Reply notifications are not available right now." }, 503);
+    if (nPut.done) return json({ done: true });
+    if (nPut.capped) return json({ error: "Too many replies are waiting to notify this device.", capped: true }, 429);
+    return json({ ok: true, expiresIn: nPut.expiresIn });
   }
 
   if (body.action === "mcp-probe") {
@@ -5932,9 +6372,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!audioBytes || audioBytes.length < 256) return json({ error: "No audio was sent." }, 400);
     var said = "";
     try {
-      var heard = await aiRun(env.AI, BOT_TRANSCRIBE_MODEL, {
-        audio: Array.from(audioBytes)
-      });
+      var heard = await aiRun(env.AI, BOT_TRANSCRIBE_MODEL, { audio: audioRaw });
       said = String((heard && (heard.text || heard.transcription ||
         (heard.result && heard.result.text))) || "").trim();
     } catch (e) {
@@ -6297,6 +6735,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
     }
     var usageT0 = Date.now();
+    var clock = botClock();
     var maxCost = capMaxCost(body);
     var capGuardFor = null;
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
@@ -6318,8 +6757,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (researchAsked && !proModel) {
       return json({ error: BOT_RESEARCH_NEEDS_PRO, research: true }, 400);
     }
-    var record = await botGetCredits(env, userPubkey);
-    var proRecord = proModel ? await botGetProCredits(env, userPubkey) : null;
+    var creditReads = await clock.time("credits", Promise.all([
+      botGetCredits(env, userPubkey),
+      proModel ? botGetProCredits(env, userPubkey) : null
+    ]));
+    var record = creditReads[0];
+    var proRecord = creditReads[1];
     var cutoff = Date.now() - BOT_PM_RATE_WINDOW_MS;
     record.rl = (record.rl || []).filter(function (t) { return t > cutoff; });
     if (proRecord) proRecord.rl = (proRecord.rl || []).filter(function (t) { return t > cutoff; });
@@ -6493,14 +6936,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       }
       var keys = turnKeys;
       turnKeys = [];
-      for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i]);
+      for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i], context);
     };
     var turnFail = async function (obj, status) {
       await turnRelease();
+      if (draft) draft.close();
       noteUsage(context, {
         pubkey: userPubkey, kind: "chat", tier: freeTurn ? "free" : (proModel ? "pro" : "standard"),
         ms: Date.now() - usageT0, ok: false,
-        err: obj && obj.noCredits ? "no-credits" : (obj && obj.error) || "error"
+        err: obj && obj.noCredits ? "no-credits" : (obj && obj.error) || "error",
+        stages: clock.stages()
       });
       return json(obj, status);
     };
@@ -6509,7 +6954,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       turnStopHeartbeat();
       var keys = turnKeys;
       turnKeys = [];
-      for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status);
+      for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status, context);
       return json(obj, status);
     };
     // Take the claim for one key, or hand back the response this attempt must
@@ -6539,8 +6984,13 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       return null;
     };
 
+    var threadRead = botGetThread(env, userPubkey);
+    threadRead.catch(function () { });
+    var claimFrom = Date.now();
     var wrapClaimed = await turnAcquire(botTurnKey(userPubkey, currentId));
+    clock.since("claim", claimFrom);
     if (wrapClaimed) return wrapClaimed;
+    if (botPq) userPqKem();
 
     // Progress is advisory: every write is best-effort and a failure never
     // touches the answer. Defined here rather than beside the first routing
@@ -6553,8 +7003,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (p && typeof p.then === "function") p.then(function () { }, function () { });
       } catch (e) { }
     };
+    var draft = body.draft === true ? botDraftSink(env, progressKey, clock) : null;
 
-    var thread = await botGetThread(env, userPubkey);
+    var thread = await clock.time("thread", threadRead);
     // A continued run carries its own conversation, tool results and all, so
     // re-fetching and re-decrypting the thread would cost latency to rebuild
     // context the parked state already holds.
@@ -6587,6 +7038,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
     var fetched = suppliedWraps(body);
     var scopeOf = {};
+    var heldHistoryRead = null;
+    var historySupplied = 0;
+    if (historyIds.length) {
+      var handedHistory = suppliedHistoryWraps(body, historyIds);
+      for (var hh in handedHistory) {
+        if (fetched[hh]) continue;
+        fetched[hh] = handedHistory[hh];
+        historySupplied++;
+      }
+      if (historySupplied) clock.add("hsup", historySupplied);
+      heldHistoryRead = clock.time("hist", botCachedWraps(env, userPubkey,
+        historyIds.filter(function (id) { return !fetched[id]; })));
+      heldHistoryRead.catch(function () { });
+    }
+    var askFrom = Date.now();
     var askMissing = askIds.filter(function (id) { return !fetched[id]; });
     if (askMissing.length) {
       var askCached = (await botCachedWraps(env, userPubkey, askMissing)).rows;
@@ -6599,13 +7065,16 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     if (askMissing.length) {
       pushProgress({ kind: "stage", stage: "reading", turns: askMissing.length });
-      var askPulled = await fetchGiftWrapsByIds(askMissing, currentId, 3000, 4);
+      var askPulled = await clock.time("relay", fetchGiftWrapsByIds(askMissing, currentId, 3000, 4));
       for (var apk in askPulled) { if (!fetched[apk]) fetched[apk] = askPulled[apk]; }
     }
+    clock.since("ask", askFrom);
     var currentWrap = fetched[currentId];
     if (!currentWrap) {
       return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
     }
+    pushProgress({ kind: "stage", stage: "opening" });
+    var openFrom = Date.now();
     var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
     if (!currentUnwrapped) return await turnFail({ error: "Could not decrypt your message." }, 400);
     // The current message must be authored by the authenticated user
@@ -6638,6 +7107,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       pieces.sort(function (a, b) { return a.at - b.at; });
       message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""));
     }
+    clock.since("open", openFrom);
     if (!message) return await turnFail({ error: "Empty message" }, 400);
     // Every event the question traveled in, so the next turn replays the
     // whole of it and not just the piece that happened to arrive last.
@@ -6663,6 +7133,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // context is scoped to it — each thread is its own isolated discussion,
     // and the flat conversation in turn excludes thread replies.
     var threadRoot = rumorTagValue(currentUnwrapped.rumor, "nymthread");
+    var earlyMedia = parseBotMediaCommand(message)
+      || mediaEditIntent(message, botExtractImageUrls(message).length)
+      || parseBotMediaIntent(message);
+    var classifyRead = !proModel && !freeTurn && !earlyMedia
+      ? botClassify(env.AI, parseBotPMRequest(message).question, clock)
+      : null;
 
     // Now history, and only this conversation's. The thread list is per key,
     // not per chat, so a new chat used to fetch and decrypt forty wraps from
@@ -6675,7 +7151,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (historyIds.length) {
       var wantHistory = historyIds.filter(function (id) { return !fetched[id]; });
       cacheWant = wantHistory.length;
-      var heldHistory = await botCachedWraps(env, userPubkey, wantHistory);
+      var heldHistory = await heldHistoryRead;
       // The store answered, or it did not. Only the second sends this turn
       // anywhere near a relay; the first is simply what the store holds.
       var storeDown = !heldHistory.ok;
@@ -6710,7 +7186,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         var histMissing = historyIds.filter(function (id) { return !fetched[id]; });
         if (histMissing.length) {
           pushProgress({ kind: "stage", stage: "reading", turns: histMissing.length });
-          var histPulled = await fetchGiftWrapsByIds(histMissing, null, 3000, 1);
+          var histPulled = await clock.time("relay", fetchGiftWrapsByIds(histMissing, null, 3000, 1));
           for (var hpk in histPulled) { if (!fetched[hpk]) fetched[hpk] = histPulled[hpk]; }
         }
       } else if (notInStore.length) {
@@ -6720,6 +7196,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
     // Reconstruct prior turns (in order) from the remaining fetched wraps.
     var history = [];
+    var histDecFrom = Date.now();
     for (var hk = 0; hk < historyIds.length; hk++) {
       if (historyIds[hk] === currentId) continue;
       var hw = fetched[historyIds[hk]];
@@ -6755,15 +7232,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         model: isBotTurn ? rumorTagValue(hu.rumor, "model") : null
       });
     }
+    clock.since("histDec", histDecFrom);
 
     // Media generation (?image / ?speak). Billed per generation rather than per
     // output token, so it charges its own flat cost instead of botProCost.
-    var media = parseBotMediaCommand(message);
-    // No command, but the message plainly asks for one. Read narrowly, and the
-    // reply says how it was read so a misread costs one credit and an apology
-    // rather than leaving the user wondering what they paid for.
-    if (!media) media = mediaEditIntent(message, botExtractImageUrls(message).length);
-    if (!media) media = parseBotMediaIntent(message);
+    var media = earlyMedia;
     if (media && freeTurn) {
       // Generating a picture or a voice clip has a bill of its own, so it is
       // one of the reasons to pay rather than something the allowance covers.
@@ -6978,7 +7451,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // rather than paying for another one.
       noteUsage(context, {
         pubkey: userPubkey, kind: "media", tier: mediaTier, task: media.kind, model: mediaBody.modelLabel,
-        calls: 1, costMilli: mediaCost * BOT_MILLI_PER_CREDIT, ms: Date.now() - usageT0
+        calls: 1, costMilli: mediaCost * BOT_MILLI_PER_CREDIT, ms: Date.now() - usageT0,
+        stages: clock.stages()
       });
       return await turnDone(mediaBody);
     }
@@ -6999,7 +7473,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       taskType = "general";
     } else {
       try {
-        taskType = await classifyBotTask(ai, parsed.question);
+        taskType = await (classifyRead || botClassify(ai, parsed.question, clock));
       } catch (e) {
         taskType = "general";
       }
@@ -7195,10 +7669,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (!freeTurn) {
       var holdAmount = proModel ? proRequired : stdRequired;
       var holdTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-      var held = await ledgerCall(env, {
+      var held = await clock.time("hold", ledgerCall(env, {
         op: "credit-hold", id: holdTry, pubkey: userPubkey, tier: proModel ? "pro" : "standard",
         amount: holdAmount, ttl: BOT_HOLD_TTL_S, rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS
-      });
+      }));
       if (held && held.ok) {
         holdId = holdTry;
       } else if (held && held.rateLimited) {
@@ -7256,11 +7730,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         mcpDecline: teamRun && typeof body.mcpDecline === "string" ? body.mcpDecline.slice(0, 128) : "",
         serverRun: serverRunOpt,
         runApprove: serverRunOpt && typeof body.runApprove === "string" ? body.runApprove.slice(0, 128) : "",
-        runDecline: typeof body.runDecline === "string" ? body.runDecline.slice(0, 128) : ""
+        runDecline: typeof body.runDecline === "string" ? body.runDecline.slice(0, 128) : "",
+        draft: draft,
+        clock: clock
       });
     } catch (e) {
       return await turnFailResumable({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
     }
+    if (draft) await draft.close();
     var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
     var reply = taken.text;
     if (!reply) return await turnFailResumable({ error: "Nymbot returned an empty response" }, 500);
@@ -7321,7 +7798,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // allowance, before any of this ran. There is nothing to charge.
     var consumed = freeTurn
       ? { ok: true, balance: 0 }
-      : await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli, hold: holdId || undefined });
+      : await clock.time("charge", ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli, hold: holdId || undefined }));
     holdId = null;
     if (consumed && consumed._noLedger) {
       if (costMilli > 0) {
@@ -7379,7 +7856,14 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
     // Signed with what wrote it, so the next turn — which may be a different
     // model — can tell this reply from its own.
+    pushProgress({ kind: "stage", stage: "sealing" });
+    var pqFrom = Date.now();
+    await userPqKem();
+    clock.since("pq", pqFrom);
+    var sealFrom = Date.now();
     var pair = await wrapReplyPair(reply, threadRoot, botReplyVoice(proModel, freeTurn));
+    clock.since("seal", sealFrom);
+    var storeFrom = Date.now();
     var updatedThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
     // A '!' question is answered without the conversation and stays out of it.
     // It was asked that way precisely so it would not become context, and
@@ -7394,6 +7878,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
     await botCacheWraps(env, userPubkey,
       wrapsToCache(fetched, [pair.selfEvent], botPrivkey, botPq, scopeOf), updatedKeep);
+    clock.since("store", storeFrom);
     var wrapStatus = botWrapsStatus();
     var chatBody = {
       cache: {
@@ -7457,7 +7942,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         : (freeTurn ? BOT_MODEL_DEFAULT : (chatResult.billedModel || BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general)),
       calls: chatResult.modelCalls == null ? 1 : chatResult.modelCalls, usage: chatResult.usage,
       costMilli: costMilli > 0 ? costMilli : cost * BOT_MILLI_PER_CREDIT,
-      git: !!ghConfig, web: body.web === true, ms: Date.now() - usageT0
+      git: !!ghConfig, web: body.web === true, ms: Date.now() - usageT0,
+      stages: clock.stages()
     });
     return await turnDone(chatBody);
   }
@@ -7585,7 +8071,7 @@ async function onRequest(context) {
   }
 
   // Private Nymbot messaging actions (paid 1:1 conversations, credit balance, purchases)
-  if (body && (body.action === "models" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek")) {
+  if (body && (body.action === "models" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {

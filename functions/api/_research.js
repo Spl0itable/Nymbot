@@ -410,7 +410,7 @@ export async function runResearch(deps, input) {
     state.pending = queryList(planned.queries, 4);
     if (!state.pending.length) state.pending = [{ q: clip(state.question, 160), kind: "reference" }];
     state.phase = "search";
-    progress({ kind: "research", stage: "planned", subs: state.subs.length, queries: state.pending.length });
+    progress({ kind: "research", stage: "planned", subs: state.subs.length, queries: state.pending.length, questions: state.subs.map((s) => clip(s, 160)) });
   }
 
   while (state.phase === "search") {

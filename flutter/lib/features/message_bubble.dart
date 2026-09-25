@@ -312,7 +312,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.bolt, size: 11, color: NymbotColors.lightning),
+              const NymGlyph('bolt', size: 11, color: NymbotColors.lightning),
               Text('${m.cost}',
                   style: const TextStyle(
                       fontSize: 10, color: NymbotColors.lightning)),
@@ -331,7 +331,7 @@ class _MessageBubbleState extends State<MessageBubble> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_outlined, size: 11, color: NymbotColors.lightning),
+            const NymGlyph('server-runs', size: 11, color: NymbotColors.lightning),
             const SizedBox(width: 2),
             Text(
                 t('{credits} on server runs', {'credits': ServerRuns.credits(m.serverRunCredits)}),
@@ -517,10 +517,8 @@ class _MessageBubbleState extends State<MessageBubble> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      a.kind == AttachmentKind.image
-                          ? Icons.image_outlined
-                          : Icons.description_outlined,
+                    NymGlyph(
+                      a.kind == AttachmentKind.image ? 'picture' : 'artifacts',
                       size: 13,
                     ),
                     const SizedBox(width: 4),
@@ -587,7 +585,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                             HapticFeedback.selectionClick();
                             widget.onEditFollowUp!(text);
                           },
-                    icon: Icon(Icons.send_rounded,
+                    icon: NymGlyph('send',
                         size: 14, color: theme.colorScheme.primary),
                     label: Text(text, softWrap: true),
                     style: OutlinedButton.styleFrom(
@@ -626,10 +624,10 @@ class _MessageBubbleState extends State<MessageBubble> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const NymGlyph('memory', size: 12),
+                const NymGlyph('thought', size: 12),
                 const SizedBox(width: 3),
                 Text(t('Reasoning'), style: const TextStyle(fontSize: 10.5)),
-                Icon(open ? Icons.expand_less : Icons.expand_more, size: 13),
+                NymGlyph('chevron', size: 13, quarterTurns: open ? 2 : 0),
               ],
             ),
           ),
@@ -882,10 +880,15 @@ class TypingIndicator extends StatelessWidget {
     required this.label,
     this.showAvatar = true,
     this.steps = const [],
+    this.draft,
+    this.wrapCode = false,
   });
 
   final String label;
   final bool showAvatar;
+
+  final String? draft;
+  final bool wrapCode;
 
   /// What the worker has reported doing, newest last. Shown under the label
   /// rather than instead of it: the spinner is still the answer to "is it
@@ -896,6 +899,7 @@ class TypingIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final recent = steps.length > 4 ? steps.sublist(steps.length - 4) : steps;
+    final partial = draft?.trim() ?? '';
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -913,9 +917,17 @@ class TypingIndicator extends StatelessWidget {
               // Centered: this is a status, not a message, and the lines under
               // it change length every couple of seconds — ragged against a left
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                crossAxisAlignment: partial.isEmpty
+                    ? CrossAxisAlignment.center
+                    : CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (partial.isNotEmpty)
+                    Padding(
+                      key: const ValueKey('reply-draft'),
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: MarkdownBody(partial, wrapCode: wrapCode),
+                    ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,

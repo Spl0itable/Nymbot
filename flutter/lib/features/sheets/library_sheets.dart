@@ -8,6 +8,7 @@ import '../markdown_body.dart';
 import '../i18n/i18n.dart';
 import '../../core/theme/theme.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 typedef MessageJump = ({String conversationId, String? messageId});
 
@@ -194,7 +195,7 @@ class _SavedSheetState extends State<_SavedSheet> {
                     messageId: row.message.id,
                   )),
                   trailing: IconButton(
-                    icon: const Icon(Icons.copy_all_outlined, size: 17),
+                    icon: const NymGlyph('copy', size: 17),
                     tooltip: t('Copy'),
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: row.message.content)),
@@ -475,30 +476,43 @@ Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              for (final item in <(String, IconData, String)>[
-                ('find', Icons.search, t('Find in this chat')),
-                ('rename', Icons.edit_outlined, t('Rename')),
-                ('pin', conv.pinned ? Icons.star : Icons.star_border,
+              for (final item in <(String, Widget, String)>[
+                ('find', const NymGlyph('search', size: 19),
+                    t('Find in this chat')),
+                ('rename', const NymGlyph('pencil', size: 19), t('Rename')),
+                ('pin', NymGlyph('star', size: 19, filled: conv.pinned),
                     conv.pinned ? t('Unpin') : t('Pin')),
-                ('archive', Icons.archive_outlined,
+                ('archive', const Icon(Icons.archive_outlined, size: 19),
                     conv.archived ? t('Unarchive') : t('Archive')),
-                ('duplicate', Icons.copy_all_outlined, t('Duplicate')),
-                ('system', Icons.tune, t('Custom instructions')),
-                ('tags', Icons.sell_outlined, t('Tags and folder')),
-                ('stats', Icons.insights_outlined, t('Chat statistics')),
-                ('caps', Icons.savings_outlined, t('Spending caps')),
-                ('share-link', Icons.link, t('Share a link')),
-                ('share', Icons.ios_share, t('Share the transcript')),
-                ('export-md', Icons.description_outlined, t('Export as Markdown')),
-                ('export-txt', Icons.notes, t('Export as plain text')),
-                ('export-json', Icons.data_object, t('Export as JSON')),
-                ('copy', Icons.copy_all_outlined, t('Copy the transcript')),
-                ('clear', Icons.cleaning_services_outlined, t('Clear this chat')),
-                ('delete', Icons.delete_outline, t('Delete')),
+                ('duplicate', const NymGlyph('branch', size: 19),
+                    t('Duplicate')),
+                ('system', const NymGlyph('person', size: 19),
+                    t('Custom instructions')),
+                ('tags', const NymGlyph('workspace', size: 19),
+                    t('Tags and folder')),
+                ('stats', const NymGlyph('chart', size: 19),
+                    t('Chat statistics')),
+                ('caps', const NymGlyph('wallet', size: 19),
+                    t('Spending caps')),
+                ('share-link', const NymGlyph('link', size: 19),
+                    t('Share a link')),
+                ('share', const Icon(Icons.ios_share, size: 19),
+                    t('Share the transcript')),
+                ('export-md', const NymGlyph('artifacts', size: 19),
+                    t('Export as Markdown')),
+                ('export-txt', const NymGlyph('terse', size: 19),
+                    t('Export as plain text')),
+                ('export-json', const NymGlyph('code', size: 19),
+                    t('Export as JSON')),
+                ('copy', const NymGlyph('copy', size: 19),
+                    t('Copy the transcript')),
+                ('clear', const Icon(Icons.cleaning_services_outlined, size: 19),
+                    t('Clear this chat')),
+                ('delete', const NymGlyph('close', size: 19), t('Delete')),
               ])
                 ListTile(
                   dense: true,
-                  leading: Icon(item.$2, size: 19),
+                  leading: item.$2,
                   title: Text(item.$3),
                   onTap: () => Navigator.pop(context, item.$1),
                 ),

@@ -239,7 +239,7 @@
         const head = rows[0] || [];
         const body = rows.slice(1);
         const cell = (text, i, tag) => {
-            const a = align[i] ? ` style="text-align:${align[i]}"` : '';
+            const a = align[i] ? ` class="md-align-${align[i]}"` : '';
             return `<${tag}${a}>${inline(text)}</${tag}>`;
         };
         return [

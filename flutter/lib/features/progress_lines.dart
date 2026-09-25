@@ -12,9 +12,18 @@ String progressLine(TurnStep step) {
           ? t('Routing to {model}', {'model': step.text})
           : t('Routing this one');
     case 'stage':
-      return step.text == 'reading'
-          ? t('Reading this conversation back off the relays')
-          : '';
+      switch (step.text) {
+        case 'reading':
+          return t('Reading this conversation back off the relays');
+        case 'encrypting':
+          return t('Encrypting your message end-to-end');
+        case 'opening':
+          return t("Opening your message on Nymbot's server");
+        case 'sealing':
+          return t('Encrypting the reply to you');
+        default:
+          return '';
+      }
     case 'route':
       return step.flag
           ? t('Sending the picture to a model that can see it')

@@ -359,6 +359,32 @@
 
     const BUSY_WAITS = [4000, 9000, 16000];
 
+    const HELD_MAX = 8;
+    const HELD_SEND = 4;
+    const HELD_BYTES = 96 * 1024;
+    const heldWraps = new Map();
+
+    function holdWraps(convId, events) {
+        if (!convId) return;
+        const list = (heldWraps.get(convId) || []).concat(events.filter(e => e && /^[0-9a-f]{64}$/i.test(e.id || '')));
+        heldWraps.set(convId, list.slice(-HELD_MAX));
+    }
+
+    function heldHistory(convId, threadIds) {
+        const list = heldWraps.get(convId) || [];
+        const want = new Set(threadIds || []);
+        const out = [];
+        let bytes = 0;
+        for (let i = list.length - 1; i >= 0 && out.length < HELD_SEND; i--) {
+            const e = list[i];
+            if (!want.has(e.id)) continue;
+            bytes += String(e.content || '').length;
+            if (bytes > HELD_BYTES) break;
+            out.unshift(e);
+        }
+        return out;
+    }
+
     function pause(ms, signal) {
         return new Promise(resolve => {
             let timer = 0;
@@ -546,6 +572,9 @@
             // and the reply's re-publish are for restoring a conversation
             // later, which is exactly what a ghost chat is refusing.
             const ghost = !!conv.ephemeral;
+            if (typeof opts.onStep === 'function') {
+                try { opts.onStep({ kind: 'stage', stage: 'encrypting', local: true }); } catch (_) { }
+            }
             const partIds = [];
             const partWraps = [];
             let wrap = null;
@@ -576,8 +605,13 @@
                 eventId: wrap.id,
                 wrap,
                 fresh: isFresh,
-                followUps: true
+                followUps: true,
+                draft: true
             };
+            if (!isFresh) {
+                const handed = heldHistory(conv.id, Store.thread(conv.id));
+                if (handed.length) extra.history = handed;
+            }
             // Every event the question was split across, in order. The last is
             // `eventId`, which is what a single-event message has always sent
             // and what an older worker will still answer from.
@@ -713,6 +747,7 @@
                 ids.push(wrap.id);
                 if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
                 Store.setThread(conv.id, ids);
+                holdWraps(conv.id, partWraps.concat(data.selfEvent ? [data.selfEvent] : []));
             }
 
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });
@@ -810,8 +845,13 @@
             const options = opts || {};
             try {
                 const { data } = await Api.call('pm-progress',
-                    { eventId, after: after || 0 },
+                    { eventId, after: after || 0, draftAfter: options.draftAfter || 0 },
                     { timeout: 8000, signer: options.signer || null });
+                const draft = data && data.draft;
+                if (typeof options.onDraft === 'function' && draft && typeof draft.text === 'string'
+                    && Number(draft.seq) > 0) {
+                    options.onDraft({ text: draft.text, seq: Number(draft.seq) });
+                }
                 return Array.isArray(data && data.steps) ? data.steps : [];
             } catch (_) {
                 return [];

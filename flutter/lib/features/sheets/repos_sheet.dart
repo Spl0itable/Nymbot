@@ -8,6 +8,7 @@ import '../../services/git_forge.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showReposSheet(BuildContext context) => showNymSheet<void>(
       context,
@@ -270,7 +271,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             decoration: InputDecoration(
               isDense: true,
               labelText: t('Filter'),
-              prefixIcon: const Icon(Icons.search, size: 18),
+              prefixIcon: const NymGlyph('search', size: 18),
             ),
             onChanged: (_) => setState(() {}),
           ),
@@ -423,7 +424,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        icon: const NymGlyph('pencil', size: 18),
                         tooltip: t('Edit'),
                         onPressed: () => _edit(r),
                       ),
@@ -435,7 +436,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                           onPressed: () => _disconnect(app, r),
                         ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 18),
+                        icon: const NymGlyph('close', size: 18),
                         tooltip: t('Remove'),
                         onPressed: () => app.deleteRepo(r.id),
                       ),
@@ -481,7 +482,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.travel_explore, size: 18),
+                  : const NymGlyph('search', size: 18),
               label: Text(_looking ? t('Looking…') : t('Look it up')),
               onPressed: _looking ? null : () => _lookUp(app),
             ),
@@ -519,7 +520,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.playlist_add_check, size: 18),
+                  : const NymGlyph('branch', size: 18),
               label: Text(t('List what this token can reach')),
               onPressed: _asking ? null : () => _browse(app),
             ),

@@ -12,6 +12,7 @@ import '../state/app_controller.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
 import 'sheets/sheet.dart';
+import 'nym_glyph.dart';
 
 ChatShareService chatShareFor(AppController app) => ChatShareService(
       blossom: app.blossom,
@@ -390,7 +391,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                 children: [
                   OutlinedButton.icon(
                     onPressed: () => _copy(current.link),
-                    icon: const Icon(Icons.copy, size: 16),
+                    icon: const NymGlyph('copy', size: 16),
                     label: Text(t('Copy the link')),
                   ),
                   OutlinedButton.icon(
@@ -404,7 +405,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                   if (!widget.conv.anon)
                     OutlinedButton.icon(
                       onPressed: _post,
-                      icon: const Icon(Icons.public, size: 16),
+                      icon: const NymGlyph('globe', size: 16),
                       label: Text(t('Also post to Nostr…')),
                     ),
                 ],
@@ -437,12 +438,12 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.copy, size: 17),
+                          icon: const NymGlyph('copy', size: 17),
                           tooltip: t('Copy'),
                           onPressed: () => _copy(r.link),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.link_off,
+                          icon: const NymGlyph('close',
                               size: 17, color: NymbotColors.danger),
                           tooltip: t('Stop sharing'),
                           onPressed: () => _stop(r),

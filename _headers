@@ -67,6 +67,10 @@
   ! Cross-Origin-Resource-Policy
   Cross-Origin-Resource-Policy: cross-origin
 
+/app/css/svg-frame.css
+  ! Cross-Origin-Resource-Policy
+  Cross-Origin-Resource-Policy: cross-origin
+
 /app/sandbox-worker.js
   ! Content-Security-Policy
   ! Cross-Origin-Resource-Policy

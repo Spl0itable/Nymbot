@@ -5,6 +5,7 @@ import '../services/research.dart';
 import '../state/app_controller.dart';
 import 'i18n/i18n.dart';
 import 'nym_avatar.dart';
+import 'nym_glyph.dart';
 
 Future<void> toggleResearchChip(BuildContext context, AppController app) async {
   final messenger = ScaffoldMessenger.of(context);
@@ -89,8 +90,8 @@ class ResearchSteps extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2),
             child: Row(
               children: [
-                Icon(
-                  line.current ? Icons.more_horiz : Icons.check,
+                NymGlyph(
+                  line.current ? 'dot' : 'check',
                   size: 13,
                   color: line.current
                       ? theme.hintColor

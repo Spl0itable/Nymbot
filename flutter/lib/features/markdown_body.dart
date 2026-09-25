@@ -10,11 +10,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
 import 'run_output.dart';
 import 'server_run_sheet.dart';
 import '../app.dart';
 import '../config.dart';
 import '../core/theme/theme.dart';
+import '../services/media_cache.dart';
 import '../services/sandbox_host.dart';
 import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
@@ -400,7 +402,7 @@ class MarkdownBody extends StatelessWidget {
             constraints: const BoxConstraints(maxHeight: 240),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(imageSource(m.group(3)!)!,
+              child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
                   loadingBuilder: (c, child, p) => p == null
                       ? child
                       : mediaWaiting(c, p, width: 200, height: 140),
@@ -729,12 +731,13 @@ class _CodeBlockState extends State<CodeBlock> {
                 if (server && runner?.serverLanguage != null)
                   ServerRunButton(controller: runner!, code: widget.code),
                 _tiny(
-                  icon: _wrap ? Icons.wrap_text : Icons.short_text,
+                  icon: 'terse',
+                  on: _wrap,
                   tooltip: t('Wrap long lines'),
                   onTap: () => setState(() => _wrap = !_wrap),
                 ),
                 _tiny(
-                  icon: _copied ? Icons.check : Icons.copy_all_outlined,
+                  icon: _copied ? 'check' : 'copy',
                   tooltip: t('Copy'),
                   onTap: () async {
                     await Clipboard.setData(ClipboardData(text: widget.code));
@@ -760,9 +763,15 @@ class _CodeBlockState extends State<CodeBlock> {
     );
   }
 
-  Widget _tiny({required IconData icon, required String tooltip, required VoidCallback onTap}) =>
+  Widget _tiny(
+          {required String icon,
+          required String tooltip,
+          required VoidCallback onTap,
+          bool on = false}) =>
       IconButton(
-        icon: Icon(icon, size: 15),
+        icon: NymGlyph(icon,
+            size: 15,
+            color: on ? Theme.of(context).colorScheme.primary : null),
         tooltip: tooltip,
         onPressed: onTap,
         visualDensity: VisualDensity.compact,
@@ -836,7 +845,7 @@ class _MediaBlockState extends State<MediaBlock> {
             ? const SizedBox(
                 width: 16, height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-            : const Icon(Icons.download),
+            : const NymGlyph('save', size: 18),
         onPressed: _saving ? null : _save,
       ),
     );
@@ -848,14 +857,14 @@ class _MediaBlockState extends State<MediaBlock> {
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(children: [
-          Icon(Icons.movie_outlined, size: 18, color: theme.hintColor),
+          NymGlyph('film', size: 18, color: theme.hintColor),
           const SizedBox(width: 8),
           Expanded(child: Text(t('Tap to save what this made'),
               style: TextStyle(fontSize: 12, color: theme.hintColor))),
           IconButton(
             iconSize: 18,
             tooltip: t('Open'),
-            icon: const Icon(Icons.open_in_new),
+            icon: const NymGlyph('link', size: 18),
             onPressed: () => launchUrl(Uri.parse(widget.url),
                 mode: LaunchMode.externalApplication),
           ),
@@ -866,7 +875,7 @@ class _MediaBlockState extends State<MediaBlock> {
                 ? const SizedBox(
                     width: 16, height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.download),
+                : const NymGlyph('save', size: 18),
             onPressed: _saving ? null : _save,
           ),
         ]),
@@ -879,7 +888,7 @@ class _MediaBlockState extends State<MediaBlock> {
     return Stack(children: [
       ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: Image.network(src,
+        child: Image(image: CachedMediaImage(src),
             loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
             errorBuilder: (c, e, s) => Text(widget.url,
                 style: TextStyle(fontSize: 12, color: theme.hintColor))),

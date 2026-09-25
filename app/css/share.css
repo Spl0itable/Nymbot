@@ -74,3 +74,6 @@ html:has(.share-page) { height: auto; }
 .share-page .share-note h2 { font-size: 1.05rem; margin-bottom: 0.5rem; }
 .share-page .share-note p + p { margin-top: 0.5rem; }
 .share-foot { margin-top: 2rem; font-size: 0.8rem; color: var(--text-faint); text-align: center; }
+.md-align-left { text-align: left; }
+.md-align-center { text-align: center; }
+.md-align-right { text-align: right; }

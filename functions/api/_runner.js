@@ -221,7 +221,7 @@ export async function runnerSettings(env, now = Date.now()) {
 }
 
 export function runnerAvailable(env, settings) {
-  if (!(env && env.RUNNER && env.RUNNER_SECRET)) return false;
+  if (!(env && env.RUNNER && String(env.RUNNER_SECRET || "").trim())) return false;
   return !(settings && settings.enabled === false);
 }
 
@@ -346,7 +346,7 @@ export async function* callRunner(env, req, opts) {
     try {
       res = await env.RUNNER.fetch("https://runner/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Runner-Secret": String(env.RUNNER_SECRET || "") },
+        headers: { "Content-Type": "application/json", "X-Runner-Secret": String(env.RUNNER_SECRET || "").trim() },
         body: JSON.stringify(req),
         signal: abort.signal
       });

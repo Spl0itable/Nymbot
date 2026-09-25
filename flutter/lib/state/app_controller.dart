@@ -43,10 +43,12 @@ import '../core/crypto/pq.dart' as pq_crypto;
 import '../services/pq_announce.dart';
 import '../services/profiles.dart';
 import '../services/relay_pool.dart';
+import '../services/reply_notify.dart';
 import '../services/research.dart';
 import '../services/server_runs.dart';
 import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
+import '../services/tasks.dart';
 import '../services/team.dart';
 import 'identity.dart';
 import 'store.dart';
@@ -145,6 +147,53 @@ class AppController extends ChangeNotifier {
 
   Nip46SocketFactory? signerSockets;
 
+  late final ReplyNotify replyNotify = ReplyNotify(
+    enabled: () => settings.replyNotify,
+    register: _registerReplyNotify,
+    titleOf: (id) => _conversationById(id)?.title ?? '',
+    open: openChat,
+  );
+
+  static const _notifyAskedKey = 'reply_notify_asked';
+
+  Conversation? _conversationById(String id) {
+    for (final c in conversations) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  Future<void> openChat(String id) async {
+    final conv = _conversationById(id);
+    if (conv != null) await open(conv);
+  }
+
+  Future<Map<String, dynamic>?> _registerReplyNotify(
+      String id, Map<String, dynamic> body) async {
+    final conv = _conversationById(id);
+    if (conv == null) return null;
+    final signer =
+        conv.anon && anon.ready ? await anon.signer() : identity.signer;
+    final res = await api.call('notify-turn', signer,
+        extra: body, timeout: const Duration(seconds: 10));
+    return res.status == 0 ? null : res.data;
+  }
+
+  Future<void> setReplyNotify(bool on) async {
+    settings.replyNotify = on;
+    await store.saveSettings(settings);
+    notifyListeners();
+    if (on) await store.setBool(_notifyAskedKey, true);
+    await replyNotify.settingChanged(on);
+  }
+
+  void _askReplyNotifyOnce() {
+    if (!settings.replyNotify || !replyNotify.supported) return;
+    if (store.getBool(_notifyAskedKey)) return;
+    unawaited(store.setBool(_notifyAskedKey, true));
+    unawaited(replyNotify.askPermission());
+  }
+
   bool signedIn = false;
   bool _entered = false;
   Timer? _bootWork;
@@ -168,6 +217,10 @@ class AppController extends ChangeNotifier {
   String? get status => turnOf(current)?.status;
 
   List<TurnStep> get progressSteps => turnOf(current)?.steps ?? const [];
+
+  String? get progressDraft => turnOf(current)?.draft;
+
+  final Set<String> streamedReplies = {};
 
   bool researchNext = false;
 
@@ -278,6 +331,15 @@ class AppController extends ChangeNotifier {
   void holdForTest(Conversation conv) {
     turns[conv.id] = ChatTurn(conv);
     notifyListeners();
+  }
+
+  @visibleForTesting
+  void watchTurnForTest(ChatTurn turn, String eventId) => _watchTurn(turn, eventId);
+
+  @visibleForTesting
+  void endTurnForTest(ChatTurn turn) {
+    turn.watching = false;
+    _endTurn(turn);
   }
 
   @visibleForTesting
@@ -463,6 +525,54 @@ class AppController extends ChangeNotifier {
     final media = mediaModelOf(conv);
     final key = media?['proKey'] as String?;
     return (mediaNeedsPro(media) && key != null) ? {'key': key} : null;
+  }
+
+  static Map<String, dynamic> mediaFor(Map<String, dynamic> m,
+      {String? slug, Map<String, dynamic>? catalog}) {
+    final credits = (m['credits'] as num?)?.toInt() ?? 0;
+    final media = <String, dynamic>{
+      'key': m['key'],
+      'label': m['label'],
+      'kind': m['kind'] ?? 'image',
+      'credits': credits,
+      'max': (m['max'] as num?)?.toInt() ?? credits,
+      'command': generatorCommand(m['command'] as String?),
+      'slug': slug,
+    };
+    if (mediaNeedsPro(media)) media['proKey'] = cheapestChatKey(catalog);
+    return media;
+  }
+
+  static String? cheapestChatKey(Map<String, dynamic>? catalog) {
+    final groups =
+        (catalog?['groups'] as List?)?.cast<Map<String, dynamic>>() ??
+            const [];
+    final byKey = {
+      for (final m in (catalog?['models'] as List?)
+              ?.cast<Map<String, dynamic>>() ??
+          const <Map<String, dynamic>>[])
+        m['key'] as String: m
+    };
+    String? best;
+    var cheapest = 1 << 30;
+    var ceiling = 1 << 30;
+    for (final group in groups) {
+      for (final key in (group['keys'] as List).cast<String>()) {
+        final m = byKey[key];
+        if (m == null) continue;
+        final kind = m['kind'] as String?;
+        if ((kind != null && kind != 'chat') || m['command'] != null) continue;
+        final credits = (m['credits'] as num?)?.toInt() ?? 0;
+        final max = (m['max'] as num?)?.toInt() ?? credits;
+        if (credits > cheapest || (credits == cheapest && max >= ceiling)) {
+          continue;
+        }
+        cheapest = credits;
+        ceiling = max;
+        best = m['key'] as String?;
+      }
+    }
+    return best;
   }
 
   static bool mediaNeedsPro(Map<String, dynamic>? media) =>
@@ -750,35 +860,65 @@ class AppController extends ChangeNotifier {
   /// Polls the worker for what the turn is doing. Stops the moment the turn is
   /// over, and never keeps the send waiting on it.
   void _watchTurn(ChatTurn turn, String eventId) {
-    if (!settings.showProgress && turn.research == null && turn.team == null) {
-      return;
-    }
+    _askReplyNotifyOnce();
+    replyNotify.pendingTurn(turn.conv.id, eventId);
+    final showSteps = settings.showProgress ||
+        turn.research != null ||
+        turn.team != null;
     turn.watching = true;
-    turn.steps = [];
+    turn.draft = null;
+    turn.steps = showSteps
+        ? turn.steps.where((s) => s.n == 0 && s.kind == 'stage').toList()
+        : [];
     () async {
       var after = 0;
+      var draftAfter = 0;
       while (turn.watching) {
         final signer = turn.conv.anon && anon.enabled
             ? await anon.signer()
             : identity.signer;
-        final steps = await chat.progress(signer, eventId, after: after);
+        String? draft;
+        final raw = await chat.progressRaw(signer, eventId,
+            after: after,
+            draftAfter: draftAfter,
+            onDraft: (text, seq) {
+              draft = text;
+              draftAfter = seq;
+            });
+        final steps = ChatEngine.steps(raw);
         if (!turn.watching) return;
-        if (steps.isNotEmpty) {
-          after = steps.last.n;
+        if (steps.isNotEmpty) after = steps.last.n;
+        if (steps.isNotEmpty && showSteps) {
           turn.steps = [...turn.steps, ...steps];
-          notifyListeners();
+          turn.log = [...turn.log, ...Tasks.compactAll(raw)];
         }
-        await Future<void>.delayed(
-            Duration(seconds: signer.isRemote ? 5 : 2));
+        if (draft != null) {
+          turn.draft = draft;
+          turn.drafted = true;
+        }
+        if ((steps.isNotEmpty && showSteps) || draft != null) notifyListeners();
+        final fast = turn.draft != null && turn.research == null;
+        await Future<void>.delayed(signer.isRemote
+            ? const Duration(seconds: 5)
+            : Duration(milliseconds: fast ? 600 : 2000));
       }
     }()
         .catchError((_) {});
   }
 
+  void _localStep(ChatTurn turn, Map<String, dynamic> step) {
+    if (!settings.showProgress && turn.research == null && turn.team == null) {
+      return;
+    }
+    turn.steps = [...turn.steps, ChatEngine.turnStep({...step, 'n': 0})];
+    notifyListeners();
+  }
+
   void _stopWatching(ChatTurn turn) {
-    if (!turn.watching && turn.steps.isEmpty) return;
+    if (!turn.watching && turn.steps.isEmpty && turn.draft == null) return;
     turn.watching = false;
     turn.steps = [];
+    turn.draft = null;
     notifyListeners();
   }
 
@@ -1179,6 +1319,7 @@ class AppController extends ChangeNotifier {
         firstTurn: false,
         resume: token,
         onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
         onThreadIds: (ids) {
           final thread = [...store.thread(conv.id), ...ids];
           unawaited(store.setThread(conv.id, thread));
@@ -1206,6 +1347,7 @@ class AppController extends ChangeNotifier {
         serverRuns: res.serverRuns,
         team: Team.normalize(res.team),
       );
+      if (turn.drafted) streamedReplies.add(reply.id);
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
@@ -1290,14 +1432,26 @@ class AppController extends ChangeNotifier {
 
   Bot? botOf(Conversation? conv) => store.bot(conv?.botId);
 
-  Future<void> setBot(String? id, {Map<String, dynamic>? model}) async {
+  Future<void> setBot(String? id,
+      {Map<String, dynamic>? model, Map<String, dynamic>? catalog}) async {
     final conv = current;
     if (conv == null) return;
     conv.botId = id;
-    if (id == null) {
-      conv.proModel = null;
-    } else if (model != null) {
-      conv.proModel = model;
+    final botMedia = conv.mediaModel?['fromBot'] == true;
+    if (id != null && model != null && model['command'] != null) {
+      final known = catalog ?? mentionCatalog;
+      conv.mediaModel = {
+        ...mediaFor(model,
+            slug: ModelMaker.of(model, known)?.slug, catalog: known),
+        'fromBot': true,
+      };
+    } else {
+      if (id == null) {
+        conv.proModel = null;
+      } else if (model != null) {
+        conv.proModel = model;
+      }
+      if (botMedia) conv.mediaModel = null;
     }
     _touch(conv);
     await store.saveConversations(conversations);
@@ -1435,6 +1589,7 @@ class AppController extends ChangeNotifier {
     }
 
     entry.advance();
+    entry.lastConvId = target.id;
     await store.saveSchedules(schedules);
     await note(t('Running “{name}”.',
         {'name': entry.title.isEmpty ? t('Untitled') : entry.title}));
@@ -1889,6 +2044,7 @@ class AppController extends ChangeNotifier {
       await open(live.first);
     }
     notifyListeners();
+    unawaited(replyNotify.attach());
 
     sync.onChange = _afterSync;
     sync.follow();
@@ -1965,6 +2121,7 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    replyNotify.detach();
     _bootWork?.cancel();
     _syncTimer?.cancel();
     _noticeTimer?.cancel();
@@ -1995,6 +2152,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> open(Conversation conv) async {
     current = conv;
+    replyNotify.viewingChat(conv.id);
     messages = store.messages(conv.id);
     artifacts = store.artifacts(conv.id);
     attachments = [];
@@ -2497,8 +2655,43 @@ class AppController extends ChangeNotifier {
 
   void _endTurn(ChatTurn turn) {
     if (turns[turn.conv.id] == turn) turns.remove(turn.conv.id);
+    unawaited(_keepTasks(turn));
+    final said = _messagesOf(turn.conv).lastWhere(
+        (m) => m.role != ChatRole.note,
+        orElse: () => ChatMessage(id: '', role: ChatRole.note, content: ''));
+    unawaited(replyNotify.settled(turn.conv.id,
+        replied: said.role == ChatRole.bot));
     turn.status = null;
     notifyListeners();
+  }
+
+  LiveTasks? liveTasks(Conversation? conv) {
+    final turn = turnOf(conv);
+    if (turn == null) return null;
+    return (
+      steps: turn.log,
+      team: turn.team,
+      research: turn.research != null,
+      label: turn.status ?? t('Nymbot is thinking'),
+    );
+  }
+
+  Future<void> _keepTasks(ChatTurn turn) async {
+    if (turn.kept) return;
+    turn.kept = true;
+    if (turn.log.isEmpty && turn.team == null && turn.research == null) return;
+    final conv = turn.conv;
+    final list = _messagesOf(conv);
+    final hit = Tasks.target(list, turn.began);
+    if (hit == null) return;
+    final rec = Tasks.record(
+        (steps: turn.log, team: turn.team, research: turn.research != null, label: ''),
+        turn.stopped ? 'stopped' : (hit['bot'] == true ? 'done' : 'failed'));
+    if (rec == null) return;
+    final next = [for (final m in list) m.id == hit['id'] ? m.copyWith(tasks: rec) : m];
+    if (conv.id == current?.id) messages = next;
+    notifyListeners();
+    await store.saveMessages(conv.id, next);
   }
 
   /// The last few turns, plain enough for a model that has never seen this
@@ -2880,6 +3073,7 @@ class AppController extends ChangeNotifier {
         research: research?.payload,
         team: team,
         onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
         onThreadIds: (ids) {
           final thread = [...store.thread(conv.id), ...ids];
           unawaited(store.setThread(conv.id, thread));
@@ -2911,6 +3105,7 @@ class AppController extends ChangeNotifier {
         serverRuns: res.serverRuns,
         team: Team.normalize(res.team),
       );
+      if (turn.drafted) streamedReplies.add(reply.id);
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       if (conv.seed != null) conv.seed = null;
@@ -3154,6 +3349,7 @@ class AppController extends ChangeNotifier {
               resume: token,
               research: research,
               onTurn: (eventId) => _watchTurn(turn, eventId),
+              onStep: (step) => _localStep(turn, step),
               onThreadIds: (ids) {
                 final thread = [...store.thread(conv.id), ...ids];
                 unawaited(store.setThread(conv.id, thread));
@@ -4018,6 +4214,11 @@ class ChatTurn {
   /// What the running turn is doing, newest last. Advisory: it is emptied the
   /// moment a turn ends, and an empty list simply shows the plain spinner.
   List<TurnStep> steps = [];
+  List<Map<String, dynamic>> log = [];
+  String? draft;
+  bool drafted = false;
+  final DateTime began = DateTime.now();
+  bool kept = false;
   bool watching = false;
   bool stopped = false;
 

@@ -4,6 +4,7 @@ import '../../app.dart';
 import '../artifact_screen.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showArtifactsSheet(BuildContext context) => showNymSheet<void>(
       context,
@@ -52,10 +53,8 @@ class _ArtifactsSheet extends StatelessWidget {
                 margin: const EdgeInsets.only(bottom: 6),
                 child: ListTile(
                   dense: true,
-                  leading: Icon(
-                    a.previewable
-                        ? Icons.description_outlined
-                        : Icons.code_outlined,
+                  leading: NymGlyph(
+                    a.previewable ? 'artifacts' : 'code',
                     size: 20,
                   ),
                   title: Text(a.title, overflow: TextOverflow.ellipsis),
@@ -72,7 +71,7 @@ class _ArtifactsSheet extends StatelessWidget {
                     showArtifact(context, a);
                   },
                   trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 17),
+                    icon: const NymGlyph('close', size: 17),
                     tooltip: t('Delete'),
                     onPressed: () => app.deleteArtifact(a.id),
                   ),

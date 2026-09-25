@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/doc_library.dart';
 import '../services/doc_search.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
 
 class DocTray extends StatelessWidget {
   const DocTray({super.key, required this.convId});
@@ -29,7 +30,7 @@ class DocTray extends StatelessWidget {
               Text(t('Searched in this chat:'), style: hint),
               for (final d in docs)
                 InputChip(
-                  avatar: const Icon(Icons.manage_search, size: 15),
+                  avatar: const NymGlyph('search', size: 15),
                   label: Text(
                     '${d.name} · ${d.paged ? t('{n} pages', {'n': d.pages}) : t('{n} parts', {'n': d.pages})}',
                     style: const TextStyle(fontSize: 12),

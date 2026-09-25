@@ -9,6 +9,7 @@ import 'code_highlight.dart';
 import 'markdown_body.dart';
 import 'i18n/i18n.dart';
 import '../core/theme/theme.dart';
+import 'nym_glyph.dart';
 
 Future<void> showArtifact(BuildContext context, Artifact artifact) =>
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -103,7 +104,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy_all_outlined, size: 20),
+              icon: const NymGlyph('copy', size: 20),
               tooltip: t('Copy'),
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
@@ -146,7 +147,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
         ),
         floatingActionButton: (_dirty && active == 1)
             ? FloatingActionButton.extended(
-                icon: const Icon(Icons.save_outlined, size: 18),
+                icon: const NymGlyph('check', size: 18),
                 label: Text(t('Save version')),
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
@@ -289,10 +290,8 @@ class ArtifactCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
-              artifact.previewable
-                  ? Icons.description_outlined
-                  : Icons.code_outlined,
+            NymGlyph(
+              artifact.previewable ? 'artifacts' : 'code',
               size: 16,
             ),
             const SizedBox(width: 8),
@@ -315,7 +314,8 @@ class ArtifactCard extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, size: 18, color: theme.hintColor),
+            NymGlyph('chevron',
+                size: 18, color: theme.hintColor, quarterTurns: 3),
           ],
         ),
       ),

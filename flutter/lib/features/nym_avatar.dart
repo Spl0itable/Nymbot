@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'nym_icons.dart';
+import '../services/media_cache.dart';
 
 class NymAvatar extends StatelessWidget {
   const NymAvatar({
@@ -29,8 +30,8 @@ class NymAvatar extends StatelessWidget {
         ),
       );
       return ClipOval(
-        child: Image.network(
-          picture,
+        child: Image(
+          image: CachedMediaImage(picture),
           width: size,
           height: size,
           fit: BoxFit.cover,

@@ -7,6 +7,7 @@ import '../core/theme/theme.dart';
 import 'command_sheet.dart';
 import 'i18n/i18n.dart';
 import 'sheets/sheet.dart';
+import 'nym_glyph.dart';
 
 typedef PaletteChoice = ({String kind, String value});
 
@@ -190,7 +191,7 @@ class _PaletteState extends State<_Palette> {
               autofocus: true,
               decoration: InputDecoration(
                 hintText: t('Type a command or search'),
-                prefixIcon: const Icon(Icons.search, size: 18),
+                prefixIcon: const NymGlyph('search', size: 18),
               ),
               onChanged: (v) => setState(() {
                 _term = v;

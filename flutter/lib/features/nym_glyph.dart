@@ -10,6 +10,7 @@ class NymGlyph extends StatelessWidget {
     this.color,
     this.filled = false,
     this.weight = 2,
+    this.quarterTurns = 0,
   });
 
   final String name;
@@ -20,6 +21,8 @@ class NymGlyph extends StatelessWidget {
 
   final double weight;
 
+  final int quarterTurns;
+
   @override
   Widget build(BuildContext context) {
     final key = kNymGlyphFor[name] ?? name;
@@ -28,17 +31,25 @@ class NymGlyph extends StatelessWidget {
         kNymGlyphStroke[key] ??
         kNymGlyphShell[key] ??
         kNymGlyphStroke['robot']!;
-    return SizedBox(
+    final glyph = SizedBox(
       width: size,
       height: size,
       child: CustomPaint(
         painter: _GlyphPainter(
           body: body,
           solid: solid != null,
-          color: color ?? IconTheme.of(context).color ?? const Color(0xFFFFFFFF),
+          color:
+              color ?? IconTheme.of(context).color ?? const Color(0xFFFFFFFF),
           weight: weight,
         ),
       ),
+    );
+    return Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: quarterTurns == 0
+          ? glyph
+          : RotatedBox(quarterTurns: quarterTurns, child: glyph),
     );
   }
 

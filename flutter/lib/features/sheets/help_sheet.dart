@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 const supportEmail = 'support@nymbot.ai';
 
@@ -285,7 +286,7 @@ class _HelpSheetState extends State<_HelpSheet> {
               controller: _search,
               decoration: InputDecoration(
                 labelText: t('Search this guide'),
-                prefixIcon: const Icon(Icons.search, size: 18),
+                prefixIcon: const NymGlyph('search', size: 18),
               ),
               onChanged: (_) => setState(() {}),
             ),
@@ -333,7 +334,7 @@ class _HelpSheetState extends State<_HelpSheet> {
             ),
             const SizedBox(height: 6),
             OutlinedButton.icon(
-              icon: const Icon(Icons.menu_book_outlined, size: 18),
+              icon: const NymGlyph('link', size: 18),
               label: Text(t('Full knowledge base')),
               onPressed: () => launchUrl(
                 Uri.parse('https://nymbot.ai/docs/'),

@@ -12,6 +12,7 @@ import '../services/sandbox_host.dart';
 import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
 
 class RunOutputs {
   RunOutputs._();
@@ -210,7 +211,7 @@ class RunOutputView extends StatelessWidget {
                         child: Text(t('Send output to Nymbot'), style: const TextStyle(fontSize: 12)),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close, size: 15),
+                        icon: const NymGlyph('close', size: 15),
                         tooltip: t('Clear'),
                         onPressed: controller.clear,
                         visualDensity: VisualDensity.compact,

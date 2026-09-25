@@ -11,6 +11,7 @@ import '../secret_guard.dart';
 import '../vault_dialog.dart';
 import 'gift_sheet.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showIdentitySheet(BuildContext context) => showNymSheet<void>(
       context,
@@ -153,7 +154,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
               identity.npub,
               actions: [
                 IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
+                  icon: const NymGlyph('copy', size: 18),
                   tooltip: t('Copy the npub'),
                   onPressed: () => _copy(identity.npub),
                 ),
@@ -165,7 +166,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
               identity.pubkey,
               actions: [
                 IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
+                  icon: const NymGlyph('copy', size: 18),
                   tooltip: t('Copy the hex key'),
                   onPressed: () => _copy(identity.pubkey),
                 ),
@@ -201,7 +202,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                     onPressed: () => setState(() => _showNsec = !_showNsec),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.copy, size: 18),
+                    icon: const NymGlyph('copy', size: 18),
                     tooltip: t('Copy the private key'),
                     onPressed: () => _copy(identity.nsec, secret: true),
                   ),
@@ -220,7 +221,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                   onPressed: () => setState(() => _showRoot = !_showRoot),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
+                  icon: const NymGlyph('copy', size: 18),
                   tooltip: t('Copy the recovery code'),
                   onPressed: () => _copy(identity.rootCode, secret: true),
                 ),

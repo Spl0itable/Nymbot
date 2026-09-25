@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'i18n/i18n.dart';
 import '../core/theme/theme.dart';
+import 'nym_glyph.dart';
 
 enum DiffLineKind { add, remove, context, hunk, meta }
 
@@ -161,8 +162,7 @@ class _FilePanelState extends State<_FilePanel> {
               ),
               child: Row(
                 children: [
-                  Icon(_open ? Icons.expand_more : Icons.chevron_right,
-                      size: 16),
+                  NymGlyph('chevron', size: 16, quarterTurns: _open ? 0 : 3),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
@@ -186,7 +186,7 @@ class _FilePanelState extends State<_FilePanel> {
                           fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                           color: Color(0xFFCF222E))),
                   IconButton(
-                    icon: const Icon(Icons.copy_all_outlined, size: 15),
+                    icon: const NymGlyph('copy', size: 15),
                     tooltip: t('Copy'),
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,

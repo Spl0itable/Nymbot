@@ -191,6 +191,8 @@ class ChatMessage {
     this.serverRunCredits = 0,
     List<Map<String, dynamic>>? serverRuns,
     this.team,
+    this.tasks,
+    this.updatedAt,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
@@ -234,6 +236,8 @@ class ChatMessage {
   final double serverRunCredits;
   final List<Map<String, dynamic>> serverRuns;
   final Map<String, dynamic>? team;
+  final Map<String, dynamic>? tasks;
+  final DateTime? updatedAt;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -241,7 +245,9 @@ class ChatMessage {
           bool? pinned,
           Map<String, dynamic>? checkpoint,
           Map<String, dynamic>? pendingTool,
-          Map<String, dynamic>? staged}) =>
+          Map<String, dynamic>? staged,
+          Map<String, dynamic>? tasks,
+          DateTime? updatedAt}) =>
       ChatMessage(
         id: id,
         role: role,
@@ -270,6 +276,8 @@ class ChatMessage {
         serverRunCredits: serverRunCredits,
         serverRuns: serverRuns,
         team: team,
+        tasks: tasks ?? this.tasks,
+        updatedAt: updatedAt ?? DateTime.now(),
         at: at,
       );
 
@@ -301,6 +309,8 @@ class ChatMessage {
         if (serverRunCredits > 0) 'serverRunCredits': serverRunCredits,
         if (serverRuns.isNotEmpty) 'serverRuns': serverRuns,
         if (team != null) 'team': team,
+        if (tasks != null) 'tasks': tasks,
+        if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -338,6 +348,10 @@ class ChatMessage {
         serverRunCredits: (j['serverRunCredits'] as num?)?.toDouble() ?? 0,
         serverRuns: (j['serverRuns'] as List?)?.whereType<Map<String, dynamic>>().toList(),
         team: j['team'] is Map ? (j['team'] as Map).cast<String, dynamic>() : null,
+        tasks: j['tasks'] is Map ? (j['tasks'] as Map).cast<String, dynamic>() : null,
+        updatedAt: j['updatedAt'] is num
+            ? DateTime.fromMillisecondsSinceEpoch((j['updatedAt'] as num).toInt())
+            : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
 

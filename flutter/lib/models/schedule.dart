@@ -16,6 +16,7 @@ class Schedule {
     this.enabled = true,
     this.runs = 0,
     this.lastRunAt,
+    this.lastConvId,
     DateTime? createdAt,
   })  : nextAt = nextAt ?? DateTime.now(),
         createdAt = createdAt ?? DateTime.now();
@@ -29,6 +30,7 @@ class Schedule {
   bool enabled;
   int runs;
   DateTime? lastRunAt;
+  String? lastConvId;
   final DateTime createdAt;
 
   bool get due => enabled && !nextAt.isAfter(DateTime.now());
@@ -68,6 +70,7 @@ class Schedule {
         'enabled': enabled,
         'runs': runs,
         'lastRunAt': lastRunAt?.millisecondsSinceEpoch,
+        'lastConvId': lastConvId,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
 
@@ -88,6 +91,7 @@ class Schedule {
             ? null
             : DateTime.fromMillisecondsSinceEpoch(
                 (j['lastRunAt'] as num).toInt()),
+        lastConvId: j['lastConvId'] as String?,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
       );

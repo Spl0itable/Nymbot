@@ -43,7 +43,7 @@
     <main class="legal-page">
         <a href="/" class="legal-back"><span aria-hidden="true">←</span> Back to Nymbot</a>
         <h1>Privacy Policy</h1>
-        <p class="last-updated">Last Updated: September 6th, 2026</p>
+        <p class="last-updated">Last Updated: September 24th, 2026</p>
         <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
         <p>There is no account, no email address and no phone number. There is a key you generate on your own device, and a balance attached to its public half. That is the whole of what we hold about you.</p>
         <p>Nymbot is an AI assistant, which means one thing is unavoidably different from a messenger: to answer your question, the service has to read it. We would rather say that plainly than bury it.</p>
@@ -59,6 +59,7 @@
             <li><strong>An ordered list of message ids</strong> per conversation, so a reply can be given the thread as context. The messages themselves are encrypted.</li>
             <li><strong>Encrypted archived copies</strong> of the exchange, readable only by the keys involved.</li>
             <li><strong>Short-lived operational records</strong> — rate limits, turn de-duplication keys, invoice claims — which exist to stop double charges and abuse.</li>
+            <li><strong>A push token, briefly</strong>, if you turn on reply notifications on iOS: the device token Apple issued, an opaque chat id made on your device and a generic line such as “Your reply is ready”. It is kept only until that one reply is finished, then deleted after a single notification is sent through Apple. On Android, reply notifications never leave your device. See <a href="/docs/apps/#reply-notifications">reply notifications</a>.</li>
         </ul>
         <p>We do not store your conversation titles: those are generated on your device and never sent. We do not store your private key, and we cannot recover it. We do not store the access token for a <a href="/docs/git/">connected git repository</a>; it is held on your device and passed with each request.</p>
 

@@ -6,6 +6,7 @@ import '../../models/memory.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showMemorySheet(BuildContext context) =>
     showNymSheet<void>(
@@ -127,7 +128,7 @@ class _MemorySheetState extends State<_MemorySheet> {
                 decoration: InputDecoration(
                   isDense: true,
                   labelText: t('Search what is remembered'),
-                  prefixIcon: const Icon(Icons.search, size: 18),
+                  prefixIcon: const NymGlyph('search', size: 18),
                 ),
                 onChanged: (_) => setState(() {}),
               ),
@@ -257,7 +258,7 @@ class _MemorySheetState extends State<_MemorySheet> {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 16),
+            icon: const NymGlyph('pencil', size: 16),
             tooltip: t('Edit'),
             visualDensity: VisualDensity.compact,
             onPressed: () => setState(() {
@@ -268,7 +269,7 @@ class _MemorySheetState extends State<_MemorySheet> {
             }),
           ),
           IconButton(
-            icon: const Icon(Icons.delete_outline, size: 16),
+            icon: const NymGlyph('close', size: 16),
             tooltip: t('Forget'),
             visualDensity: VisualDensity.compact,
             onPressed: () => app.deleteMemory(entry.id),

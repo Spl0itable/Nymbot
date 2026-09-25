@@ -155,11 +155,24 @@ ${NOTE}
                 which model it routed to, what it searched the web for, which files it is reading in
                 a <a href="/docs/git/">connected repository</a>, which model call it is on, and the
                 model's own reasoning as each call returns.</p>
-            <p>That report is scoped to the key that asked for the reply and to that one message. In
+            <p>The lines between sending and the reply are, in order: <em>Encrypting your message
+                end-to-end</em> while your device seals it; <em>Opening your message on Nymbot's
+                server</em> once the server has it; then the conversation, any search and the model at
+                work; and <em>Encrypting the reply to you</em> as the answer is sealed for your key.
+                Encrypting and opening take milliseconds on your own key. They take longer only when a
+                remote signer has to approve each signature, or when the earlier turns have to be read
+                back off the relays. Nearly all of the wait is the model writing, plus any searching
+                and, on Pro when the provider is busy, waiting for a free slot.</p>
+            <p>The reply shows up in its bubble as the model writes it, and the finished,
+                end-to-end encrypted reply replaces it when it arrives. The server has to read your
+                message to answer it, so the partial text it hands back over the same channel shows it
+                nothing new, and it is deleted when the turn ends. Repository and connector tasks and research arrive whole, apart from the
+                written report.</p>
+            <p>All of this is scoped to the key that asked for the reply and to that one message. In
                 <a href="/docs/anonymous/">anonymous mode</a> the key that asked is the throwaway one,
                 so watching a reply reveals nothing the message had not already revealed &mdash; the
-                account behind it is no more involved than it was before. Turn it off in Settings and
-                you get the plain spinner.</p>
+                account behind it is no more involved than it was before. Turn the step lines off in
+                Settings and you get the plain spinner; the reply still appears as it is written.</p>
 
             <h2 id="follow-ups">Next steps and sources</h2>
             <p>A reply can end with a few suggested next steps, shown as chips under the latest reply. Tap

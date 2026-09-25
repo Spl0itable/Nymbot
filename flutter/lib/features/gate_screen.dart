@@ -16,6 +16,7 @@ import '../state/app_controller.dart';
 import '../state/identity.dart';
 import 'i18n/i18n.dart';
 import 'secret_guard.dart';
+import 'nym_glyph.dart';
 
 const String nymbotWordmark = r'''                                  ##\                  ##\
                                   ## |                 ## |
@@ -683,7 +684,7 @@ class _GateScreenState extends State<GateScreen> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.copy, size: 18),
+              icon: const NymGlyph('copy', size: 18),
               tooltip: t('Copy the link'),
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: link));
@@ -802,7 +803,7 @@ class _GateScreenState extends State<GateScreen> {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.copy, size: 18),
+                icon: const NymGlyph('copy', size: 18),
                 tooltip: t('Copy'),
                 onPressed: () async {
                   await SecretScreen.copy(value);

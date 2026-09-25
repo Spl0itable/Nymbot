@@ -62,13 +62,13 @@ class NymbotToolbar extends StatelessWidget {
       ),
       if (app.runnerAvailable && repos.isNotEmpty)
         _ChipSpec(
-          glyph: 'code',
+          glyph: 'server-runs',
           label: t('Server runs'),
           active: app.current?.serverRuns == true,
           onTap: () => _toggleServerRuns(context, app),
         ),
       _ChipSpec(
-        glyph: 'link',
+        glyph: 'connectors',
         label: app.activeConnectors.isEmpty
             ? t('Connectors')
             : app.activeConnectors.length == 1
@@ -103,7 +103,7 @@ class NymbotToolbar extends StatelessWidget {
         onTap: () => _confirmGhost(context, app),
       ),
       _ChipSpec(
-        glyph: app.activeBot?.icon ?? 'robot',
+        glyph: 'bot',
         label: app.activeBot?.name ?? t('Bot'),
         active: app.activeBot != null,
         onTap: () => showBotsSheet(context),
@@ -144,7 +144,7 @@ class NymbotToolbar extends StatelessWidget {
           onTap: () => _cycleEffort(context, app),
         ),
       _ChipSpec(
-        glyph: 'search',
+        glyph: 'research',
         label: t('Research'),
         active: app.researchNext,
         onTap: () => toggleResearchChip(context, app),
@@ -197,7 +197,7 @@ class NymbotToolbar extends StatelessWidget {
       for (final c in off) c.build(context),
     ];
     final balance = _Chip(
-      glyph: app.spendingAnon ? 'anon' : 'bolt',
+      glyph: 'bolt',
       label: (!app.proTier &&
               !app.spendingAnon &&
               (app.standardBalance ?? 0) == 0 &&
@@ -313,7 +313,7 @@ Future<void> _showChipMenu(
                   color: spec.active ? theme.colorScheme.primary : null),
           title: Text(spec.label, style: const TextStyle(fontSize: 13)),
           trailing: spec.active
-              ? Icon(Icons.check, size: 16, color: theme.colorScheme.primary)
+              ? NymGlyph('check', size: 16, color: theme.colorScheme.primary)
               : null,
           onTap: () {
             Navigator.pop(sheetContext);
@@ -466,7 +466,7 @@ class ContextBar extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    Widget face(String label, Color colour, {IconData? badge}) => Container(
+    Widget face(String label, Color colour, {String? badge}) => Container(
           padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
           decoration: BoxDecoration(
             border: Border.all(color: colour.withValues(alpha: 0.45)),
@@ -482,7 +482,7 @@ class ContextBar extends StatelessWidget {
               ),
               if (badge != null) ...[
                 const SizedBox(width: 3),
-                Icon(badge, size: 11, color: colour.withValues(alpha: 0.75)),
+                NymGlyph(badge, size: 11, color: colour.withValues(alpha: 0.75)),
               ],
             ],
           ),
@@ -521,19 +521,19 @@ class ContextBar extends StatelessWidget {
                   subtitle: repo.branch.isEmpty ? null : Text(repo.branch),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.edit_outlined),
+                  leading: const NymGlyph('pencil', size: 20),
                   title: Text(repo.allowWrites
                       ? t('Stop letting Nymbot write here')
                       : t('Let Nymbot write here')),
                   onTap: () => Navigator.pop(sheet, 'writes'),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.settings_outlined),
+                  leading: const NymGlyph('settings', size: 20),
                   title: Text(t('Repository settings')),
                   onTap: () => Navigator.pop(sheet, 'settings'),
                 ),
                 ListTile(
-                  leading: const Icon(Icons.close),
+                  leading: const NymGlyph('close', size: 20),
                   title: Text(t('Remove from this chat')),
                   onTap: () => Navigator.pop(sheet, 'remove'),
                 ),
@@ -573,7 +573,7 @@ class ContextBar extends StatelessWidget {
                       child: face(
                         '${r.display}${r.branch.isEmpty ? '' : '@${r.branch}'}',
                         NymbotColors.lightning,
-                        badge: r.allowWrites ? Icons.edit_outlined : null,
+                        badge: r.allowWrites ? 'pencil' : null,
                       ),
                     ),
                   ),
@@ -582,7 +582,7 @@ class ContextBar extends StatelessWidget {
             ),
             IconButton(
               key: ValueKey('repo-remove-${r.id}'),
-              icon: Icon(Icons.close,
+              icon: NymGlyph('close',
                   size: 14,
                   color: NymbotColors.lightning.withValues(alpha: 0.8)),
               tooltip: t('Remove {repo} from this chat', {'repo': r.repo}),

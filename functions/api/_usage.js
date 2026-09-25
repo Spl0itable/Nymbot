@@ -9,8 +9,26 @@ const USAGE_DDL = [
   "cost_milli INTEGER NOT NULL DEFAULT 0, ms INTEGER NOT NULL DEFAULT 0, client TEXT, git INTEGER NOT NULL DEFAULT 0, " +
   "web INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 1, err TEXT)",
   "CREATE INDEX IF NOT EXISTS bot_usage_at ON bot_usage (at)",
-  "CREATE INDEX IF NOT EXISTS bot_usage_pubkey ON bot_usage (pubkey, at)"
+  "CREATE INDEX IF NOT EXISTS bot_usage_pubkey ON bot_usage (pubkey, at)",
+  "ALTER TABLE bot_usage ADD COLUMN stages TEXT"
 ];
+
+const STAGE_KEY = /^[A-Za-z]{1,16}$/;
+const STAGE_MAX = 32;
+
+export function usageStages(stages) {
+  if (!stages || typeof stages !== "object") return null;
+  const out = {};
+  let n = 0;
+  for (const k of Object.keys(stages)) {
+    if (!STAGE_KEY.test(k)) continue;
+    const v = Number(stages[k]);
+    if (!Number.isFinite(v) || v < 0) continue;
+    out[k] = Math.min(Math.round(v), 86400000);
+    if (++n >= STAGE_MAX) break;
+  }
+  return n ? JSON.stringify(out) : null;
+}
 
 let usageReady = false;
 
@@ -44,19 +62,26 @@ export function noteUsage(context, row) {
   const db = env && env.DB_BOT;
   if (!hasD1(db) || !row || typeof row.pubkey !== "string") return;
   const u = row.usage || {};
+  const stages = usageStages(row.stages);
   const work = (async () => {
     try {
       await ensureUsage(db);
-      await db.prepare(
-        "INSERT INTO bot_usage (at, pubkey, kind, tier, task, model, calls, tok_in, tok_out, tok_cached, cost_milli, ms, client, git, web, ok, err) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).bind(
+      const values = [
         Date.now(), row.pubkey.toLowerCase(), String(row.kind || "chat").slice(0, 16), String(row.tier || "standard").slice(0, 16),
         row.task ? String(row.task).slice(0, 32) : null, row.model ? String(row.model).slice(0, 120) : null,
         num(row.calls), num(u.fresh) + num(u.wrote), num(u.out), num(u.read),
         num(row.costMilli), num(row.ms), usageClient(context.request), row.git ? 1 : 0, row.web ? 1 : 0,
         row.ok === false ? 0 : 1, row.err ? String(row.err).slice(0, 200) : null
-      ).run();
+      ];
+      const cols = "at, pubkey, kind, tier, task, model, calls, tok_in, tok_out, tok_cached, cost_milli, ms, client, git, web, ok, err";
+      const marks = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+      if (stages) {
+        try {
+          await db.prepare("INSERT INTO bot_usage (" + cols + ", stages) VALUES (" + marks + ", ?)").bind(...values, stages).run();
+          return;
+        } catch (e) { }
+      }
+      await db.prepare("INSERT INTO bot_usage (" + cols + ") VALUES (" + marks + ")").bind(...values).run();
     } catch (e) { /* a lost usage row is not a lost reply */ }
   })();
   try {

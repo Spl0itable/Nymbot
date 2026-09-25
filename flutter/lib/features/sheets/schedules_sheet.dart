@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../core/crypto/keys.dart';
+import '../../models/conversation.dart';
 import '../../models/schedule.dart';
+import '../../state/app_controller.dart';
 import '../../services/chat_engine.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
-Future<void> showSchedulesSheet(BuildContext context, {String prefill = ''}) =>
-    showNymSheet<void>(
+Future<String?> showSchedulesSheet(BuildContext context, {String prefill = ''}) =>
+    showNymSheet<String>(
       context,
       (_) => _SchedulesSheet(prefill: prefill),
     );
@@ -118,6 +121,66 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
     return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
   }
 
+  Widget _details(BuildContext context, AppController app, Schedule entry) {
+    final chatId = entry.convId ?? entry.lastConvId;
+    Conversation? chat;
+    for (final c in app.conversations) {
+      if (c.id == chatId) chat = c;
+    }
+    final where = entry.convId != null
+        ? (chat == null
+            ? t('Its chat was deleted')
+            : (chat.title.isEmpty ? t('New chat') : chat.title))
+        : t('A new chat each run');
+    final ran = entry.lastRunAt;
+    final last = ran == null || ran.millisecondsSinceEpoch == 0
+        ? ''
+        : t('Last run {when}', {'when': _stamp(ran)});
+    final target = chat;
+    return Opacity(
+      opacity: entry.enabled ? 1 : 0.55,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            [
+              repeatLabel(entry.repeat),
+              entry.enabled ? _stamp(entry.nextAt) : t('Paused'),
+              entry.runs > 0
+                  ? t('{n} runs', {'n': entry.runs})
+                  : t('never run'),
+            ].join(' · '),
+            style: const TextStyle(fontSize: 11),
+          ),
+          Text(
+            last.isEmpty ? where : '$where · $last',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11),
+          ),
+          if (target != null)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                key: ValueKey('schedule-chat-${entry.id}'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+                onPressed: () async {
+                  final navigator = Navigator.of(context);
+                  await app.open(target);
+                  navigator.pop(target.id);
+                },
+                child: Text(t('Go to chat')),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -156,28 +219,19 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
               ),
             for (final entry in app.schedules)
               Card(
+                key: ValueKey('schedule-${entry.id}'),
                 margin: const EdgeInsets.only(bottom: 6),
                 child: ListTile(
                   dense: true,
-                  leading: Icon(
-                    entry.enabled
-                        ? Icons.schedule
-                        : Icons.pause_circle_outline,
+                  leading: NymGlyph(
+                    'scheduled',
                     size: 20,
+                    color: entry.enabled ? null : Theme.of(context).disabledColor,
                   ),
                   title: Text(
                       entry.title.isEmpty ? t('Untitled') : entry.title,
                       overflow: TextOverflow.ellipsis),
-                  subtitle: Text(
-                    [
-                      repeatLabel(entry.repeat),
-                      entry.enabled ? _stamp(entry.nextAt) : t('Paused'),
-                      entry.runs > 0
-                          ? t('{n} runs', {'n': entry.runs})
-                          : t('never run'),
-                    ].join(' · '),
-                    style: const TextStyle(fontSize: 11),
-                  ),
+                  subtitle: _details(context, app, entry),
                   onTap: () => _edit(entry),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -196,7 +250,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                         },
                       ),
                       IconButton(
-                        icon: const Icon(Icons.play_circle_outline, size: 18),
+                        icon: const NymGlyph('send', size: 18),
                         tooltip: t('Run now'),
                         onPressed: () {
                           Navigator.of(context).pop();
@@ -204,7 +258,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                         },
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 17),
+                        icon: const NymGlyph('close', size: 17),
                         tooltip: t('Delete'),
                         onPressed: () => app.deleteSchedule(entry.id),
                       ),
@@ -248,7 +302,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             const SizedBox(height: 10),
             OutlinedButton.icon(
               onPressed: _pickWhen,
-              icon: const Icon(Icons.event, size: 18),
+              icon: const NymGlyph('scheduled', size: 18),
               label: Text('${t('First run')}: ${_stamp(_when)}'),
             ),
             SwitchListTile(

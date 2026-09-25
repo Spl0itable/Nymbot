@@ -82,6 +82,7 @@ class _BotsSheetState extends State<_BotsSheet> {
       catalog: _catalog,
       current: _modelKey,
       noneLabel: t('Auto-routed (standard)'),
+      includeMedia: true,
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -171,7 +172,7 @@ class _BotsSheetState extends State<_BotsSheet> {
       }
       model ??= {'key': bot!.modelKey, 'label': bot.modelLabel ?? bot.modelKey};
     }
-    await app.setBot(bot?.id, model: model);
+    await app.setBot(bot?.id, model: model, catalog: _catalog);
   }
 
   @override
@@ -238,12 +239,12 @@ class _BotsSheetState extends State<_BotsSheet> {
                         onPressed: () => showShareBot(context, bot),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 17),
+                        icon: const NymGlyph('pencil', size: 17),
                         tooltip: t('Edit'),
                         onPressed: () => _edit(bot),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 17),
+                        icon: const NymGlyph('close', size: 17),
                         tooltip: t('Delete'),
                         onPressed: () => app.deleteBot(bot.id),
                       ),
@@ -258,7 +259,7 @@ class _BotsSheetState extends State<_BotsSheet> {
               ),
             OutlinedButton.icon(
               onPressed: () => showAddBot(context),
-              icon: const Icon(Icons.add, size: 18),
+              icon: const NymGlyph('plus', size: 18),
               label: Text(t('Add a shared bot')),
             ),
             const Divider(height: 24),
@@ -463,7 +464,7 @@ class _ShareBotState extends State<_ShareBot> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    icon: const Icon(Icons.copy, size: 16),
+                    icon: const NymGlyph('copy', size: 16),
                     label: Text(t('Copy the link')),
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: link)),

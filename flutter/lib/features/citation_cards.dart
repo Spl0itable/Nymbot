@@ -3,6 +3,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
+import '../services/media_cache.dart';
 
 /// One thing a reply says it read. A chip only ever showed a title; a card
 /// shows where it came from and what it said, which is what makes a citation
@@ -161,8 +163,10 @@ class _CitationCardsState extends State<CitationCards> {
                       label,
                       style: TextStyle(fontSize: 10.5, color: theme.hintColor),
                     ),
-                    Icon(_open ? Icons.expand_less : Icons.expand_more,
-                        size: 16, color: theme.hintColor),
+                    NymGlyph('chevron',
+                        size: 16,
+                        color: theme.hintColor,
+                        quarterTurns: _open ? 2 : 0),
                   ],
                 ),
               ),
@@ -240,7 +244,7 @@ class _Card extends StatelessWidget {
               ),
             ),
             if (open != null)
-              Icon(Icons.open_in_new, size: 13, color: theme.hintColor),
+              NymGlyph('link', size: 13, color: theme.hintColor),
           ],
         ),
       ),
@@ -278,8 +282,8 @@ class _Mark extends StatelessWidget {
       height: 20,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(5),
-        child: Image.network(
-          src,
+        child: Image(
+          image: CachedMediaImage(src),
           width: 20,
           height: 20,
           fit: BoxFit.contain,

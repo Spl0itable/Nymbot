@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../state/app_controller.dart';
 import '../../app.dart';
 import 'i18n.dart';
+import '../nym_glyph.dart';
 
 class LanguageSelectScreen extends StatelessWidget {
   const LanguageSelectScreen({super.key, required this.onDone});
@@ -101,7 +102,7 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
           controller: _search,
           decoration: InputDecoration(
             isDense: true,
-            prefixIcon: const Icon(Icons.search, size: 18),
+            prefixIcon: const NymGlyph('search', size: 18),
             hintText: t('Search languages'),
           ),
           onChanged: (v) => setState(() => _query = v),
@@ -184,7 +185,7 @@ class _LanguageRow extends StatelessWidget {
                   ],
                 ),
               ),
-              if (selected) Icon(Icons.check, size: 18, color: scheme.primary),
+              if (selected) NymGlyph('check', size: 18, color: scheme.primary),
             ],
           ),
         ),
@@ -212,7 +213,7 @@ Future<void> showLanguagePicker(BuildContext context, AppController app) {
                         style: Theme.of(context).textTheme.titleMedium),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close),
+                    icon: const NymGlyph('close', size: 20),
                     tooltip: t('Close'),
                     onPressed: () => Navigator.of(dialogContext).pop(),
                   ),

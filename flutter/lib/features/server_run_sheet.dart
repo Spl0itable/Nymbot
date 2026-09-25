@@ -8,6 +8,7 @@ import 'i18n/i18n.dart';
 import 'run_output.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/sheet.dart';
+import 'nym_glyph.dart';
 
 typedef ServerRunChoice = ({int timeoutSec, bool withFiles, double maxCost});
 
@@ -167,7 +168,7 @@ class ServerRunButton extends StatelessWidget {
           key: const ValueKey('server-run'),
           icon: controller.running && controller.onServer
               ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(Icons.cloud_outlined, size: 16, color: Theme.of(context).colorScheme.primary),
+              : NymGlyph('server-runs', size: 16, color: Theme.of(context).colorScheme.primary),
           tooltip: t('Run on a Nymbot server'),
           onPressed: controller.running ? null : () => runCodeOnServer(context, controller, code),
           visualDensity: VisualDensity.compact,

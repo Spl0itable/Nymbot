@@ -588,7 +588,7 @@ export function serverRunTool(o) {
       runId: newId(), maxOutputBytes: RUNNER_OUTPUT_BYTES
     };
     packed.bytes = null;
-    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "start" });
+    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "start", command: String(run.command || "").slice(0, 160) });
     var output = "";
     var truncatedNote = false;
     var last = await serverRunDrive(o.env, request, function (ev) {
@@ -607,7 +607,7 @@ export function serverRunTool(o) {
       image: run.image, command: run.command, milli: charged.milli, billedMs: charged.billedMs,
       code: last && last.type === "exit" ? last.code : null, ok: !!last && last.type === "exit"
     });
-    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "done", credits: charged.credits });
+    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "done", credits: charged.credits, code: last && last.type === "exit" ? last.code : null, ms: Number(charged.billedMs) || 0 });
     return serverRunResult({
       image: run.image, timeoutSec: run.timeoutSec, last: last, milli: charged.milli,
       output: output, truncatedNote: truncatedNote

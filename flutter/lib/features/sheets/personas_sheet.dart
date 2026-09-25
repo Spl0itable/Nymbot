@@ -89,7 +89,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.copy_all_outlined, size: 17),
+                        icon: const NymGlyph('copy', size: 17),
                         tooltip: t('Copy'),
                         onPressed: () => setState(() {
                           _editingId = null;
@@ -100,7 +100,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                       ),
                       if (!p.builtin)
                         IconButton(
-                          icon: const Icon(Icons.edit_outlined, size: 17),
+                          icon: const NymGlyph('pencil', size: 17),
                           tooltip: t('Edit'),
                           onPressed: () => setState(() {
                             _editingId = p.id;
@@ -111,7 +111,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
                         ),
                       if (!p.builtin)
                         IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 17),
+                          icon: const NymGlyph('close', size: 17),
                           tooltip: t('Delete'),
                           onPressed: () => app.deletePersona(p.id),
                         ),

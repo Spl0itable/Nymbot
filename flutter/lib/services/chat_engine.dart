@@ -138,6 +138,28 @@ class ChatEngine {
   final NymbotApi api;
   final AnonMode anon;
 
+  static const heldMax = 8;
+  static const heldSend = 4;
+  static const heldBytes = 96 * 1024;
+  final Map<String, List<NostrEvent>> _held = {};
+
+  void holdWraps(String convId, List<NostrEvent> events) {
+    final list = [...?_held[convId], ...events];
+    _held[convId] =
+        list.length > heldMax ? list.sublist(list.length - heldMax) : list;
+  }
+
+  List<NostrEvent> heldHistory(String convId) {
+    final list = _held[convId] ?? const <NostrEvent>[];
+    final out = <NostrEvent>[];
+    var bytes = 0;
+    for (var i = list.length - 1; i >= 0 && out.length < heldSend; i--) {
+      bytes += list[i].content.length;
+      if (bytes > heldBytes) break;
+      out.insert(0, list[i]);
+    }
+    return out;
+  }
 
   static ({String? thinking, String body}) splitThinking(String text) {
     for (final tag in const ['think', 'thinking', 'reasoning']) {
@@ -312,6 +334,8 @@ class ChatEngine {
   // back against the question before sending it. Both are charged as what they
   // are — more model calls — so the price says what the work was.
   static const effortLevels = {'normal': 1, 'careful': 2, 'deep': 3};
+
+  static const reconnects = 2;
 
   static const busyWaits = [
     Duration(seconds: 4),
@@ -684,6 +708,7 @@ class ChatEngine {
     /// Called with the turn's own event id as soon as it is published, so a
     /// watcher can start before the answer comes back.
     void Function(String eventId)? onTurn,
+    void Function(Map<String, dynamic> step)? onStep,
     List<Attachment> attachments = const [],
     String? quote,
     bool webSearch = false,
@@ -738,6 +763,11 @@ class ChatEngine {
     // a ghost chat is refusing.
     final ghost = conv.ephemeral;
     final botKem = pq.botKey?.pk;
+    if (onStep != null) {
+      try {
+        onStep({'kind': 'stage', 'stage': 'encrypting', 'local': true});
+      } catch (_) {}
+    }
     final partIds = <String>[];
     final partWraps = <NostrEvent>[];
     NostrEvent? wrap;
@@ -781,11 +811,14 @@ class ChatEngine {
 
     final announcement =
         useAnon ? await anon.announcement() : pq.selfAnnouncement;
+    final handed = freshTurn ? const <NostrEvent>[] : heldHistory(conv.id);
     final extra = <String, dynamic>{
       'eventId': wrap!.id,
       'wrap': wrap.toJson(),
       'fresh': freshTurn,
       'followUps': true,
+      'draft': true,
+      if (handed.isNotEmpty) 'history': [for (final w in handed) w.toJson()],
       // Every event the question was split across, in order. The last is
       // `eventId`, which is what a message that fits has always sent.
       if (partIds.length > 1) 'parts': partIds,
@@ -829,10 +862,15 @@ class ChatEngine {
     ApiResult res;
     var held = 0;
     var waited = 0;
+    var lost = 0;
     while (true) {
       if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
       res = await api.call('pm', signer,
           extra: extra, timeout: timeout ?? NymbotConfig.pmTimeout);
+      if (res.status == 0 && lost++ < reconnects) {
+        await _wait(const Duration(seconds: 2), turn);
+        continue;
+      }
       if (res.data['pending'] == true && held++ < 5) {
         turn.say(t('Still working on that one…'));
         await _wait(const Duration(seconds: 3), turn);
@@ -925,6 +963,7 @@ class ChatEngine {
     // become context. The chat still shows it.
     if (!freshTurn) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
+      holdWraps(conv.id, [...partWraps, if (selfEvent != null) selfEvent]);
     }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');
@@ -969,16 +1008,45 @@ class ChatEngine {
     EventSigner signer,
     String eventId, {
     int after = 0,
+  }) async =>
+      steps(await progressRaw(signer, eventId, after: after));
+
+  static List<TurnStep> steps(List<Map<String, dynamic>> raw) {
+    try {
+      return raw.map(turnStep).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> progressRaw(
+    EventSigner signer,
+    String eventId, {
+    int after = 0,
+    int draftAfter = 0,
+    void Function(String text, int seq)? onDraft,
   }) async {
     try {
       final res = await api.call(
         'pm-progress',
         signer,
-        extra: {'eventId': eventId, 'after': after},
+        extra: {'eventId': eventId, 'after': after, 'draftAfter': draftAfter},
         timeout: const Duration(seconds: 8),
       );
+      final draft = res.data['draft'];
+      if (onDraft != null && draft is Map && draft['text'] is String) {
+        final seq = (draft['seq'] as num?)?.toInt() ?? 0;
+        if (seq > 0) onDraft(draft['text'] as String, seq);
+      }
       final steps = (res.data['steps'] as List?) ?? const [];
-      return steps.whereType<Map<String, dynamic>>().map((s) => s['kind'] == 'research' ? Research.stepOf(s) : s['kind'] == 'team' ? Team.stepOf(s) : Connectors.step(s) ?? (
+      return steps.whereType<Map<String, dynamic>>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static TurnStep turnStep(Map<String, dynamic> s) =>
+      s['kind'] == 'research' ? Research.stepOf(s) : s['kind'] == 'team' ? Team.stepOf(s) : Connectors.step(s) ?? (
             n: (s['n'] as num?)?.toInt() ?? 0,
             kind: s['kind'] as String? ?? '',
             // One field for "the thing this step is about", whichever name the
@@ -1000,11 +1068,7 @@ class ChatEngine {
                 0,
             of: (s['of'] as num?)?.toInt() ?? (s['team'] as num?)?.toInt() ?? 0,
             flag: s['seeing'] == true,
-          )).toList();
-    } catch (_) {
-      return const [];
-    }
-  }
+          );
 
   Future<NostrEvent> _wrap(UnsignedEvent rumor, EventSigner signer,
           String recipientPubkey, Uint8List? kemPk) =>

@@ -21,6 +21,18 @@
         return Array.from(text).slice(0, NICKNAME_MAX).join('').trim();
     }
 
+    function shown(picture) {
+        const C = window.NymbotConfig || {};
+        const B = window.NymbotBlossom;
+        if (!picture || !C.apiHost) return picture;
+        let host;
+        try { host = new URL(picture).hostname.toLowerCase(); } catch (_) { return picture; }
+        const direct = [C.apiHost].concat(B && Array.isArray(B.HOSTS) ? B.HOSTS : []).some((h) => {
+            try { return new URL(/^https:/.test(h) ? h : 'https://' + h).hostname.toLowerCase() === host; } catch (_) { return false; }
+        });
+        return direct ? picture : `https://${C.apiHost}/api/proxy?url=${encodeURIComponent(picture)}`;
+    }
+
     function cached(pubkey) {
         const all = Store.read('profiles', {}) || {};
         return all[pubkey] || null;
@@ -118,7 +130,7 @@
                 name: (hit && hit.name) || fallbackName,
                 nip05: (hit && hit.nip05) || '',
                 about: (hit && hit.about) || '',
-                avatar: (hit && hit.picture) || Avatar.identicon(key),
+                avatar: (hit && hit.picture && shown(hit.picture)) || Avatar.identicon(key),
                 hasProfile: !!(hit && (hit.name || hit.picture)),
                 colour: Avatar.colorClass(key)
             };

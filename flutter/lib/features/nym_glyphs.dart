@@ -46,6 +46,7 @@ const Map<String, String> kNymGlyphStroke = <String, String>{
   'plus': '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>',
   'menu': '<line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>',
   'down': '<line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline>',
+  'chevron': '<polyline points="6 9 12 15 18 9"></polyline>',
   'up': '<line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline>',
   'prompt': '<path d="M4 4h16v12H7l-3 3z"></path>',
   'picture': '<rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="8.5" cy="9.5" r="1.6"></circle><path d="M3.5 17.5 9 12l4 4 2.5-2.5 5 5"></path>',
@@ -58,6 +59,11 @@ const Map<String, String> kNymGlyphStroke = <String, String>{
   'circle': '<circle cx="12" cy="12" r="6.5"></circle>',
   'wallet': '<path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2"></path><rect x="3" y="7" width="18" height="13" rx="2"></rect><circle cx="16.5" cy="13.5" r="1.2"></circle>',
   'link': '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path>',
+  'save': '<path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 20h16"></path>',
+  'tasks': '<polyline points="3.5 6.5 5.2 8.2 8 5"></polyline><line x1="11" y1="6.5" x2="20.5" y2="6.5"></line><polyline points="3.5 12.5 5.2 14.2 8 11"></polyline><line x1="11" y1="12.5" x2="20.5" y2="12.5"></line><circle cx="5.6" cy="18.5" r="1.6"></circle><line x1="11" y1="18.5" x2="20.5" y2="18.5"></line>',
+  'workspace': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>',
+  'bot': '<rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4"></path><circle cx="9" cy="14" r="1"></circle><circle cx="15" cy="14" r="1"></circle>',
+  'artifacts': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline>',
 };
 
 /// The few that also have a solid form, for a selected or active state.
@@ -73,40 +79,45 @@ const Map<String, String> kNymGlyphFilled = <String, String>{
 /// The shell's own drawings — the sidebar rows and toolbar chips whose icon is
 /// inline in index.html rather than in icons.js.
 const Map<String, String> kNymGlyphShell = <String, String>{
+  'connectors': '<path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 17v4"></path>',
+  'scheduled': '<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>',
   'saved-messages': '<path d="M12 17v5"></path><path d="M9 2h6l-1 7 4 4v2H6v-2l4-4z"></path>',
   'help': '<circle cx="12" cy="12" r="9"></circle><path d="M9.6 9.2a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.8-.9 1.4v.5"></path><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"></circle>',
-  'scheduled': '<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>',
-  'ghost': '<path d="M12 2a7 7 0 0 0-7 7v11l2.5-2 2.5 2 2-2 2 2 2.5-2 2.5 2V9a7 7 0 0 0-7-7Z"></path><circle cx="9.5" cy="10" r="1"></circle><circle cx="14.5" cy="10" r="1"></circle>',
-  'bot': '<rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4"></path><circle cx="9" cy="14" r="1"></circle><circle cx="15" cy="14" r="1"></circle>',
-  'workspace': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>',
-  'compare': '<rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect>',
-  'artifacts': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline>',
+  'server-runs': '<rect x="3" y="4" width="18" height="7" rx="1.5"></rect><rect x="3" y="13" width="18" height="7" rx="1.5"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line>',
+  'research': '<circle cx="11" cy="11" r="6"></circle><line x1="20" y1="20" x2="15.5" y2="15.5"></line><line x1="8.5" y1="11" x2="13.5" y2="11"></line><line x1="11" y1="8.5" x2="11" y2="13.5"></line>',
   'team': '<circle cx="12" cy="7" r="3"></circle><circle cx="5" cy="17" r="2.5"></circle><circle cx="19" cy="17" r="2.5"></circle><path d="M12 10v3"></path><path d="M7 15.5 10 13h4l3 2.5"></path>',
+  'ghost': '<path d="M12 2a7 7 0 0 0-7 7v11l2.5-2 2.5 2 2-2 2 2 2.5-2 2.5 2V9a7 7 0 0 0-7-7Z"></path><circle cx="9.5" cy="10" r="1"></circle><circle cx="14.5" cy="10" r="1"></circle>',
+  'compare': '<rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect>',
 };
 
 /// What the web app draws next to each label, so a screen here asks for the
 /// thing rather than repeating the lookup: kNymGlyphFor['settings'].
 const Map<String, String> kNymGlyphFor = <String, String>{
   'repositories': 'branch',
+  'connectors': 'connectors',
   'prompt-library': 'prompt',
   'personas': 'person',
+  'workspaces': 'workspace',
+  'bots': 'bot',
+  'artifacts': 'artifacts',
+  'scheduled': 'scheduled',
   'saved-messages': 'saved-messages',
   'memory': 'memory',
   'settings': 'settings',
   'help': 'help',
   'auto-routed': 'model',
   'git': 'branch',
+  'server-runs': 'server-runs',
   'persona': 'person',
   'effort': 'lightbulb',
+  'research': 'research',
+  'team': 'team',
   'web': 'globe',
   'anon': 'eyeOff',
-  'scheduled': 'scheduled',
   'ghost': 'ghost',
   'bot': 'bot',
   'workspace': 'workspace',
   'compare': 'compare',
-  'artifacts': 'artifacts',
-  'team': 'team',
 };
 
 /// The persona icons, in the order the web app offers them.

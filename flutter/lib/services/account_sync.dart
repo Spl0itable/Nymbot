@@ -151,6 +151,15 @@ class AccountSync {
     return out.values.toList();
   }
 
+  static bool _messagesChanged(List<ChatMessage> mine, List<ChatMessage> merged) {
+    if (merged.length != mine.length) return true;
+    final held = {for (final m in mine) m.id: jsonEncode(m.toJson())};
+    for (final m in merged) {
+      if (held[m.id] != jsonEncode(m.toJson())) return true;
+    }
+    return false;
+  }
+
   static bool _carriesSecret(Map<String, dynamic>? row, List<String> marks) =>
       row != null && marks.any((f) => row[f] is String);
 
@@ -555,7 +564,7 @@ class AccountSync {
         graves,
       ).map(_msgFromWire).toList()
         ..sort((a, b) => a.at.compareTo(b.at));
-      if (merged.length != mine.length) {
+      if (_messagesChanged(mine, merged)) {
         await _store.saveMessages(id, merged);
         touched.add(key);
       }

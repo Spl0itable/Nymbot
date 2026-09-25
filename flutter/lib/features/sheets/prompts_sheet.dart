@@ -5,6 +5,7 @@ import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<String?> showPromptsSheet(BuildContext context, {String filter = ''}) =>
     showNymSheet<String>(
@@ -140,7 +141,7 @@ class _PromptsSheetState extends State<_PromptsSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 17),
+                        icon: const NymGlyph('pencil', size: 17),
                         tooltip: t('Edit'),
                         onPressed: () => setState(() {
                           _editingId = p.id;
@@ -149,7 +150,7 @@ class _PromptsSheetState extends State<_PromptsSheet> {
                         }),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 17),
+                        icon: const NymGlyph('close', size: 17),
                         tooltip: t('Delete'),
                         onPressed: () => app.deletePrompt(p.id),
                       ),

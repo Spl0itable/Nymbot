@@ -111,7 +111,14 @@ ${NOTE}
                     applies to any reply.</li>
             </ul>
             <p>For bigger questions there is also <a href="/docs/team-mode/">Team mode</a>, which splits the
-                research between several models working at once.</p>`,
+                research between several models working at once.</p>
+
+            <h2 id="tasks-pane">The Tasks pane</h2>
+            <p>The checklist button at the top of the chat opens its <strong>Tasks</strong> pane, which lists
+                the chat's research as an outline, newest first: the questions it planned to answer, each
+                search, the sources it read with their site icons, and the report it wrote, with the step it
+                is on marked while it runs. Tap a step to jump to its place in the chat. The outline stays
+                with the chat after the research finishes.</p>`,
 });
 
 await docsPage({
@@ -124,7 +131,7 @@ await docsPage({
                 Context Protocol. Nothing runs without your say-so unless you choose otherwise.</p>
 ${NOTE}
 
-            <h2 id="what-they-are">What a connector is</h2>
+            <h2 id="what-they-are">What is a connector</h2>
             <p>Many services now publish an MCP server: an address that lists tools a model can call, such
                 as searching an issue tracker, reading a calendar or querying a database. Add one to Nymbot and
                 a <a href="/docs/models/#pro">Pro</a> reply can use those tools while it answers.</p>
@@ -190,7 +197,7 @@ await docsPage({
                 split the work between several models at once, with your own model in charge.</p>
 ${NOTE}
 
-            <h2 id="what-it-is">What Team mode is</h2>
+            <h2 id="what-it-is">What is Team mode</h2>
             <p>In Team mode, your pinned <a href="/docs/models/#pro">Pro model</a> becomes the
                 <em>overseer</em>. It splits the task, hands the parts to two to four <em>workers</em>, and
                 puts their work together. The workers all run on one model that you choose, which can be a
@@ -291,7 +298,18 @@ ${NOTE}
                 with the model it ran on, the Pro credits it used, and whether it was <strong>done</strong>,
                 <strong>stopped</strong> or <strong>failed</strong>. It also says when the workers had to run
                 one at a time. The price on the reply is the total for the whole team; tap it to see the
-                breakdown, with a <strong>Team lead</strong> row and one row for each worker.</p>`,
+                breakdown, with a <strong>Team lead</strong> row and one row for each worker.</p>
+
+            <h2 id="tasks-pane">The Tasks pane</h2>
+            <p>The checklist button at the top of the chat opens its <strong>Tasks</strong> pane: beside the
+                chat on a wide screen, as a sheet on a phone. While a team works, the button shows it is
+                running, and the pane lays the work out as an outline, newest turn first: the Lead's plan,
+                each worker's part with the model it runs on, its cost and whether it is done, stopped or
+                failed, then the Lead's review and final steps. A connector call or server run the Lead
+                asks for is listed with its approval, and you can allow or decline it right there, exactly
+                as on the card in the chat. <strong>Stop</strong> stops the running reply. Tap any step to
+                jump to its place in the chat. The outline is kept with the chat's messages, so it is still
+                there after the work finishes and on your other devices.</p>`,
 });
 
 await docsPage({
@@ -353,7 +371,7 @@ await docsPage({
                 own, in a container made for that one run.</p>
 ${NOTE}
 
-            <h2 id="what-it-is">What a server run is</h2>
+            <h2 id="what-it-is">What is a server run</h2>
             <p>A server run starts a fresh container, puts your code in it, runs it, sends back what it
                 printed and destroys the container. You see the most it can cost before it starts, and you
                 pay from your <a href="/docs/credits/#two-balances">Pro balance</a> for the time it actually
@@ -467,7 +485,15 @@ ${NOTE}
                 <li>Up to 200 files, 8 MB in all, handed back to save.</li>
             </ul>
             <p>Server runs can be switched off for maintenance, as a whole or one image at a time. When they
-                are off, the <strong>Run on server</strong> button and the chip are not shown.</p>`,
+                are off, the <strong>Run on server</strong> button and the chip are not shown.</p>
+
+            <h2 id="tasks-pane">The Tasks pane</h2>
+            <p>In a repository chat, the checklist button at the top of the chat opens its
+                <strong>Tasks</strong> pane. It lists what each turn did, newest first: the files it read and
+                edited, commits, changes staged for your review, and every server run with its command,
+                image, time, cost and exit status. A server run waiting for your approval can be allowed or
+                declined from the pane, the same as from its card, and a running reply can be stopped there.
+                The outline stays with the chat after the work finishes.</p>`,
 });
 
 console.log('docs batch 6 written');

@@ -6,6 +6,7 @@ import '../../models/workspace.dart';
 import '../../services/attachments.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showWorkspacesSheet(BuildContext context) =>
     showNymSheet<void>(
@@ -141,7 +142,7 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
                     : null,
                 child: ListTile(
                   dense: true,
-                  leading: const Icon(Icons.folder_outlined, size: 20),
+                  leading: const NymGlyph('workspace', size: 20),
                   title: Text(space.name.isEmpty ? t('Untitled') : space.name),
                   subtitle: Text(
                     [
@@ -156,12 +157,12 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 17),
+                        icon: const NymGlyph('pencil', size: 17),
                         tooltip: t('Edit'),
                         onPressed: () => _edit(space),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 17),
+                        icon: const NymGlyph('close', size: 17),
                         tooltip: t('Delete'),
                         onPressed: () => app.deleteWorkspace(space.id),
                       ),
@@ -240,13 +241,13 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
                   margin: const EdgeInsets.only(bottom: 4),
                   child: ListTile(
                     dense: true,
-                    leading: const Icon(Icons.description_outlined, size: 18),
+                    leading: const NymGlyph('copy', size: 18),
                     title:
                         Text(file.name, overflow: TextOverflow.ellipsis),
                     subtitle: Text('${file.size} ${t('characters')}',
                         style: const TextStyle(fontSize: 11)),
                     trailing: IconButton(
-                      icon: const Icon(Icons.close, size: 17),
+                      icon: const NymGlyph('close', size: 17),
                       tooltip: t('Remove'),
                       onPressed: () => setState(() {
                         _files = _files.where((f) => f.id != file.id).toList();
@@ -257,7 +258,7 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _addFiles,
-              icon: const Icon(Icons.attach_file, size: 18),
+              icon: const NymGlyph('attach', size: 18),
               label: Text(t('Add a file')),
             ),
             if (_error.isNotEmpty) ...[

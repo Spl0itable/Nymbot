@@ -32,6 +32,9 @@ const ALLOWED_MEDIA_TYPES = new Set([
 // Custom emoji images are effectively immutable, so cache them for 30 days.
 const EMOJI_CACHE_TTL = 2592000;
 
+const CONTENT_ADDRESSED = /\/[0-9a-f]{64}(?:\.[a-z0-9]{1,8})?$/i;
+const CONTENT_ADDRESSED_CACHE_TTL = 2592000;
+
 // Max size for unfurl HTML fetch (512 KB)
 const MAX_UNFURL_SIZE = 512 * 1024;
 
@@ -508,6 +511,8 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   }
   if (isEmoji) {
     headers.set('Cache-Control', `public, max-age=${EMOJI_CACHE_TTL}, s-maxage=${EMOJI_CACHE_TTL}, immutable`);
+  } else if (CONTENT_ADDRESSED.test(new URL(targetUrl).pathname)) {
+    headers.set('Cache-Control', `public, max-age=${CONTENT_ADDRESSED_CACHE_TTL}, s-maxage=${CONTENT_ADDRESSED_CACHE_TTL}, immutable`);
   } else {
     headers.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
   }

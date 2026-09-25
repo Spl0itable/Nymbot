@@ -10,6 +10,7 @@ import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import '../purchase_policy.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showCreditsSheet(BuildContext context, {int? credits}) =>
     showNymSheet<void>(
@@ -271,7 +272,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      icon: const Icon(Icons.copy, size: 16),
+                      icon: const NymGlyph('copy', size: 16),
                       label: Text(t('Copy invoice')),
                       onPressed: () async {
                         await Clipboard.setData(ClipboardData(text: invoice));
@@ -285,7 +286,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton.icon(
-                      icon: const Icon(Icons.bolt, size: 16),
+                      icon: const NymGlyph('wallet', size: 16),
                       label: Text(t('Open wallet')),
                       onPressed: () => launchUrl(
                         Uri.parse('lightning:$invoice'),

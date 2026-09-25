@@ -445,6 +445,7 @@
             this.toggleSidebar(false);
             this.closeFind();
             this.closeArtifact();
+            if (window.NymbotTasks) window.NymbotTasks.switched(this);
             this.renderMessages();
             this.refreshComposer();
             this.renderList();
@@ -541,6 +542,8 @@
                 list.appendChild(empty);
             }
             $('repoCount').textContent = repos.length ? String(repos.length) : '';
+            this.renderMenuCounts();
+            this.updateConvFade();
         },
 
         /// Who the messages in this chat are from. An anonymous chat is
@@ -1036,6 +1039,7 @@
             const node = this.messageNode(m, grouped);
             old.replaceWith(node);
             this.syncFollowUps();
+            if (window.NymbotTasks) window.NymbotTasks.refresh(this);
             return node;
         },
 
@@ -1144,6 +1148,7 @@
                         research,
                         controller: turn.controller,
                         onStatus: (text) => this.turnStatus(turn, text),
+                        onStep: (step) => this.localStep(turn, step),
                         onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
                     });
                 } catch (e) {
@@ -1274,9 +1279,13 @@
                             ? t('Routing to {model}', { model: step.model })
                             : t('Routing this one'));
                 case 'stage':
-                    return step.stage === 'reading'
-                        ? t('Reading this conversation back off the relays')
-                        : '';
+                    switch (step.stage) {
+                        case 'reading': return t('Reading this conversation back off the relays');
+                        case 'encrypting': return t('Encrypting your message end-to-end');
+                        case 'opening': return t('Opening your message on Nymbot\'s server');
+                        case 'sealing': return t('Encrypting the reply to you');
+                        default: return '';
+                    }
                 case 'route':
                     return step.seeing
                         ? t('Sending the picture to a model that can see it')
@@ -1386,30 +1395,76 @@
         /// turn is over, and never keeps the send waiting on it.
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
-            if (!this.settings.showProgress && !turn.research && !turn.team) return;
-            turn.steps = [];
+            turn.steps = (turn.steps || []).filter(s => s && s.local);
             let after = 0;
+            let draftAfter = 0;
             let alive = true;
             turn.watch = () => { alive = false; };
+            const remote = !signer && Identity.isRemote;
             const tick = async () => {
                 while (alive) {
-                    const steps = await Chat.progress(eventId, after, { signer });
+                    let draft = null;
+                    const steps = await Chat.progress(eventId, after,
+                        { signer, draftAfter, onDraft: (d) => { draft = d; } });
                     if (!alive) return;
                     if (steps.length) {
                         after = steps[steps.length - 1].n || after;
                         for (const s of steps) turn.steps.push(s);
+                        if (window.NymbotTasks) window.NymbotTasks.seen(this, turn, steps);
                         this.renderProgress(turn);
                     }
-                    await new Promise(r => setTimeout(r, !signer && Identity.isRemote ? 5000 : 2000));
+                    if (draft) {
+                        draftAfter = draft.seq;
+                        turn.draft = draft.text;
+                        this.renderDraft(turn);
+                    }
+                    const fast = !!turn.draft && !turn.research;
+                    await new Promise(r => setTimeout(r, remote ? 5000 : (fast ? 600 : 2000)));
                 }
             };
             tick().catch(() => { });
+        },
+
+        localStep(turn, step) {
+            if (!turn || !step) return;
+            turn.steps = (turn.steps || []).concat([Object.assign({}, step, { local: true })]);
+            this.renderProgress(turn);
+        },
+
+        renderDraft(turn) {
+            const node = turn && turn.node;
+            if (!node || !node.isConnected) return;
+            let box = node.querySelector('.bot-draft');
+            if (!turn.draft) {
+                if (box) box.remove();
+                node.classList.remove('has-draft');
+                return;
+            }
+            if (!box) {
+                box = el('div', 'bot-draft');
+                box.appendChild(el('div', 'msg-text'));
+                node.insertBefore(box, node.querySelector('.bot-thinking-head'));
+                node.classList.add('has-draft');
+            }
+            const text = box.querySelector('.msg-text');
+            const follow = this.nearBottom();
+            text.innerHTML = MD.render(turn.draft, {
+                wrap: this.settings.codeWrap,
+                lineNumbers: this.settings.lineNumbers
+            });
+            text.appendChild(el('span', 'stream-caret'));
+            turn.drafted = true;
+            if (follow) this.scrollToBottom();
         },
 
         stopWatchingTurn(turn) {
             if (turn && turn.watch) {
                 try { turn.watch(); } catch (_) { }
                 turn.watch = null;
+            }
+            if (turn && turn.draft) {
+                turn.draft = null;
+                this.renderDraft(turn);
             }
         },
 
@@ -1719,6 +1774,7 @@
                     team,
                     controller: turn.controller,
                     onStatus: (status) => this.turnStatus(turn, status),
+                    onStep: (step) => this.localStep(turn, step),
                     onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
                 });
                 this.stopWatchingTurn(turn);
@@ -1755,7 +1811,7 @@
                 const lifted = Artifacts.harvest(live.id, reply);
                 const node = this.showMessage(live.id, reply);
                 if (node && lifted.length) this.renderArtifactStrip();
-                if (node && this.settings.typewriter && !this.reducedMotion() && reply.content.length < 12000) {
+                if (node && this.settings.typewriter && !turn.drafted && !this.reducedMotion() && reply.content.length < 12000) {
                     await this.typeInto(node, reply);
                 }
                 const spent = ServerRun ? ServerRun.totalCost(reply) : reply.cost;
@@ -2101,6 +2157,7 @@
             const button = $('micBtn');
             const strip = $('dictateStrip');
             if (!button || !strip) return;
+            const Dictate = window.NymbotDictate;
             button.classList.toggle('is-on', state === 'recording');
             button.classList.toggle('is-busy', state === 'starting' || state === 'sending');
             button.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
@@ -2111,14 +2168,93 @@
             strip.classList.toggle('is-sending', state === 'sending');
             $('dictateDone').hidden = state !== 'recording';
             $('dictateCancel').hidden = !state;
+            const hint = $('dictateHint');
+            const quiet = state === 'recording' && !!Dictate && Dictate.noSound();
+            if (hint) {
+                hint.hidden = !quiet;
+                hint.textContent = quiet ? t('No sound is coming in. Check your microphone.') : '';
+            }
+            const wave = $('dictateWave');
+            if (wave) wave.classList.toggle('is-quiet', quiet);
+            if (quiet && !this._dictateHinted) {
+                this._dictateHinted = true;
+                this.dictationStatus(t('No sound is coming in. Check your microphone.'));
+            }
             if (state === 'recording') {
-                const secs = Math.floor(window.NymbotDictate.elapsed() / 1000);
-                $('dictateLabel').textContent = t('Listening… {time}', {
-                    time: Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0')
-                });
+                const clock = (ms) => {
+                    const secs = Math.max(0, Math.floor(ms / 1000));
+                    return Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
+                };
+                const elapsed = Dictate.elapsed();
+                $('dictateLabel').textContent = t('Listening… {time}', { time: clock(elapsed) });
+                $('dictateLeft').textContent = t('{time} left', { time: clock(Dictate.MAX_MS - elapsed + 999) });
+                if (this.reducedMotion()) this.drawDictation();
             } else if (state === 'sending') {
                 $('dictateLabel').textContent = t('Transcribing…');
+                $('dictateLeft').textContent = '';
             }
+        },
+
+        dictationStatus(text) {
+            const live = $('dictateStatus');
+            if (live) live.textContent = text || '';
+        },
+
+        drawDictation() {
+            const canvas = $('dictateWave');
+            const Dictate = window.NymbotDictate;
+            if (!canvas || !Dictate || typeof canvas.getContext !== 'function') return;
+            const ratio = window.devicePixelRatio || 1;
+            const width = Math.max(1, Math.round((canvas.clientWidth || 320) * ratio));
+            const height = Math.max(1, Math.round((canvas.clientHeight || 28) * ratio));
+            if (canvas.width !== width) canvas.width = width;
+            if (canvas.height !== height) canvas.height = height;
+            let g = null;
+            try { g = canvas.getContext('2d'); } catch (_) { g = null; }
+            if (!g) return;
+            g.clearRect(0, 0, width, height);
+            g.fillStyle = getComputedStyle(canvas).color || '#888';
+            if (this.reducedMotion()) {
+                const bar = Math.max(2 * ratio, Math.round(Dictate.level() * width));
+                const thick = Math.max(2, Math.round(height / 3));
+                g.fillRect(0, Math.round((height - thick) / 2), bar, thick);
+                this._dictateDrawn = bar;
+                return;
+            }
+            const levels = Dictate.levels();
+            const step = Math.max(1, Math.round(5 * ratio));
+            const barWidth = Math.max(1, Math.round(3 * ratio));
+            const count = Math.floor(width / step);
+            let drawn = 0;
+            for (let i = 0; i < count; i++) {
+                const level = levels[levels.length - count + i] || 0;
+                const h = Math.max(Math.round(2 * ratio), Math.round(level * height));
+                g.fillRect(i * step, Math.round((height - h) / 2), barWidth, h);
+                if (level > 0) drawn++;
+            }
+            this._dictateDrawn = drawn;
+        },
+
+        animateDictation() {
+            cancelAnimationFrame(this._dictateFrame);
+            this._dictateFrame = null;
+            if (this.dictation !== 'recording' || this.reducedMotion()) return;
+            const frame = () => {
+                if (this.dictation !== 'recording') {
+                    this._dictateFrame = null;
+                    return;
+                }
+                this.drawDictation();
+                this._dictateFrame = requestAnimationFrame(frame);
+            };
+            this._dictateFrame = requestAnimationFrame(frame);
+        },
+
+        stopDictationTimers() {
+            clearInterval(this._dictateTick);
+            this._dictateTick = null;
+            cancelAnimationFrame(this._dictateFrame);
+            this._dictateFrame = null;
         },
 
         toggleDictation() {
@@ -2157,42 +2293,51 @@
                 return;
             }
             this.dictation = 'recording';
-            clearInterval(this._dictateTick);
-            this._dictateTick = setInterval(() => this.renderDictation(), 500);
+            this._dictateHinted = false;
+            this.stopDictationTimers();
+            this._dictateTick = setInterval(() => this.renderDictation(), 250);
             this.renderDictation();
+            this.drawDictation();
+            this.animateDictation();
+            this.dictationStatus(t('Recording'));
         },
 
         cancelDictation() {
             const Dictate = window.NymbotDictate;
-            clearInterval(this._dictateTick);
-            this._dictateTick = null;
+            this.stopDictationTimers();
             const was = this.dictation;
             this.dictation = null;
             this._dictateRun = null;
             if (Dictate) Dictate.cancel();
             this.renderDictation();
+            this.dictationStatus('');
             if (was) this.toast(t('Dictation canceled.'));
         },
 
         async finishDictation() {
             const Dictate = window.NymbotDictate;
             if (this.dictation !== 'recording' || !Dictate) return;
-            clearInterval(this._dictateTick);
-            this._dictateTick = null;
+            this.stopDictationTimers();
             this.dictation = 'sending';
             const run = {};
             this._dictateRun = run;
             this.renderDictation();
+            this.dictationStatus(t('Transcribing…'));
             const settle = (message) => {
                 if (this._dictateRun !== run) return false;
                 this._dictateRun = null;
                 this.dictation = null;
                 this.renderDictation();
+                this.dictationStatus('');
                 if (message) this.toast(message);
                 return true;
             };
             const blob = await Dictate.stop();
             if (this._dictateRun !== run) return;
+            if (Dictate.silent) {
+                settle(t('No sound was picked up, so nothing was sent. Check your microphone and try again.'));
+                return;
+            }
             if (!blob || !blob.size) {
                 settle(t('Nothing was recorded.'));
                 return;
@@ -2262,6 +2407,7 @@
                 continued: 0
             };
             this.turns.set(conv.id, turn);
+            if (window.NymbotTasks) window.NymbotTasks.began(this, turn);
             this.mountTurn();
             this.syncFollowUps();
             this.refreshComposer();
@@ -2272,6 +2418,7 @@
         endTurn(turn) {
             if (!turn) return;
             if (this.turns.get(turn.convId) === turn) this.turns.delete(turn.convId);
+            if (window.NymbotTasks) window.NymbotTasks.ended(this, turn);
             if (turn.node) {
                 turn.node.remove();
                 turn.node = null;
@@ -2288,6 +2435,7 @@
             turn.node = this.thinkingNode(turn.label);
             $('messages').appendChild(turn.node);
             this.renderProgress(turn);
+            this.renderDraft(turn);
             this.scrollToBottom();
         },
 
@@ -5130,7 +5278,7 @@
             reader.hidden = true;
             frame.hidden = false;
             frame.srcdoc = lang === 'svg'
-                ? `<body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#fff">${entry.body}</body>`
+                ? `<link rel="stylesheet" href="${location.origin}/app/css/svg-frame.css"><body>${entry.body}</body>`
                 : entry.body;
         },
 
@@ -5244,6 +5392,225 @@
                 list.appendChild(row);
             }
             this.openModal('modalArtifacts');
+        },
+
+        renderMenuCounts() {
+            const show = (id, n) => {
+                const node = $(id);
+                if (node) node.textContent = n ? String(n) : '';
+            };
+            show('workspaceCount', Store.workspaces().length);
+            show('botCount', Bots.all().length);
+            show('scheduleCount', Store.schedules().filter(s => s.enabled).length);
+            if (!this._artifactWatch) {
+                this._artifactWatch = true;
+                this._artifactCountStale = true;
+                Store.watch((key) => {
+                    if (key === 'conversations' || String(key).startsWith('artifacts_')) {
+                        this._artifactCountStale = true;
+                    }
+                    if (key === 'workspaces' || key === 'bots' || key === 'schedules') {
+                        queueMicrotask(() => this.renderMenuCounts());
+                    }
+                });
+            }
+            if (!this._artifactCountStale || this._artifactCountPending) return;
+            this._artifactCountPending = true;
+            const run = () => {
+                this._artifactCountPending = false;
+                this._artifactCountStale = false;
+                show('artifactCount', this.artifactIndex().length);
+            };
+            if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 2000 });
+            else setTimeout(run, 300);
+        },
+
+        updateConvFade() {
+            const list = $('convList');
+            const fade = $('convFade');
+            if (!list || !fade) return;
+            if (!this._convFadeWired) {
+                this._convFadeWired = true;
+                list.addEventListener('scroll', () => this.updateConvFade(), { passive: true });
+                if (window.ResizeObserver) new ResizeObserver(() => this.updateConvFade()).observe(list);
+                window.addEventListener('resize', () => this.updateConvFade());
+            }
+            const left = list.scrollHeight - list.scrollTop - list.clientHeight;
+            fade.classList.toggle('is-visible', list.clientHeight > 0 && left > 2);
+        },
+
+        artifactKind(lang) {
+            const l = String(lang || '').toLowerCase();
+            if (['html', 'htm', 'svg', 'xml'].includes(l)) return 'page';
+            if (['markdown', 'md', 'txt', 'text', ''].includes(l)) return 'doc';
+            if (['json', 'csv', 'tsv', 'yaml', 'yml', 'toml', 'sql'].includes(l)) return 'data';
+            return 'code';
+        },
+
+        artifactIndex() {
+            const rows = [];
+            for (const conv of Store.conversations()) {
+                if (conv.ephemeral || Store._ghosts.has(conv.id)) continue;
+                const list = Store.read('artifacts_' + conv.id, []);
+                if (!Array.isArray(list)) continue;
+                for (const a of list) {
+                    if (a && a.id) rows.push({ a, conv, kind: this.artifactKind(a.lang) });
+                }
+            }
+            const when = (a) => a.updatedAt || a.createdAt || 0;
+            return rows.sort((x, y) => when(y.a) - when(x.a));
+        },
+
+        openArtifactLibrary() {
+            this.artifactLibrary = { rows: this.artifactIndex(), kind: 'all', limit: 100 };
+            this._artifactCountStale = false;
+            $('artifactCount').textContent = this.artifactLibrary.rows.length
+                ? String(this.artifactLibrary.rows.length) : '';
+            const search = $('artifactLibrarySearch');
+            if (!this._artifactLibraryWired) {
+                this._artifactLibraryWired = true;
+                search.addEventListener('input', () => {
+                    if (this.artifactLibrary) this.artifactLibrary.limit = 100;
+                    this.renderArtifactLibrary();
+                });
+                search.addEventListener('keydown', (e) => {
+                    if (e.key !== 'ArrowDown') return;
+                    const first = $('artifactLibraryList').querySelector('.artifact-open');
+                    if (first) { e.preventDefault(); first.focus(); }
+                });
+                $('artifactLibraryList').addEventListener('keydown', (e) => this.artifactLibraryKey(e));
+            }
+            search.value = '';
+            this.setArtifactLibraryKind('all');
+            this.openModal('modalArtifactLibrary');
+        },
+
+        setArtifactLibraryKind(kind) {
+            if (!this.artifactLibrary) return;
+            this.artifactLibrary.kind = kind;
+            this.artifactLibrary.limit = 100;
+            for (const pill of document.querySelectorAll('#artifactLibraryKinds [data-kind]')) {
+                const on = pill.dataset.kind === kind;
+                pill.classList.toggle('is-active', on);
+                pill.setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            this.renderArtifactLibrary();
+        },
+
+        artifactLibraryMatches() {
+            const lib = this.artifactLibrary;
+            if (!lib) return [];
+            const term = ($('artifactLibrarySearch').value || '').trim().toLowerCase();
+            return lib.rows.filter((row) => {
+                if (lib.kind !== 'all' && row.kind !== lib.kind) return false;
+                if (!term) return true;
+                return String(row.a.title || '').toLowerCase().includes(term)
+                    || String(row.a.lang || '').toLowerCase().includes(term)
+                    || String(row.conv.title || '').toLowerCase().includes(term)
+                    || String(row.a.body || '').toLowerCase().includes(term);
+            });
+        },
+
+        renderArtifactLibrary() {
+            const lib = this.artifactLibrary;
+            const list = $('artifactLibraryList');
+            if (!lib || !list) return;
+            list.innerHTML = '';
+            const matches = this.artifactLibraryMatches();
+            $('artifactLibraryStatus').textContent = !lib.rows.length
+                ? t('Nothing yet. A reply with a whole file in it lands here.')
+                : matches.length === 1 ? t('1 artifact') : t('{n} artifacts', { n: matches.length });
+            if (lib.rows.length && !matches.length) {
+                list.appendChild(el('p', 'hint', t('Nothing matches that.')));
+            }
+            for (const row of matches.slice(0, lib.limit)) list.appendChild(this.artifactLibraryRow(row));
+            if (matches.length > lib.limit) {
+                const more = el('button', 'btn btn-small artifact-more', t('Show more'));
+                more.type = 'button';
+                more.addEventListener('click', () => {
+                    lib.limit += 100;
+                    this.renderArtifactLibrary();
+                });
+                list.appendChild(more);
+            }
+        },
+
+        artifactLibraryRow({ a, conv }) {
+            const row = el('div', 'repo-row artifact-row');
+            row.setAttribute('role', 'listitem');
+            row.dataset.artifact = a.id;
+            row.dataset.conv = conv.id;
+            const main = el('div', 'repo-main');
+            const open = el('button', 'artifact-open');
+            open.type = 'button';
+            open.appendChild(el('span', 'repo-name', a.title || t('Untitled')));
+            const lines = String(a.body || '').split('\n').length;
+            const sub = el('span', 'repo-sub', [
+                a.lang || 'text',
+                t('{n} lines', { n: lines }),
+                conv.title || t('New chat'),
+                this.dayLabel(a.updatedAt || a.createdAt || Date.now())
+            ].join(' · '));
+            if (conv.anon) sub.appendChild(el('span', 'conv-badge', 'anon'));
+            open.appendChild(sub);
+            open.setAttribute('aria-label', t('Open {title} from {chat}', {
+                title: a.title || t('Untitled'), chat: conv.title || t('New chat')
+            }));
+            open.addEventListener('click', () => this.openLibraryArtifact(conv.id, a.id));
+            main.appendChild(open);
+            row.appendChild(main);
+            const actions = el('div', 'row-actions');
+            const button = (label, act, run) => {
+                const b = el('button', 'row-btn', label);
+                b.type = 'button';
+                b.dataset.libraryAct = act;
+                b.setAttribute('aria-label', label + ': ' + (a.title || t('Untitled')));
+                b.addEventListener('click', run);
+                actions.appendChild(b);
+            };
+            button(t('Copy'), 'copy', () => this.writeClipboard(a.body || ''));
+            button(t('Download'), 'download', () => {
+                const name = String(a.title || 'artifact').replace(/[^\w.-]+/g, '-').toLowerCase()
+                    + '.' + Artifacts.extensionFor(a.lang);
+                Exporter.download(name, 'text/plain', a.body || '');
+            });
+            button(t('Go to chat'), 'chat', () => this.goToArtifactChat(conv.id, a.messageId));
+            row.appendChild(actions);
+            return row;
+        },
+
+        artifactLibraryKey(e) {
+            const buttons = [...$('artifactLibraryList').querySelectorAll('.artifact-open')];
+            if (!buttons.length) return;
+            const row = e.target.closest('.artifact-row');
+            const at = row ? buttons.indexOf(row.querySelector('.artifact-open')) : -1;
+            let next = null;
+            if (e.key === 'ArrowDown') next = buttons[Math.min(buttons.length - 1, at + 1)];
+            else if (e.key === 'ArrowUp') {
+                if (at <= 0) { e.preventDefault(); $('artifactLibrarySearch').focus(); return; }
+                next = buttons[at - 1];
+            } else if (e.key === 'Home') next = buttons[0];
+            else if (e.key === 'End') next = buttons[buttons.length - 1];
+            if (!next) return;
+            e.preventDefault();
+            next.focus();
+            next.scrollIntoView({ block: 'nearest' });
+        },
+
+        openLibraryArtifact(convId, id) {
+            const conv = Store.conversation(convId);
+            if (!conv) { this.toast(t('That chat is gone.')); return; }
+            this.closeModals({ keepFocus: true });
+            if (!this.conv || this.conv.id !== conv.id) this.open(conv);
+            this.openArtifact(id);
+        },
+
+        goToArtifactChat(convId, messageId) {
+            const conv = Store.conversation(convId);
+            if (!conv) { this.toast(t('That chat is gone.')); return; }
+            this.closeModals({ keepFocus: true });
+            this.open(conv);
+            if (messageId) setTimeout(() => this.jumpToMessage(messageId), 60);
         },
 
         /// What a repo run changed, and the way back. Turning writes on is a
@@ -5600,6 +5967,7 @@
                 },
                 Research.helpTopic(),
                 Team.helpTopic(),
+                ...(window.NymbotTasks ? [window.NymbotTasks.helpTopic()] : []),
                 {
                     title: t('Typing while it is still writing'),
                     body: t('You do not have to wait for a reply to land before saying the next thing. Anything typed mid-reply waits its turn, shown above the composer in the order it was typed, and goes as soon as the current one is done. Take one back out while it waits, or press Stop and nothing behind it is sent either. Commands are the exception: they are free and instant, so they run straight away rather than queueing.')
@@ -5739,7 +6107,8 @@
                     t('Nothing scheduled. A standing question — a digest, a check on a repository — goes here.')));
             }
             for (const entry of all) {
-                const row = el('div', 'repo-row' + (entry.enabled ? ' is-on' : ''));
+                const row = el('div', 'repo-row' + (entry.enabled ? ' is-on' : ' is-paused'));
+                row.dataset.schedule = entry.id;
                 const main = el('div', 'repo-main');
                 main.appendChild(el('span', 'repo-name', entry.title || t('Untitled')));
                 const when = entry.enabled
@@ -5750,8 +6119,29 @@
                     when,
                     entry.runs ? t('{n} runs', { n: entry.runs }) : t('never run')
                 ].join(' · ')));
+                const chatId = entry.convId || entry.lastConvId || null;
+                const chat = chatId ? Store.conversation(chatId) : null;
+                const where = entry.convId
+                    ? (chat ? (chat.title || t('New chat')) : t('Its chat was deleted'))
+                    : t('A new chat each run');
+                const last = entry.lastError
+                    ? t('Last run failed: {error}', { error: entry.lastError })
+                    : entry.lastRunAt
+                        ? t('Last run {when}', { when: `${this.dayLabel(entry.lastRunAt)} ${this.timeLabel(entry.lastRunAt)}` })
+                        : '';
+                main.appendChild(el('span', 'repo-sub schedule-chat', last ? `${where} · ${last}` : where));
                 row.appendChild(main);
                 const actions = el('div', 'row-actions');
+                if (chat) {
+                    const go = el('button', 'row-btn', t('Go to chat'));
+                    go.type = 'button';
+                    go.dataset.scheduleAct = 'chat';
+                    go.addEventListener('click', () => {
+                        this.closeModals({ keepFocus: true });
+                        this.open(chat);
+                    });
+                    actions.appendChild(go);
+                }
                 const toggle = el('button', 'row-btn', entry.enabled ? t('Pause') : t('Resume'));
                 toggle.type = 'button';
                 toggle.addEventListener('click', () => {
@@ -5832,7 +6222,7 @@
             const conv = target || this.newConversation({ title: entry.title });
             if (!this.conv || this.conv.id !== conv.id) this.open(conv);
             this.closeModals();
-            Store.saveSchedule(this.advance(entry));
+            Store.saveSchedule(Object.assign(this.advance(entry), { lastConvId: conv.id, lastRunAt: Date.now() }));
             this.renderSchedules();
             this.refreshToolbar();
             this.note(t('Running “{name}”.', { name: entry.title || t('Untitled') }));
@@ -7497,6 +7887,10 @@
 
         async clearCaches() {
             try {
+                const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+                if (sw) sw.postMessage({ type: 'nymbot-wipe-media' });
+            } catch (_) { }
+            try {
                 if (!window.caches) return;
                 const keys = await caches.keys();
                 await Promise.all(keys.map(k => caches.delete(k)));
@@ -8173,6 +8567,8 @@
                 'open-compare': () => this.openCompare(),
                 'compare-run': () => this.runCompare(),
                 'open-artifacts': () => this.openArtifactList(),
+                'open-artifact-library': () => this.openArtifactLibrary(),
+                'artifact-kind': (target) => this.setArtifactLibraryKind(target.dataset.kind),
                 'artifact-open': (target) => this.openArtifact(target.dataset.artifact),
                 'artifact-close': () => this.closeArtifact(),
                 'artifact-tab': (target) => this.setArtifactTab(target.dataset.tab),
@@ -8326,6 +8722,7 @@
                 window.NymbotConnectors ? window.NymbotConnectors.handlers(this) : {},
                 ServerRun ? ServerRun.handlers(this) : {},
                 Team.handlers(this),
+                window.NymbotTasks ? window.NymbotTasks.handlers(this) : {},
                 window.NymbotGift.handlers(this),
                 window.NymbotVault ? window.NymbotVault.handlers(this) : {});
 

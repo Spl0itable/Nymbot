@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app.dart';
 import '../core/theme/theme.dart';
 import 'i18n/i18n.dart';
+import 'nym_glyph.dart';
 import 'sheets/models_sheet.dart';
 
 class NoticeBanner extends StatelessWidget {
@@ -22,11 +23,12 @@ class NoticeBanner extends StatelessWidget {
       _ => theme.colorScheme.secondary,
     };
     final icon = notice.kind == 'model'
-        ? Icons.auto_awesome_outlined
+        ? NymGlyph('model', size: 16, color: accent)
         : switch (notice.level) {
-            'success' => Icons.check_circle_outline,
-            'warning' => Icons.warning_amber_rounded,
-            _ => Icons.campaign_outlined,
+            'success' => NymGlyph('verified', size: 16, color: accent),
+            'warning' =>
+              Icon(Icons.warning_amber_rounded, size: 16, color: accent),
+            _ => NymGlyph('prompt', size: 16, color: accent),
           };
     final link = notice.url;
     final model = notice.kind == 'model' ? notice.model : null;
@@ -54,7 +56,7 @@ class NoticeBanner extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 1),
-            child: Icon(icon, size: 16, color: accent),
+            child: icon,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -106,7 +108,7 @@ class NoticeBanner extends StatelessWidget {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.close, size: 16),
+            icon: const NymGlyph('close', size: 16),
             tooltip: t('Dismiss'),
             visualDensity: VisualDensity.compact,
             onPressed: () => app.dismissNotice(notice.id),

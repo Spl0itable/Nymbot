@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/free_tier.dart';
+import '../services/media_cache.dart';
 
 import '../models/artifact.dart';
 import '../models/bot.dart';
@@ -334,6 +335,9 @@ class Store {
     return Artifact.decodeList(_prefs.getString('artifacts_$convId'));
   }
 
+  List<Artifact> keptArtifacts(String convId) =>
+      Artifact.decodeList(_prefs.getString('artifacts_$convId'));
+
   Future<void> saveArtifacts(String convId, List<Artifact> list) async {
     final kept = list.length > 60 ? list.sublist(list.length - 60) : list;
     // A file lifted out of a ghost chat is still that chat: it stays in memory
@@ -481,5 +485,6 @@ class Store {
     await _prefs.clear();
     await _secure.deleteAll();
     await _legacySecure.deleteAll();
+    await MediaCache.instance.clear();
   }
 }

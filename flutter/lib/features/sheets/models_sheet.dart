@@ -213,6 +213,7 @@ Future<Map<String, dynamic>?> showModelChoice(
   String? current,
   Map<String, String> unavailable = const {},
   String? noneLabel,
+  bool includeMedia = false,
 }) =>
     showNymSheet<Map<String, dynamic>>(
       context,
@@ -222,6 +223,7 @@ Future<Map<String, dynamic>?> showModelChoice(
         current: current,
         unavailable: unavailable,
         noneLabel: noneLabel,
+        includeMedia: includeMedia,
       ),
     );
 
@@ -326,8 +328,10 @@ class ModelSlot extends StatelessWidget {
                 Text(t('Change'),
                     style: TextStyle(
                         fontSize: 13, color: theme.colorScheme.primary)),
-                Icon(Icons.chevron_right,
-                    size: 18, color: theme.colorScheme.primary),
+                NymGlyph('chevron',
+                    size: 18,
+                    color: theme.colorScheme.primary,
+                    quarterTurns: 3),
               ],
             ),
           ),
@@ -344,6 +348,7 @@ class _ModelChoice extends StatelessWidget {
     required this.current,
     required this.unavailable,
     required this.noneLabel,
+    required this.includeMedia,
   });
 
   final String title;
@@ -351,6 +356,7 @@ class _ModelChoice extends StatelessWidget {
   final String? current;
   final Map<String, String> unavailable;
   final String? noneLabel;
+  final bool includeMedia;
 
   @override
   Widget build(BuildContext context) {
@@ -375,8 +381,10 @@ class _ModelChoice extends StatelessWidget {
               child: ModelList(
                 catalog: catalog,
                 loading: false,
-                chatOnly: true,
-                filters: ModelPicker.chatFilters,
+                chatOnly: !includeMedia,
+                filters: includeMedia
+                    ? ModelList.everyFilter
+                    : ModelPicker.chatFilters,
                 selectedKeys: {if (current != null) current!},
                 unavailable: unavailable,
                 scrollController: controller,
@@ -560,7 +568,9 @@ class _ModelListState extends State<ModelList> {
       trailing: IconButton(
         visualDensity: VisualDensity.compact,
         iconSize: 16,
-        icon: Icon(starred ? Icons.star : Icons.star_border,
+        icon: NymGlyph('star',
+            size: 16,
+            filled: starred,
             color: starred ? NymbotColors.lightning : null),
         tooltip: t('Star this model'),
         onPressed: () async {
@@ -607,7 +617,7 @@ class _ModelListState extends State<ModelList> {
                   suffixIcon: _term.isEmpty
                       ? null
                       : IconButton(
-                          icon: const Icon(Icons.close, size: 18),
+                          icon: const NymGlyph('close', size: 18),
                           tooltip: t('Clear search'),
                           onPressed: () => setState(() {
                             _search.clear();
@@ -638,7 +648,7 @@ class _ModelListState extends State<ModelList> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.sort,
+                    NymGlyph('terse',
                         size: 18,
                         color: flat ? theme.colorScheme.primary : null),
                     const SizedBox(width: 4),
@@ -723,37 +733,9 @@ class _ModelsSheetState extends State<_ModelsSheet> {
     });
   }
 
-  String? _cheapestChatKey() {
-    final groups =
-        (_catalog?['groups'] as List?)?.cast<Map<String, dynamic>>() ??
-            const [];
-    final byKey = {
-      for (final m in ModelPicker.modelsOf(_catalog)) m['key'] as String: m
-    };
-    String? best;
-    var cheapest = 1 << 30;
-    var ceiling = 1 << 30;
-    for (final group in groups) {
-      for (final key in (group['keys'] as List).cast<String>()) {
-        final m = byKey[key];
-        if (m == null) continue;
-        final kind = m['kind'] as String?;
-        if ((kind != null && kind != 'chat') || m['command'] != null) continue;
-        final credits = (m['credits'] as num?)?.toInt() ?? 0;
-        final max = (m['max'] as num?)?.toInt() ?? credits;
-        if (credits > cheapest || (credits == cheapest && max >= ceiling)) continue;
-        cheapest = credits;
-        ceiling = max;
-        best = m['key'] as String?;
-      }
-    }
-    return best;
-  }
-
   Future<void> _pick(AppController app, Map<String, dynamic> m,
       Map<String, dynamic> group) async {
     final credits = ModelPicker.credits(m);
-    final max = ModelPicker.ceiling(m);
     final key = m['key'] as String;
     final command = m['command'] as String?;
     final slug = ModelPicker.slugOf(m, group);
@@ -763,18 +745,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
     if (command != null) {
       final media = pinned
           ? null
-          : {
-              'key': key,
-              'label': m['label'],
-              'kind': m['kind'] ?? 'image',
-              'credits': credits,
-              'max': max,
-              'command': AppController.generatorCommand(command),
-              'slug': slug,
-            };
-      if (AppController.mediaNeedsPro(media)) {
-        media!['proKey'] = _cheapestChatKey();
-      }
+          : AppController.mediaFor(m, slug: slug, catalog: _catalog);
       await app.setMediaModel(media);
       messenger.showSnackBar(SnackBar(
         content: Text(pinned

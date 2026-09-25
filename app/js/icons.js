@@ -54,7 +54,12 @@
         dot: '<circle cx="12" cy="12" r="5"></circle>',
         circle: '<circle cx="12" cy="12" r="6.5"></circle>',
         wallet: '<path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2"></path><rect x="3" y="7" width="18" height="13" rx="2"></rect><circle cx="16.5" cy="13.5" r="1.2"></circle>',
-        link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path>'
+        link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path>',
+        save: '<path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 20h16"></path>',
+        tasks: '<polyline points="3.5 6.5 5.2 8.2 8 5"></polyline><line x1="11" y1="6.5" x2="20.5" y2="6.5"></line><polyline points="3.5 12.5 5.2 14.2 8 11"></polyline><line x1="11" y1="12.5" x2="20.5" y2="12.5"></line><circle cx="5.6" cy="18.5" r="1.6"></circle><line x1="11" y1="18.5" x2="20.5" y2="18.5"></line>',
+        workspace: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>',
+        bot: '<rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4"></path><circle cx="9" cy="14" r="1"></circle><circle cx="15" cy="14" r="1"></circle>',
+        artifacts: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline>',
     };
 
     const FILLED = {

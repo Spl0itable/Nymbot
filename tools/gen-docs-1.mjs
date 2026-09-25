@@ -187,8 +187,35 @@ ${NOTE}
                     is, the <a href="https://nymbot.ai/app">web app</a> installs to a home screen and is
                     the same thing.</p>
             </div>
-            <p>Where the platform is more restrictive, the app is too: Android's background limits mean a
-                long Pro reply finishes when you come back to the app rather than while it is buried.</p>
+
+            <h2 id="reply-notifications">Reply notifications</h2>
+            <p>A long reply can take a minute or more. With <strong>Notify me when a reply is ready</strong>
+                on in Settings, which is the default, you can leave the app while Nymbot works and get a
+                notification when the reply is ready. Tap it and the app opens that chat and collects the
+                reply. If you are looking at that chat when the reply lands, there is no notification. Turn
+                the setting off and none of what follows happens.</p>
+            <p>The first time you send a message with the setting on, your phone asks whether Nymbot may
+                send notifications. Say no and nothing is shown or registered.</p>
+            <p><strong>On Android</strong> it all stays on your device. While a reply is pending and the app
+                is in the background, Android shows a quiet &ldquo;Waiting for Nymbot's reply&hellip;&rdquo;
+                notification, which is what keeps the app running so the reply can arrive. When it does, the
+                app posts &ldquo;Nymbot replied&rdquo; with the chat's title, read from your device and never
+                sent anywhere. The waiting notification goes away as soon as nothing is pending or you open
+                the app.</p>
+            <p><strong>On iOS</strong> an app in the background cannot wait for a reply, so the notification
+                comes through Apple's push service. When you leave the app with a reply pending, it sends the
+                Nymbot service three things for that one reply:</p>
+            <ul>
+                <li>the device token Apple issued so this app on this device can receive notifications,</li>
+                <li>an opaque id for the chat, made on your device, so tapping the notification opens the
+                    right one, and</li>
+                <li>a generic line such as &ldquo;Your reply is ready&rdquo;, in your language.</li>
+            </ul>
+            <p>Never the chat's title, your message or the reply. The service keeps the token only until
+                that one reply is finished, and never longer than ten minutes, then sends a single
+                notification through Apple and deletes it. Apple sees that a notification with that generic
+                line went to your device. The reply itself still reaches the app end-to-end encrypted, the
+                way every reply does.</p>
 
             <h2 id="one-account">One account everywhere</h2>
             <p>Your key is the account. Point a second device at the same <code>nsec</code> and it is the

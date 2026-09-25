@@ -9,6 +9,7 @@ import '../../services/connectors.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
+import '../nym_glyph.dart';
 
 Future<void> showConnectorsSheet(BuildContext context) => showNymSheet<void>(
       context,
@@ -218,12 +219,12 @@ class _ConnectorsSheetState extends State<ConnectorsSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        icon: const NymGlyph('pencil', size: 18),
                         tooltip: t('Edit'),
                         onPressed: () => _edit(c),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 18),
+                        icon: const NymGlyph('close', size: 18),
                         tooltip: t('Remove'),
                         onPressed: () => app.deleteConnector(c.id),
                       ),
@@ -307,7 +308,7 @@ class _ConnectorsSheetState extends State<ConnectorsSheet> {
               icon: _testing
                   ? const SizedBox(
                       width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.power_outlined, size: 18),
+                  : const NymGlyph('connectors', size: 18),
               label: Text(t('Test connection')),
               onPressed: _testing ? null : () => _test(app),
             ),

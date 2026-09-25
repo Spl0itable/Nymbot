@@ -26,8 +26,10 @@ import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
 import 'artifact_screen.dart';
+import 'tasks_pane.dart';
 import 'caps_sheet.dart';
 import 'code_frame.dart';
+import 'dictation_wave.dart';
 import 'doc_tray.dart';
 import 'compose_controller.dart';
 import 'sheets/bots_sheet.dart';
@@ -55,6 +57,7 @@ import 'notice_banner.dart';
 import 'nym_avatar.dart';
 import 'nym_icons.dart';
 import 'sheets/anon_sheet.dart';
+import 'sheets/artifact_library_sheet.dart';
 import 'sheets/appearance_sheet.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/gift_sheet.dart';
@@ -112,6 +115,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _dictation;
   DateTime? _dictateFrom;
   Timer? _dictateTick;
+  DictationMeter? _meter;
+  Timer? _levelTick;
 
   AppController? _app;
 
@@ -222,10 +227,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {});
     });
     setState(() => _dictation = 'recording');
+    unawaited(SemanticsService.announce(t('Recording'), Directionality.of(context)));
+    _startLevels();
+  }
+
+  void _startLevels() {
+    _levelTick?.cancel();
+    final meter = DictationMeter();
+    _meter = meter;
+    var busy = false;
+    var misses = 0;
+    _levelTick = Timer.periodic(DictationMeter.interval, (timer) async {
+      if (busy) return;
+      busy = true;
+      final level = await Dictation.level();
+      busy = false;
+      if (!mounted || _meter != meter || _dictation != 'recording') return;
+      final wasQuiet = meter.noSound;
+      meter.add(level);
+      if (level == null) {
+        misses++;
+        if (misses >= 10 && !meter.metering) timer.cancel();
+        return;
+      }
+      misses = 0;
+      if (meter.noSound && !wasQuiet) {
+        unawaited(SemanticsService.announce(
+            t('No sound is coming in. Check your microphone.'),
+            Directionality.of(context)));
+      }
+      setState(() {});
+    });
+  }
+
+  void _stopLevels() {
+    _levelTick?.cancel();
+    _levelTick = null;
   }
 
   Future<void> _cancelDictation() async {
     _dictateTick?.cancel();
+    _stopLevels();
+    _meter = null;
     final was = _dictation;
     setState(() => _dictation = null);
     await Dictation.cancel();
@@ -235,6 +278,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _finishDictation() async {
     if (_dictation != 'recording') return;
     _dictateTick?.cancel();
+    _stopLevels();
+    final silent = _meter?.silentClip ?? false;
+    _meter = null;
     setState(() => _dictation = 'sending');
     void settle(String? message) {
       if (!mounted) return;
@@ -249,6 +295,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       audio = null;
     }
     if (!mounted || _dictation != 'sending') return;
+    if (silent) {
+      settle(t('No sound was picked up, so nothing was sent. Check your '
+          'microphone and try again.'));
+      return;
+    }
     if (audio == null || audio.isEmpty) {
       settle(t('Nothing was recorded.'));
       return;
@@ -342,28 +393,79 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _dictationStrip(BuildContext context) {
-    final seconds = _dictateFrom == null
-        ? 0
-        : DateTime.now().difference(_dictateFrom!).inSeconds;
-    final time = '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    final theme = Theme.of(context);
+    final sending = _dictation == 'sending';
+    final spent = _dictateFrom == null
+        ? Duration.zero
+        : DateTime.now().difference(_dictateFrom!);
+    String clock(Duration d) {
+      final seconds = d.isNegative ? 0 : d.inSeconds;
+      return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    }
+
+    final left = Dictation.limit - spent + const Duration(milliseconds: 999);
+    final meter = sending ? null : _meter;
+    final quiet = meter != null && meter.noSound;
     return Padding(
       key: const ValueKey('dictation-strip'),
       padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.mic, size: 16, color: NymbotColors.danger),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              _dictation == 'sending'
-                  ? t('Transcribing…')
-                  : t('Listening… {time}', {'time': time}),
-              style: const TextStyle(fontSize: 12),
-            ),
+          Row(
+            children: [
+              NymGlyph('mic', size: 16, color: NymbotColors.danger),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Semantics(
+                  liveRegion: sending,
+                  child: Text(
+                    sending
+                        ? t('Transcribing…')
+                        : t('Listening… {time}', {'time': clock(spent)}),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+              if (!sending)
+                Text(
+                  t('{time} left', {'time': clock(left)}),
+                  key: const ValueKey('dictation-left'),
+                  style: TextStyle(fontSize: 12, color: theme.hintColor),
+                ),
+            ],
           ),
-          if (_dictation == 'recording')
-            TextButton(onPressed: _finishDictation, child: Text(t('Done'))),
-          TextButton(onPressed: _cancelDictation, child: Text(t('Cancel'))),
+          if (meter != null && meter.metering)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: DictationWave(
+                key: const ValueKey('dictation-wave'),
+                levels: meter.levels,
+                quiet: quiet,
+              ),
+            ),
+          if (quiet)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                t('No sound is coming in. Check your microphone.'),
+                key: const ValueKey('dictation-hint'),
+                style: TextStyle(fontSize: 12, color: NymbotColors.danger),
+              ),
+            ),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            children: [
+              TextButton(onPressed: _cancelDictation, child: Text(t('Cancel'))),
+              if (!sending)
+                FilledButton(
+                  onPressed: _finishDictation,
+                  child: Text(t('Stop and transcribe')),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -390,6 +492,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     _stopReveal();
     _dictateTick?.cancel();
+    _stopLevels();
     if (_dictation != null) unawaited(Dictation.cancel());
     _input.dispose();
     _queueEditor.dispose();
@@ -472,6 +575,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final reply = last != null && last.role == ChatRole.bot ? last : null;
     if (reply != null &&
         app.settings.typewriter &&
+        !app.streamedReplies.contains(reply.id) &&
         reply.content.length < 12000) {
       await _typeOut(reply);
     }
@@ -1378,12 +1482,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               for (final (key, icon, label) in [
-                ('photos', Icons.photo_library_outlined, t('Photos')),
-                ('camera', Icons.photo_camera_outlined, t('Take a photo')),
-                ('files', Icons.attach_file, t('Files')),
+                ('photos', const NymGlyph('picture', size: 20), t('Photos')),
+                ('camera', const Icon(Icons.photo_camera_outlined),
+                    t('Take a photo')),
+                ('files', const NymGlyph('attach', size: 20), t('Files')),
               ])
                 ListTile(
-                  leading: Icon(icon),
+                  leading: icon,
                   title: Text(label),
                   onTap: () => Navigator.pop(sheet, key),
                 ),
@@ -1422,6 +1527,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (jump.messageId != null) _shownConv = conv.id;
     await app.open(conv);
     if (jump.messageId != null) _scrollToMessage(jump.messageId!);
+  }
+
+  Future<void> _jumpFromLibrary(ArtifactJump jump) async {
+    final app = AppScope.read(context);
+    final hit = app.conversations.where((c) => c.id == jump.conversationId);
+    if (hit.isEmpty) return;
+    final artifactId = jump.artifactId;
+    if (artifactId == null) {
+      await _runPalette((
+        kind: 'message',
+        value: '${jump.conversationId} ${jump.messageId ?? ''}',
+      ));
+      return;
+    }
+    await app.open(hit.first);
+    if (!mounted) return;
+    final made = app.artifacts.where((a) => a.id == artifactId);
+    if (made.isNotEmpty) await showArtifact(context, made.first);
+  }
+
+  bool _tasksOpen = false;
+
+  void _openTasks(BuildContext context) {
+    if (tasksBeside(context)) {
+      setState(() => _tasksOpen = !_tasksOpen);
+      return;
+    }
+    unawaited(showTasksSheet(context, onJump: _jumpFromTasks));
+  }
+
+  void _jumpFromTasks(String id) {
+    if (id == 'live') {
+      _toBottom();
+      return;
+    }
+    _scrollToMessage(id);
   }
 
   void _scrollToMessage(String id) {
@@ -1496,7 +1637,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          drawer: const _ChatDrawer(),
+          drawer: _ChatDrawer(onJump: _jumpFromLibrary),
           drawerEdgeDragWidth: MediaQuery.sizeOf(context).width * 0.5,
           appBar: AppBar(
             title: Semantics(
@@ -1521,8 +1662,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       if (conv?.pinned ?? false)
                         const Padding(
                           padding: EdgeInsets.only(left: 6),
-                          child: Icon(Icons.star,
-                              size: 14, color: NymbotColors.lightning),
+                          child: NymGlyph('star',
+                              size: 14,
+                              filled: true,
+                              color: NymbotColors.lightning),
                         ),
                       if (conv != null) CapBadge(conv: conv),
                     ],
@@ -1540,19 +1683,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     side: BorderSide(color: Theme.of(context).colorScheme.secondary),
                   ),
                 ),
+              TasksButton(open: _tasksOpen, onPressed: () => _openTasks(context)),
               IconButton(
-                icon: const Icon(Icons.search, size: 20),
+                icon: const NymGlyph('search', size: 20),
                 tooltip: t('Search everything'),
                 onPressed: () => _openSearch(),
               ),
               IconButton(
-                icon: const Icon(Icons.more_vert, size: 20),
+                icon: const NymGlyph('more', size: 20, filled: true),
                 tooltip: t('Chat options'),
                 onPressed: () => _menu(app),
               ),
             ],
           ),
-          body: Column(
+          body: TasksSplit(
+            open: _tasksOpen,
+            onJump: _jumpFromTasks,
+            onClose: () => setState(() => _tasksOpen = false),
+            child: Column(
             children: [
               const NoticeBanner(),
               const NymbotToolbar(),
@@ -1571,7 +1719,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           heroTag: 'toBottom',
                           tooltip: t('Jump to the newest message'),
                           onPressed: () => _toBottom(),
-                          child: const Icon(Icons.arrow_downward, size: 18),
+                          child: const NymGlyph('down', size: 18),
                         ),
                       ),
                   ],
@@ -1579,6 +1727,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               _composer(context, app),
             ],
+          ),
           ),
         ),
       ),
@@ -1641,17 +1790,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+            icon: const NymGlyph('up', size: 20),
             tooltip: t('Previous match'),
             onPressed: hits.isEmpty ? null : () => _stepFind(app, -1),
           ),
           IconButton(
-            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+            icon: const NymGlyph('down', size: 20),
             tooltip: t('Next match'),
             onPressed: hits.isEmpty ? null : () => _stepFind(app, 1),
           ),
           IconButton(
-            icon: const Icon(Icons.close, size: 18),
+            icon: const NymGlyph('close', size: 18),
             tooltip: t('Close find'),
             onPressed: () => setState(() => _findTerm = null),
           ),
@@ -1722,6 +1871,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       : t('Nymbot is thinking')),
               showAvatar: app.settings.avatars,
               steps: _progressLines(app.progressSteps),
+              draft: app.progressDraft,
+              wrapCode: app.settings.codeWrap,
             );
           }
           final m = messages[i];
@@ -1892,17 +2043,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 width: 13,
                                 height: 13,
                                 child: CircularProgressIndicator(strokeWidth: 2))
-                            : Icon(
-                                a.uploadError != null
-                                    ? Icons.error_outline
-                                    : (a.kind == AttachmentKind.image
-                                        ? Icons.image_outlined
-                                        : Icons.description_outlined),
-                                size: 15,
-                                color: a.uploadError != null
-                                    ? Theme.of(context).colorScheme.error
-                                    : null,
-                              ),
+                            : a.uploadError != null
+                                ? Icon(Icons.error_outline,
+                                    size: 15,
+                                    color: Theme.of(context).colorScheme.error)
+                                : NymGlyph(
+                                    a.kind == AttachmentKind.image
+                                        ? 'picture'
+                                        : 'artifacts',
+                                    size: 15),
                         tooltip: a.uploadError,
                         label: Text(
                           a.uploading
@@ -1957,7 +2106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                       IconButton(
                         key: ValueKey('queue-edit-$i'),
-                        icon: const Icon(Icons.edit_outlined, size: 15),
+                        icon: const NymGlyph('pencil', size: 15),
                         tooltip: t('Edit message'),
                         constraints:
                             const BoxConstraints(minWidth: 48, minHeight: 48),
@@ -1969,7 +2118,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             : null,
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close, size: 15),
+                        icon: const NymGlyph('close', size: 15),
                         tooltip: t('Do not send this'),
                         constraints:
                             const BoxConstraints(minWidth: 48, minHeight: 48),
@@ -2000,7 +2149,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close, size: 15),
+                      icon: const NymGlyph('close', size: 15),
                       tooltip: t('Remove the quote'),
                       visualDensity: VisualDensity.compact,
                       onPressed: () => app.setQuote(null),
@@ -2021,10 +2170,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.attach_file, size: 20),
+                  icon: const NymGlyph('attach', size: 20),
                   tooltip: t('Attach a file'),
                   onPressed: _attach,
                 ),
+                if (Dictation.supported)
+                  IconButton(
+                    key: const ValueKey('mic'),
+                    onPressed: _dictation == 'starting' || _dictation == 'sending'
+                        ? null
+                        : _toggleDictation,
+                    tooltip: _dictation == 'recording'
+                        ? t('Stop and transcribe')
+                        : t('Dictate a message'),
+                    isSelected: _dictation == 'recording',
+                    icon: const NymGlyph('mic', size: 20),
+                    selectedIcon: const NymGlyph('mic',
+                        size: 20, color: NymbotColors.danger),
+                  ),
                 Expanded(
                   child: CodeFrame(
                     controller: _input,
@@ -2086,20 +2249,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(width: 6),
-                if (Dictation.supported)
-                  IconButton(
-                    key: const ValueKey('mic'),
-                    onPressed: _dictation == 'starting' || _dictation == 'sending'
-                        ? null
-                        : _toggleDictation,
-                    tooltip: _dictation == 'recording'
-                        ? t('Stop and transcribe')
-                        : t('Dictate a message'),
-                    isSelected: _dictation == 'recording',
-                    icon: const Icon(Icons.mic_none, size: 20),
-                    selectedIcon: Icon(Icons.stop_circle_outlined,
-                        size: 20, color: NymbotColors.danger),
-                  ),
                 if (app.sending) ...[
                   IconButton.filledTonal(
                     onPressed: app.stop,
@@ -2109,21 +2258,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       backgroundColor:
                           NymbotColors.danger.withValues(alpha: 0.16),
                     ),
-                    icon: const Icon(Icons.stop, size: 20),
+                    icon: const NymGlyph('stop', size: 20, filled: true),
                   ),
                   if (_hasText) ...[
                     const SizedBox(width: 6),
                     IconButton.filledTonal(
                       onPressed: () => _send(),
                       tooltip: t('Send when this one is done'),
-                      icon: const Icon(Icons.send, size: 20),
+                      icon: const NymGlyph('send', size: 20),
                     ),
                   ],
                 ] else
                   IconButton.filledTonal(
                     onPressed: () => _send(),
                     tooltip: t('Send'),
-                    icon: const Icon(Icons.send, size: 20),
+                    icon: const NymGlyph('send', size: 20),
                   ),
               ],
             ),
@@ -2380,7 +2529,9 @@ Future<void> confirmDeleteChat(
 }
 
 class _ChatDrawer extends StatefulWidget {
-  const _ChatDrawer();
+  const _ChatDrawer({required this.onJump});
+
+  final Future<void> Function(ArtifactJump jump) onJump;
 
   @override
   State<_ChatDrawer> createState() => _ChatDrawerState();
@@ -2389,12 +2540,34 @@ class _ChatDrawer extends StatefulWidget {
 class _ChatDrawerState extends State<_ChatDrawer> {
   static const _menuOpenKey = 'menuOpen';
   bool _libraryOpen = true;
+  int? _artifactCount;
 
   @override
   void initState() {
     super.initState();
     _libraryOpen = AppScope.read(context).store.getBool(_menuOpenKey, fallback: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _artifactCount = artifactIndex(AppScope.read(context)).length);
+    });
   }
+
+  Future<void> _openArtifactLibrary() async {
+    final jump = await showArtifactLibrarySheet(context);
+    if (!mounted) return;
+    setState(() => _artifactCount = artifactIndex(AppScope.read(context)).length);
+    if (jump == null) return;
+    Navigator.pop(context);
+    await widget.onJump(jump);
+  }
+
+  int? _menuCount(AppController app, String entry) => switch (entry) {
+        'workspace' => app.workspaces.length,
+        'bot' => app.bots.length,
+        'artifacts' => _artifactCount,
+        'scheduled' => app.schedules.where((s) => s.enabled).length,
+        _ => null,
+      };
 
   void _toggleMenu() {
     setState(() => _libraryOpen = !_libraryOpen);
@@ -2450,7 +2623,8 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         dense: true,
         selected: conv.id == app.current?.id,
         leading: conv.pinned
-            ? const Icon(Icons.star, size: 15, color: NymbotColors.lightning)
+            ? const NymGlyph('star',
+                size: 15, filled: true, color: NymbotColors.lightning)
             : null,
         horizontalTitleGap: conv.pinned ? null : 0,
         title: Text(
@@ -2479,7 +2653,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             if (conv.anon)
               Text(t('anon'), style: const TextStyle(fontSize: 11)),
             IconButton(
-              icon: const Icon(Icons.more_vert, size: 18),
+              icon: const NymGlyph('more', size: 18, filled: true),
               tooltip: t('Chat options'),
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
@@ -2529,7 +2703,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           ],
         ),
         trailing: IconButton(
-          icon: const Icon(Icons.add),
+          icon: const NymGlyph('plus', size: 20),
           tooltip: t('New chat'),
           onPressed: () async {
             await app.newConversation();
@@ -2594,7 +2768,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 duration: reducedMotion(context)
                     ? Duration.zero
                     : const Duration(milliseconds: 150),
-                child: const NymGlyph('down', size: 16),
+                child: const NymGlyph('chevron', size: 16),
               ),
             ],
           ),
@@ -2604,13 +2778,21 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         for (final entry in <(String, String, Future<void> Function())>[
           ('repositories', t('Repositories'),
               () => showReposSheet(context)),
-          ('link', t('Connectors'), () => showConnectorsSheet(context)),
+          ('connectors', t('Connectors'),
+              () => showConnectorsSheet(context)),
           ('prompt-library', t('Prompt library'), () async {
             final picked = await showPromptsSheet(context);
             if (picked != null) app.queueInput(picked);
             if (picked != null && context.mounted) Navigator.pop(context);
           }),
           ('personas', t('Personas'), () => showPersonasSheet(context)),
+          ('workspace', t('Workspaces'), () => showWorkspacesSheet(context)),
+          ('bot', t('Bots'), () => showBotsSheet(context)),
+          ('artifacts', t('Artifacts'), _openArtifactLibrary),
+          ('scheduled', t('Scheduled'), () async {
+            final went = await showSchedulesSheet(context);
+            if (went != null && context.mounted) Navigator.pop(context);
+          }),
           ('saved-messages', t('Saved messages'), () async {
             await showSavedMessagesSheet(context);
           }),
@@ -2623,10 +2805,18 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           ListTile(
             dense: true,
             visualDensity: VisualDensity.compact,
+            key: ValueKey('drawer-menu-${entry.$1}'),
             leading: NymGlyph.has(entry.$1)
                 ? NymGlyph(entry.$1, size: 18)
                 : const Icon(Icons.keyboard_outlined, size: 18),
             title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
+            trailing: switch (_menuCount(app, entry.$1)) {
+              final int n when n > 0 => Text('$n',
+                  key: ValueKey('drawer-count-${entry.$1}'),
+                  style: TextStyle(
+                      fontSize: 12, color: Theme.of(context).hintColor)),
+              _ => null,
+            },
             onTap: entry.$3,
           ),
       const Divider(height: 1),
@@ -2640,11 +2830,12 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               picture: app.profiles.of(app.identity.pubkey).picture,
             ),
             Positioned(
-              right: -1,
-              bottom: -1,
-              child: Icon(
-                Icons.circle,
-                size: 9,
+              right: -5.5,
+              bottom: -5.5,
+              child: NymGlyph(
+                'dot',
+                size: 18,
+                filled: true,
                 color: app.relaysUp > 0
                     ? Theme.of(context).colorScheme.primary
                     : Theme.of(context).disabledColor,
@@ -2673,7 +2864,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               if (who.nip05.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(left: 4),
-                  child: Icon(Icons.check_circle_outline,
+                  child: NymGlyph('verified',
                       size: 12, color: Theme.of(context).colorScheme.secondary),
                 ),
             ],
@@ -2703,13 +2894,13 @@ class _ChatDrawerState extends State<_ChatDrawer> {
       child: SafeArea(
         child: LayoutBuilder(
           builder: (context, box) {
-            final needed = (_libraryOpen ? 740.0 : 380.0) * scale;
+            final needed = (_libraryOpen ? 900.0 : 380.0) * scale;
             if (box.maxHeight >= needed) {
               return Column(
                 children: [
                   ...head,
                   Expanded(
-                    child: rows.isEmpty ? empty : ListView(children: rows),
+                    child: rows.isEmpty ? empty : _FadedChatList(children: rows),
                   ),
                   ...foot,
                 ],
@@ -2730,6 +2921,100 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _FadedChatList extends StatefulWidget {
+  const _FadedChatList({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  State<_FadedChatList> createState() => _FadedChatListState();
+}
+
+class _FadedChatListState extends State<_FadedChatList> {
+  static const _fade = 32.0;
+  final _scroll = ScrollController();
+  bool _more = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_measure);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  @override
+  void didUpdateWidget(covariant _FadedChatList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _measure() {
+    if (!mounted || !_scroll.hasClients) return;
+    final more = _scroll.position.extentAfter > 2;
+    if (more != _more) setState(() => _more = more);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final base = DrawerTheme.of(context).backgroundColor ??
+        theme.colorScheme.surfaceContainerLow;
+    return NotificationListener<ScrollMetricsNotification>(
+      onNotification: (_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+        return false;
+      },
+      child: Stack(
+        children: [
+          ListView(
+            key: const ValueKey('drawer-chat-list'),
+            controller: _scroll,
+            padding: const EdgeInsets.only(bottom: _fade),
+            children: widget.children,
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: _fade,
+            child: IgnorePointer(
+              child: ExcludeSemantics(
+                child: AnimatedOpacity(
+                  key: const ValueKey('drawer-fade'),
+                  opacity: _more ? 1 : 0,
+                  duration: reducedMotion(context)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 150),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          base.withValues(alpha: 0),
+                          base.withValues(alpha: 0.7),
+                          base,
+                        ],
+                        stops: const [0, 0.55, 1],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

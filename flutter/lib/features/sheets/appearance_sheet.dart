@@ -184,6 +184,23 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             toggle(t('Vibrate when a reply lands'), s.hapticOnReply,
                 (v) => s.hapticOnReply = v),
             toggle(t('Read every reply aloud'), s.autoSpeak, (v) => s.autoSpeak = v),
+            if (app.replyNotify.supported) ...[
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: s.replyNotify,
+                title: Text(t('Notify me when a reply is ready'),
+                    style: const TextStyle(fontSize: 13)),
+                onChanged: app.setReplyNotify,
+              ),
+              Text(
+                t('Leave the app while Nymbot works and get a notification '
+                    'when the reply is ready. On iOS this sends a push token, '
+                    'held only until that reply, and never your chat titles.'),
+                style: TextStyle(
+                    fontSize: 11, color: Theme.of(context).hintColor),
+              ),
+            ],
             VoicePicker(
               value: s.voiceUri,
               onChanged: (v) {
