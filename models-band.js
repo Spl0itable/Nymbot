@@ -70,11 +70,12 @@
         }
     };
 
-    fetch('/api/bot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'models' })
-    })
+    try {
+        var baked = band.getAttribute('data-models-fallback');
+        if (baked) render(JSON.parse(baked));
+    } catch (e) {}
+
+    fetch('/api/models', { headers: { 'Accept': 'application/json' } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(render)
         .catch(function () {});

@@ -71,10 +71,29 @@ for (const [outPath, meta] of Object.entries(result.metafile.outputs)) {
 const site = await loadSite();
 const { runtime: runtimeStrings, slugs, sources } = site;
 
+const { BOT_PRO_MODELS } = await import("./functions/api/bot.js");
+const modelsFallback = (() => {
+  const models = [];
+  const groups = [];
+  const bySlug = new Map();
+  for (const [key, m] of Object.entries(BOT_PRO_MODELS)) {
+    if (m.priced === false || !m.label) continue;
+    const authorSlug = String(m.model || "").replace(/^@cf\//, "").split("/")[0].toLowerCase();
+    models.push({ key, label: m.label, authorSlug, priced: true });
+    if (!bySlug.has(authorSlug)) {
+      const group = { author: m.author || authorSlug, authorSlug, keys: [] };
+      bySlug.set(authorSlug, group);
+      groups.push(group);
+    }
+    bySlug.get(authorSlug).keys.push(key);
+  }
+  return JSON.stringify({ models, groups }).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+})();
+
 // Point every document at the hashed asset filenames. Absolute, so a page
 // served from /es/terms/ still resolves them.
 const documents = site.documents.map((doc) => {
-  let html = doc.html;
+  let html = doc.html.replace('data-models-fallback=""', `data-models-fallback="${modelsFallback}"`);
   for (const asset of hashedAssets) {
     const hashed = rename.get(asset.src);
     if (!hashed) throw new Error(`No hashed output for ${asset.src}`);

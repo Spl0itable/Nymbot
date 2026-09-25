@@ -363,11 +363,7 @@
         mount.appendChild(note);
     };
 
-    fetch('/api/bot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'models' })
-    }).then(function (r) {
+    fetch('/api/models', { headers: { 'Accept': 'application/json' } }).then(function (r) {
         if (!r.ok) throw new Error('http ' + r.status);
         return r.json();
     }).then(render).catch(function () {

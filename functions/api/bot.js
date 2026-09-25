@@ -11918,6 +11918,7 @@ export {
   parseBotMediaIntent,
   botGeneratorCatalog,
   BOT_PRO_IMAGE_MODELS,
+  BOT_PRO_MODELS,
   anthropicizeRequest,
   parseGitConfig,
   gitToolDefs,
