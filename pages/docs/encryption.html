@@ -66,13 +66,13 @@
             <ul>
                 <li>a <strong>rumor</strong> &mdash; the message itself, unsigned, so it can never be proved
                     to a third party;</li>
-                <li>a <strong>seal</strong>, encrypted to the recipient and signed by the sender, which is
+                <li>a <strong>seal</strong>, signed by you and encrypted to the recipient, which is
                     how the recipient knows who sent it;</li>
                 <li>a <strong>wrap</strong>, encrypted and signed by a single-use throwaway key, which is
                     all a relay ever sees.</li>
             </ul>
             <p>So a relay holding your traffic sees an event from a key that exists only for that message,
-                addressed to a key it cannot connect to anything else, with a random timestamp. Metadata
+                with a random timestamp &mdash; it can tell a message is for Nymbot, not who sent it. Metadata
                 analysis over the wraps gets very little.</p>
             <p>A copy of each message is also wrapped to your own key, which is how your history restores on
                 a new device from the relays rather than from any server-side transcript.</p>
@@ -98,7 +98,7 @@
                         <tr><td>Your message text</td><td>Read, to answer it</td><td>Read, to answer it</td></tr>
                         <tr><td>Which key asked</td><td>Your nym's public key</td><td>A throwaway key</td></tr>
                         <tr><td>Which key is charged</td><td>Your nym</td><td>The throwaway key</td></tr>
-                        <tr><td>Your conversation title</td><td>Never sent</td><td>Never sent</td></tr>
+                        <tr><td>Your conversation title</td><td>Only encrypted to your own key, for sync</td><td>Same</td></tr>
                         <tr><td>Your private key</td><td>Never leaves the device</td><td>Never leaves the device</td></tr>
                         <tr><td>Your <a href="/docs/git/#token-safety">repository</a> and <a href="/docs/connectors/#secrets">connector</a> tokens</td><td>Passed with the requests that use them, never stored readable; synced only inside your sealed settings</td><td>Same</td></tr>
                         <tr><td>Pictures you attach</td><td>Uploaded to a public media host, signed by a throwaway key made for that picture</td><td>Same</td></tr>
@@ -107,8 +107,8 @@
                     </tbody>
                 </table>
             </div>
-            <p>Conversation titles are generated on your device, which is why they are one of the few things
-                about your usage that never crosses the wire at all.</p>
+            <p>Conversation titles are generated on your device, never by the model, and only cross the wire
+                encrypted to your own key, so your other devices can show them.</p>
         <!--DOCS-PAGER-->
         </main>
         <!--DOCS-TOC-->

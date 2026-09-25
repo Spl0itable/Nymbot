@@ -1,25 +1,14 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:sign_in_with_apple/sign_in_with_apple.dart' show AppleLogoPainter;
 
 import '../core/theme/theme.dart';
 import '../services/key_backup.dart';
 import '../services/passkey_backup.dart';
-import 'brand_tile.dart';
+import 'brand_buttons.dart';
 import 'i18n/i18n.dart';
 
 typedef BackupStatusSink = void Function(String? text, {bool spin});
-
-String continueWithLabel(BackupProvider provider) => switch (provider) {
-      BackupProvider.google => t('Continue with Google'),
-      BackupProvider.apple => t('Continue with Apple'),
-    };
-
-String backUpToLabel(BackupProvider provider) => switch (provider) {
-      BackupProvider.google => t('Back up to Google'),
-      BackupProvider.apple => t('Back up to Apple'),
-    };
 
 String removeBackupsLabel(BackupProvider provider) => switch (provider) {
       BackupProvider.google => t('Remove Google backups'),
@@ -33,44 +22,21 @@ String backupErrorMessage(Object error) => error is BackupFailure
     ? error.message
     : t('The backup could not be reached. Check your connection and try again.');
 
-class ProviderMark extends StatelessWidget {
-  const ProviderMark(this.provider, {super.key, this.size = 18});
-
-  final BackupProvider provider;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => switch (provider) {
-        BackupProvider.google => BrandTile(slug: 'google', size: size),
-        BackupProvider.apple => SizedBox(
-            width: size,
-            height: size,
-            child: CustomPaint(
-              painter: AppleLogoPainter(
-                  color: Theme.of(context).colorScheme.onSurface),
-            ),
-          ),
-      };
-}
-
 class ProviderButton extends StatelessWidget {
   const ProviderButton({
     super.key,
     required this.provider,
-    required this.label,
     required this.onPressed,
   });
 
   final BackupProvider provider;
-  final String label;
   final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: ProviderMark(provider),
-        label: Text(label),
-      );
+  Widget build(BuildContext context) => switch (provider) {
+        BackupProvider.google => GoogleButton(onPressed: onPressed),
+        BackupProvider.apple => AppleButton(onPressed: onPressed),
+      };
 }
 
 class BackupStatusLine extends StatelessWidget {
@@ -355,17 +321,3 @@ String passkeyErrorMessage(Object error, {required bool google}) =>
     error is PasskeyUnsupported
         ? passkeyUnsupportedMessage(google: google)
         : backupErrorMessage(error);
-
-class PasskeyButton extends StatelessWidget {
-  const PasskeyButton({super.key, required this.label, required this.onPressed});
-
-  final String label;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: const Icon(Icons.fingerprint, size: 18),
-        label: Text(label),
-      );
-}

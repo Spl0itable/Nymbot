@@ -94,9 +94,11 @@
                 the credit lands once, not twice.</p>
 
             <h2 id="what-a-reply-costs">What a reply costs</h2>
-            <p><strong>Standard replies</strong> cost one credit for an ordinary answer, and more for a task
-                that genuinely needs more work &mdash; a long reasoning route or a search-backed answer. The
-                app tells you when a reply cost more than one.</p>
+            <p><strong>Standard replies</strong> are metered the same way, on the tokens the routed model
+                actually reads and writes at its rates, and charged in thousandths of a credit &mdash; so an
+                ordinary answer costs a fraction of one, and a long reasoning route or a search-backed answer
+                costs more. Only a model with no published rates falls back to a flat one credit, or two for
+                coding and reasoning.</p>
             <p><strong>Pro replies</strong> are metered on the tokens the model actually reads and writes,
                 at that model's published per-million rates. A maximum is <em>reserved</em> when you send the
                 message and only the real cost is charged, so a short answer from an expensive model costs a

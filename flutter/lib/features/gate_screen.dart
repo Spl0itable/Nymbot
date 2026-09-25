@@ -20,6 +20,7 @@ import '../services/nostr/nip55.dart';
 import '../state/app_controller.dart';
 import '../state/identity.dart';
 import 'i18n/i18n.dart';
+import 'brand_buttons.dart';
 import 'key_backup_ui.dart';
 import 'secret_guard.dart';
 import 'nym_glyph.dart';
@@ -898,25 +899,12 @@ class _GateScreenState extends State<GateScreen> {
     final stores = AppScope.of(context).keyBackups.stores;
     if (stores.isEmpty && !_passkeyReady) return const [];
     return [
-      if (_passkeyReady) ...[
-        const SizedBox(height: 8),
-        PasskeyButton(
-          key: const ValueKey('gate-passkey'),
-          label: t('Continue with a passkey'),
-          onPressed: _busy ? null : _continueWithPasskey,
-        ),
-        TextButton(
-          key: const ValueKey('gate-passkey-new'),
-          onPressed: _busy ? null : _createWithPasskey,
-          child: Text(t('Create a new key and back it up with a passkey')),
-        ),
-      ],
+      const SizedBox(height: brandGroupGap),
       for (final store in stores) ...[
-        const SizedBox(height: 8),
+        if (store != stores.first) const SizedBox(height: 8),
         ProviderButton(
           key: ValueKey('gate-${store.provider.name}'),
           provider: store.provider,
-          label: continueWithLabel(store.provider),
           onPressed: _busy ? null : () => _continueWith(store),
         ),
       ],
@@ -930,10 +918,19 @@ class _GateScreenState extends State<GateScreen> {
         ),
       ],
       if (_passkeyReady) ...[
+        if (stores.isNotEmpty) const SizedBox(height: brandPasskeyGap),
+        PasskeyButton(
+          key: const ValueKey('gate-passkey'),
+          label: t('Continue with a passkey'),
+          onPressed: _busy ? null : _continueWithPasskey,
+        ),
         const SizedBox(height: 6),
         Text(
-          t('A passkey can hold an encrypted copy of your key too, with no PIN. '
-              'It syncs through your passkey provider.'),
+          stores.isEmpty
+              ? t('A passkey can hold an encrypted copy of your key, with no '
+                  'PIN. It syncs through your passkey provider.')
+              : t('A passkey can hold an encrypted copy of your key too, with '
+                  'no PIN. It syncs through your passkey provider.'),
           style: const TextStyle(fontSize: 12),
         ),
       ],

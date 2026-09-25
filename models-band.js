@@ -40,13 +40,15 @@
         var byKey = {};
         models.forEach(function (m) { byKey[m.key] = m; });
         var ordered = [];
+        var narrow = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+        var perMaker = narrow ? 3 : 6;
         var flagships = [];
         groups.forEach(function (g) {
             var keep = (g.keys || []).map(function (k) { return byKey[k]; })
                 .filter(function (m) { return m && m.priced !== false && m.label; });
             if (!keep.length) return;
             flagships.push(keep[0]);
-            keep.slice(0, 6).forEach(function (m) { ordered.push(m); });
+            keep.slice(0, perMaker).forEach(function (m) { ordered.push(m); });
         });
         if (ordered.length < 4) return;
 

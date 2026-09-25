@@ -32,9 +32,29 @@
 }
 
 .models-band-row {
+    position: relative;
     overflow: hidden;
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
-    mask-image: linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+
+.models-band-row::before,
+.models-band-row::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 1;
+    width: 12%;
+    pointer-events: none;
+}
+
+.models-band-row::before {
+    left: 0;
+    background: linear-gradient(to right, var(--darker), transparent);
+}
+
+.models-band-row::after {
+    right: 0;
+    background: linear-gradient(to left, var(--darker), transparent);
 }
 
 .models-band-track {
@@ -104,8 +124,8 @@
 }
 
 @keyframes models-band-scroll {
-    from { transform: translateX(0); }
-    to { transform: translateX(-50%); }
+    from { transform: translate3d(0, 0, 0); }
+    to { transform: translate3d(-50%, 0, 0); }
 }
 
 @media (max-width: 768px) {
@@ -118,9 +138,9 @@
         margin-bottom: 1.75rem;
     }
 
-    .models-band-row {
-        -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
-        mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+    .models-band-row::before,
+    .models-band-row::after {
+        width: 8%;
     }
 
     .models-band-set {

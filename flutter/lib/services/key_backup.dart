@@ -566,7 +566,7 @@ class KeyBackups {
   final PinThrottle throttle = PinThrottle();
 
   List<BackupStore> get stores => [
-        for (final store in [google, apple])
+        for (final store in [apple, google])
           if (store != null) store,
       ];
 

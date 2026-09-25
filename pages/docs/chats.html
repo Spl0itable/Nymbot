@@ -73,7 +73,8 @@
                 header and in the sidebar.</p>
             <p>Two things follow from that. A conversation that starts "why does this regex backtrack" is
                 findable a week later, and the title is chosen entirely on your device &mdash; the server is
-                not asked to summarize anything, and never sees the title at all.</p>
+                not asked to summarize anything, and the title only ever leaves your device encrypted to your
+                own key, for your other devices.</p>
             <p>Rename any chat from its header menu if the first thing you asked turned out not to be what
                 the conversation became about. The same menu is on every row in the sidebar, behind the
                 &hellip; button, and it acts on that row's chat: renaming, pinning, archiving, exporting or
@@ -148,7 +149,7 @@
                 before it answers.</p>
             <p>Those turns are decrypted for the request anyway and were being discarded, so reading one
                 back costs no second trip to the relays and nothing is stored to make it possible. What it
-                does cost is one more model call, and therefore one more base credit &mdash; on the replies
+                does cost is one more model call, charged on the tokens it uses &mdash; on the replies
                 that actually look something up, and not on the ones that do not.</p>
             <div class="docs-note">
                 <span class="docs-note-label">Why not simply send everything</span>

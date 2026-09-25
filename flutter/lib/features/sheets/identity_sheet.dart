@@ -9,6 +9,7 @@ import '../../services/nickname.dart';
 import '../../services/passkey_backup.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import '../brand_buttons.dart';
 import '../key_backup_ui.dart';
 import '../secret_guard.dart';
 import '../vault_dialog.dart';
@@ -438,51 +439,50 @@ class _IdentitySheetState extends State<_IdentitySheet> {
                 'without the PIN.'),
             style: const TextStyle(fontSize: 12),
           ),
+        for (final store in app.keyBackups.stores) ...[
+          const SizedBox(height: 8),
+          ProviderButton(
+            key: ValueKey('backup-to-${store.provider.name}'),
+            provider: store.provider,
+            onPressed: _backupBusy ? null : () => _backUp(app, store),
+          ),
+        ],
+        if (app.keyBackups.any)
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final store in app.keyBackups.stores)
+                TextButton(
+                  key: ValueKey('backup-remove-${store.provider.name}'),
+                  onPressed:
+                      _backupBusy ? null : () => _removeBackups(app, store),
+                  child: Text(removeBackupsLabel(store.provider)),
+                ),
+            ],
+          ),
         if (_passkeyReady) ...[
-          const SizedBox(height: 6),
+          SizedBox(height: app.keyBackups.any ? brandPasskeyGap : 8),
           Text(
             t('A passkey can hold an encrypted copy of this key too, with no '
                 'PIN. It syncs through your passkey provider, and Continue with '
                 'a passkey brings the key back on another device.'),
             style: const TextStyle(fontSize: 12),
           ),
+          const SizedBox(height: 8),
+          PasskeyButton(
+            key: const ValueKey('backup-passkey'),
+            label: t('Back up with a passkey'),
+            onPressed: _backupBusy ? null : () => _backUpWithPasskey(app),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const ValueKey('backup-passkey-update'),
+              onPressed: _backupBusy ? null : () => _updatePasskeyBackup(app),
+              child: Text(t('Update a passkey backup')),
+            ),
+          ),
         ],
-        const SizedBox(height: 8),
-        if (_passkeyReady)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              PasskeyButton(
-                key: const ValueKey('backup-passkey'),
-                label: t('Back up with a passkey'),
-                onPressed: _backupBusy ? null : () => _backUpWithPasskey(app),
-              ),
-              TextButton(
-                key: const ValueKey('backup-passkey-update'),
-                onPressed: _backupBusy ? null : () => _updatePasskeyBackup(app),
-                child: Text(t('Update a passkey backup')),
-              ),
-            ],
-          ),
-        for (final store in app.keyBackups.stores)
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ProviderButton(
-                key: ValueKey('backup-to-${store.provider.name}'),
-                provider: store.provider,
-                label: backUpToLabel(store.provider),
-                onPressed: _backupBusy ? null : () => _backUp(app, store),
-              ),
-              TextButton(
-                key: ValueKey('backup-remove-${store.provider.name}'),
-                onPressed: _backupBusy ? null : () => _removeBackups(app, store),
-                child: Text(removeBackupsLabel(store.provider)),
-              ),
-            ],
-          ),
         if (_backupStatus != null) ...[
           const SizedBox(height: 8),
           _backupWarn

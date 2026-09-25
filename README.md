@@ -5,7 +5,7 @@ frontier model, and replies paid for in Bitcoin over Lightning.
 
 Nymbot shares one identity and one credit balance with
 [Nymchat](https://nymchat.app), the messenger it is also built into: sign in to
-either with the same key and your credits, history and throwaway key follow you.
+either with the same key and your credits and Nymbot conversation follow you.
 
 ## What is in here
 
