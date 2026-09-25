@@ -4903,11 +4903,11 @@ async function botCollectChatStream(body, onText) {
     if (failure) return;
     if (obj.usage && typeof obj.usage === "object") usage = obj.usage;
     var piece = "";
-    if (typeof obj.response === "string") piece += obj.response;
     var choice = Array.isArray(obj.choices) ? obj.choices[0] : null;
     var delta = choice && (choice.delta || choice.message);
+    if (delta && typeof delta.content === "string") piece = delta.content;
+    else if (typeof obj.response === "string") piece = obj.response;
     if (delta) {
-      if (typeof delta.content === "string") piece += delta.content;
       var r = delta.reasoning_content != null ? delta.reasoning_content : delta.reasoning;
       if (typeof r === "string") reasoning += r;
     }
