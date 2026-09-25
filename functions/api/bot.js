@@ -2819,10 +2819,12 @@ function gitTreeForPrompt(files, limit) {
 }
 var BOT_GIT_REF_RE = /^[\w./-]{1,100}$/;
 var BOT_GIT_DEFAULT_HOSTS = { github: "github.com", gitlab: "gitlab.com", gitea: "codeberg.org" };
+var BOT_GIT_PROVIDER_ALIASES = { codeberg: "gitea", forgejo: "gitea" };
 
 function parseGitConfig(raw) {
   if (!raw || typeof raw !== "object") return null;
   var provider = typeof raw.provider === "string" ? raw.provider.toLowerCase() : "github";
+  if (Object.prototype.hasOwnProperty.call(BOT_GIT_PROVIDER_ALIASES, provider)) provider = BOT_GIT_PROVIDER_ALIASES[provider];
   if (!Object.prototype.hasOwnProperty.call(BOT_GIT_DEFAULT_HOSTS, provider)) return null;
   var host = typeof raw.host === "string" ? raw.host.trim().toLowerCase() : "";
   if (!host) host = BOT_GIT_DEFAULT_HOSTS[provider];

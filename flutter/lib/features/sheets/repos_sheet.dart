@@ -496,7 +496,6 @@ class _ReposSheetState extends State<_ReposSheet> {
                 const DropdownMenuItem(value: 'github', child: Text('GitHub')),
                 const DropdownMenuItem(value: 'gitlab', child: Text('GitLab')),
                 DropdownMenuItem(value: 'gitea', child: Text(t('Gitea / Forgejo'))),
-                const DropdownMenuItem(value: 'bitbucket', child: Text('Bitbucket')),
                 const DropdownMenuItem(value: 'codeberg', child: Text('Codeberg')),
               ],
               onChanged: (v) => setState(() => _provider = v ?? 'github'),

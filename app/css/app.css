@@ -293,7 +293,8 @@ html[data-motion="reduce"] *::after {
 .gate-connect { margin-top: 0.75rem; }
 .gate-connect canvas { display: block; margin: 0 auto 0.6rem; border-radius: 8px; max-width: 100%; height: auto; }
 .gate-nickname { margin-top: 1.25rem; }
-.gate-google, .gate-passkey { margin-top: 0.25rem; }
+.gate-google { margin-top: 1.75rem; }
+.gate-passkey { margin-top: 1rem; }
 .pin-warn { color: var(--text); margin-top: 0.75rem; }
 .pin-pick { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
 .pin-pick .btn { justify-content: center; font-family: var(--mono); }
@@ -321,6 +322,39 @@ html[data-motion="reduce"] *::after {
 .btn-danger { border-color: var(--danger); color: var(--danger); }
 .btn-ghost { color: var(--text-dim); }
 .btn-small { padding: 0.35rem 0.7rem; font-size: 0.85rem; }
+
+.btn-brand {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.btn-brand-icon { flex: none; width: 20px; height: 20px; }
+.btn-brand:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.btn-brand:disabled { opacity: 0.5; cursor: default; }
+.btn-google { background: #131314; border-color: #8E918F; color: #E3E3E3; }
+.btn-google:hover { background: #202124; }
+.btn-passkey { background: var(--bg-raised); border-color: var(--text-faint); color: var(--text); }
+.btn-passkey:hover { background: var(--bubble-bot); border-color: var(--text-dim); }
+@media (prefers-color-scheme: light) {
+    html:not([data-theme]) .btn-google { background: #FFFFFF; border-color: #747775; color: #1F1F1F; }
+    html:not([data-theme]) .btn-google:hover { background: #F8F9FA; }
+}
+html[data-theme="light"] .btn-google { background: #FFFFFF; border-color: #747775; color: #1F1F1F; }
+html[data-theme="light"] .btn-google:hover { background: #F8F9FA; }
+.gate-actions .btn-brand { flex: 1 1 100%; width: 100%; }
+#googleBackupRow .reveal-row, #passkeyBackupRow .reveal-row { flex-wrap: wrap; }
 
 .icon-btn {
     display: grid;

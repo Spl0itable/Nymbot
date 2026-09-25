@@ -46,17 +46,6 @@
                 private: !!r.private,
                 description: r.description || ''
             }))
-        },
-        bitbucket: {
-            base: () => 'https://api.bitbucket.org/2.0',
-            path: '/repositories?role=member&pagelen=100&sort=-updated_on',
-            headers: (token) => ({ Authorization: 'Bearer ' + token }),
-            read: (body) => ((body && body.values) || []).map((r) => ({
-                repo: r.full_name,
-                branch: (r.mainbranch && r.mainbranch.name) || '',
-                private: !!r.is_private,
-                description: r.description || ''
-            }))
         }
     };
 

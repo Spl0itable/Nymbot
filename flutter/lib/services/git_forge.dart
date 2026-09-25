@@ -35,7 +35,7 @@ class ForgeException implements Exception {
 class GitForge {
   const GitForge._();
 
-  static const supported = {'github', 'gitlab', 'gitea', 'codeberg', 'bitbucket'};
+  static const supported = {'github', 'gitlab', 'gitea', 'codeberg'};
 
   /// Only a self-hosted forge has no default host worth guessing.
   static bool needsHost(String provider) => provider == 'gitea';
@@ -59,9 +59,6 @@ class GitForge {
         return Uri.parse('https://$h/api/v1/user/repos?limit=100');
       case 'gitea':
         return Uri.parse('https://${_clean(host)}/api/v1/user/repos?limit=100');
-      case 'bitbucket':
-        return Uri.parse('https://api.bitbucket.org/2.0/repositories'
-            '?role=member&pagelen=100&sort=-updated_on');
       default:
         throw const ForgeException(ForgeFailure.unsupported);
     }
@@ -76,20 +73,13 @@ class GitForge {
         };
       case 'gitlab':
         return {'PRIVATE-TOKEN': token};
-      case 'bitbucket':
-        return {'Authorization': 'Bearer $token'};
       default:
         return {'Authorization': 'token $token'};
     }
   }
 
   static List<ForgeRepo> parse(String provider, dynamic body) {
-    List<dynamic> rows;
-    if (provider == 'bitbucket') {
-      rows = (body is Map && body['values'] is List) ? body['values'] as List : const [];
-    } else {
-      rows = body is List ? body : const [];
-    }
+    final List<dynamic> rows = body is List ? body : const [];
     final out = <ForgeRepo>[];
     for (final row in rows) {
       if (row is! Map) continue;
@@ -101,16 +91,6 @@ class GitForge {
             repo: name,
             branch: (row['default_branch'] as String?) ?? '',
             private: row['visibility'] != 'public',
-            description: (row['description'] as String?) ?? '',
-          ));
-        case 'bitbucket':
-          final name = row['full_name'];
-          if (name is! String || name.isEmpty) continue;
-          final main = row['mainbranch'];
-          out.add(ForgeRepo(
-            repo: name,
-            branch: main is Map ? (main['name'] as String?) ?? '' : '',
-            private: row['is_private'] == true,
             description: (row['description'] as String?) ?? '',
           ));
         default:
