@@ -106,8 +106,15 @@
         { title: t('Write code'), body: t('Write a small, dependency-free function that debounces an async call and cancels the pending one.') },
         { title: t('Compare options'), body: t('Give me three genuinely different ways to store 200 MB of user data offline in a browser, with what sinks each.') },
         { title: t('Generate a picture'), body: '?image a lighthouse at dusk, long exposure, muted palette' },
-        { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk', needs: 'pro' }
+        { title: t('Search the web'), body: '?web what changed in the latest Bitcoin Core release', spare: true },
+        { title: t('Generate a video'), body: '?video a lighthouse beam sweeping across a storm at dusk', needs: 'pro' },
+        { title: t('Translate'), body: '?translate "Where is the nearest train station?" into Japanese', spare: true }
     ];
+
+    const pickStarters = (list) => {
+        let room = 6 - list.filter(x => !x.spare).length;
+        return list.filter(x => !x.spare || room-- > 0);
+    };
 
     const UI = {
         conv: null,
@@ -684,8 +691,8 @@
             const cards = el('div', 'empty-cards');
             const own = bot && (bot.starters || []).length
                 ? bot.starters.map(body => ({ title: bot.name, body }))
-                : starters().filter(x => x.needs !== 'repos' || Store.repos().length)
-                    .filter(x => x.needs !== 'pro' || (Number(this.balance.pro) || 0) > 0);
+                : pickStarters(starters().filter(x => x.needs !== 'repos' || Store.repos().length)
+                    .filter(x => x.needs !== 'pro' || (Number(this.balance.pro) || 0) > 0));
             for (const starter of own) {
                 const b = el('button', 'empty-card');
                 b.type = 'button';
