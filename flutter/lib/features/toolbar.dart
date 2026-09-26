@@ -197,7 +197,8 @@ class NymbotToolbar extends StatelessWidget {
       for (final c in off) c.build(context),
     ];
     final balance = _Chip(
-      glyph: 'bolt',
+      key: const ValueKey('balance-chip'),
+      glyph: app.spendingAnon ? 'anon' : 'bolt',
       label: (!app.proTier &&
               !app.spendingAnon &&
               (app.standardBalance ?? 0) == 0 &&
@@ -207,7 +208,7 @@ class NymbotToolbar extends StatelessWidget {
               ? t('Buy')
               : creditFigure(app.shownBalance)),
       active: false,
-      color: NymbotColors.lightning,
+      color: app.spendingAnon ? theme.colorScheme.secondary : NymbotColors.lightning,
       onTap: () => showCreditsSheet(context),
     );
     if (MediaQuery.textScalerOf(context).scale(1) > 1.15) {
@@ -714,6 +715,7 @@ class _TierSwitch extends StatelessWidget {
 
 class _Chip extends StatelessWidget {
   const _Chip({
+    super.key,
     required this.glyph,
     required this.label,
     required this.active,
