@@ -24,7 +24,7 @@ export function mediaEditBody(family, prompt, refs) {
   var images = (refs || []).filter(function (u) { return /^https?:\/\//.test(String(u)); })
     .slice(0, MEDIA_EDIT_MAX_IMAGES);
   if (family === "google") {
-    return { prompt: p, image_input: images, aspect_ratio: "match_input_image", image_size: "1K" };
+    return { prompt: p, image_input: images, image_size: "1K" };
   }
   if (family === "bfl") {
     return { prompt: p, input_images: images };

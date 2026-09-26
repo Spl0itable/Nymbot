@@ -26,7 +26,7 @@ const BOT_ACTIONS = {
 export function wsAuthHostOk(auth, reqUrl) {
   const tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
   const tag = tags.find((t) => Array.isArray(t) && t[0] === 'u');
-  if (!tag) return true;
+  if (!tag) return false;
   try {
     return new URL(String(tag[1])).host === new URL(reqUrl).host;
   } catch {

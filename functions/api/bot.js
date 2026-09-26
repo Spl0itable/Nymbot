@@ -1242,6 +1242,86 @@ function botVisionContent(question, urls) {
   return blocks;
 }
 
+var BOT_INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+var BOT_INLINE_IMAGE_TIMEOUT_MS = 8000;
+var botInlinedMessages = new WeakMap();
+
+async function botImageDataUrl(url) {
+  if (!/^https?:\/\//i.test(url) || isPrivateHostUrl(url)) return null;
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, BOT_INLINE_IMAGE_TIMEOUT_MS);
+  try {
+    var at = url;
+    var resp = null;
+    for (var hop = 0; hop <= 3; hop++) {
+      resp = await fetch(at, { headers: { "User-Agent": BOT_BROWSER_AGENT, "Accept": "image/*" }, redirect: "manual", signal: controller.signal });
+      if (!(resp.status >= 300 && resp.status < 400)) break;
+      var loc = resp.headers.get("Location");
+      try { if (resp.body && resp.body.cancel) await resp.body.cancel(); } catch (e) { }
+      if (!loc || hop === 3) return null;
+      var next = new URL(loc, at).toString();
+      if (!/^https?:/i.test(next) || isPrivateHostUrl(next)) return null;
+      at = next;
+    }
+    if (!resp.ok || !resp.body) return null;
+    var declared = Number(resp.headers.get("Content-Length")) || 0;
+    if (declared > BOT_INLINE_IMAGE_MAX_BYTES) return null;
+    var reader = resp.body.getReader();
+    var chunks = [];
+    var total = 0;
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      total += r.value.length;
+      if (total > BOT_INLINE_IMAGE_MAX_BYTES) {
+        try { await reader.cancel(); } catch (e) { }
+        return null;
+      }
+      chunks.push(r.value);
+    }
+    var bytes = new Uint8Array(total);
+    var off = 0;
+    for (var i = 0; i < chunks.length; i++) { bytes.set(chunks[i], off); off += chunks[i].length; }
+    var mime = botSniffImageMime(bytes);
+    if (mime === "image/jpeg" && !(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
+    return "data:" + mime + ";base64," + botBase64Encode(bytes);
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function botInlineVisionImages(messages) {
+  if (!Array.isArray(messages)) return messages;
+  if (botInlinedMessages.has(messages)) return botInlinedMessages.get(messages);
+  var urls = {};
+  messages.forEach(function (m) {
+    if (!m || !Array.isArray(m.content)) return;
+    m.content.forEach(function (b) {
+      var u = b && b.type === "image_url" && b.image_url && b.image_url.url;
+      if (typeof u === "string" && /^https?:\/\//i.test(u)) urls[u] = null;
+    });
+  });
+  var list = Object.keys(urls);
+  if (!list.length) return messages;
+  var loaded = await Promise.all(list.map(botImageDataUrl));
+  list.forEach(function (u, i) { urls[u] = loaded[i]; });
+  var out = messages.map(function (m) {
+    if (!m || !Array.isArray(m.content)) return m;
+    return Object.assign({}, m, {
+      content: m.content.map(function (b) {
+        var u = b && b.type === "image_url" && b.image_url && b.image_url.url;
+        if (typeof u !== "string" || !Object.prototype.hasOwnProperty.call(urls, u)) return b;
+        if (urls[u]) return { type: "image_url", image_url: { url: urls[u] } };
+        return { type: "text", text: "(An attached picture could not be loaded, so it is not shown here: " + u + ")" };
+      })
+    });
+  });
+  botInlinedMessages.set(messages, out);
+  return out;
+}
+
 // BUD-02 upload auth: a kind-24242 event signed by the bot, carrying the
 // payload hash, base64'd into an "Authorization: Nostr <event>" header.
 function botBlossomAuth(sha256Hex, privkey, pubkey) {
@@ -1690,7 +1770,7 @@ function botMeteredReserveMilli(m, legs, repoTask, btcUsd, satsPerCredit, safety
   var calls = Math.max(1, Math.floor(Number(legs) || 1));
   var inTok = repoTask ? BOT_GIT_RESERVE_IN_TOKENS : BOT_RESERVE_IN_TOKENS;
   var outTok = Math.min(BOT_RESERVE_OUT_TOKENS, m.maxTokens || BOT_RESERVE_OUT_TOKENS);
-  var usd = (inTok * p.in + calls * outTok * p.out) / 1e6;
+  var usd = calls * (inTok * p.in + outTok * p.out) / 1e6;
   return botMilliForUsd(
     usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN * (safety == null ? BOT_RESERVE_SAFETY : safety),
     btcUsd, satsPerCredit);
@@ -1783,15 +1863,30 @@ function proCompatEndpoints(env) {
   return out.filter(function (e) { return e.kind !== "api" || proApiToken(env); });
 }
 
-function proCompatHeaders(env, kind) {
+function proGatewayAuthToken(env) {
+  return env.AI_GATEWAY_TOKEN || proApiToken(env);
+}
+
+function proCompatHeaders(env, kind, model) {
   var headers = { "Content-Type": "application/json" };
+  var token = proApiToken(env);
   if (kind === "api") {
-    var token = proApiToken(env);
     if (token) headers["Authorization"] = "Bearer " + token;
-  } else if (env.AI_GATEWAY_TOKEN) {
-    headers["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    return headers;
   }
+  var gatewayToken = proGatewayAuthToken(env);
+  if (gatewayToken) headers["cf-aig-authorization"] = "Bearer " + gatewayToken;
+  if (token && /^workers-ai\//.test(String(model || ""))) headers["Authorization"] = "Bearer " + token;
   return headers;
+}
+
+var PRO_ROUTE_AUTH_COOLDOWN_MS = 10 * 60 * 1000;
+var proRouteDownUntil = {};
+
+function proLiveEndpoints(endpoints) {
+  var now = Date.now();
+  var live = endpoints.filter(function (e) { return !(proRouteDownUntil[e.url] > now); });
+  return live.length ? live : endpoints;
 }
 
 function proBindingAvailable(env) {
@@ -2118,6 +2213,7 @@ function botStreamEmptyError() {
 }
 
 async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
+  if (/^(?:workers-ai\/)?@cf\//.test(String(step.model || ""))) messages = await botInlineVisionImages(messages);
   var canStream = !!draft && !(tools && tools.length) && step.apiPath !== "responses";
   if (step.kind === "bound") {
     // Anthropic speaks its own request shape even behind the binding — the
@@ -2158,7 +2254,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
 
   if (step.kind === "anthropic") {
     var nativeHeaders = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
-    if (env.AI_GATEWAY_TOKEN) nativeHeaders["cf-aig-authorization"] = "Bearer " + env.AI_GATEWAY_TOKEN;
+    if (proGatewayAuthToken(env)) nativeHeaders["cf-aig-authorization"] = "Bearer " + proGatewayAuthToken(env);
     if (/fable/.test(step.model) && env.ANTHROPIC_API_KEY) {
       nativeHeaders["cf-aig-zdr"] = "false";
       nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
@@ -2204,15 +2300,19 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
   if (!endpoints.length) {
     throw new Error("Nymbot Pro needs AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_NAME (or AI_GATEWAY_URL) configured on the worker.");
   }
+  endpoints = proLiveEndpoints(endpoints);
   var lastErr = null;
   for (var i = 0; i < endpoints.length; i++) {
     try {
       return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
-        proCompatHeaders(env, endpoints[i].kind),
+        proCompatHeaders(env, endpoints[i].kind, step.model),
         Object.assign({ model: step.model }, req),
         canStream ? draft : null, step.apiPath === "messages" ? "anthropic" : "chat");
     } catch (e) {
       lastErr = e;
+      if (e && (e.httpStatus === 401 || e.httpStatus === 403) && endpoints.length > 1) {
+        proRouteDownUntil[endpoints[i].url] = Date.now() + PRO_ROUTE_AUTH_COOLDOWN_MS;
+      }
       if (e && e.streamEmpty) throw e;
       if (!proWorthRetrying(e)) throw e;
     }
@@ -3942,7 +4042,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   while (true) {
     if (calls > 0 && opts.capGuard && !opts.capGuard.room(usage, 1)) {
       return await finish({
-        reply: capStoppedReply(sofar),
+        reply: capStoppedReply(sofar, opts.capGuard.reason),
         modelCalls: calls,
         outputTokens: outputTokens,
         usage: usage,
@@ -5215,6 +5315,8 @@ function splitQuotedReply(raw) {
   return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
 }
 
+var BOT_PM_TEXT_MAX = 200000;
+
 function parseBotPMRequest(rawMessage) {
   var freshOnly = false;
   var message = String(rawMessage || "");
@@ -5224,8 +5326,8 @@ function parseBotPMRequest(rawMessage) {
     message = message.slice(bang[0].length);
   }
   var split = splitQuotedReply(message);
-  var question = sanitizeInput(split.reply || split.quoted || message);
-  if (!question) question = sanitizeInput(message);
+  var question = sanitizeInput(split.reply || split.quoted || message, BOT_PM_TEXT_MAX);
+  if (!question) question = sanitizeInput(message, BOT_PM_TEXT_MAX);
   return { freshOnly: freshOnly, split: split, question: question };
 }
 
@@ -5731,7 +5833,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     for (var i = 0; i < window.kept.length; i++) {
       var entry = window.kept[i];
       if (!entry || !entry.text) continue;
-      var text = sanitizeInput(entry.text);
+      var text = sanitizeInput(entry.text, BOT_PM_TEXT_MAX);
       if (!text) continue;
       messages.push({ role: entry.isBot ? "assistant" : "user", content: text });
     }
@@ -5831,7 +5933,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     var quotedBy = /nymbot/i.test(split.author)
       ? "something you (Nymbot) said earlier in this conversation"
       : (split.author ? "something the user said earlier in this conversation" : "an earlier message in this conversation");
-    messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
+    messages.push({ role: "user", content: "--- QUOTED MESSAGE (read-only context — this is " + quotedBy + ", and the user's newest message below is a direct reply to it) ---\n" + sanitizeInput(split.quoted, BOT_PM_TEXT_MAX) + "\n--- END QUOTED MESSAGE ---\nUse the quoted text to understand what the user's reply is referring to." });
     messages.push({ role: "assistant", content: "Understood." });
   }
 
@@ -6858,23 +6960,32 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var proLegs = agentTask ? BOT_GIT_MAX_TURNS : effortWanted;
       var proMetered = botMeteredReserve(proModel, proLegs, agentTask,
         await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT);
-      var proRequired = (proMetered != null ? proMetered : proBase * proLegs)
-        + botPartSurcharge(botPartsCount(body));
+      var proSurcharge = botPartSurcharge(botPartsCount(body));
+      var proRequired = (proMetered != null ? proMetered : proBase * proLegs) + proSurcharge;
       if (proMetered != null) proBase = Math.max(1, Math.ceil(proMetered / proLegs));
-      if (maxCost != null) {
+      var proHeldGuard = proMetered != null && !researchAsked && !teamAsked;
+      if (proHeldGuard && proLegs > 1 && (proRecord.balance || 0) < proRequired) {
+        var proOneLeg = botMeteredReserve(proModel, 1, agentTask, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT) + proSurcharge;
+        if ((proRecord.balance || 0) >= proOneLeg) proRequired = Math.floor(proRecord.balance || 0);
+      }
+      if (proHeldGuard || maxCost != null) {
         var capBtc = await botBtcPrice();
-        var capSurcharge = botPartSurcharge(botPartsCount(body)) * BOT_MILLI_PER_CREDIT;
-        var capFirst = botMeteredReserveMilli(proModel, 1, agentTask, capBtc, BOT_PRO_SATS_PER_CREDIT, 1);
+        var capSurcharge = proSurcharge * BOT_MILLI_PER_CREDIT;
+        var capFirst = botMeteredReserveMilli(proModel, 1, agentTask, capBtc, BOT_PRO_SATS_PER_CREDIT);
         if (capFirst == null) capFirst = botProMaxCost(proModel, agentTask) * BOT_MILLI_PER_CREDIT;
-        var capNo = capRefusal(capFirst + capSurcharge, maxCost, true);
-        if (capNo && !teamAsked) return json(capNo);
+        if (maxCost != null) {
+          var capNo = capRefusal(capFirst + capSurcharge, maxCost, true);
+          if (capNo && !teamAsked) return json(capNo);
+        }
         var capModel = proModel;
         capGuardFor = function () {
-          return capGuard(capMilli(maxCost) - capSurcharge, function (u) {
+          var heldMilli = proRequired * BOT_MILLI_PER_CREDIT - capSurcharge;
+          var capped = maxCost != null && (!proHeldGuard || capMilli(maxCost) - capSurcharge < heldMilli);
+          return capGuard(capped ? capMilli(maxCost) - capSurcharge : heldMilli, function (u) {
             if (!botUsageBilled(u)) return 0;
             var m = botMeteredCharge(capModel, u, capBtc, BOT_PRO_SATS_PER_CREDIT);
             return m == null ? 0 : m;
-          }, capFirst);
+          }, capFirst, capped ? "cap" : "balance");
         };
       }
       // Looking back past the window is one more model call on top. Room for it
@@ -6913,11 +7024,19 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     // empty balance, so nobody who has paid is quietly moved onto it.
     var freeTurn = false;
     var freeState = null;
+    var freeNet = null;
+    var freeReturned = false;
+    var freeGiveBack = async function () {
+      if (!freeTurn || freeReturned) return;
+      freeReturned = true;
+      try { await ledgerCall(env, { op: "free-return", pubkey: userPubkey, net: freeNet }); } catch (e) { }
+    };
     if (!proModel && record.balance <= 0) {
+      freeNet = await botFreeNetId(context.request, env);
       var claim = await ledgerCall(env, {
         op: "free-claim", pubkey: userPubkey, limit: BOT_FREE_DAILY,
         // Counted per address as well as per key, at the same cap.
-        net: await botFreeNetId(context.request, env), netLimit: BOT_FREE_NET_DAILY
+        net: freeNet, netLimit: BOT_FREE_NET_DAILY
       });
       if (claim && claim.ok) {
         freeTurn = true;
@@ -6977,6 +7096,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     };
     var turnFail = async function (obj, status) {
       await turnRelease();
+      await freeGiveBack();
       if (draft) draft.close();
       noteUsage(context, {
         pubkey: userPubkey, kind: "chat", tier: freeTurn ? "free" : (proModel ? "pro" : "standard"),
@@ -7026,7 +7146,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var claimFrom = Date.now();
     var wrapClaimed = await turnAcquire(botTurnKey(userPubkey, currentId));
     clock.since("claim", claimFrom);
-    if (wrapClaimed) return wrapClaimed;
+    if (wrapClaimed) {
+      await freeGiveBack();
+      return wrapClaimed;
+    }
     if (botPq) userPqKem();
 
     // Progress is advisory: every write is best-effort and a failure never
@@ -7118,7 +7241,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     if (currentUnwrapped.author !== userPubkey) {
       return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
-    var message = sanitizeInput(currentUnwrapped.rumor.content || "");
+    var message = sanitizeInput(currentUnwrapped.rumor.content || "", BOT_PM_TEXT_MAX);
     // Put the pieces back. Every part must open, must be authored by the same
     // user and must carry the same message id as the one that arrived — a
     // question assembled from someone else's events would be a question the
@@ -7142,7 +7265,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         pieces.push({ at: rumorPartIndex(pu.rumor) || (qi + 1), text: String(pu.rumor.content || "") });
       }
       pieces.sort(function (a, b) { return a.at - b.at; });
-      message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""));
+      message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""), BOT_PM_TEXT_MAX);
     }
     clock.since("open", openFrom);
     if (!message) return await turnFail({ error: "Empty message" }, 400);
@@ -7159,6 +7282,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // Another wrap of this same message owns the turn; drop the claim on
         // ours so its own resends go straight to that answer.
         await turnRelease();
+        await freeGiveBack();
         return msgClaimed;
       }
     }
@@ -7417,6 +7541,23 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
             (mediaRecord.balance || 0) + ". Type ?buy for more."
         });
       }
+      var mediaHoldTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      var mediaHeld = await ledgerCall(env, {
+        op: "credit-hold", id: mediaHoldTry, pubkey: userPubkey, tier: mediaTier,
+        amount: mediaCost, ttl: BOT_HOLD_TTL_S, rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS
+      });
+      if (mediaHeld && mediaHeld.ok) {
+        holdId = mediaHoldTry;
+      } else if (mediaHeld && mediaHeld.rateLimited) {
+        return await turnFail({ error: "Slow down \u2014 too many messages. Try again in a minute." }, 429);
+      } else if (!mediaHeld || !mediaHeld._noLedger) {
+        var mediaFree = mediaHeld ? Math.max(0, (Number(mediaHeld.balance) || 0) - (Number(mediaHeld.held) || 0)) : 0;
+        return await turnFail({
+          noCredits: true, pro: !!proModel, balance: mediaFree, required: mediaCost,
+          error: "Another reply is still using part of your " + (proModel ? "Pro " : "") + "balance, so " + mediaFree +
+            " credits are free right now and this one needs " + mediaCost + ". Wait for it to finish, or type ?buy for more."
+        }, 402);
+      }
       var mediaUrl;
       try {
         if (media.kind === "video") {
@@ -7434,7 +7575,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         // Nothing is charged when generation or upload fails.
         return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
       }
-      var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier });
+      var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
+      holdId = null;
       if (mediaSpend && mediaSpend._noLedger) {
         mediaRecord.balance -= mediaCost;
         mediaRecord.totalUsed = (mediaRecord.totalUsed || 0) + mediaCost;
@@ -11903,6 +12045,9 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 export {
   onRequest,
   handleBotPMAction,
+  proCompatHeaders,
+  proLiveEndpoints,
+  botInlineVisionImages,
   runProGitChat,
   runProEffort,
   botReleaseStrandedTurn,

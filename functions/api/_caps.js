@@ -41,7 +41,7 @@ export function capClampCharge(cost, costMilli, maxCost) {
   return { cost: cost, costMilli: costMilli, clamped: false };
 }
 
-export function capGuard(limitMilli, priceOf, firstCallMilli) {
+export function capGuard(limitMilli, priceOf, firstCallMilli, reason) {
   let before = 0;
   let extra = 0;
   let last = Math.max(0, Number(firstCallMilli) || 0);
@@ -59,6 +59,7 @@ export function capGuard(limitMilli, priceOf, firstCallMilli) {
   };
   return {
     limit: limitMilli,
+    reason: reason === "balance" ? "balance" : "cap",
     room: function (usage, calls) {
       const spent = seen(usage);
       const n = Math.max(1, Math.floor(Number(calls) || 1));
@@ -77,8 +78,10 @@ export function capGuard(limitMilli, priceOf, firstCallMilli) {
   };
 }
 
-export function capStoppedReply(sofar) {
-  const note = "I stopped here to stay inside the spending cap this chat sets for one reply: the next step could have gone past it. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
+export function capStoppedReply(sofar, reason) {
+  const note = reason === "balance"
+    ? "I stopped here because the next step could have cost more than your balance had room for. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran."
+    : "I stopped here to stay inside the spending cap this chat sets for one reply: the next step could have gone past it. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
   const text = String(sofar || "").trim();
   return text ? text + "\n\n_" + note + "_" : note;
 }
