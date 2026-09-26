@@ -670,6 +670,7 @@ class _CodeBlockState extends State<CodeBlock> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final server = widget.runnable &&
+        !DetachedRuns.of(context) &&
         (context.getElementForInheritedWidgetOfExactType<AppScope>() != null) &&
         AppScope.of(context).runnerAvailable;
     final runner = _runnerFor(server);

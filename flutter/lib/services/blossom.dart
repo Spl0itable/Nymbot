@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../config.dart';
 import '../core/crypto/keys.dart' as keys;
+import '../features/i18n/i18n.dart';
 import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
 
@@ -102,27 +103,27 @@ class Blossom {
         '${last == null ? '' : ' ($last)'}');
   }
 
-  Future<BlossomSpread> spread(
-      Uint8List bytes, String mime, EventSigner signer) async {
+  static String get ownOrigin => 'https://${NymbotConfig.apiHost}';
+
+  Future<BlossomSpread> storeShare(Uint8List bytes, EventSigner signer) async {
     final sha256 = crypto.sha256.convert(bytes).toString();
     final header = await _auth(sha256, signer);
-    Object? last;
-    final tries = await Future.wait(NymbotConfig.shareHosts.map((host) async {
-      try {
-        await _putTo(host, bytes, mime, header);
-        return host;
-      } catch (e) {
-        last = e;
-        return null;
-      }
-    }));
-    final accepted = tries.whereType<String>().toList();
-    if (accepted.isEmpty) {
+    final resp = await _client
+        .put(
+          Uri.parse('$ownOrigin/api/proxy?action=share-put'),
+          headers: {
+            'Authorization': header,
+            'Content-Type': 'application/octet-stream',
+            'User-Agent': NymbotConfig.userAgent,
+          },
+          body: bytes,
+        )
+        .timeout(const Duration(seconds: 45));
+    if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw BlossomFailure(
-          'The file could not be uploaded — every media host refused it.'
-          '${last == null ? '' : ' ($last)'}');
+          '${t('The chat could not be stored for sharing.')} (HTTP ${resp.statusCode})');
     }
-    return BlossomSpread(hosts: accepted, sha256: sha256);
+    return BlossomSpread(hosts: [ownOrigin], sha256: sha256);
   }
 
   Future<int> remove(String host, String sha256, EventSigner signer) async {

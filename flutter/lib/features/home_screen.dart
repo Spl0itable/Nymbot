@@ -28,6 +28,7 @@ import '../state/app_controller.dart';
 import 'artifact_screen.dart';
 import 'tasks_pane.dart';
 import 'caps_sheet.dart';
+import 'conv_badge.dart';
 import 'code_frame.dart';
 import 'dictation_wave.dart';
 import 'doc_tray.dart';
@@ -2753,7 +2754,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 ),
               ),
             if (conv.anon)
-              Text(t('anon'), style: const TextStyle(fontSize: 11)),
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: AnonBadge(),
+              ),
             IconButton(
               icon: const NymGlyph('more', size: 18, filled: true),
               tooltip: t('Chat options'),

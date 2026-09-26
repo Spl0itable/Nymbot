@@ -46,7 +46,10 @@
         document.title = (transcript.title || t('Shared chat')) + ' - Nymbot';
         const list = document.createElement('div');
         list.className = 'share-transcript';
-        Share.render(list, transcript);
+        Share.render(list, transcript, { interactive: true });
+        if (window.NymbotRunner) {
+            for (const text of list.querySelectorAll('.share-message[data-role="assistant"] .msg-text')) window.NymbotRunner.decorate(text);
+        }
         main.appendChild(list);
         const foot = document.createElement('p');
         foot.className = 'share-foot';
@@ -94,20 +97,59 @@
         show(transcript);
     }
 
+    let previewWait = null;
+
+    function openPreview(html) {
+        const box = $('sharePreviewModal');
+        const old = $('sharePreviewFrame');
+        if (!box || !old) return;
+        const frame = old.cloneNode(false);
+        if (previewWait) window.removeEventListener('message', previewWait);
+        previewWait = (e) => {
+            if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'nymbot-preview-ready') return;
+            window.removeEventListener('message', previewWait);
+            previewWait = null;
+            frame.contentWindow.postMessage({ type: 'nymbot-preview', html: String(html || '') }, '*');
+        };
+        window.addEventListener('message', previewWait);
+        frame.src = '/app/preview.html';
+        old.replaceWith(frame);
+        box.hidden = false;
+    }
+
+    function closePreview() {
+        const box = $('sharePreviewModal');
+        const old = $('sharePreviewFrame');
+        if (previewWait) { window.removeEventListener('message', previewWait); previewWait = null; }
+        if (old) {
+            const frame = old.cloneNode(false);
+            frame.removeAttribute('src');
+            old.replaceWith(frame);
+        }
+        if (box) box.hidden = true;
+    }
+
     async function start() {
         applyTheme();
         try { await window.NymbotI18n.ready; } catch (_) { }
         $('shareFrom').textContent = t('Shared from Nymbot');
         $('shareOpenApp').textContent = t('Open Nymbot');
         document.addEventListener('click', (e) => {
-            const btn = e.target.closest('[data-act="code-copy"], [data-act="code-wrap"]');
+            if (e.target.closest('[data-act="close-preview"]')) { closePreview(); return; }
+            const btn = e.target.closest('[data-act="code-copy"], [data-act="code-wrap"], [data-act="code-preview"]');
             if (!btn) return;
             const block = btn.closest('.code-block, .diff-block');
             if (!block) return;
             if (btn.dataset.act === 'code-wrap') { block.classList.toggle('is-wrapped'); return; }
+            if (btn.dataset.act === 'code-preview') {
+                const src = block.querySelector('.code-source');
+                openPreview(src ? src.value : '');
+                return;
+            }
             const source = block.querySelector('.code-source');
             try { navigator.clipboard.writeText(source ? source.value : ''); } catch (_) { }
         });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePreview(); });
         window.addEventListener('hashchange', () => load());
         await load();
     }

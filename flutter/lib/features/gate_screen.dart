@@ -1047,15 +1047,23 @@ class _GateScreenState extends State<GateScreen> {
   }
 
   Widget _agreement(BuildContext context) {
-    final faint = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
+    final scheme = Theme.of(context).colorScheme;
+    final faint = scheme.onSurface.withValues(alpha: 0.6);
     final style = TextStyle(fontSize: 12, color: faint);
-    final link = style.copyWith(decoration: TextDecoration.underline);
+    final link = style.copyWith(
+      color: scheme.secondary,
+      decoration: TextDecoration.underline,
+      decorationColor: scheme.secondary,
+    );
     Widget linkTo(String label, String path) => Semantics(
           link: true,
-          child: GestureDetector(
-            onTap: () => launchUrl(Uri.parse('https://${NymbotConfig.apiHost}$path'),
-                mode: LaunchMode.externalApplication),
-            child: Text(label, style: link),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => launchUrl(Uri.parse('https://${NymbotConfig.apiHost}$path'),
+                  mode: LaunchMode.externalApplication),
+              child: Text(label, style: link),
+            ),
           ),
         );
     final spans = <InlineSpan>[];

@@ -294,13 +294,15 @@
             ? t('Ran on your device — failed')
             : t('Ran on your device in {ms} ms', { ms: result.ms })));
         const actions = el('span', 'run-actions');
-        const send = el('button', 'code-btn run-send', t('Send output to Nymbot'));
-        send.type = 'button';
-        send.addEventListener('click', () => sendToComposer(result));
+        if (document.getElementById('input')) {
+            const send = el('button', 'code-btn run-send', t('Send output to Nymbot'));
+            send.type = 'button';
+            send.addEventListener('click', () => sendToComposer(result));
+            actions.appendChild(send);
+        }
         const close = el('button', 'code-btn run-close', t('Clear'));
         close.type = 'button';
         close.addEventListener('click', () => box.remove());
-        actions.appendChild(send);
         actions.appendChild(close);
         head.appendChild(actions);
         box.appendChild(head);

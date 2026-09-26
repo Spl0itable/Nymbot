@@ -74,7 +74,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
         _current = record;
         _busy = false;
         _status = t(
-            'Anyone with this link can read what you included. The host only holds ciphertext; the key is in the link.');
+            'Anyone with this link can read what you included. Nymbot only holds ciphertext; the key is in the link.');
       });
       await _loadRecords();
     } catch (e) {
@@ -101,7 +101,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
       builder: (context) => AlertDialog(
         title: Text(t('Stop sharing')),
         content: Text(t(
-            'This deletes the encrypted copy from the media host and forgets the link on this device. Anyone who already opened it may have kept a copy, and that cannot be taken back.')),
+            'This deletes the encrypted copy from Nymbot and forgets the link on this device. Anyone who already opened it may have kept a copy, and that cannot be taken back.')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -121,8 +121,8 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
     setState(() {
       if (_current?.id == record.id) _current = null;
       _status = deleted
-          ? t('Deleted from the host. The link no longer opens. Anyone who already opened it may have kept a copy.')
-          : t('The host did not confirm the delete, so the encrypted copy may stay there until it expires. The link is forgotten on this device. Anyone who already opened it may have kept a copy.');
+          ? t('Deleted. The link no longer opens. Anyone who already opened it may have kept a copy.')
+          : t('Nymbot did not confirm the delete, so the encrypted copy may still be stored. The link is forgotten on this device. Anyone who already opened it may have kept a copy.');
     });
     await _loadRecords();
   }
@@ -296,7 +296,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                 style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              t('The chat is encrypted on this device before it leaves. The key travels only in the link, so the media host stores something it cannot read. Anyone you give the link to can read what you include.'),
+              t('The chat is encrypted on this device before it leaves. The key travels only in the link, so Nymbot stores something it cannot read. Anyone you give the link to can read what you include.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -431,9 +431,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                   child: ListTile(
                     dense: true,
                     title: Text(_stamp(r.createdAt)),
-                    subtitle: Text(
-                        '${ChatShare.includedText(r.included)}\n${Uri.tryParse(r.server)?.host ?? r.server}'),
-                    isThreeLine: true,
+                    subtitle: Text(ChatShare.includedText(r.included)),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

@@ -23,12 +23,19 @@
         <a class="btn btn-small btn-primary" id="shareOpenApp" href="/app/">Open Nymbot</a>
     </header>
     <main class="share-main messages" id="shareMain" aria-live="polite"></main>
+    <div class="modal" id="sharePreviewModal" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Preview</h2><button class="icon-btn" type="button" data-act="close-preview" aria-label="Close">&times;</button></header>
+            <iframe id="sharePreviewFrame" class="preview-frame" sandbox="allow-scripts" title="Preview"></iframe>
+        </div>
+    </div>
 
     <script src="/app/js/config.js"></script>
     <script src="/app/js/i18n.js"></script>
     <script src="/app/js/highlight.js"></script>
     <script src="/app/js/markdown.js"></script>
     <script src="/app/js/share.js"></script>
+    <script src="/app/js/runner.js"></script>
     <script src="/app/js/share-view.js"></script>
 </body>
 

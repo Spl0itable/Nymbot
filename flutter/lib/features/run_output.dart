@@ -14,6 +14,16 @@ import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
 
+class DetachedRuns extends InheritedWidget {
+  const DetachedRuns({super.key, required super.child});
+
+  static bool of(BuildContext context) =>
+      context.getElementForInheritedWidgetOfExactType<DetachedRuns>() != null;
+
+  @override
+  bool updateShouldNotify(DetachedRuns oldWidget) => false;
+}
+
 class RunOutputs {
   RunOutputs._();
 
@@ -165,7 +175,7 @@ class RunButton extends StatelessWidget {
           tooltip: t('Run this on your device'),
           onPressed: controller.running
               ? null
-              : () => controller.run(code, AppScope.read(context).current?.id),
+              : () => controller.run(code, DetachedRuns.of(context) ? null : AppScope.read(context).current?.id),
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 30, minHeight: 28),
@@ -224,7 +234,7 @@ class RunOutputView extends StatelessWidget {
                   children: [
                     Expanded(child: Text(heading, style: hint)),
                     if (!controller.running) ...[
-                      TextButton(
+                      if (!DetachedRuns.of(context)) TextButton(
                         onPressed: () =>
                             RunOutputs.toComposer.value = RunOutputs.composerText(r, server: server),
                         child: Text(t('Send output to Nymbot'), style: const TextStyle(fontSize: 12)),

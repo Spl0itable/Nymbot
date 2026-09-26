@@ -2082,12 +2082,7 @@ class AppController extends ChangeNotifier {
     // process it lived in is gone, and a chat past the auto-delete window is
     // one the user has already said they do not want kept.
     await sweepOldChats();
-    final live = conversations.where((c) => !c.archived).toList();
-    if (live.isEmpty) {
-      await newConversation();
-    } else {
-      await open(live.first);
-    }
+    await openStartingChat();
     notifyListeners();
     unawaited(replyNotify.attach());
 
@@ -2198,6 +2193,23 @@ class AppController extends ChangeNotifier {
     return conv;
   }
 
+  static const _viewChatKey = 'view_chat';
+
+  Future<void> openStartingChat() async {
+    final id = store.getString(_viewChatKey);
+    final remembered = id == null ? null : _conversationById(id);
+    if (remembered != null) {
+      await open(remembered);
+      return;
+    }
+    final live = conversations.where((c) => !c.archived).toList();
+    if (live.isEmpty) {
+      await newConversation();
+    } else {
+      await open(live.first);
+    }
+  }
+
   Future<void> open(Conversation conv) async {
     current = conv;
     replyNotify.viewingChat(conv.id);
@@ -2206,6 +2218,7 @@ class AppController extends ChangeNotifier {
     attachments = [];
     quote = null;
     notifyListeners();
+    await store.setString(_viewChatKey, conv.id);
   }
 
   List<Artifact> artifactsOf(String messageId) =>

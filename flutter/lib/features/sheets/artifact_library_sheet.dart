@@ -6,6 +6,7 @@ import '../../models/artifact.dart';
 import '../../models/conversation.dart';
 import '../../services/share_file.dart';
 import '../../state/app_controller.dart';
+import '../conv_badge.dart';
 import '../i18n/i18n.dart';
 import '../nym_glyph.dart';
 import 'sheet.dart';
@@ -125,14 +126,25 @@ class _ArtifactLibrarySheetState extends State<_ArtifactLibrarySheet> {
           excludeSemantics: true,
           child: Text(title, overflow: TextOverflow.ellipsis),
         ),
-        subtitle: Text(
-          [
-            a.lang.isEmpty ? 'text' : a.lang,
-            t('{n} lines', {'n': a.lines}),
-            chat,
-            _day(a.updatedAt),
-            if (row.conv.anon) t('anon'),
-          ].join(' · '),
+        subtitle: Text.rich(
+          TextSpan(
+            text: [
+              a.lang.isEmpty ? 'text' : a.lang,
+              t('{n} lines', {'n': a.lines}),
+              chat,
+              _day(a.updatedAt),
+            ].join(' · '),
+            children: [
+              if (row.conv.anon)
+                const WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Padding(
+                    padding: EdgeInsets.only(left: 6),
+                    child: AnonBadge(),
+                  ),
+                ),
+            ],
+          ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 11),

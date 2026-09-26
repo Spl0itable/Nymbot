@@ -329,10 +329,12 @@ class ChatShare {
       'https://${NymbotConfig.apiHost}/api/proxy?action=share-blob'
       '&server=${Uri.encodeComponent(server)}&x=${Uri.encodeComponent(sha256)}';
 
-  static List<String> candidates(ShareRef ref) => [
-        ref.server,
-        ...NymbotConfig.shareHosts.where((h) => h != ref.server),
-      ];
+  static List<String> candidates(ShareRef ref) => ref.server == Blossom.ownOrigin
+      ? [ref.server]
+      : [
+          ref.server,
+          ...NymbotConfig.shareHosts.where((h) => h != ref.server),
+        ];
 
   static Future<Uint8List> fetchBlob(ShareRef ref,
       {http.Client? client}) async {
@@ -463,8 +465,7 @@ class ChatShareService {
           'That is too large to share. Leave the images out, or share less of the chat.'));
     }
     final skHex = keys.bytesToHex(keys.generatePrivateKey());
-    final placed = await blossom.spread(
-        sealed.bytes, 'application/octet-stream', signerFor(skHex));
+    final placed = await blossom.storeShare(sealed.bytes, signerFor(skHex));
     final record = ShareRecord(
       id: keys.bytesToHex(keys.randomBytes(8)),
       link: ChatShare.link(placed.host, placed.sha256, sealed.key),

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../services/chat_share.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
+import 'run_output.dart';
 
 Future<void> showSharedChat(BuildContext context, String link,
         {http.Client? client}) =>
@@ -48,8 +49,8 @@ class _SharedChatScreenState extends State<SharedChatScreen> {
     }
   }
 
-  (String, String) _explain(Object? error) => switch (
-          error is _Problem ? error.kind : 'offline') {
+  (String, String) _explain(Object? error) =>
+      switch (error is _Problem ? error.kind : 'offline') {
         'incomplete' => (
             t('This link is incomplete'),
             t('The part after the # is missing or damaged. Ask whoever sent '
@@ -57,7 +58,7 @@ class _SharedChatScreenState extends State<SharedChatScreen> {
           ),
         'gone' => (
             t('This chat is no longer shared'),
-            t('Whoever shared it stopped sharing, or the host let it expire.'),
+            t('Whoever shared it stopped sharing.'),
           ),
         'key' => (
             t('This link does not open this chat'),
@@ -98,39 +99,42 @@ class _SharedChatScreenState extends State<SharedChatScreen> {
               .map((m) => m.cast<String, dynamic>())
               .toList();
           final title = '${data['title'] ?? ''}'.trim();
-          return SelectionArea(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Text(title.isEmpty ? t('Shared chat') : title,
-                    style: theme.textTheme.titleLarge),
-                const SizedBox(height: 12),
-                for (final m in messages)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          m['role'] == 'user' ? t('User') : 'Nymbot',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: m['role'] == 'user'
-                                  ? theme.hintColor
-                                  : theme.colorScheme.primary),
-                        ),
-                        const SizedBox(height: 4),
-                        MarkdownBody('${m['content']}'),
-                      ],
+          return DetachedRuns(
+            child: SelectionArea(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Text(title.isEmpty ? t('Shared chat') : title,
+                      style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  for (final m in messages)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            m['role'] == 'user' ? t('User') : 'Nymbot',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: m['role'] == 'user'
+                                    ? theme.hintColor
+                                    : theme.colorScheme.primary),
+                          ),
+                          const SizedBox(height: 4),
+                          MarkdownBody('${m['content']}',
+                              runnable: m['role'] == 'assistant'),
+                        ],
+                      ),
                     ),
+                  Text(
+                    t('Read-only copy. It was encrypted on the sender’s device, '
+                        'and the key never left this link.'),
+                    style: TextStyle(fontSize: 11, color: theme.hintColor),
                   ),
-                Text(
-                  t('Read-only copy. It was encrypted on the sender’s device, '
-                      'and the key never left this link.'),
-                  style: TextStyle(fontSize: 11, color: theme.hintColor),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         },

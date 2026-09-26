@@ -259,7 +259,8 @@
         return node;
     }
 
-    function messageNode(m) {
+    function messageNode(m, options) {
+        const interactive = !!(options && options.interactive);
         const self = m.role === 'user';
         const node = el('div', 'chat-message share-message' + (self ? ' self' : ''));
         node.dataset.role = m.role;
@@ -296,7 +297,9 @@
         }
         const text = el('div', 'msg-text');
         text.innerHTML = MD().render(m.content || '', { wrap: true, lineNumbers: false, media: null });
-        for (const b of text.querySelectorAll('[data-act="code-preview"], [data-act="code-download"], [data-act="save-media"]')) b.remove();
+        const strip = interactive ? '[data-act="code-download"], [data-act="save-media"]'
+            : '[data-act="code-preview"], [data-act="code-download"], [data-act="save-media"]';
+        for (const b of text.querySelectorAll(strip)) b.remove();
         for (const media of text.querySelectorAll('img, audio, video, source')) {
             const src = media.getAttribute('src');
             if (src) media.setAttribute('src', proxied(src));
@@ -333,9 +336,9 @@
         return node;
     }
 
-    function render(root, transcript) {
+    function render(root, transcript, options) {
         root.innerHTML = '';
-        for (const m of transcript.messages) root.appendChild(messageNode(m));
+        for (const m of transcript.messages) root.appendChild(messageNode(m, options));
         return root;
     }
 
