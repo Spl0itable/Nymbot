@@ -16,6 +16,7 @@
 
     const N = BigInt('0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
     const DENOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
+    const TIERS = ['standard', 'pro'];
     const MAX_OUTPUTS = 32;
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
@@ -54,6 +55,26 @@
             try { return P().fromHex('02' + hex(sha(cat(base, le32(i))))); } catch (_) { }
         }
         throw new Error('hash-to-curve failed');
+    }
+
+    function keysetFrom(keys) {
+        if (!keys || typeof keys !== 'object') return null;
+        const clean = {};
+        const parts = [];
+        for (const tier of TIERS) {
+            const row = keys[tier];
+            if (!row || typeof row !== 'object') return null;
+            clean[tier] = {};
+            for (const denom of DENOMS) {
+                const key = row[String(denom)];
+                if (typeof key !== 'string' || !/^0[23][0-9a-f]{64}$/.test(key)) return null;
+                try { P().fromHex(key); } catch (_) { return null; }
+                clean[tier][String(denom)] = key;
+                parts.push(tier + ':' + denom + ':' + key);
+            }
+        }
+        const id = hex(NT()._sha256(enc.encode(parts.join('|')))).slice(0, 16);
+        return { id, keys: clean };
     }
 
     function splitAmount(amount) {
@@ -201,16 +222,21 @@
             if (status >= 400 || !data || data.error || !data.keys || !data.keysetId) {
                 throw new Error((data && data.error) || t('Voucher keys are unavailable.'));
             }
+            const checked = keysetFrom(data.keys);
+            if (!checked || checked.id !== String(data.keysetId)) {
+                throw new Error(t('Voucher keyset rejected.'));
+            }
             const pinned = Store.read('anon_keyset', null);
-            if (pinned && pinned !== data.keysetId) {
+            if (pinned && pinned !== checked.id) {
                 // A per-user keyset is exactly how a mint would tag its users,
                 // so this is the user's call, not ours.
-                const ok = this.onKeysetChange ? await this.onKeysetChange(pinned, data.keysetId) : false;
+                const ok = this.onKeysetChange ? await this.onKeysetChange(pinned, checked.id) : false;
                 if (!ok) throw new Error(t('Voucher keyset rejected.'));
             }
-            Store.write('anon_keyset', data.keysetId);
-            this._keyset = data;
-            return data;
+            Store.write('anon_keyset', checked.id);
+            const keyset = Object.assign({}, data, { keysetId: checked.id, keys: checked.keys });
+            this._keyset = keyset;
+            return keyset;
         },
 
         _verifyDleq(keyHex, blindedHex, sig) {

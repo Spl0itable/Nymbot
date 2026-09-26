@@ -263,7 +263,19 @@
         giftList(opts) { return this.call('gift-list', {}, opts); },
         giftPeek(code, opts) { return this.call('gift-peek', { code }, opts); },
 
-        voucherKeys() { return this.call('voucher-keys', {}); },
+        async voucherKeys() {
+            try {
+                const resp = await Edge.fetch(url(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'voucher-keys' })
+                });
+                const data = await resp.json().catch(() => ({}));
+                return { status: resp.status, data: data || {} };
+            } catch (_) {
+                return { status: 0, data: unreachable() };
+            }
+        },
         voucherIssue(payload, opts) { return this.call('voucher-issue', payload, opts); },
         voucherRedeem(payload, opts) { return this.call('voucher-redeem', payload, opts); }
     };

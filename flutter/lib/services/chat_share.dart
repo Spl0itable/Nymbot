@@ -446,8 +446,26 @@ class ChatShareService {
   Future<void> _save(Map<String, List<ShareRecord>> all) => writeRecords(
       jsonEncode(all.map((k, v) => MapEntry(k, v.map((r) => r.toJson()).toList()))));
 
-  Future<List<ShareRecord>> records(String convId) async =>
-      (await _all())[convId] ?? const [];
+  static const shareTtlMs = 24 * 60 * 60 * 1000;
+
+  static bool live(ShareRecord r, int nowMs) =>
+      r.createdAt <= 0 || nowMs - r.createdAt < shareTtlMs;
+
+  Future<List<ShareRecord>> records(String convId) async {
+    final all = await _all();
+    final list = all[convId] ?? const <ShareRecord>[];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final kept = [for (final r in list) if (live(r, now)) r];
+    if (kept.length != list.length) {
+      if (kept.isEmpty) {
+        all.remove(convId);
+      } else {
+        all[convId] = kept;
+      }
+      await _save(all);
+    }
+    return kept;
+  }
 
   static LocalSigner signerFor(String skHex) =>
       LocalSigner(keys.hexToBytes(skHex));

@@ -1,3 +1,5 @@
+import { mcpHostBlocked } from "./_mcp.js";
+
 export var GIT_READ_CHUNK_LINES = 400;
 export var GIT_READ_MAX_CHARS = 48000;
 export var GIT_TRIM_MIN_CHARS = 600;
@@ -9,6 +11,7 @@ export var GIT_SEARCH_CONTEXT = 2;
 export var GIT_ARCHIVE_DEFAULT_MB = 20;
 export var GIT_ARCHIVE_MAX_FILE_BYTES = 1024 * 1024;
 export var GIT_ARCHIVE_MAX_TOTAL_BYTES = 48 * 1024 * 1024;
+export var GIT_UNPACK_MAX_BYTES = 32 * 1024 * 1024;
 export var GIT_STAGE_MAX_FILES = 60;
 export var GIT_STAGE_MAX_BYTES = 2 * 1024 * 1024;
 export var GIT_DIFF_MAX_CHARS = 200000;
@@ -385,6 +388,48 @@ export function gitStageFiles(stage, branch) {
   }).filter(function (f) { return f.content !== f.before; });
 }
 
+var GIT_CI_DIRS = [".github/workflows/", ".github/actions/", ".gitea/workflows/", ".forgejo/workflows/",
+  ".circleci/", ".buildkite/"];
+var GIT_CI_FILES = /^(\.gitlab-ci\.ya?ml|\.travis\.ya?ml|azure-pipelines\.ya?ml|jenkinsfile|bitbucket-pipelines\.ya?ml|\.drone\.ya?ml)$/;
+
+export function gitSafePath(raw, allowRoot) {
+  var p = str(raw);
+  if (/[\\\x00-\x1f\x7f]/.test(p) || /^[A-Za-z]:/.test(p) || p.indexOf("..") !== -1) return null;
+  if (p.charAt(0) === "/" && p.replace(/\/+/g, "") !== "") return null;
+  var segs = p.split("/").filter(function (s) { return s !== "" && s !== "."; });
+  for (var i = 0; i < segs.length; i++) {
+    if (segs[i].toLowerCase() === ".git") return null;
+  }
+  var out = segs.join("/");
+  if (!out && !allowRoot) return null;
+  return out;
+}
+
+export function gitIsCiPath(raw) {
+  var segs = str(raw).replace(/\\/g, "/").split("/").filter(function (s) { return s !== "" && s !== "."; });
+  var p = segs.join("/").toLowerCase();
+  if (!p) return false;
+  for (var i = 0; i < GIT_CI_DIRS.length; i++) {
+    var dir = GIT_CI_DIRS[i];
+    if ((p + "/").indexOf(dir) === 0) return true;
+  }
+  return GIT_CI_FILES.test(segs[segs.length - 1].toLowerCase());
+}
+
+export function gitNeedsReview(cfg, branch, path) {
+  var def = cfg && (cfg.defaultBranch || (!cfg.branch ? cfg.resolvedBranch : null));
+  if (def && branch === def) return true;
+  return gitIsCiPath(path);
+}
+
+export function gitBranchNeedsReview(cfg, stage, branch) {
+  var files = gitStageFiles(stage, branch);
+  for (var i = 0; i < files.length; i++) {
+    if (gitNeedsReview(cfg, branch, files[i].path)) return true;
+  }
+  return false;
+}
+
 export function gitStageBranches(stage) {
   return Object.keys(stage || {}).filter(function (br) { return gitStageFiles(stage, br).length > 0; });
 }
@@ -447,8 +492,8 @@ export function gitParseStaged(raw, repo, refRe) {
   for (var i = 0; i < raw.files.length; i++) {
     var f = raw.files[i];
     if (!f || typeof f !== "object") return null;
-    var p = str(f.path).replace(/^\/+|\/+$/g, "");
-    if (!p || p.indexOf("..") !== -1 || p.length > 400 || seen[p]) return null;
+    var p = gitSafePath(str(f.path).replace(/\/+$/, ""));
+    if (!p || p.length > 400 || seen[p]) return null;
     seen[p] = true;
     if (f.content !== null && typeof f.content !== "string") return null;
     bytes += str(f.content).length;
@@ -589,25 +634,28 @@ export function gitSnapshotFromTar(bytes, options) {
 }
 
 export async function gitGunzip(bytes, maxBytes) {
-  var cap = Number(maxBytes) > 0 ? Number(maxBytes) : GIT_ARCHIVE_MAX_TOTAL_BYTES * 2;
+  var cap = Number(maxBytes) > 0 ? Math.min(Number(maxBytes), GIT_UNPACK_MAX_BYTES) : GIT_UNPACK_MAX_BYTES;
   var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
   var reader = stream.getReader();
-  var parts = [];
+  var out = new Uint8Array(Math.min(cap, Math.max(64 * 1024, (bytes.length || 0) * 4)));
   var size = 0;
   while (true) {
     var r = await reader.read();
     if (r.done) break;
-    size += r.value.length;
-    if (size > cap) {
+    var need = size + r.value.length;
+    if (need > cap) {
       try { await reader.cancel(); } catch (e) { }
       throw new Error("archive too large once unpacked");
     }
-    parts.push(r.value);
+    if (need > out.length) {
+      var grown = new Uint8Array(Math.min(cap, Math.max(need, out.length * 2)));
+      grown.set(out.subarray(0, size));
+      out = grown;
+    }
+    out.set(r.value, size);
+    size = need;
   }
-  var out = new Uint8Array(size);
-  var at = 0;
-  parts.forEach(function (p) { out.set(p, at); at += p.length; });
-  return out;
+  return out.subarray(0, size);
 }
 
 export function gitSnapshotList(snap, dir, stage) {
@@ -901,7 +949,7 @@ export async function gitFetchArchive(url, headers, capBytes, fetchImpl) {
     if (!loc || hop === GIT_ARCHIVE_MAX_REDIRECTS) return { ok: false, status: res.status };
     var next;
     try { next = new URL(loc, at).toString(); } catch (e) { return { ok: false, status: res.status }; }
-    if (!/^https:/i.test(next)) return { ok: false, status: res.status };
+    if (!/^https:/i.test(next) || mcpHostBlocked(new URL(next).hostname) !== "") return { ok: false, status: res.status };
     if (!gitArchiveKeepsAuth(origin, next)) sendHeaders = gitHeadersWithoutAuth(sendHeaders);
     at = next;
   }

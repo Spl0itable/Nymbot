@@ -76,7 +76,7 @@
         } catch (e) {
             if (e && e.gone) {
                 note(t('This chat is no longer shared'), [
-                    t('Whoever shared it stopped sharing.')
+                    t('Whoever shared it stopped sharing, or the link passed its 24 hours.')
                 ]);
             } else {
                 note(t('The shared chat could not be loaded'), [

@@ -149,24 +149,27 @@ class AnonMode {
 
   // --- vouchers ---------------------------------------------------------------
 
-  Future<Map<String, dynamic>> keyset(EventSigner identity,
-      {bool force = false}) async {
+  Future<Map<String, dynamic>> keyset({bool force = false}) async {
     final cached = _keyset;
     if (cached != null && !force) return cached;
-    final res = await _api.voucherKeys(identity);
+    final res = await _api.voucherKeys();
     final data = res.data;
     if (res.status >= 400 || data['error'] != null || data['keys'] == null) {
       throw StateError((data['error'] as String?) ?? 'Voucher keys are unavailable.');
     }
+    final keys = voucherKeysetKeys(data['keys']);
+    if (keys == null) throw StateError(t('Voucher keyset rejected.'));
+    final id = voucherKeysetId(keys);
+    if (data['keysetId'] != id) throw StateError(t('Voucher keyset rejected.'));
     final pinned = _store.getString(_keysetKey);
-    final id = data['keysetId'] as String;
     if (pinned != null && pinned != id) {
       final ok = await (onKeysetChange?.call(pinned, id) ?? Future.value(false));
       if (!ok) throw StateError(t('Voucher keyset rejected.'));
     }
     await _store.setString(_keysetKey, id);
-    _keyset = data;
-    return data;
+    final verified = <String, dynamic>{...data, 'keysetId': id, 'keys': keys};
+    _keyset = verified;
+    return verified;
   }
 
   List<Map<String, dynamic>> _tokens(String tier) =>
@@ -188,7 +191,7 @@ class AnonMode {
   /// outputs re-sign without a second debit.
   Future<void> _finishIssue(
       EventSigner identity, Map<String, dynamic> pending) async {
-    final keys = await keyset(identity);
+    final keys = await keyset();
     final tier = pending['tier'] as String;
     final outputs = (pending['outputs'] as List).cast<Map<String, dynamic>>();
     final res = await _api.voucherIssue(identity, {
@@ -314,7 +317,7 @@ class AnonMode {
       throw StateError(t('That amount needs too many vouchers — move a smaller amount.'));
     }
     await ensure();
-    await keyset(identity);
+    await keyset();
     final stale = _state['pending'] as Map<String, dynamic>?;
     if (stale != null) await _finishIssue(identity, stale);
 

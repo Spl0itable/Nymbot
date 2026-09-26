@@ -120,14 +120,15 @@ import { runResearch, researchEstimate, researchPublicLimits, researchCommand,
   researchWanted, researchStatedMax, researchFloor, RESEARCH_LIMITS, RESEARCH_REPORT_PROMPT } from "./_research.js";
 import { teamParse, teamModeOf, teamEstimate, runTeamResearch, runTeamRepo,
   TEAM_NEEDS_PRO, TEAM_WRONG_TASK } from "./_team.js";
-import { mcpParseServers, mcpParseServer, mcpProbe, mcpPrepare, mcpContextBlock, mcpRedact, runMcpToolLoop, mcpIpv6Blocked,
+import { mcpParseServers, mcpParseServer, mcpProbe, mcpPrepare, mcpContextBlock, mcpRedact, runMcpToolLoop, mcpHostBlocked,
   mcpFormatResult, mcpArgsPreview, mcpArgsLength, mcpPauseReply, mcpInert } from "./_mcp.js";
 import { paceProviderOf, paceTpmFor, paceEstimateTokens, paceUsageTokens, paceBucketTake,
   paceBucketSettle, paceRetryAfterMs } from "./_pace.js";
 import { gitCompactConvo, gitReadRange, gitApplyEdits, gitStageEntry, gitStagePut, gitStageFiles,
   gitStageBranches, gitCommitMessage, gitStagedPayload, gitParseStaged, gitTextHash,
   gitSnapshotFromTar, gitGunzip, gitSnapshotList, gitSearchTexts, gitFormatMatches,
-  gitCommitFiles, gitArchiveUrl, gitFetchArchive, gitCiStatus, GIT_ARCHIVE_DEFAULT_MB } from "./_gitrun.js";
+  gitCommitFiles, gitArchiveUrl, gitFetchArchive, gitCiStatus, GIT_ARCHIVE_DEFAULT_MB,
+  gitSafePath, gitNeedsReview, gitBranchNeedsReview } from "./_gitrun.js";
 import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_runner.js";
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
@@ -2921,6 +2922,36 @@ var BOT_GIT_REF_RE = /^[\w./-]{1,100}$/;
 var BOT_GIT_DEFAULT_HOSTS = { github: "github.com", gitlab: "gitlab.com", gitea: "codeberg.org" };
 var BOT_GIT_PROVIDER_ALIASES = { codeberg: "gitea", forgejo: "gitea" };
 
+function botRandomHex(n) {
+  var b = new Uint8Array(n);
+  crypto.getRandomValues(b);
+  return Array.from(b, function (x) { return x.toString(16).padStart(2, "0"); }).join("");
+}
+
+function botFailText(generic, where, e) {
+  var ref = botRandomHex(3);
+  console.error("ref " + ref + " " + where + " failed:", e);
+  if (e && e.userFacing && e.message) return String(e.message) + " (ref " + ref + ")";
+  return generic + " (ref " + ref + ")";
+}
+
+var BOT_GIT_HOST_REFUSED = "That git host is a private or local address, which Nymbot's servers cannot reach.";
+
+function gitHostBlocked(host) {
+  var m = /^(.*?)(?::(\d{1,5}))?$/.exec(String(host || "").trim().toLowerCase());
+  if (m[2] != null && (Number(m[2]) < 1 || Number(m[2]) > 65535)) return true;
+  return mcpHostBlocked(m[1]) !== "";
+}
+
+function gitConfigRefused(body) {
+  var list = Array.isArray(body && body.repos) && body.repos.length ? body.repos : [body && body.git];
+  for (var i = 0; i < list.length; i++) {
+    var h = list[i] && typeof list[i].host === "string" ? list[i].host.trim() : "";
+    if (h && gitHostBlocked(h)) return BOT_GIT_HOST_REFUSED;
+  }
+  return "";
+}
+
 function parseGitConfig(raw) {
   if (!raw || typeof raw !== "object") return null;
   var provider = typeof raw.provider === "string" ? raw.provider.toLowerCase() : "github";
@@ -2928,7 +2959,8 @@ function parseGitConfig(raw) {
   if (!Object.prototype.hasOwnProperty.call(BOT_GIT_DEFAULT_HOSTS, provider)) return null;
   var host = typeof raw.host === "string" ? raw.host.trim().toLowerCase() : "";
   if (!host) host = BOT_GIT_DEFAULT_HOSTS[provider];
-  if (!/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)) return null;
+  if (!/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:\d{1,5})?$/.test(host)) return null;
+  if (gitHostBlocked(host)) return null;
   var token = typeof raw.token === "string" ? raw.token.trim() : "";
   if (provider === "github" && host === "github.com") {
     if (!/^(gh[a-z]_|github_pat_)[A-Za-z0-9_]{16,255}$/.test(token)) return null;
@@ -2999,6 +3031,8 @@ function gitHeaders(cfg, accept) {
   return headers;
 }
 
+var GIT_MAX_REDIRECTS = 3;
+
 async function gitFetch(cfg, path, opts) {
   opts = opts || {};
   var headers = gitHeaders(cfg, opts.accept);
@@ -3007,8 +3041,27 @@ async function gitFetch(cfg, path, opts) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(opts.body);
   }
-  var res = await fetch(gitApiBase(cfg) + path, init);
-  return { ok: res.ok, status: res.status, text: await res.text() };
+  var url = gitApiBase(cfg) + path;
+  var origin = new URL(url).origin;
+  init.redirect = "manual";
+  for (var hop = 0; hop <= GIT_MAX_REDIRECTS; hop++) {
+    var res = await fetch(url, init);
+    if (res.status < 300 || res.status > 399 || !res.headers.get("location")) {
+      return { ok: res.ok, status: res.status, text: await res.text() };
+    }
+    var next;
+    try { next = new URL(res.headers.get("location"), url); } catch (e) { next = null; }
+    try { await res.body?.cancel(); } catch (e) {}
+    if (!next || next.protocol !== "https:" || next.origin !== origin || gitHostBlocked(next.host)) {
+      return { ok: false, status: res.status, text: "Redirect to another host refused." };
+    }
+    if (res.status === 303 || ((res.status === 301 || res.status === 302) && init.method === "POST")) {
+      init = { method: "GET", headers: headers, redirect: "manual" };
+      delete headers["Content-Type"];
+    }
+    url = next.toString();
+  }
+  return { ok: false, status: 502, text: "Too many redirects." };
 }
 
 function gitJson(r) { try { return JSON.parse(r.text); } catch (e) { return null; } }
@@ -3262,7 +3315,9 @@ async function prepareGitRepo(cfg) {
   var provider = GIT_PROVIDERS[cfg.provider];
   var defaultBranch = await provider.meta(cfg);
   if (!defaultBranch) {
-    throw new Error("Can't access " + cfg.repo + " on " + cfg.host + " — check the token and repo with ?git status.");
+    var access = new Error("Can't access " + cfg.repo + " on " + cfg.host + " — check the token and repo with ?git status.");
+    access.userFacing = true;
+    throw access;
   }
   cfg.defaultBranch = defaultBranch;
   cfg.resolvedBranch = cfg.branch || defaultBranch;
@@ -3601,7 +3656,9 @@ function gitCallFor(cfg) {
 
 async function gitFlushRecord(cfg, record, onlyBranch, message) {
   if (!record || cfg.approve) return "";
-  var branches = gitStageBranches(record.stage).filter(function (b) { return !onlyBranch || b === onlyBranch; });
+  var branches = gitStageBranches(record.stage).filter(function (b) {
+    return (!onlyBranch || b === onlyBranch) && !gitBranchNeedsReview(cfg, record.stage, b);
+  });
   var lines = [];
   for (var i = 0; i < branches.length; i++) {
     var br = branches[i];
@@ -3648,6 +3705,16 @@ async function gitFlushRecord(cfg, record, onlyBranch, message) {
   return lines.join("\n");
 }
 
+function gitHoldForReview(record) {
+  if (!record || record.cfg.approve) return !!record;
+  var left = gitStageBranches(record.stage).filter(function (b) { return gitBranchNeedsReview(record.cfg, record.stage, b); });
+  if (!left.length) return false;
+  record.cfg.approve = true;
+  record.reviewForced = true;
+  record.stageBranch = left[0];
+  return true;
+}
+
 function gitStagedOf(record) {
   if (!record || !record.cfg.approve) return null;
   var br = gitStageBranches(record.stage)[0];
@@ -3664,9 +3731,9 @@ async function execGitTool(cfg, name, args, record, scope) {
   delete args.repo;
   var branch = cfg.resolvedBranch;
   function cleanPath(p) {
-    p = String(p || "").replace(/^\/+|\/+$/g, "");
-    if (p.indexOf("..") !== -1) throw new Error("Invalid path");
-    return p;
+    var safe = gitSafePath(String(p || "").replace(/\/+$/, ""), true);
+    if (safe == null) throw new Error("Invalid path: give a path relative to the repository root, without '..', backslashes or .git/");
+    return safe;
   }
   function refOr(v, fallback) {
     v = String(v || "").trim();
@@ -3757,11 +3824,26 @@ async function execGitTool(cfg, name, args, record, scope) {
       ? "It will be shown to the user for review with the rest of this reply's changes."
       : "It is committed with the rest of this reply's changes as one commit when you finish, or when you call commit.");
   };
+  var holdNote = "";
+  var holdFor = async function (target, path) {
+    if (cfg.approve || !gitNeedsReview(cfg, target, path)) return null;
+    var pre = await gitFlushRecord(cfg, record, null, "");
+    if (/^Error:/m.test(pre)) return pre;
+    cfg.approve = true;
+    record.reviewForced = true;
+    record.stageBranch = gitStageBranches(record.stage)[0] || null;
+    holdNote = " Changes to CI or automation files and to the default branch '" + (cfg.defaultBranch || target) +
+      "' always need the user's approval, so from now on this reply's changes to " + cfg.repo +
+      " are staged for the user to review instead of committed." + (pre ? " Committed first: " + pre : "");
+    return null;
+  };
 
   if (name === "write_file") {
     var wp = cleanPath(args.path);
     if (!wp) return "Error: path is required";
     var target = refOr(args.branch, branch);
+    var held = await holdFor(target, wp);
+    if (held) return held;
     var wrong = stageOn(target);
     if (wrong) return wrong;
     var content = String(args.content == null ? "" : args.content);
@@ -3775,13 +3857,15 @@ async function execGitTool(cfg, name, args, record, scope) {
     var bad = gitStagePut(record.stage, target, wp, content, before, String(args.message || "").slice(0, 200));
     if (bad) return bad;
     record.stageBranch = record.stageBranch || target;
-    return stagedNote(target, wp, content);
+    return stagedNote(target, wp, content) + holdNote;
   }
 
   if (name === "edit_file") {
     var ep = cleanPath(args.path);
     if (!ep) return "Error: path is required";
     var eTarget = refOr(args.branch, branch);
+    var eHeld = await holdFor(eTarget, ep);
+    if (eHeld) return eHeld;
     var eWrong = stageOn(eTarget);
     if (eWrong) return eWrong;
     var edits = args.edits;
@@ -3801,14 +3885,15 @@ async function execGitTool(cfg, name, args, record, scope) {
     return "Edited '" + ep + "': " + applied.applied + " replacement" + (applied.applied === 1 ? "" : "s") +
       " staged; it now has " + applied.content.split("\n").length + " lines. " + (cfg.approve
       ? "It will be shown to the user for review."
-      : "Committed with the rest when you finish, or when you call commit.");
+      : "Committed with the rest when you finish, or when you call commit.") + holdNote;
   }
 
   if (name === "commit") {
     var cMsg = String(args.message || "").slice(0, 200).trim();
     if (cfg.approve) {
       if (cMsg) record.stageMessage = cMsg;
-      return "Ask before committing is on for " + cfg.repo + ": the changes stay staged and the user reviews and applies them after your reply. Do not call commit again; finish your summary.";
+      return (record.reviewForced ? "These changes touch CI or automation files or the default branch of " + cfg.repo +
+        ", so they need the user's approval" : "Ask before committing is on for " + cfg.repo) + ": the changes stay staged and the user reviews and applies them after your reply. Do not call commit again; finish your summary.";
     }
     var flushed = await gitFlushRecord(cfg, record, null, cMsg);
     return flushed || "Nothing is staged to commit.";
@@ -3964,10 +4049,11 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     }
     records[c.repo] = gitRecordNew(c, base);
     var parked = opts.stage && typeof opts.stage === "object" ? opts.stage[c.repo] : null;
-    if (parked && c.allowWrites && c.approve && parked.stage && typeof parked.stage === "object") {
+    if (parked && c.allowWrites && (c.approve || parked.review) && parked.stage && typeof parked.stage === "object") {
       records[c.repo].stage = parked.stage;
       records[c.repo].stageMessage = String(parked.message || "");
       records[c.repo].stageBranch = parked.branch || null;
+      if (parked.review) gitHoldForReview(records[c.repo]);
     }
   }
   var checkpointFor = function (rec) {
@@ -4009,17 +4095,19 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       if (!Object.prototype.hasOwnProperty.call(records, k)) continue;
       var rec = records[k];
       if (!rec.cfg.allowWrites) continue;
+      if (!rec.cfg.approve) {
+        var flushed = await gitFlushRecord(rec.cfg, rec, null, "");
+        if (/^Error:/m.test(flushed)) notes.push(flushed.split("\n").filter(function (l) { return /^Error:/.test(l); }).join("\n"));
+        gitHoldForReview(rec);
+      }
       if (rec.cfg.approve) {
         var review = gitStagedOf(rec);
         if (review) reviews.push(review);
         if (out.truncated && gitStageBranches(rec.stage).length) {
           parkedStage = parkedStage || {};
-          parkedStage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch };
+          parkedStage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch, review: !!rec.reviewForced };
         }
-        continue;
       }
-      var flushed = await gitFlushRecord(rec.cfg, rec, null, "");
-      if (/^Error:/m.test(flushed)) notes.push(flushed.split("\n").filter(function (l) { return /^Error:/.test(l); }).join("\n"));
     }
     if (notes.length) out.reply = String(out.reply || "") + "\n\n" + notes.join("\n").replace(/^Error: /gm, "Note: ");
     out.checkpoint = checkpointOf();
@@ -4135,10 +4223,11 @@ function mcpGitAdapter(all, env, parked, serverRun) {
     if (c.archiveBytes == null) c.archiveBytes = archiveBytes;
     records[c.repo] = gitRecordNew(c, null);
     var hold = parked && typeof parked === "object" ? parked[c.repo] : null;
-    if (hold && c.allowWrites && c.approve && hold.stage && typeof hold.stage === "object") {
+    if (hold && c.allowWrites && (c.approve || hold.review) && hold.stage && typeof hold.stage === "object") {
       records[c.repo].stage = hold.stage;
       records[c.repo].stageMessage = String(hold.message || "");
       records[c.repo].stageBranch = hold.branch || null;
+      if (hold.review) gitHoldForReview(records[c.repo]);
     }
   }
   var checkpointOf = function () {
@@ -4197,17 +4286,19 @@ function mcpGitAdapter(all, env, parked, serverRun) {
         if (!Object.prototype.hasOwnProperty.call(records, k)) continue;
         var rec = records[k];
         if (!rec.cfg.allowWrites) continue;
+        if (!rec.cfg.approve) {
+          var flushed = await gitFlushRecord(rec.cfg, rec, null, "");
+          if (/^Error:/m.test(flushed)) notes.push(flushed.split("\n").filter(function (l) { return /^Error:/.test(l); }).join("\n"));
+          gitHoldForReview(rec);
+        }
         if (rec.cfg.approve) {
           var review = gitStagedOf(rec);
           if (review) reviews.push(review);
           if (parkIt && gitStageBranches(rec.stage).length) {
             parkedStage = parkedStage || {};
-            parkedStage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch };
+            parkedStage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch, review: !!rec.reviewForced };
           }
-          continue;
         }
-        var flushed = await gitFlushRecord(rec.cfg, rec, null, "");
-        if (/^Error:/m.test(flushed)) notes.push(flushed.split("\n").filter(function (l) { return /^Error:/.test(l); }).join("\n"));
       }
       var staged = null;
       if (reviews.length) {
@@ -4222,8 +4313,8 @@ function mcpGitAdapter(all, env, parked, serverRun) {
 async function gitRevertBatch(cfg, provider, baseSha, branch, paths) {
   var files = [];
   for (var i = 0; i < paths.length; i++) {
-    var p = String(paths[i] || "").replace(/^\/+|\/+$/g, "");
-    if (!p || p.indexOf("..") !== -1) return null;
+    var p = gitSafePath(String(paths[i] || "").replace(/\/+$/, ""));
+    if (!p) return null;
     var was;
     try { was = String(await provider.readFile(cfg, baseSha, p)); } catch (e) { return null; }
     if (/^Error: HTTP 404/.test(was)) files.push({ path: p, content: null, existed: true });
@@ -5634,6 +5725,7 @@ async function botTeamRepoTurn(context, proModel, messages, ghConfig, runOpts) {
       git.records[hk].stage = held[hk].stage;
       git.records[hk].stageMessage = String(held[hk].message || "");
       git.records[hk].stageBranch = held[hk].branch || null;
+      if (held[hk].review) gitHoldForReview(git.records[hk]);
     }
   } else {
     messages[0].content += "\n" + await buildGitContext(ghConfig, { explore: false });
@@ -5713,7 +5805,7 @@ async function botTeamRepoTurn(context, proModel, messages, ghConfig, runOpts) {
       if (!Object.prototype.hasOwnProperty.call(git.records, k)) continue;
       var rec = git.records[k];
       if (!rec.cfg.allowWrites || !gitStageBranches(rec.stage).length) continue;
-      stage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch };
+      stage[k] = { stage: rec.stage, message: rec.stageMessage, branch: rec.stageBranch, review: !!rec.reviewForced };
     }
     result.state.stage = stage;
     return Object.assign({
@@ -6515,7 +6607,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       said = String((heard && (heard.text || heard.transcription ||
         (heard.result && heard.result.text))) || "").trim();
     } catch (e) {
-      return json({ error: "Transcription failed: " + String((e && e.message) || e).slice(0, 160) }, 502);
+      return json({ error: botFailText("Transcription failed: the speech service could not process that clip. Please try again.", "transcribe", e) }, 502);
     }
     noteUsage(context, { pubkey: userPubkey, kind: "transcribe", tier: "standard", model: BOT_TRANSCRIBE_MODEL,
       calls: 1, ms: Date.now() - transcribeT0 });
@@ -6532,7 +6624,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
   // model and spends no credits.
   if (body.action === "pm-revert") {
     var revCfg = parseGitConfig(body.git);
-    if (!revCfg) return json({ error: "That repository is not connected." }, 400);
+    if (!revCfg) return json({ error: gitConfigRefused(body) || "That repository is not connected." }, 400);
     if (!revCfg.allowWrites) {
       return json({ error: "Writes are off for that repository." }, 400);
     }
@@ -6566,8 +6658,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var removed = [];
     var failed = [];
     for (var pi = 0; pi < wanted.length; pi++) {
-      var rp = String(wanted[pi] || "").replace(/^\/+|\/+$/g, "");
-      if (!rp || rp.indexOf("..") !== -1) { failed.push(wanted[pi]); continue; }
+      var rp = gitSafePath(String(wanted[pi] || "").replace(/\/+$/, ""));
+      if (!rp) { failed.push(wanted[pi]); continue; }
       var was;
       try {
         was = await revProvider.readFile(revCfg, mark.baseSha, rp);
@@ -6604,7 +6696,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "git-apply") {
     var applyCfg = parseGitConfig(body.git);
-    if (!applyCfg) return json({ error: "That repository is not connected." }, 400);
+    if (!applyCfg) return json({ error: gitConfigRefused(body) || "That repository is not connected." }, 400);
     if (!applyCfg.allowWrites) return json({ error: "Writes are off for that repository." }, 400);
     var applied = await gitApplyStaged(applyCfg, body.staged);
     return json(applied.body, applied.status);
@@ -6920,7 +7012,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         }, 400);
       }
       ghConfig = parseGitConfigs(body);
-      if (!ghConfig) return json({ error: "Invalid git configuration — re-run ?git in this chat." }, 400);
+      if (!ghConfig) return json({ error: gitConfigRefused(body) || "Invalid git configuration — re-run ?git in this chat." }, 400);
     }
     var mcpConfig = null;
     if (body.mcp != null) {
@@ -7573,7 +7665,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         }
       } catch (e) {
         // Nothing is charged when generation or upload fails.
-        return await turnFail({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+        return await turnFail({ error: botFailText("Nymbot error: the media could not be generated, and nothing was charged. Please try again.", "media", e) }, 500);
       }
       var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
       holdId = null;
@@ -7914,7 +8006,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         clock: clock
       });
     } catch (e) {
-      return await turnFailResumable({ error: "Nymbot error: " + (e.message || String(e)) }, 500);
+      return await turnFailResumable({ error: botFailText("Nymbot error: something went wrong while answering. Please try again.", "chat", e) }, 500);
     }
     if (draft) await draft.close();
     var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
@@ -10484,13 +10576,7 @@ function isPrivateHostUrl(raw) {
   var host;
   try { host = new URL(raw).hostname.toLowerCase(); } catch (e) { return true; }
   if (!host) return true;
-  if (host === "localhost" || host === "[::1]" || /\.local$/.test(host) || /\.internal$/.test(host)) return true;
-  if (/^\[/.test(host)) return mcpIpv6Blocked(host) !== false;
-  var p = host.split(".");
-  if (p.length !== 4 || p.some(function (n) { return !/^\d{1,3}$/.test(n); })) return false;
-  var a = +p[0], b = +p[1];
-  return a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  return mcpHostBlocked(host) !== "";
 }
 
 // Reads the pages a message links to.
@@ -10783,7 +10869,7 @@ async function handleAsk(question, context, conversation, channelMessages, activ
     if (reply.trim()) return reply;
     return "(Nymbot returned an empty response)";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    return botFailText("Nymbot error: something went wrong on our side. Please try again.", "command", e);
   }
 }
 
@@ -10831,7 +10917,7 @@ async function handleSummarize(context, channelMessages, geohash) {
     }
     return "(Nymbot returned an empty response)";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    return botFailText("Nymbot error: something went wrong on our side. Please try again.", "command", e);
   }
 }
 
@@ -11143,7 +11229,7 @@ async function handleTrivia(args, context) {
     }
     return "Couldn't generate a trivia question — try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    return botFailText("Nymbot error: something went wrong on our side. Please try again.", "command", e);
   }
 }
 
@@ -11166,7 +11252,7 @@ async function handleJoke(context) {
     }
     return "\u{1F602} I tried to think of a joke but my circuits got crossed. Try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    return botFailText("Nymbot error: something went wrong on our side. Please try again.", "command", e);
   }
 }
 
@@ -11198,7 +11284,7 @@ async function handleRiddle(context) {
     }
     return "Couldn't generate a riddle — try again!";
   } catch (e) {
-    return "Nymbot error: " + (e.message || String(e));
+    return botFailText("Nymbot error: something went wrong on our side. Please try again.", "command", e);
   }
 }
 
@@ -11613,7 +11699,7 @@ function fetchEventsFromRelay(relayUrl, filter, timeoutMs) {
     }
     var timer = setTimeout(finish, timeoutMs);
     ws.addEventListener("open", function() {
-      var subId = "nymbot-" + Math.random().toString(36).slice(2, 8);
+      var subId = "nymbot-" + botRandomHex(4);
       ws.send(JSON.stringify(["REQ", subId, filter]));
     });
     ws.addEventListener("message", function(msg) {
@@ -12074,6 +12160,8 @@ export {
   gitResumeState,
   mcpGitAdapter,
   fetchPageDocument,
+  isPrivateHostUrl,
+  gitConfigRefused,
   botFreeNetId
 };
 /*! Bundled license information:

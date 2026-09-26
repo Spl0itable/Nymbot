@@ -34,7 +34,7 @@ export function mcpInert(v, max) {
   return max ? s.slice(0, max) : s;
 }
 
-function mcpIpv4Blocked(host) {
+export function mcpIpv4Blocked(host) {
   var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (!m) return null;
   var a = Number(m[1]), b = Number(m[2]), c = Number(m[3]);
@@ -62,6 +62,24 @@ export function mcpIpv6Blocked(host) {
   return false;
 }
 
+export function mcpHostBlocked(rawHost) {
+  var host = String(rawHost || "").toLowerCase().replace(/\.+$/, "");
+  if (!host) return "local";
+  var v6 = mcpIpv6Blocked(host);
+  if (v6 === true) return "address";
+  var v4 = mcpIpv4Blocked(host);
+  if (v4 === true) return "address";
+  if (v4 === null && v6 === null) {
+    if (MCP_BLOCKED_HOSTS[host] || host.indexOf(".") === -1) return "local";
+    for (var i = 0; i < MCP_BLOCKED_SUFFIXES.length; i++) {
+      var suf = MCP_BLOCKED_SUFFIXES[i];
+      if (host.slice(-suf.length) === suf) return "local";
+    }
+    if (!/^[a-z0-9.-]+$/.test(host)) return "invalid";
+  }
+  return "";
+}
+
 export function mcpCheckUrl(raw) {
   var s = typeof raw === "string" ? raw.trim() : "";
   if (!s || s.length > 2000) return { ok: false, error: "A connector needs an https URL." };
@@ -72,22 +90,10 @@ export function mcpCheckUrl(raw) {
   if (!MCP_ALLOWED_PORTS[u.port]) return { ok: false, error: "Connectors must use the standard https port (443 or 8443)." };
   var host = u.hostname.toLowerCase().replace(/\.$/, "");
   if (!host) return { ok: false, error: "That connector URL has no host." };
-  var v6 = mcpIpv6Blocked(host);
-  if (v6 === true) return { ok: false, error: "That address is private or reserved, so a connector cannot use it." };
-  var v4 = mcpIpv4Blocked(host);
-  if (v4 === true) return { ok: false, error: "That address is private or reserved, so a connector cannot use it." };
-  if (v4 === null && v6 === null) {
-    if (MCP_BLOCKED_HOSTS[host] || host.indexOf(".") === -1) {
-      return { ok: false, error: "That host is local, so a connector cannot use it." };
-    }
-    for (var i = 0; i < MCP_BLOCKED_SUFFIXES.length; i++) {
-      var suf = MCP_BLOCKED_SUFFIXES[i];
-      if (host.slice(-suf.length) === suf) {
-        return { ok: false, error: "That host is local, so a connector cannot use it." };
-      }
-    }
-    if (!/^[a-z0-9.-]+$/.test(host)) return { ok: false, error: "That connector URL has an invalid host." };
-  }
+  var kind = mcpHostBlocked(host);
+  if (kind === "address") return { ok: false, error: "That address is private or reserved, so a connector cannot use it." };
+  if (kind === "local") return { ok: false, error: "That host is local, so a connector cannot use it." };
+  if (kind === "invalid") return { ok: false, error: "That connector URL has an invalid host." };
   u.hash = "";
   return { ok: true, url: u.toString() };
 }

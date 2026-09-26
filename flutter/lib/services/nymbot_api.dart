@@ -376,8 +376,29 @@ class NymbotApi {
   Future<ApiResult> giftPeek(EventSigner signer, String code) =>
       call('gift-peek', signer, extra: {'code': code});
 
-  Future<ApiResult> voucherKeys(EventSigner signer) =>
-      call('voucher-keys', signer);
+  Future<ApiResult> voucherKeys() async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.botUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({'action': 'voucher-keys'}),
+          )
+          .timeout(const Duration(seconds: 30));
+      final decoded = jsonDecode(resp.body);
+      return (
+        status: resp.statusCode,
+        data: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{}
+      );
+    } on TimeoutException {
+      return (status: 0, data: {'error': 'timed out'});
+    } catch (_) {
+      return (status: 0, data: {'error': 'network error'});
+    }
+  }
 
   Future<ApiResult> voucherIssue(
           EventSigner signer, Map<String, dynamic> payload) =>

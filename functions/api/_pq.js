@@ -703,7 +703,7 @@ function fetchPqAnnouncementKey(userPubkey, relays, timeoutMs) {
       try { ws = new WebSocket(url); } catch (e) { resolve(out); return; }
       var timer = setTimeout(finish, timeoutMs || 2500);
       ws.addEventListener("open", function () {
-        try { ws.send(JSON.stringify(["REQ", "pq-" + Math.random().toString(36).slice(2, 8), filter])); }
+        try { ws.send(JSON.stringify(["REQ", "pq-" + Array.from(crypto.getRandomValues(new Uint8Array(4)), function (x) { return x.toString(16).padStart(2, "0"); }).join(""), filter])); }
         catch (e) { finish(); }
       });
       ws.addEventListener("message", function (msg) {

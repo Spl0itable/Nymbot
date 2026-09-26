@@ -58,7 +58,7 @@ class _SharedChatScreenState extends State<SharedChatScreen> {
           ),
         'gone' => (
             t('This chat is no longer shared'),
-            t('Whoever shared it stopped sharing.'),
+            t('Whoever shared it stopped sharing, or the link passed its 24 hours.'),
           ),
         'key' => (
             t('This link does not open this chat'),

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pointycastle/digests/sha256.dart';
@@ -9,6 +10,8 @@ import 'keys.dart';
 const List<int> voucherDenoms = [
   1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 ];
+
+const List<String> voucherTiers = ['standard', 'pro'];
 
 const int voucherMaxOutputs = 32;
 
@@ -85,6 +88,39 @@ ECPoint voucherPointFromHex(String hex) {
 }
 
 String voucherPointHex(ECPoint p) => bytesToHex(p.getEncoded(true));
+
+final RegExp _compressedPoint = RegExp(r'^0[23][0-9a-f]{64}$');
+
+Map<String, Map<String, String>>? voucherKeysetKeys(Object? keys) {
+  if (keys is! Map) return null;
+  final out = <String, Map<String, String>>{};
+  for (final tier in voucherTiers) {
+    final byDenom = keys[tier];
+    if (byDenom is! Map) return null;
+    final row = <String, String>{};
+    for (final d in voucherDenoms) {
+      final hex = byDenom['$d'];
+      if (hex is! String || !_compressedPoint.hasMatch(hex)) return null;
+      try {
+        voucherPointFromHex(hex);
+      } catch (_) {
+        return null;
+      }
+      row['$d'] = hex;
+    }
+    out[tier] = row;
+  }
+  return out;
+}
+
+String voucherKeysetId(Map<String, Map<String, String>> keys) {
+  final parts = <String>[
+    for (final tier in voucherTiers)
+      for (final d in voucherDenoms) '$tier:$d:${keys[tier]!['$d']}',
+  ];
+  return bytesToHex(_sha256(Uint8List.fromList(utf8.encode(parts.join('|')))))
+      .substring(0, 16);
+}
 
 ECPoint voucherBlind(Uint8List x, BigInt r) =>
     (voucherHashToCurve(x) + (_secp.G * r))!;

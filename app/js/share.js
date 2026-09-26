@@ -12,6 +12,7 @@
     const MAX_BYTES = 12 * 1024 * 1024;
     const APP = { name: 'nymbot-web', version: '1.0.0' };
     const RECORDS = C.storagePrefix + 'shares';
+    const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
     const DEFAULTS = { upTo: null, reasoning: false, sources: true, files: false, images: false };
 
     function b64url(bytes) {
@@ -209,6 +210,8 @@
             headers: { 'Authorization': await authHeader(signer, 'upload', sha256), 'Content-Type': 'application/octet-stream' },
             body: bytes
         });
+        if (resp.status === 429) throw new Error(t('You have shared a lot recently. Try again in an hour, or stop sharing an older link first.'));
+        if (resp.status === 503) throw new Error(t('Sharing is full right now. Try again later.'));
         if (!resp.ok) throw new Error(t('The chat could not be stored for sharing.') + ' (HTTP ' + resp.status + ')');
         return { host: OWN(), hosts: [OWN()], sha256 };
     }
@@ -374,9 +377,20 @@
         try { localStorage.setItem(RECORDS, JSON.stringify(all)); } catch (_) { }
     }
 
+    function live(record) {
+        const at = Number(record && record.createdAt);
+        return !(at > 0) || Date.now() - at < SHARE_TTL_MS;
+    }
+
     function records(convId) {
-        const list = readAll()[convId];
-        return Array.isArray(list) ? list : [];
+        const all = readAll();
+        const list = Array.isArray(all[convId]) ? all[convId] : [];
+        const kept = list.filter(live);
+        if (kept.length !== list.length) {
+            if (kept.length) all[convId] = kept; else delete all[convId];
+            writeAll(all);
+        }
+        return kept;
     }
 
     function remember(convId, record) {
@@ -557,7 +571,7 @@
                 this.$('shareSend').hidden = typeof navigator.share !== 'function';
                 this.$('sharePost').hidden = !!this.conv.anon;
                 this.ui.modalStatus('shareStatus',
-                    t('Anyone with this link can read what you included. Nymbot only holds ciphertext; the key is in the link.'), 'ok');
+                    t('Anyone with this link can read what you included for the next 24 hours, then it stops opening. Nymbot only holds ciphertext; the key is in the link.'), 'ok');
                 this.renderList();
             } catch (e) {
                 this.ui.modalStatus('shareStatus', (e && e.message) || t('The request failed.'), 'warn');
@@ -616,7 +630,7 @@
             if (!this.current || this.conv.anon) return;
             const comment = await this.ui.ask({
                 title: t('Post to Nostr'),
-                body: t('This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat.'),
+                body: t('This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat until the link expires 24 hours after you shared it.'),
                 area: true,
                 label: t('Comment (optional)'),
                 check: t('I understand this note is public and signed by my key'),

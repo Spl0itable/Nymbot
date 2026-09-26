@@ -119,6 +119,13 @@ class Blossom {
           body: bytes,
         )
         .timeout(const Duration(seconds: 45));
+    if (resp.statusCode == 429) {
+      throw BlossomFailure(t(
+          'You have shared a lot recently. Try again in an hour, or stop sharing an older link first.'));
+    }
+    if (resp.statusCode == 503) {
+      throw BlossomFailure(t('Sharing is full right now. Try again later.'));
+    }
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw BlossomFailure(
           '${t('The chat could not be stored for sharing.')} (HTTP ${resp.statusCode})');

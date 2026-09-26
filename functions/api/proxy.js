@@ -60,6 +60,12 @@ const CORS_HEADERS = {
 };
 
 
+function errorRef() {
+  const b = new Uint8Array(3);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
 export async function onRequest(context) {
   const { request } = context;
 
@@ -109,7 +115,9 @@ export async function onRequest(context) {
       return await handleMediaProxy(url.searchParams.get('url'), request, url.searchParams.get('emoji') === '1');
     }
   } catch (err) {
-    return jsonResponse({ error: err.message || 'Internal error' }, 500);
+    const ref = errorRef();
+    console.error('[proxy] ' + (action || 'media') + ' failed ref ' + ref, err);
+    return jsonResponse({ error: 'Internal error (ref ' + ref + ')' }, 500);
   }
 }
 

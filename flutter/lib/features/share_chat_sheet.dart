@@ -74,7 +74,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
         _current = record;
         _busy = false;
         _status = t(
-            'Anyone with this link can read what you included. Nymbot only holds ciphertext; the key is in the link.');
+            'Anyone with this link can read what you included for the next 24 hours, then it stops opening. Nymbot only holds ciphertext; the key is in the link.');
       });
       await _loadRecords();
     } catch (e) {
@@ -143,7 +143,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(t(
-                    'This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat.')),
+                    'This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat until the link expires 24 hours after you shared it.')),
                 const SizedBox(height: 10),
                 TextField(
                   controller: comment,
@@ -296,7 +296,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                 style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              t('The chat is encrypted on this device before it leaves. The key travels only in the link, so Nymbot stores something it cannot read. Anyone you give the link to can read what you include.'),
+              t('The chat is encrypted on this device before it leaves. The key travels only in the link, so Nymbot stores something it cannot read. Anyone you give the link to can read what you include. The link works for 24 hours.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),

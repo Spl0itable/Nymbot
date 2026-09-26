@@ -37,9 +37,13 @@ class CodePreviewScreen extends StatelessWidget {
 class ArtifactPreview {
   const ArtifactPreview._();
 
-  static const policy = "default-src 'none'; img-src data: blob:; "
-      "style-src 'unsafe-inline' https:; font-src https: data:; "
-      "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
+  static const policy = "default-src 'none'; "
+      "script-src 'unsafe-inline' 'unsafe-eval' https: data: blob:; "
+      "style-src 'unsafe-inline' https: data: blob:; "
+      'img-src https: data: blob:; font-src https: data: blob:; media-src https: data: blob:; '
+      'connect-src https: data: blob:; worker-src blob: data:; child-src blob:; '
+      "frame-src 'none'; object-src 'none'; "
+      "base-uri https:; form-action 'none'";
 
   static const codeLanguages = {'html', 'htm', 'svg'};
 
@@ -48,31 +52,24 @@ class ArtifactPreview {
   static const _meta =
       '<meta http-equiv="Content-Security-Policy" content="$policy">';
 
+  static const _viewport =
+      '<meta name="viewport" content="width=device-width, initial-scale=1">';
+
+  static const _prologue = '<!doctype html><html><head>$_meta$_viewport';
+
   static String document(String body, String lang) {
     final kind = lang.toLowerCase();
     if (kind == 'svg' || kind == 'xml') {
-      return '<!doctype html><html><head>$_meta'
-          '<meta name="viewport" content="width=device-width, initial-scale=1">'
-          '<style>body{margin:0;display:flex;justify-content:center}'
+      return '$_prologue<style>body{margin:0;display:flex;justify-content:center}'
           'svg{max-width:100%;height:auto}</style></head><body>$body</body></html>';
     }
-    final head = RegExp(r'<head(\s[^>]*)?>', caseSensitive: false).firstMatch(body);
-    if (head != null) {
-      return body.replaceRange(head.end, head.end, _meta);
-    }
-    final html = RegExp(r'<html(\s[^>]*)?>', caseSensitive: false).firstMatch(body);
-    if (html != null) {
-      return body.replaceRange(html.end, html.end, '<head>$_meta</head>');
-    }
-    return '<!doctype html><html><head>$_meta'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '</head><body>$body</body></html>';
+    return '$_prologue$body';
   }
 
   static bool allowedNavigation(String url) {
     final u = Uri.tryParse(url);
     if (u == null) return false;
-    return u.scheme == 'about' || u.scheme == 'data';
+    return u.scheme == 'about';
   }
 }
 

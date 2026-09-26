@@ -42,26 +42,10 @@
         return C.apiHost ? `https://${C.apiHost}/api/proxy?url=${encodeURIComponent(u.href)}` : '';
     }
 
-    function inline(text) {
-        let out = esc(text);
+    const MARK = '\u0000';
+    const HOLD = /\u0000(\d+)\u0000/g;
 
-        const codes = [];
-        out = out.replace(/`([^`\n]+)`/g, (_, c) => {
-            codes.push(c);
-            return `@@NYMCODE${codes.length - 1}@@`;
-        });
-
-        out = out.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, alt, href) => {
-            const u = /^https?:\/\//i.test(unesc(href).trim()) ? mediaSrc(unesc(href)) : '';
-            return u ? `<img class="msg-media" src="${esc(u)}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer">` : m;
-        });
-        out = out.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, label, href) => {
-            const u = safeUrl(unesc(href));
-            return u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${label}</a>` : m;
-        });
-        out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (m, pre, u) =>
-            `${pre}<a href="${esc(unesc(u))}" target="_blank" rel="noopener noreferrer">${u}</a>`);
-
+    function emphasis(out) {
         out = out.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>');
         out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
         out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
@@ -73,9 +57,38 @@
         out = out.replace(/\[\^(\d+)\]/g, '<sup class="md-footnote">$1</sup>');
         out = out.replace(/(^|[^\\$])\$([^$\n]{1,200})\$(?!\d)/g, (m, pre, body) =>
             `${pre}<span class="md-math">${body}</span>`);
-
-        out = out.replace(/@@NYMCODE(\d+)@@/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
         return out;
+    }
+
+    function inline(text) {
+        let out = esc(String(text).replace(/\u0000/g, '�'));
+
+        const held = [];
+        const hold = (html, plainText) => {
+            held.push({ html, text: plainText });
+            return `${MARK}${held.length - 1}${MARK}`;
+        };
+        const flat = (s) => s.replace(HOLD, (_, i) => held[Number(i)].text);
+        const restore = (s) => s.replace(HOLD, (_, i) => restore(held[Number(i)].html));
+
+        out = out.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`, c));
+
+        out = out.replace(/!\[([^\]\n]*)\]\(([^)\s\u0000]+)\)/g, (m, alt, href) => {
+            const u = /^https?:\/\//i.test(unesc(href).trim()) ? mediaSrc(unesc(href)) : '';
+            if (!u) return m;
+            const label = esc(unesc(flat(alt)));
+            return hold(`<img class="msg-media" src="${esc(u)}" alt="${label}" loading="lazy" referrerpolicy="no-referrer">`, label);
+        });
+        out = out.replace(/\[([^\]\n]+)\]\(([^)\s\u0000]+)\)/g, (m, label, href) => {
+            const u = safeUrl(unesc(href));
+            return u ? hold(`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`, flat(label)) : m;
+        });
+        out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+)/g, (m, pre, u) => {
+            const href = safeUrl(unesc(u));
+            return href ? pre + hold(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${u}</a>`, u) : m;
+        });
+
+        return restore(emphasis(out));
     }
 
     const SAVE_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none"'

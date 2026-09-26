@@ -9,7 +9,7 @@ import { tarEntries, gitGunzip, gitStageFiles } from "./_gitrun.js";
 
 export var SERVER_RUN_TOOL = "run_command";
 export var SERVER_RUN_ARCHIVE_MAX_BYTES = 60 * 1024 * 1024;
-export var SERVER_RUN_UNPACKED_MAX_BYTES = 96 * 1024 * 1024;
+export var SERVER_RUN_UNPACKED_MAX_BYTES = 32 * 1024 * 1024;
 export var SERVER_RUN_TAIL_CHARS = 12 * 1024;
 export var SERVER_RUN_HEARTBEAT_MS = 15000;
 export var SERVER_RUN_HOLD_SLACK_S = 600;

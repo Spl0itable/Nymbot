@@ -195,11 +195,11 @@ ${NOTE}
                 default it is the messages and their sources only, and the sheet shows a preview of exactly
                 what will be shared.</p>
             <p>The copy is encrypted on your device with a new key made for that link, and only the
-                encrypted copy is uploaded to a media host, signed by a throwaway key rather than by your
+                encrypted copy is uploaded to Nymbot, signed by a throwaway key rather than by your
                 account. The key is the part of the link after the <code>#</code>, which browsers never send
-                to a server, so neither the host nor Nymbot can read what you shared.</p>
-            <p>The app remembers the link for that chat on this device. <strong>Stop sharing</strong> deletes
-                the encrypted copy from the host, and the link stops opening. Anyone who already opened it
+                to a server, so Nymbot cannot read what you shared.</p>
+            <p>A link works for 24 hours, after which Nymbot deletes the encrypted copy and the link stops opening. Until then the app remembers it for that chat on this device, and <strong>Stop sharing</strong> deletes
+                it sooner. Anyone who already opened it
                 may have kept a copy, and that cannot be taken back.</p>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Posting to Nostr</span>
