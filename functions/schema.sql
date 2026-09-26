@@ -111,3 +111,14 @@ CREATE TABLE IF NOT EXISTS pm (
   PRIMARY KEY (pubkey, id)
 );
 CREATE INDEX IF NOT EXISTS pm_pubkey_created ON pm (pubkey, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS shares (
+  hash TEXT NOT NULL,
+  part INTEGER NOT NULL,
+  parts INTEGER NOT NULL,
+  owner TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (hash, part)
+);
+CREATE INDEX IF NOT EXISTS shares_owner ON shares (owner);

@@ -216,7 +216,7 @@
             const swept = Store.sweepOldChats(this.settings.autoDeleteDays || 0);
 
             const list = Store.conversations().filter(c => !c.archived);
-            this.open(list.length ? list[0] : this.newConversation());
+            this.open(this.startingChat() || (list.length ? list[0] : this.newConversation()));
             this.renderList();
             if (swept) {
                 this.toast(swept === 1
@@ -448,10 +448,26 @@
             return conv;
         },
 
+        startingChat() {
+            const m = /(?:^|[#&])chat=([A-Za-z0-9_-]{1,64})/.exec(location.hash || '');
+            const id = m ? m[1] : Store.read('view_chat', null);
+            return id ? Store.conversation(id) : null;
+        },
+
+        showChatInUrl(conv) {
+            try { Store.write('view_chat', conv.id); } catch (_) { }
+            const hash = location.hash || '';
+            if (hash && hash !== '#' && !/^#chat=/.test(hash)) return;
+            const next = '#chat=' + conv.id;
+            if (hash === next) return;
+            try { history.replaceState(history.state, '', location.pathname + location.search + next); } catch (_) { }
+        },
+
         open(conv) {
             if (!conv) return;
             if (this.conv && !this.editing) Store.setDraft(this.conv.id, $('input') ? $('input').value : '');
             this.conv = conv;
+            this.showChatInUrl(conv);
             Notify.viewingChat(conv.id);
             this.attachments = [];
             this.quote = null;

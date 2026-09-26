@@ -13,7 +13,6 @@
         'https://nostr.download'
     ];
 
-    const SHARE_HOSTS = C.shareHosts || [];
 
     // Uploads go through the worker's media proxy: it holds the CORS headers the
     // hosts do not all send, and it keeps the uploader's address off them.
@@ -85,7 +84,6 @@
 
     const Blossom = {
         HOSTS,
-        SHARE_HOSTS,
         throwaway,
 
         /// Uploads bytes and returns the public URL.
@@ -106,21 +104,6 @@
             }
             throw new Error(t('The file could not be uploaded — every media host refused it.')
                 + (last && last.message ? ' (' + last.message + ')' : ''));
-        },
-
-        async spread(bytes, mime, opts) {
-            const options = opts || {};
-            const sha256 = await sha256Hex(bytes);
-            const header = await auth(sha256, options.signer);
-            const tries = await Promise.allSettled(SHARE_HOSTS.map((host) =>
-                putTo(host, bytes, mime, header, options.signal).then(() => host)));
-            const hosts = tries.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-            if (!hosts.length) {
-                const last = tries.map((r) => r.reason).filter(Boolean).pop();
-                throw new Error(t('The file could not be uploaded — every media host refused it.')
-                    + (last && last.message ? ' (' + last.message + ')' : ''));
-            }
-            return { hosts, host: hosts[0], sha256 };
         },
 
         async remove(host, hashHex, opts) {

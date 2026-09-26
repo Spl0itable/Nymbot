@@ -182,9 +182,35 @@
         return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
     }
 
+    const OWN = () => `https://${C.apiHost}`;
+
     function candidates(ref) {
+        if (ref.server === OWN()) return [ref.server];
         const known = C.shareHosts || [];
         return [ref.server].concat(known.filter((h) => h !== ref.server));
+    }
+
+    async function authHeader(signer, verb, hashHex) {
+        const now = Math.floor(Date.now() / 1000);
+        const signed = await signer.sign({
+            kind: 24242,
+            created_at: now,
+            tags: [['t', verb], ['x', hashHex], ['expiration', String(now + 600)]],
+            content: verb === 'delete' ? 'Delete shared chat' : 'Store shared chat'
+        });
+        return 'Nostr ' + btoa(JSON.stringify(signed));
+    }
+
+    async function store(bytes, signer) {
+        const sha256 = await sha256Hex(bytes);
+        const doFetch = window.NymbotEdge ? window.NymbotEdge.fetch.bind(window.NymbotEdge) : fetch;
+        const resp = await doFetch(`https://${C.apiHost}/api/proxy?action=share-put`, {
+            method: 'PUT',
+            headers: { 'Authorization': await authHeader(signer, 'upload', sha256), 'Content-Type': 'application/octet-stream' },
+            body: bytes
+        });
+        if (!resp.ok) throw new Error(t('The chat could not be stored for sharing.') + ' (HTTP ' + resp.status + ')');
+        return { host: OWN(), hosts: [OWN()], sha256 };
     }
 
     async function fetchBlob(ref, fetcher) {
@@ -384,8 +410,7 @@
         }
         const sk = NT().generateSecretKey();
         const skHex = hex(sk);
-        const placed = await window.NymbotBlossom.spread(sealed.bytes, 'application/octet-stream',
-            { signer: signerFor(skHex) });
+        const placed = await store(sealed.bytes, signerFor(skHex));
         const o = Object.assign({}, DEFAULTS, options || {});
         const record = {
             id: hex(crypto.getRandomValues(new Uint8Array(8))),
@@ -529,7 +554,7 @@
                 this.$('shareSend').hidden = typeof navigator.share !== 'function';
                 this.$('sharePost').hidden = !!this.conv.anon;
                 this.ui.modalStatus('shareStatus',
-                    t('Anyone with this link can read what you included. The host only holds ciphertext; the key is in the link.'), 'ok');
+                    t('Anyone with this link can read what you included. Nymbot only holds ciphertext; the key is in the link.'), 'ok');
                 this.renderList();
             } catch (e) {
                 this.ui.modalStatus('shareStatus', (e && e.message) || t('The request failed.'), 'warn');
@@ -548,7 +573,6 @@
                 const main = el('div', 'share-record-main');
                 main.appendChild(el('strong', null, stamp(r.createdAt)));
                 main.appendChild(el('span', null, includedText(r.included || {})));
-                main.appendChild(el('span', 'share-record-host', hostOf(r.server)));
                 row.appendChild(main);
                 const copy = el('button', 'btn btn-small', t('Copy'));
                 copy.type = 'button';
@@ -567,7 +591,7 @@
         async stop(record) {
             const ok = await this.ui.ask({
                 title: t('Stop sharing'),
-                body: t('This deletes the encrypted copy from the media host and forgets the link on this device. Anyone who already opened it may have kept a copy, and that cannot be taken back.'),
+                body: t('This deletes the encrypted copy from Nymbot and forgets the link on this device. Anyone who already opened it may have kept a copy, and that cannot be taken back.'),
                 confirm: t('Stop sharing'),
                 danger: true
             });
@@ -580,8 +604,8 @@
             }
             this.renderList();
             this.ui.modalStatus('shareStatus', result.deleted
-                ? t('Deleted from the host. The link no longer opens. Anyone who already opened it may have kept a copy.')
-                : t('The host did not confirm the delete, so the encrypted copy may stay there until it expires. The link is forgotten on this device. Anyone who already opened it may have kept a copy.'),
+                ? t('Deleted. The link no longer opens. Anyone who already opened it may have kept a copy.')
+                : t('Nymbot did not confirm the delete, so the encrypted copy may still be stored. The link is forgotten on this device. Anyone who already opened it may have kept a copy.'),
             result.deleted ? 'ok' : 'warn');
         },
 

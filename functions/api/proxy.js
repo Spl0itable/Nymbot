@@ -15,7 +15,7 @@
 import { validateZapReceipt, nwcInvoicePaid } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
-import { handleShareBlob, handleShareDelete } from './_share.js';
+import { handleShareBlob, handleShareDelete, handleSharePut } from './_share.js';
 import { mcpIpv6Blocked } from './_mcp.js';
 
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
@@ -89,10 +89,12 @@ export async function onRequest(context) {
       return await handleBlossomUpload(request, url.searchParams.get('server'));
     } else if (action === 'mirror') {
       return await handleBlossomMirror(request, url.searchParams.get('server'));
+    } else if (action === 'share-put') {
+      return await handleSharePut(request, url.searchParams, CORS_HEADERS, context.env);
     } else if (action === 'share-blob') {
-      return await handleShareBlob(request, url.searchParams, CORS_HEADERS);
+      return await handleShareBlob(request, url.searchParams, CORS_HEADERS, context.env);
     } else if (action === 'delete') {
-      return await handleShareDelete(request, url.searchParams, CORS_HEADERS);
+      return await handleShareDelete(request, url.searchParams, CORS_HEADERS, context.env);
     } else if (action === 'geo-relays') {
       return await handleGeoRelays(context);
     } else if (action === 'geocode') {
