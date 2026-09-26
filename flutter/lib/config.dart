@@ -9,6 +9,12 @@ class NymbotConfig {
       'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2';
   static const String botName = 'Nymbot';
 
+  static const List<String> shareHosts = [
+    'https://blossom.yakihonne.com',
+    'https://files.sovbit.host',
+    'https://nostr.download',
+  ];
+
   static const List<String> relays = [
     'wss://relay.damus.io',
     'wss://nos.lol',

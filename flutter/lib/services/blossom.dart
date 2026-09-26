@@ -102,6 +102,29 @@ class Blossom {
         '${last == null ? '' : ' ($last)'}');
   }
 
+  Future<BlossomSpread> spread(
+      Uint8List bytes, String mime, EventSigner signer) async {
+    final sha256 = crypto.sha256.convert(bytes).toString();
+    final header = await _auth(sha256, signer);
+    Object? last;
+    final tries = await Future.wait(NymbotConfig.shareHosts.map((host) async {
+      try {
+        await _putTo(host, bytes, mime, header);
+        return host;
+      } catch (e) {
+        last = e;
+        return null;
+      }
+    }));
+    final accepted = tries.whereType<String>().toList();
+    if (accepted.isEmpty) {
+      throw BlossomFailure(
+          'The file could not be uploaded — every media host refused it.'
+          '${last == null ? '' : ' ($last)'}');
+    }
+    return BlossomSpread(hosts: accepted, sha256: sha256);
+  }
+
   Future<int> remove(String host, String sha256, EventSigner signer) async {
     final header = await _auth(sha256, signer, verb: 'delete');
     final resp = await _client
@@ -129,6 +152,13 @@ class BlossomPlacement {
   final String host;
   final String sha256;
   final String sk;
+}
+
+class BlossomSpread {
+  const BlossomSpread({required this.hosts, required this.sha256});
+  final List<String> hosts;
+  final String sha256;
+  String get host => hosts.first;
 }
 
 class UploadLedger {

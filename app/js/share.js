@@ -182,13 +182,28 @@
         return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
     }
 
+    function candidates(ref) {
+        const known = C.shareHosts || [];
+        return [ref.server].concat(known.filter((h) => h !== ref.server));
+    }
+
     async function fetchBlob(ref, fetcher) {
-        const resp = await (fetcher || fetch)(blobUrl(ref), { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
-        if (resp.status === 404 || resp.status === 410) throw Object.assign(new Error('gone'), { gone: true });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const bytes = new Uint8Array(await resp.arrayBuffer());
-        if (await sha256Hex(bytes) !== ref.sha256) throw new Error('hash');
-        return bytes;
+        let gone = 0;
+        let last = null;
+        const hosts = candidates(ref);
+        for (const server of hosts) {
+            try {
+                const resp = await (fetcher || fetch)(blobUrl({ server, sha256: ref.sha256 }),
+                    { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+                if (resp.status === 404 || resp.status === 410) { gone++; continue; }
+                if (!resp.ok) { last = new Error('HTTP ' + resp.status); continue; }
+                const bytes = new Uint8Array(await resp.arrayBuffer());
+                if (await sha256Hex(bytes) !== ref.sha256) { last = new Error('hash'); continue; }
+                return bytes;
+            } catch (e) { last = e; }
+        }
+        if (gone === hosts.length) throw Object.assign(new Error('gone'), { gone: true });
+        throw last || new Error('unavailable');
     }
 
     function proxied(url) {
@@ -369,13 +384,14 @@
         }
         const sk = NT().generateSecretKey();
         const skHex = hex(sk);
-        const placed = await window.NymbotBlossom.place(sealed.bytes, 'application/octet-stream',
+        const placed = await window.NymbotBlossom.spread(sealed.bytes, 'application/octet-stream',
             { signer: signerFor(skHex) });
         const o = Object.assign({}, DEFAULTS, options || {});
         const record = {
             id: hex(crypto.getRandomValues(new Uint8Array(8))),
             link: link({ server: placed.host, sha256: placed.sha256 }, sealed.key),
             server: placed.host,
+            servers: placed.hosts,
             sha256: placed.sha256,
             createdAt: transcript.sharedAt,
             included: {
@@ -394,12 +410,11 @@
     }
 
     async function stop(convId, record) {
-        let status = 0;
-        try {
-            status = await window.NymbotBlossom.remove(record.server, record.sha256, { signer: signerFor(record.sk) });
-        } catch (_) { status = 0; }
+        const servers = (record.servers && record.servers.length) ? record.servers : [record.server];
+        const done = await Promise.all(servers.map((server) =>
+            window.NymbotBlossom.remove(server, record.sha256, { signer: signerFor(record.sk) }).catch(() => 0)));
         forget(convId, record.id);
-        return { deleted: status === 200 };
+        return { deleted: done.every((status) => status === 200) };
     }
 
     async function postNote(conv, record, comment) {

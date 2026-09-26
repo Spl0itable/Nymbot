@@ -3699,8 +3699,7 @@
             const composer = $('input');
             if (composer) composer.setAttribute('placeholder', this.composerPlaceholder(media));
 
-            $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
-            $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
+            this.paintChatMenu(conv);
 
             if (window.NymbotConnectors) window.NymbotConnectors.refreshChip(this);
             if (ServerRun) ServerRun.refreshChip(this);
@@ -8033,8 +8032,7 @@
             this.menuConvId = convId || null;
             const conv = this.menuChat();
             if (!conv) return;
-            $('menuPin').textContent = conv.pinned ? t('Unpin') : t('Pin');
-            $('menuArchive').textContent = conv.archived ? t('Unarchive') : t('Archive');
+            this.paintChatMenu(conv);
             if (anchor) {
                 // Anchored to the row rather than to the header it lives in,
                 // and kept inside the viewport when the row is near the bottom.
@@ -8048,6 +8046,39 @@
             } else {
                 menu.hidden = false;
             }
+        },
+
+        paintChatMenu(conv) {
+            const menu = $('chatMenu');
+            if (!menu) return;
+            const icons = {
+                'menu-find': 'search', 'share-transcript': 'share',
+                'rename-chat': 'pencil', 'pin-chat': 'star', 'archive-chat': 'archive', 'fork-chat': 'branch',
+                'open-system': 'person', 'open-tags': 'workspace', 'open-stats': 'chart', 'open-caps': 'wallet',
+                'export-md': 'artifacts', 'export-txt': 'terse', 'export-json': 'code',
+                'copy-transcript': 'copy', 'share-chat': 'link', 'clear-chat': 'broom', 'delete-chat': 'close'
+            };
+            menu.querySelectorAll('button[data-act]').forEach((button) => {
+                const name = icons[button.dataset.act];
+                if (!name) return;
+                let label = button.querySelector('.menu-label');
+                if (!label) {
+                    label = document.createElement('span');
+                    label.className = 'menu-label';
+                    label.textContent = button.textContent.trim();
+                    button.textContent = '';
+                    button.appendChild(label);
+                }
+                const was = button.querySelector('svg.icon');
+                if (was) was.remove();
+                const filled = button.dataset.act === 'pin-chat' && !!(conv && conv.pinned);
+                button.insertBefore(Icons.node(name, { size: 16, filled }), label);
+            });
+            const share = $('menuShareTranscript');
+            if (share) share.hidden = typeof navigator.share !== 'function';
+            if (!conv) return;
+            $('menuPin').querySelector('.menu-label').textContent = conv.pinned ? t('Unpin') : t('Pin');
+            $('menuArchive').querySelector('.menu-label').textContent = conv.archived ? t('Unarchive') : t('Archive');
         },
 
         closeChatMenu() {
@@ -8655,6 +8686,18 @@
                     this.writeClipboard(Exporter.clipboardMarkdown(c));
                 },
                 'share-chat': () => { const c = this.menuChat(); this.closeChatMenu(); window.NymbotShare.openFor(this, c); },
+                'menu-find': () => {
+                    const c = this.menuChat();
+                    this.closeChatMenu();
+                    if (c && (!this.conv || this.conv.id !== c.id)) this.open(c);
+                    this.openFind();
+                },
+                'share-transcript': () => {
+                    const c = this.menuChat();
+                    this.closeChatMenu();
+                    if (!c || typeof navigator.share !== 'function') return;
+                    navigator.share({ title: c.title || t('Nymbot chat'), text: Exporter.clipboardMarkdown(c) }).catch(() => { });
+                },
                 'clear-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.clearChat(c); },
                 'delete-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.deleteChat(c); },
                 'conv-filter': (target) => {

@@ -5,6 +5,12 @@ window.NymbotConfig = {
     botName: 'Nymbot',
     botAvatar: '/images/nymbot-icon.png',
 
+    shareHosts: [
+        'https://blossom.yakihonne.com',
+        'https://files.sovbit.host',
+        'https://nostr.download'
+    ],
+
     relays: [
         'wss://relay.damus.io',
         'wss://nos.lol',

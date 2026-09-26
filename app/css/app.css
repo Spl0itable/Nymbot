@@ -701,7 +701,9 @@ kbd {
 .menu.is-floating { position: fixed; top: 0; left: 0; right: auto; z-index: 58; }
 
 .menu button {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
     width: 100%;
     padding: 0.45rem 0.6rem;
     border: 0;
@@ -713,6 +715,7 @@ kbd {
 }
 .menu button:hover { background: var(--bubble-bot); }
 .menu button.danger { color: var(--danger); }
+.menu button > .icon { flex: none; opacity: 0.85; }
 
 .find-bar {
     display: flex;
@@ -1559,17 +1562,19 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     right: 1rem;
     bottom: 7.5rem;
     z-index: 15;
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     display: grid;
     place-items: center;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-    background: var(--bg-raised);
-    color: var(--text-dim);
+    border-radius: 12px;
+    border: 0;
+    background: color-mix(in srgb, var(--primary) 24%, var(--bg-raised));
+    color: var(--primary);
     cursor: pointer;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28), 0 1px 3px rgba(0, 0, 0, 0.2);
 }
+.jump-btn:hover { background: color-mix(in srgb, var(--primary) 32%, var(--bg-raised)); }
+.jump-btn svg { width: 18px; height: 18px; }
 
 /* --- help ----------------------------------------------------------------- */
 
@@ -2460,6 +2465,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .gift-made { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--line); }
 .gift-made-what { font-weight: 600; margin: 0; }
 .gift-made .row-actions { flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+#shareResult .row-actions { flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
 .gift-list-head { font-size: 0.9rem; margin: 1rem 0 0.4rem; }
 .gift-list { display: flex; flex-direction: column; gap: 0.4rem; }
 .gift-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 8px; }

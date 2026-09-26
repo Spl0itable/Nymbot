@@ -310,6 +310,8 @@ async function handleZapVerify(request, context) {
 const ALLOWED_BLOSSOM_HOSTS = new Set([
   'blossom.band',
   'blossom.primal.net',
+  'blossom.yakihonne.com',
+  'files.sovbit.host',
   'nostr.download',
 ]);
 const DEFAULT_BLOSSOM_HOST = 'https://blossom.band';

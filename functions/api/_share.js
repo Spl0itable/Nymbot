@@ -1,6 +1,8 @@
 const SHARE_HOSTS = new Set([
   "blossom.band",
   "blossom.primal.net",
+  "blossom.yakihonne.com",
+  "files.sovbit.host",
   "nostr.download"
 ]);
 

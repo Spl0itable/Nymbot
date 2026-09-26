@@ -69,12 +69,15 @@ class ShareRecord {
     required this.createdAt,
     required this.included,
     required this.sk,
+    List<String>? servers,
     List<String>? notes,
-  }) : notes = notes ?? [];
+  })  : servers = (servers == null || servers.isEmpty) ? [server] : servers,
+        notes = notes ?? [];
 
   final String id;
   final String link;
   final String server;
+  final List<String> servers;
   final String sha256;
   final int createdAt;
   final Map<String, dynamic> included;
@@ -85,6 +88,7 @@ class ShareRecord {
         'id': id,
         'link': link,
         'server': server,
+        'servers': servers,
         'sha256': sha256,
         'createdAt': createdAt,
         'included': included,
@@ -108,6 +112,7 @@ class ShareRecord {
           ? (j['included'] as Map).cast<String, dynamic>()
           : <String, dynamic>{},
       sk: j['sk'] as String,
+      servers: (j['servers'] as List?)?.whereType<String>().toList(),
       notes: (j['notes'] as List?)?.whereType<String>().toList(),
     );
   }
@@ -324,21 +329,47 @@ class ChatShare {
       'https://${NymbotConfig.apiHost}/api/proxy?action=share-blob'
       '&server=${Uri.encodeComponent(server)}&x=${Uri.encodeComponent(sha256)}';
 
-  static Future<Map<String, dynamic>> fetch(ShareRef ref,
+  static List<String> candidates(ShareRef ref) => [
+        ref.server,
+        ...NymbotConfig.shareHosts.where((h) => h != ref.server),
+      ];
+
+  static Future<Uint8List> fetchBlob(ShareRef ref,
       {http.Client? client}) async {
     final c = client ?? http.Client();
-    final resp = await c.get(Uri.parse(blobUrl(ref.server, ref.sha256)),
-        headers: {'User-Agent': NymbotConfig.userAgent});
-    if (resp.statusCode == 404 || resp.statusCode == 410) {
-      throw ShareFailure('gone', gone: true);
+    final hosts = candidates(ref);
+    var gone = 0;
+    Object? last;
+    for (final server in hosts) {
+      try {
+        final resp = await c.get(Uri.parse(blobUrl(server, ref.sha256)),
+            headers: {'User-Agent': NymbotConfig.userAgent});
+        if (resp.statusCode == 404 || resp.statusCode == 410) {
+          gone++;
+          continue;
+        }
+        if (resp.statusCode != 200) {
+          last = ShareFailure('HTTP ${resp.statusCode}');
+          continue;
+        }
+        final bytes = resp.bodyBytes;
+        if (crypto.sha256.convert(bytes).toString() != ref.sha256) {
+          last = ShareFailure('hash');
+          continue;
+        }
+        return bytes;
+      } catch (e) {
+        last = e;
+      }
     }
-    if (resp.statusCode != 200) throw ShareFailure('HTTP ${resp.statusCode}');
-    final bytes = resp.bodyBytes;
-    if (crypto.sha256.convert(bytes).toString() != ref.sha256) {
-      throw ShareFailure('hash');
-    }
-    return open(bytes, ref.key);
+    if (gone == hosts.length) throw ShareFailure('gone', gone: true);
+    if (last is ShareFailure) throw last;
+    throw ShareFailure(last == null ? 'unavailable' : '$last');
   }
+
+  static Future<Map<String, dynamic>> fetch(ShareRef ref,
+      {http.Client? client}) async =>
+      open(await fetchBlob(ref, client: client), ref.key);
 
   static String summary(Map<String, dynamic> transcript) {
     final msgs = (transcript['messages'] as List).cast<Map<String, dynamic>>();
@@ -432,12 +463,13 @@ class ChatShareService {
           'That is too large to share. Leave the images out, or share less of the chat.'));
     }
     final skHex = keys.bytesToHex(keys.generatePrivateKey());
-    final placed = await blossom.place(
+    final placed = await blossom.spread(
         sealed.bytes, 'application/octet-stream', signerFor(skHex));
     final record = ShareRecord(
       id: keys.bytesToHex(keys.randomBytes(8)),
       link: ChatShare.link(placed.host, placed.sha256, sealed.key),
       server: placed.host,
+      servers: placed.hosts,
       sha256: placed.sha256,
       createdAt: transcript['sharedAt'] as int,
       included: {
@@ -457,13 +489,9 @@ class ChatShareService {
   }
 
   Future<bool> stop(String convId, ShareRecord record) async {
-    var status = 0;
-    try {
-      status = await blossom.remove(
-          record.server, record.sha256, signerFor(record.sk));
-    } catch (_) {
-      status = 0;
-    }
+    final done = await Future.wait(record.servers.map((server) => blossom
+        .remove(server, record.sha256, signerFor(record.sk))
+        .catchError((_) => 0)));
     final all = await _all();
     final next = (all[convId] ?? const <ShareRecord>[])
         .where((r) => r.id != record.id)
@@ -474,7 +502,7 @@ class ChatShareService {
       all[convId] = next;
     }
     await _save(all);
-    return status == 200;
+    return done.every((status) => status == 200);
   }
 
   Future<int> postNote(
@@ -505,6 +533,7 @@ class ChatShareService {
               id: r.id,
               link: r.link,
               server: r.server,
+              servers: r.servers,
               sha256: r.sha256,
               createdAt: r.createdAt,
               included: r.included,
