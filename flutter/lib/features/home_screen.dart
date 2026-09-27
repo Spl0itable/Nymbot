@@ -1591,10 +1591,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       video = kind == 'video';
     }
     final ({List<Attachment> files, List<String> problems}) picked;
+    void loading(bool busy) {
+      if (busy && mounted) _say(t('Getting your files ready…'));
+    }
     try {
-      picked = source == 'files'
-          ? await Attachments.pick()
-          : await Attachments.pickMedia(camera: source == 'camera', video: video);
+      picked = source == 'camera'
+          ? await Attachments.capture(video: video)
+          : await Attachments.pick(media: source == 'photos', onLoading: loading);
     } catch (_) {
       _say(t('Could not open that. Check that Nymbot may use it in your '
           'device settings.'));
@@ -2365,6 +2368,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           : null,
                       decoration: InputDecoration(
                         hintText: _composerHint(app.activeMediaModel, app.attachments),
+                        hintMaxLines: 1,
                         hintStyle: TextStyle(
                           fontSize: 12,
                           color: Theme.of(context).hintColor.withValues(alpha: 0.7),

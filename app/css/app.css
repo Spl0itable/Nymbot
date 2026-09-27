@@ -2056,6 +2056,12 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .composer > * { max-width: 820px; margin-left: auto; margin-right: auto; }
 .composer-status { margin-bottom: 0.4rem; font-size: 0.8rem; color: var(--text-dim); }
 .composer-row { display: flex; gap: 0.4rem; align-items: flex-end; }
+.composer-field { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.composer-field .mic-btn { position: absolute; inset-inline-end: 0.2rem; bottom: 0.2rem; width: 30px; height: 30px; border-color: transparent; }
+.composer-field:has(.composer-input:not(.is-empty)) .mic-btn:not(.is-on):not(.is-busy) { display: none; }
+.composer-field:has(.mic-btn:not([hidden])):has(.composer-input.is-empty) .composer-input,
+.composer-field:has(.mic-btn:not([hidden]).is-on) .composer-input,
+.composer-field:has(.mic-btn:not([hidden]).is-busy) .composer-input { padding-inline-end: 2.4rem; }
 .composer textarea { resize: none; max-height: 40vh; }
 
 /* The composer is editable rather than a textarea, so what you write in
@@ -2085,11 +2091,16 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .composer-input.is-empty::before {
     content: attr(placeholder);
     position: absolute;
-    left: 0.75rem;
+    inset-inline-start: 0.75rem;
+    inset-inline-end: 0.75rem;
     top: 0.55rem;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     color: var(--text-faint);
     pointer-events: none;
 }
+.composer-field:has(.mic-btn:not([hidden])) .composer-input.is-empty::before { inset-inline-end: 2.4rem; }
 .composer-input .ce-line { min-height: 1.4em; }
 
 /* The marks stay where you typed them so the text you are editing is still

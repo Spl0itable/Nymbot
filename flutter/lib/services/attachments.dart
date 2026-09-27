@@ -107,11 +107,16 @@ class Attachments {
     return out.takeBytes();
   }
 
-  static Future<({List<Attachment> files, List<String> problems})> pick() async {
+  static Future<({List<Attachment> files, List<String> problems})> pick(
+      {bool media = false, void Function(bool busy)? onLoading}) async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       withReadStream: true,
-      type: FileType.any,
+      type: media ? FileType.media : FileType.any,
+      compressionQuality: 85,
+      onFileLoading: onLoading == null
+          ? null
+          : (status) => onLoading(status == FilePickerStatus.picking),
     );
     if (result == null) return (files: <Attachment>[], problems: <String>[]);
     final problems = <String>[];
@@ -132,14 +137,14 @@ class Attachments {
     return (files: taken.files, problems: [...problems, ...taken.problems]);
   }
 
-  static Future<({List<Attachment> files, List<String> problems})> pickMedia(
-      {bool camera = false, bool video = false}) async {
+  static Future<({List<Attachment> files, List<String> problems})> capture(
+      {bool video = false}) async {
     final picker = ImagePicker();
     final picked = <XFile>[];
-    if (camera && video) {
+    if (video) {
       final clip = await picker.pickVideo(source: ImageSource.camera);
       if (clip != null) picked.add(clip);
-    } else if (camera) {
+    } else {
       final shot = await picker.pickImage(
         source: ImageSource.camera,
         maxWidth: maxImageEdge.toDouble(),
@@ -147,12 +152,6 @@ class Attachments {
         imageQuality: 85,
       );
       if (shot != null) picked.add(shot);
-    } else {
-      picked.addAll(await picker.pickMultipleMedia(
-        maxWidth: maxImageEdge.toDouble(),
-        maxHeight: maxImageEdge.toDouble(),
-        imageQuality: 85,
-      ));
     }
     return takeMedia(picked);
   }
