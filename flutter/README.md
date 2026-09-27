@@ -12,8 +12,8 @@ flutter run
 
 ## Where it points
 
-`lib/config.dart` holds the whole answer: the worker is our own, on
-`nymbot.ai`, and the relay list is the one that worker itself fetches
+`lib/config.dart` holds the whole answer: the worker is Nymchat's, on
+`web.nymchat.app`, and the relay list is the one that worker itself fetches
 from. Credits, conversation threads and the anonymous-mode throwaway key are all
 keyed to your public key, so signing in to either service with the same key
 gives you the same account.
@@ -146,6 +146,69 @@ go to the platform keystore through `flutter_secure_storage`. Conversations and
 preferences go to shared preferences: they are already encrypted to the key on
 the relays, and keeping them out of the keystore keeps its surface to the things
 that must not be readable at rest. Android backups are off entirely.
+
+## Release signing
+
+The release APK is signed with a keystore this repository deliberately does not
+contain. `./scripts/generate-keystore.sh` creates it once —
+`android/app/nymbot-release-key.jks`, plus the `android/key.properties` that
+points Gradle at it and holds its passwords in the clear. Both are gitignored
+and must stay that way: the private key in that file *is* Nymbot's identity on
+Android, and anyone holding it with its password can sign a build every existing
+install will accept as a genuine update.
+
+Losing it is the same problem from the other side, and it is the one that cannot
+be undone. Android refuses an update signed by a different key, so a lost
+keystore strands every install that already exists: the only route forward is
+uninstall and reinstall, which takes the on-device conversation store with it.
+There is no reissue and no recovery — not from Google, not from Zapstore. The
+key has to outlive the machine it was generated on, which is what the backup is
+for.
+
+So, once, immediately after generating it, put all four of these somewhere that
+is neither this checkout nor this machine — a password manager entry, or an
+encrypted volume kept offline:
+
+- `android/app/nymbot-release-key.jks` itself, as a file attachment. It is a
+  couple of kilobytes.
+- The **store password** and the **key password**, read out of
+  `android/key.properties`. They may be the same string.
+- The alias, `nymbot-release`, which `keytool` needs to find the key inside the
+  store.
+- The SHA-256 fingerprint, which is what `assetlinks.json` pins for App Links
+  and what lets you confirm later that a build was signed with the right key:
+
+```sh
+keytool -list -v -keystore android/app/nymbot-release-key.jks -alias nymbot-release
+```
+
+Restoring on a new machine is the reverse and needs no script: drop the `.jks`
+back into `android/app/`, then write `android/key.properties` by hand with the
+four `storePassword` / `keyPassword` / `keyAlias` / `storeFile` lines. The
+generate script refuses to run when a keystore is already present, precisely so
+a restore is never mistaken for a regeneration.
+
+CI signs from the same key without ever committing it — the keystore goes in
+base64 and the passwords go in beside it, as encrypted repository secrets:
+
+```sh
+base64 -i android/app/nymbot-release-key.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_PASSWORD
+gh secret set ANDROID_KEY_ALIAS --body nymbot-release
+```
+
+A missing `key.properties` cannot slip through unnoticed: `signingConfigs`
+reads it unconditionally (`android/app/build.gradle:32`), so an absent file
+leaves `storeFile` null and the build fails outright. What verification catches
+is the subtler case — a restore from backup, or a CI run, that signed with the
+wrong key:
+
+```sh
+apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+```
+
+The certificate it prints should carry the same SHA-256 as the keystore above.
 
 ## Not hammering the gateway
 

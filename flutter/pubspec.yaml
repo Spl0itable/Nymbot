@@ -1,13 +1,14 @@
 name: nymbot
 description: "Nymbot — a private AI assistant. No account, end-to-end encrypted, paid in sats."
 publish_to: "none"
-version: 1.0.7+321
-
+version: 1.0.7+329
 environment:
   sdk: ^3.6.0
 
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   cupertino_icons: any
 
@@ -27,9 +28,13 @@ dependencies:
 
   web_socket_channel: ^3.0.1
   http: ^1.0.0
+  path_provider: ^2.1.5
 
   shared_preferences: ^2.3.2
   flutter_secure_storage: ^9.2.2
+  local_auth: ^2.3.0
+  google_sign_in: ^7.2.0
+  sign_in_with_apple: ^7.0.1
 
   qr_flutter: ^4.1.0
   url_launcher: any
@@ -39,17 +44,31 @@ dependencies:
   file_picker: ^8.1.0
   flutter_tts: ^4.2.0
   share_plus: ^10.1.0
+  image: ^4.3.0
+  image_picker: ^1.1.2
+  webview_flutter: ^4.13.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.2
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/nymbot-icon.png
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
 
-  # Written by `npm run build` from the shared translation cache. `index.json`
-  # is always present (an empty list when nothing is published yet), so the
-  # bundle is valid in a checkout that has never been built.
+  # One assets: key only — a second one silently replaces the first rather
+  # than adding to it, which would drop whichever list came earlier.
+  #
+  # assets/i18n is written by `npm run build` from the shared translation
+  # cache. `index.json` is always present (an empty list when nothing is
+  # published yet), so the bundle is valid in a checkout never built.
   assets:
+    - assets/images/
     - assets/i18n/

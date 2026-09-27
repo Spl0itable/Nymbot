@@ -205,7 +205,7 @@ class PqAnnounce {
         'alg': NymbotConfig.pqAlg,
         'nym': 1,
         'epoch': epoch,
-        'pk': b64,
+        if (signer is LocalSigner) 'pk': b64,
         'pk2': b64,
         'exp': exp,
         'devices': const [],

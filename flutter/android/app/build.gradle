@@ -1,6 +1,6 @@
 plugins {
     id "com.android.application"
-    id "kotlin-android"
+    id "org.jetbrains.kotlin.android"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
 }
@@ -11,6 +11,41 @@ def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
+
+// ---------------------------------------------------------------------------
+// Version code resolution
+//
+// CI/deploy pipelines sometimes inject their own (low) --build-number, which
+// collides with version codes already consumed on Google Play. To keep uploads
+// monotonic we take the highest of:
+//   * the build number declared in pubspec.yaml (source of truth)
+//   * whatever Flutter resolved (flutter.versionCode)
+//   * MIN_PLAY_VERSION_CODE, a floor above everything already on Play
+// ---------------------------------------------------------------------------
+def MIN_PLAY_VERSION_CODE = 329
+
+def pubspecBuildNumber = 0
+def pubspecVersionName = null
+def pubspecFile = file("../../pubspec.yaml")
+if (pubspecFile.exists()) {
+    def versionLine = pubspecFile.readLines().find { it.trim().startsWith("version:") }
+    if (versionLine != null) {
+        def raw = versionLine.split(":", 2)[1].trim().replaceAll("[\"']", "")
+        def parts = raw.split("\\+")
+        pubspecVersionName = parts[0].trim()
+        if (parts.length > 1) {
+            try { pubspecBuildNumber = parts[1].trim().toInteger() } catch (ignored) { }
+        }
+    }
+}
+
+def flutterCode = 0
+try { flutterCode = (flutter.versionCode ?: 0) as int } catch (ignored) { }
+
+def resolvedVersionCode = [pubspecBuildNumber, flutterCode, MIN_PLAY_VERSION_CODE].max()
+def resolvedVersionName = (pubspecVersionName ?: flutter.versionName ?: "1.0.0")
+
+println "[nymbot] resolved Android versionCode=${resolvedVersionCode} versionName=${resolvedVersionName} (pubspec=${pubspecBuildNumber}, flutter=${flutterCode}, floor=${MIN_PLAY_VERSION_CODE})"
 
 android {
     namespace = "ai.nymbot"
@@ -45,8 +80,8 @@ android {
         // secure storage needs.
         minSdk = 24
         targetSdk = 36
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        versionCode = resolvedVersionCode
+        versionName = resolvedVersionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
         ndk {
@@ -76,4 +111,7 @@ dependencies {
     // Enable Java 8+ API desugaring across app and transitive dependencies
     // This satisfies AAR metadata requirements from flutter_local_notifications
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
+    implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'androidx.credentials:credentials:1.5.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
 }

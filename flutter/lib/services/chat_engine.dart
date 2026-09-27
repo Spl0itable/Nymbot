@@ -735,7 +735,7 @@ class ChatEngine {
     final EventSigner signer = useAnon ? await anon.signer() : identity.signer;
     final selfKem = useAnon
         ? anon.kemOf(await anon.ensure())?.publicKey
-        : identity.kemPublicKey;
+        : (identity.rootLocked ? null : identity.kemPublicKey);
 
     final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
     final head =

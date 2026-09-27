@@ -3,9 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>production</string>
-	<!-- Keychain access group for flutter_secure_storage, which is where the
-	     identity key, the post-quantum root and the anonymous-mode state live. -->
+	<string>development</string>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>

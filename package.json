@@ -1,5 +1,5 @@
 {
-  "name": "nymbot-web",
+  "name": "nymbot",
   "version": "1.0.0",
   "description": "Nymbot landing site and knowledge base",
   "private": true,
@@ -11,18 +11,7 @@
     "build": "node build.mjs",
     "i18n": "node i18n/sync.mjs",
     "i18n:list": "node i18n/sync.mjs --list",
-    "i18n:export": "node i18n/export.mjs",
-    "icons:export": "node tools/gen-flutter-icons.mjs",
-    "flutter:sync": "node tools/sync-flutter.mjs",
-    "brands": "node tools/gen-brands.mjs",
-    "brand-assets": "node tools/gen-brand-assets.mjs",
-    "test": "node i18n/test/run.mjs",
-    "test:browser": "node i18n/test/browser.mjs",
-    "test:mobile": "node test/mobile.mjs",
-    "test:app": "node test/app-features.mjs",
-    "test:worker": "node test/wrap-delivery.mjs",
-    "test:catalog": "node test/catalog-generators.mjs",
-    "test:usage": "node --no-warnings test/usage-log.mjs"
+    "i18n:export": "node i18n/export.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

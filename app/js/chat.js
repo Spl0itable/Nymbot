@@ -544,7 +544,7 @@
             const senderPubkey = anon ? sender.pubkey : Identity.pubkey;
             const selfKemPk = anon
                 ? (Anon.kem() ? Anon.kem().publicKey : null)
-                : Identity.kemPk;
+                : (Identity.rootLocked || !Identity._kem ? null : Identity.kemPk);
 
             const repos = reposFor(conv);
             const attachments = opts.attachments || [];

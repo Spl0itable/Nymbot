@@ -1,6 +1,6 @@
 import { build, transform } from "esbuild";
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isRtl, TRANSLATED_LANGUAGES } from "./i18n/languages.mjs";
@@ -271,6 +271,27 @@ console.log(`  ${documents.length} pages: ${documents.map((d) => d.slug ?? "/").
   const say = (label, built) => `${label}: ${built.packs.size} languages`
     + (built.partial.length ? `, ${built.partial.length} incomplete` : "");
   console.log(`  ${say("app packs", app)}; ${say("flutter packs", flutter)}`);
+}
+
+{
+  const appDir = path.join(outDir, "app");
+  const swFile = path.join(appDir, "sw.js");
+  const files = (await readdir(appDir, { recursive: true, withFileTypes: true }))
+    .filter((d) => d.isFile())
+    .map((d) => path.relative(appDir, path.join(d.parentPath ?? d.path, d.name)).split(path.sep).join("/"))
+    .filter((rel) => rel !== "sw.js")
+    .sort();
+  const digest = createHash("sha256");
+  for (const rel of files) {
+    digest.update(rel + "\0");
+    digest.update(createHash("sha256").update(await readFile(path.join(appDir, rel))).digest());
+  }
+  const version = digest.digest("hex").slice(0, 12);
+  const sw = await readFile(swFile, "utf8");
+  const cacheLine = /const CACHE = '[^']*';/;
+  if (!cacheLine.test(sw)) throw new Error("app/sw.js has no `const CACHE = '...';` line to stamp");
+  await writeFile(swFile, sw.replace(cacheLine, `const CACHE = 'nymbot-shell-${version}';`));
+  console.log(`  app cache: nymbot-shell-${version} (${files.length} files)`);
 }
 
 console.log(`  sitemap.xml (index over ${sitemaps.length - 1} language sitemaps), llms.txt, llms-full.txt, 404.html`);

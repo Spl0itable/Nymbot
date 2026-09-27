@@ -1,4 +1,12 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
 #include "Generated.xcconfig"
+
+// The deploy pipeline runs `flutter build ipa` with its own --build-number,
+// which lands in Generated.xcconfig as FLUTTER_BUILD_NUMBER (last upload came
+// out as 4) and collides with builds already on App Store Connect. An
+// assignment placed AFTER the #include wins in an xcconfig, so the archive
+// takes the number below instead of whatever the pipeline injected.
+// Keep this equal to the build number in pubspec.yaml; release_test.dart fails
+// if the two drift apart.
 FLUTTER_BUILD_NAME=1.0.7
-FLUTTER_BUILD_NUMBER=321
+FLUTTER_BUILD_NUMBER=329

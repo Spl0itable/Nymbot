@@ -57,30 +57,30 @@
 		<string>mailto</string>
 		<string>tel</string>
 	</array>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Nymbot uses Face ID to unlock your encrypted identity.</string>
+	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
+	     so no annual self-classification export filing is required. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attaching a picture to a message reads it from your library. When you send it, the picture is uploaded to a picture host under a one-time key and linked in your message.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Taking a photo to attach to a message uses the camera. The photo is only sent when you send the message.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictating a message records a short clip and sends it to Nymbot's server to be turned into text, which you review before anything is sent.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>app.nymchat</string>
+			<string>google-sign-in</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>nymchat</string>
+				<string>com.googleusercontent.apps.435441872913-ejlcpebd2jspm0lvg1l8grlatv56e806</string>
 			</array>
 		</dict>
 	</array>
-	<!-- Identifiers BGTaskScheduler may run; must match AppDelegate's
-	     refreshTaskIdentifier or registration throws at launch. -->
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>app.nymchat.refresh</string>
-	</array>
-	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
-	     so no annual self-classification export filing is required. -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Attaching a picture to a message reads it from your library. It is encrypted with the rest of the message before it leaves the device.</string>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
 </dict>
 </plist>
