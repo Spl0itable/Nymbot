@@ -2,7 +2,7 @@
     'use strict';
 
     const P = window.NymbotConfig.storagePrefix;
-    const NAMES = ['identity', 'signer', 'anon', 'repos', 'connectors', 'shares'];
+    const NAMES = ['identity', 'signer', 'anon', 'repos', 'connectors', 'shares', 'giftCodes', 'pendingInvoices'];
     const PREFIX = 'enc:v1:';
     const CHECK = 'nymbot-vault-ok';
     const ROUNDS = 310000;

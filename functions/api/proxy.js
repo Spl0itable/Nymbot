@@ -52,6 +52,48 @@ const GEO_RELAYS_CACHE_TTL = 300;
 // Translate endpoints, tried in order.
 const TRANSLATE_CACHE_TTL = 86400;
 
+const TRANSLATE_RATE_HOST = 'https://nymbot-translate-rate.invalid';
+const TRANSLATE_IP_PER_MINUTE = 1200;
+const TRANSLATE_IP_PER_HOUR = 20000;
+const TRANSLATE_MINUTE_MS = 60000;
+const TRANSLATE_HOUR_MS = 3600000;
+
+async function translateRateWindow(bucket, ip, units, limit, windowMs) {
+  try {
+    if (typeof caches === 'undefined' || !caches.default) return true;
+    const windowId = Math.floor(Date.now() / windowMs);
+    const key = new Request(`${TRANSLATE_RATE_HOST}/${bucket}?ip=${encodeURIComponent(ip)}&w=${windowId}`);
+    let count = 0;
+    const hit = await caches.default.match(key);
+    if (hit) {
+      const n = parseInt(await hit.text(), 10);
+      if (Number.isFinite(n)) count = n;
+    }
+    if (count + units > limit) return false;
+    await caches.default.put(key, new Response(String(count + units), {
+      headers: { 'Content-Type': 'text/plain', 'Cache-Control': `max-age=${Math.ceil(windowMs / 1000)}` },
+    }));
+    return true;
+  } catch (_) {
+    return true;
+  }
+}
+
+async function translateRateOk(request, env, units) {
+  const bypass = env && typeof env.TRANSLATE_RATE_BYPASS === 'string' ? env.TRANSLATE_RATE_BYPASS : '';
+  if (bypass.length >= 32 && request.headers.get('X-Translate-Key') === bypass) return true;
+  let ip = '';
+  try { ip = request.headers.get('CF-Connecting-IP') || ''; } catch (_) { ip = ''; }
+  if (!ip) return true;
+  const n = Math.max(1, Math.floor(units) || 1);
+  if (!(await translateRateWindow('m', ip, n, TRANSLATE_IP_PER_MINUTE, TRANSLATE_MINUTE_MS))) return false;
+  return await translateRateWindow('h', ip, n, TRANSLATE_IP_PER_HOUR, TRANSLATE_HOUR_MS);
+}
+
+function translateThrottled() {
+  return jsonResponse({ error: 'Too many translation requests. Try again in a minute.' }, 429);
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
@@ -578,7 +620,7 @@ async function handleTranslate(request, context) {
   // its own inference call — the models take one input — so this saves the
   // network, not the work.
   if (Array.isArray(texts)) {
-    return await handleTranslateBatch(texts, source || 'auto', target, context);
+    return await handleTranslateBatch(texts, source || 'auto', target, context, request);
   }
   if (!text) {
     return jsonResponse({ error: 'Missing text or target language' }, 400);
@@ -592,6 +634,7 @@ async function handleTranslate(request, context) {
   const cachePath = `/translate?k=${await sha256Hex(`${sl}\u0000${target}\u0000${q}`)}`;
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
+  if (!(await translateRateOk(request, context.env, 1))) return translateThrottled();
 
   let result;
   try {
@@ -638,7 +681,7 @@ const TRANSLATE_BATCH_MAX = 25;
 const TRANSLATE_BATCH_BYTES = 20000;
 const TRANSLATE_BATCH_CONCURRENCY = 4;
 
-async function handleTranslateBatch(texts, source, target, context) {
+async function handleTranslateBatch(texts, source, target, context, request) {
   if (texts.length === 0) return jsonResponse({ translations: [] });
   if (texts.length > TRANSLATE_BATCH_MAX) {
     return jsonResponse({ error: `Too many strings (max ${TRANSLATE_BATCH_MAX})` }, 400);
@@ -648,6 +691,8 @@ async function handleTranslateBatch(texts, source, target, context) {
   if (total > TRANSLATE_BATCH_BYTES) {
     return jsonResponse({ error: `Batch too large (max ${TRANSLATE_BATCH_BYTES} chars)` }, 400);
   }
+  const work = items.filter((t) => t.trim()).length;
+  if (work && !(await translateRateOk(request, context.env, work))) return translateThrottled();
 
   const ai = context.env && context.env.AI;
   const out = new Array(items.length).fill(null);

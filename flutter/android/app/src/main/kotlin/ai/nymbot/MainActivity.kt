@@ -3,12 +3,17 @@ package ai.nymbot
 import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.PersistableBundle
 import android.provider.OpenableColumns
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
@@ -35,7 +40,9 @@ import javax.crypto.spec.GCMParameterSpec
 class MainActivity : FlutterFragmentActivity() {
     private var intents: MethodChannel? = null
     private val pending = mutableListOf<Map<String, Any?>>()
-    private val maxSharedBytes = 16 * 1024 * 1024
+    private val maxSharedBytes = 50 * 1024 * 1024
+    private val maxSharedTotal = 80 * 1024 * 1024
+    private val maxSharedFiles = 10
     private var recorder: MediaRecorder? = null
     private var recording: File? = null
     private var waitingForMic: MethodChannel.Result? = null
@@ -77,15 +84,24 @@ class MainActivity : FlutterFragmentActivity() {
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/secure")
             .setMethodCallHandler { call, result ->
-                if (call.method == "secure") {
-                    if (call.arguments == true) {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                    } else {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                when (call.method) {
+                    "secure" -> {
+                        if (call.arguments == true) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        }
+                        result.success(null)
                     }
-                    result.success(null)
-                } else {
-                    result.notImplemented()
+                    "copySecret" -> {
+                        val text = call.argument<String>("text")
+                        if (text == null) {
+                            result.error("failed", null, null)
+                        } else {
+                            result.success(copySecret(text))
+                        }
+                    }
+                    else -> result.notImplemented()
                 }
             }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/vault_key")
@@ -136,6 +152,21 @@ class MainActivity : FlutterFragmentActivity() {
             }
             else -> result.notImplemented()
         }
+    }
+
+    private fun copySecret(text: String): Boolean = try {
+        val clip = ClipData.newPlainText("", text)
+        val extras = PersistableBundle()
+        if (Build.VERSION.SDK_INT >= 33) {
+            extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        } else {
+            extras.putBoolean("android.content.extra.IS_SENSITIVE", true)
+        }
+        clip.description.extras = extras
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+        true
+    } catch (e: Exception) {
+        false
     }
 
     private fun newSignerId(): String = java.util.UUID.randomUUID().toString()
@@ -355,9 +386,14 @@ class MainActivity : FlutterFragmentActivity() {
                 return mapOf("type" to "link", "url" to url)
             }
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
-                val text = intent.getStringExtra(Intent.EXTRA_TEXT)
-                val uris = streams(intent)
-                val files = uris.take(10).mapNotNull { file(it) }
+                val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+                val files = mutableListOf<Map<String, Any>>()
+                var budget = maxSharedTotal
+                for (uri in streams(intent).take(maxSharedFiles)) {
+                    val got = file(uri, minOf(maxSharedBytes, budget)) ?: continue
+                    budget -= (got["bytes"] as ByteArray).size
+                    files.add(got)
+                }
                 if (text.isNullOrBlank() && files.isEmpty()) return null
                 return mapOf("type" to "share", "text" to text, "files" to files)
             }
@@ -401,10 +437,15 @@ class MainActivity : FlutterFragmentActivity() {
         return owner?.packageName != packageName
     }
 
-    private fun file(uri: Uri): Map<String, Any>? = if (!foreign(uri)) null else try {
-        var name = "shared"
+    private fun file(uri: Uri, limit: Int): Map<String, Any>? = if (!foreign(uri)) null else try {
+        var name: String? = null
         contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0)?.let { name = it }
+            if (c.moveToFirst()) name = c.getString(0)
+        }
+        val mime = try {
+            contentResolver.getType(uri)
+        } catch (e: Exception) {
+            null
         }
         val bytes = contentResolver.openInputStream(uri)?.use { stream ->
             val out = java.io.ByteArrayOutputStream()
@@ -414,14 +455,44 @@ class MainActivity : FlutterFragmentActivity() {
                 val n = stream.read(buffer)
                 if (n < 0) break
                 total += n
-                if (total > maxSharedBytes) return@use null
+                if (total > limit) return@use null
                 out.write(buffer, 0, n)
             }
             out.toByteArray()
         }
-        if (bytes == null) null else mapOf("name" to name, "bytes" to bytes)
+        if (bytes == null) null else mapOf("name" to label(name, mime), "bytes" to bytes)
     } catch (e: Exception) {
         null
+    }
+
+    private fun label(raw: String?, mime: String?): String {
+        var name = (raw ?: "").substringAfterLast('/').substringAfterLast('\\')
+        name = name.filter { !Character.isISOControl(it) && Character.getType(it) != Character.FORMAT.toInt() }
+        name = name.trim().trimStart('.').trim()
+        if (name.length > 120) {
+            val dot = name.lastIndexOf('.')
+            val ext = if (dot > 0 && name.length - dot <= 10) name.substring(dot) else ""
+            name = name.take(120 - ext.length) + ext
+        }
+        if (name.isEmpty()) name = "shared"
+        if (!name.contains('.')) {
+            val ext = extensionFor(mime)
+            if (ext != null) name = "$name.$ext"
+        }
+        return name
+    }
+
+    private fun extensionFor(mime: String?): String? {
+        val type = mime?.lowercase()?.substringBefore(';')?.trim() ?: return null
+        return when (type) {
+            "image/jpeg" -> "jpg"
+            "video/quicktime" -> "mov"
+            "text/plain" -> "txt"
+            "text/markdown" -> "md"
+            "application/pdf" -> "pdf"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+            else -> android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(type)
+        }
     }
 
     private class Reply(private val result: MethodChannel.Result) {

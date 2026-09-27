@@ -613,7 +613,7 @@
             const kids = el('ul', 'task-children');
             for (const c of it.children) {
                 const k = el('li', 'task-child');
-                if (it.favicons) k.appendChild(favicon(c));
+                if (it.favicons && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(c) && c.length <= 253) k.appendChild(favicon(c));
                 k.appendChild(el('span', '', c));
                 kids.appendChild(k);
             }

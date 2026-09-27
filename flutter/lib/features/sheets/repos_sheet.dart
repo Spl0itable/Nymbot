@@ -142,9 +142,13 @@ class _ReposSheetState extends State<_ReposSheet> {
       });
       return;
     }
+    final wasWhere = _where(_provider, _host.text);
+    final nowWhere = _where(forge.provider, forge.host);
+    final tokenDropped = _token.text.trim().isNotEmpty && wasWhere != nowWhere;
     setState(() {
       _looking = false;
       _announced = found;
+      if (tokenDropped) _token.clear();
       _provider = forge.provider;
       _host.text = forge.host;
       _repo.text = forge.repo;
@@ -156,10 +160,20 @@ class _ReposSheetState extends State<_ReposSheet> {
       }
       if (forge.guessed) {
         parts.add(t('The host is self-hosted, so the provider is a guess — change it if that is wrong.'));
+        parts.add(t('Only paste a token that was created on {host}.', {'host': forge.host}));
       }
-      parts.add(t('Add a token for {host} to read it.', {'host': forge.host}));
+      parts.add(tokenDropped
+          ? t('The token you had was for {was}, so it was cleared. Enter a token for {host}.',
+              {'was': wasWhere, 'host': forge.host})
+          : t('Add a token for {host} to read it.', {'host': forge.host}));
       _error = parts.join(' ');
     });
+  }
+
+  static String _where(String provider, String host) {
+    const fallback = {'github': 'github.com', 'gitlab': 'gitlab.com', 'gitea': 'codeberg.org'};
+    final typed = host.trim();
+    return (typed.isNotEmpty ? typed : (fallback[provider] ?? '')).toLowerCase();
   }
 
   /// The announcement only rides along if the form still points at what it
@@ -445,7 +459,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                 ),
               ),
             if (app.repos.isNotEmpty)
-              Row(
+              Wrap(
                 children: [
                   TextButton(
                     onPressed: () => app.setReposHere(const []),
@@ -576,6 +590,22 @@ class _ReposSheetState extends State<_ReposSheet> {
                 if (_token.text.trim().isEmpty || _repo.text.trim().isEmpty) {
                   setState(() =>
                       _error = t('A token and a repository are both needed.'));
+                  return;
+                }
+                final before = _editingId == null
+                    ? null
+                    : app.repos.where((r) => r.id == _editingId).firstOrNull;
+                final nowWhere = _where(_provider, _host.text);
+                if (before != null &&
+                    before.token.isNotEmpty &&
+                    _token.text.trim() == before.token &&
+                    nowWhere != _where(before.provider, before.host)) {
+                  setState(() {
+                    _token.clear();
+                    _error = t(
+                        'Enter the token for {host} again. A saved token is only sent to the host it was added for.',
+                        {'host': nowWhere});
+                  });
                   return;
                 }
                 await app.saveRepo(

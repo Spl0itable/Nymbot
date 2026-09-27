@@ -20,6 +20,8 @@
     const SUMMARY_COMMAND = 80;
     const COMMAND_KEPT = 8000;
     const FILES_MAX = 200;
+    const STAGED_KEPT = 40;
+    const STAGED_SHOWN = 8;
 
     let info = null;
     let loading = null;
@@ -607,7 +609,59 @@
             : t('Server runs are off for this chat.'));
     }
 
+    function stagedFrom(p) {
+        const list = Array.isArray(p.stagedFiles) ? p.stagedFiles : [];
+        const files = [];
+        for (const f of list) {
+            const path = typeof f === 'string' ? f : String((f && f.path) || '');
+            if (!path) continue;
+            if (files.length >= STAGED_KEPT) break;
+            const item = { path: path.slice(0, 400) };
+            if (f && typeof f === 'object') {
+                if (Number(f.added) > 0) item.added = Math.floor(Number(f.added));
+                if (Number(f.removed) > 0) item.removed = Math.floor(Number(f.removed));
+                if (f.deleted === true) item.deleted = true;
+            }
+            files.push(item);
+        }
+        if (!files.length) return null;
+        const extra = Math.max(0, list.length - files.length);
+        const more = p.stagedMore === true ? Math.max(1, extra) : Math.max(0, Math.floor(Number(p.stagedMore) || 0)) + extra;
+        return {
+            branch: p.stagedBranch ? String(p.stagedBranch).slice(0, 200) : '',
+            files,
+            more,
+            unreviewed: p.unreviewedStaged === true
+        };
+    }
+
+    function stagedNode(staged) {
+        const box = el('div', 'server-run-staged');
+        box.appendChild(el('div', 'server-run-meta', staged.branch
+            ? t('Staged changes on {branch}:', { branch: staged.branch })
+            : t('Staged changes:')));
+        const list = el('ul', 'server-run-staged-files');
+        for (const f of staged.files.slice(0, STAGED_SHOWN)) {
+            const row = el('li', 'server-run-staged-file');
+            row.appendChild(el('span', 'server-run-staged-path', f.path));
+            const bits = f.deleted
+                ? t('deleted')
+                : [f.added ? '+' + f.added : '', f.removed ? '\u2212' + f.removed : ''].filter(Boolean).join(' ');
+            if (bits) row.appendChild(el('span', 'server-run-staged-diff', bits));
+            list.appendChild(row);
+        }
+        box.appendChild(list);
+        const more = staged.more + Math.max(0, staged.files.length - STAGED_SHOWN);
+        if (more > 0) box.appendChild(el('div', 'server-run-meta server-run-staged-more', t('+{n} more', { n: more })));
+        if (staged.unreviewed) {
+            box.appendChild(el('div', 'pending-tool-warn server-run-staged-warn',
+                t("You haven't reviewed these staged changes. If you allow this run, they go to the server with it.")));
+        }
+        return box;
+    }
+
     function pendingFrom(p, token) {
+        const staged = stagedFrom(p);
         return {
             kind: 'server-run',
             id: String(p.id || ''),
@@ -617,6 +671,7 @@
             maxCredits: Math.max(0, Number(p.maxCredits) || 0),
             repo: p.repo ? String(p.repo).slice(0, 200) : '',
             team: !!p.team,
+            staged,
             token,
             state: 'waiting'
         };
@@ -635,6 +690,7 @@
         card.appendChild(el('pre', 'pending-tool-args server-run-command', p.command));
         card.appendChild(el('div', 'server-run-meta', t('Time limit: {time}', { time: timeLabel(p.timeoutSec) })));
         card.appendChild(el('div', 'server-run-price', t('Up to {credits} Pro credits', { credits: credits(p.maxCredits) })));
+        if (p.staged && Array.isArray(p.staged.files) && p.staged.files.length) card.appendChild(stagedNode(p.staged));
         if (p.state === 'allowed') {
             card.appendChild(el('div', 'pending-tool-note', t('Allowed once.')));
             return card;

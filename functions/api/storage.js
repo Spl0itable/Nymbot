@@ -38,6 +38,7 @@ import {
   buildGiftWrappedDMPair,
   verifyClientAuth,
   enforceAuthReplay,
+  authReplayRequired,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -55,6 +56,7 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
+import { mcpHostBlocked } from "./_mcp.js";
 
 function shopKnown(id) {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(SHOP_CATALOG, id);
@@ -138,6 +140,18 @@ function shopItemAvailability(cat, now) {
   return null;
 }
 
+function shopClaimVisibleTo(claim, userPubkey) {
+  if (!claim || typeof claim !== "object") return false;
+  var payer = String(claim.paidBy || "").toLowerCase();
+  var owner = String(claim.pubkey || "").toLowerCase();
+  return payer === userPubkey || owner === userPubkey;
+}
+
+function shopClaimReplay(claim, userPubkey) {
+  var owner = String(claim.pubkey || "").toLowerCase();
+  var own = owner === userPubkey;
+  return { itemId: claim.itemId, code: own ? claim.code : null, gift: claim.gift, recipient: claim.pubkey, alreadyClaimed: true };
+}
 
 function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
@@ -213,7 +227,20 @@ async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
 // per-request signatures are skipped. The HTTP path verifies each request.
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
+  if (context && context._storageAuthed && context._storageAuthed.body === body && context._storageAuthed.pubkey === userPubkey) return true;
   return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body });
+}
+
+async function storageReplayRefusal(context, body) {
+  if (!body || !context || context._wsAuthedPubkey || !authReplayRequired(body.action, context.env || {})) return null;
+  var pk = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(pk) || !clientAuthOk(context, body, pk)) return null;
+  context._storageAuthed = { body: body, pubkey: pk };
+  var rp = await enforceAuthReplay(ledgerCall, context.env, body.auth && body.auth.id);
+  if (rp.ok) return null;
+  return new Response(JSON.stringify({ error: rp.error }), {
+    status: rp.status, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+  });
 }
 
 var STORAGE_PQ_RELAYS = [
@@ -333,14 +360,6 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (!clientAuthOk(context, body, userPubkey)) {
     return json({ error: "Authentication failed" }, 401);
   }
-  // The replay nonce protects per-request HTTP auth. Over the WebSocket the
-  // connection is authenticated once, so there is no per-request nonce; the
-  // Ledger Durable Object enforces double-spend safety server-side instead.
-  var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
-  if (!context._wsAuthedPubkey && SHOP_MONEY_ACTIONS[body.action]) {
-    var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
-    if (!rp.ok) return json({ error: rp.error }, rp.status);
-  }
 
   if (body.action === "shop-get") {
     var rec = await shopGet(env.DB_SHOP, userPubkey);
@@ -435,7 +454,8 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!/^[0-9a-f]{64}$/i.test(invoiceId)) return json({ error: "Invalid invoice reference." }, 400);
     var prevClaim = await invoiceGet(env.DB_INVOICES, "shop", "claimed", invoiceId);
     if (prevClaim) {
-      return json({ itemId: prevClaim.itemId, code: prevClaim.code, gift: prevClaim.gift, recipient: prevClaim.pubkey, alreadyClaimed: true });
+      if (!shopClaimVisibleTo(prevClaim, userPubkey)) return json({ error: "This invoice belongs to a different user." }, 403);
+      return json(shopClaimReplay(prevClaim, userPubkey));
     }
     var pending = await invoiceGet(env.DB_INVOICES, "shop", "pending", invoiceId);
     if (!pending) return json({ error: "Unknown or expired invoice." }, 404);
@@ -471,7 +491,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (claimRes && claimRes._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
     if (claimRes && claimRes.alreadyClaimed) {
       var prev = claimRes.prev;
-      if (prev) return json({ itemId: prev.itemId, code: prev.code, gift: prev.gift, recipient: prev.pubkey, alreadyClaimed: true });
+      if (prev && shopClaimVisibleTo(prev, userPubkey)) return json(shopClaimReplay(prev, userPubkey));
       return json({ error: "This payment was already claimed." }, 409);
     }
     if (claimRes && claimRes.soldOut) {
@@ -491,9 +511,9 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       giftEvent = await buildStoragePqDM(env, botPrivkey, botPubkey, recipient, giftMsg);
     }
     return json({
-      itemId: pending.itemId, code: code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
+      itemId: pending.itemId, code: isGift ? null : code, gift: isGift, recipient: recipient, giftEvent: giftEvent,
       edition: claimRes.edition || null,
-      bundle: bundleItems || null,
+      bundle: bundleItems ? (isGift ? bundleItems.map(function (b) { return { itemId: b.itemId }; }) : bundleItems) : null,
       owned: isGift ? undefined : crec.owned, active: isGift ? undefined : crec.active
     });
   }
@@ -604,24 +624,25 @@ async function handleSettingsAction(context, body) {
       ? body.contentHash.toLowerCase() : null;
     var prevDoc = null;
     try {
-      prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
+      prevDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at, LENGTH(blob) AS len FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
     } catch (e) { }
     if (contentHash && prevDoc && prevDoc.content_hash === contentHash) {
       return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
     }
     // Cap distinct categories per user to bound storage from runaway splitting.
-    if (!prevDoc) {
+    var prevLen = prevDoc ? (Number(prevDoc.len) || 0) : 0;
+    if (!prevDoc || body.blob.length > prevLen) {
       try {
         var cntRow = await env.DB_SETTINGS.prepare(
           "SELECT COUNT(*) AS n, SUM(LENGTH(blob)) AS bytes, SUM(CASE WHEN category LIKE 'nymbot-%' THEN 1 ELSE 0 END) AS bot FROM settings WHERE pubkey = ?"
         ).bind(userPubkey).first();
-        if (cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
+        if (!prevDoc && cntRow && (cntRow.n || 0) >= SETTINGS_MAX_CATEGORIES) {
           return json({ error: "Too many settings categories." }, 429);
         }
-        if (cntRow && /^nymbot-/i.test(cat) && (cntRow.bot || 0) >= SETTINGS_MAX_NYMBOT_CATEGORIES) {
+        if (!prevDoc && cntRow && /^nymbot-/i.test(cat) && (cntRow.bot || 0) >= SETTINGS_MAX_NYMBOT_CATEGORIES) {
           return json({ error: "Too many settings categories." }, 429);
         }
-        if (cntRow && (Number(cntRow.bytes) || 0) + body.blob.length > SETTINGS_MAX_BYTES) {
+        if (cntRow && (Number(cntRow.bytes) || 0) - prevLen + body.blob.length > SETTINGS_MAX_BYTES) {
           return json({ error: "Settings storage is full." }, 413);
         }
       } catch (e) { }
@@ -806,6 +827,7 @@ async function handleProfileAction(context, body) {
 var PM_EVENT_MAX = 96 * 1024;
 var CHANNEL_EVENT_MAX = 64 * 1024;
 var CHANNEL_TTL_MS = 24 * 60 * 60 * 1000;
+var CHANNEL_FUTURE_SKEW_S = 600;
 var ZAP_EVENT_MAX = 32 * 1024;
 
 // Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
@@ -851,8 +873,16 @@ function readCachePutRaw(context, path, bodyText, contentType, ttlSeconds) {
 }
 var STORAGE_RATE_HOST = "https://nymchat-rate.invalid";
 var PM_DEPOSIT_RATE = 600;
+var PM_DEPOSIT_IP_RATE = 3000;
 var ZAP_PUT_RATE = 300;
 var STORAGE_RATE_WINDOW_MS = 60000;
+
+function storageRequestIp(context) {
+  try {
+    var h = context && context.request && context.request.headers;
+    return (h && typeof h.get === "function" && h.get("CF-Connecting-IP")) || "";
+  } catch (e) { return ""; }
+}
 
 async function storageRateTake(bucket, who, units, limit) {
   try {
@@ -1063,7 +1093,9 @@ async function handlePmAction(context, body) {
     var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
     var depNow = Date.now();
-    if (!(await storageRateTake("pm-deposit", userPubkey, Math.max(1, depEvents.length), PM_DEPOSIT_RATE))) {
+    var depUnits = Math.max(1, depEvents.length);
+    if (!(await storageRateTake("pm-deposit", userPubkey, depUnits, PM_DEPOSIT_RATE)) ||
+      !(await storageRateTake("pm-deposit-ip", storageRequestIp(context), depUnits, PM_DEPOSIT_IP_RATE))) {
       return json({ error: "Too many messages deposited. Try again in a minute." }, 429);
     }
     var depCeil = Math.floor(depNow / 1000);
@@ -1245,8 +1277,8 @@ async function handleChannelAction(context, body) {
         : "";
       rows = (await replica(env.DB_CHANNELS).prepare(
         "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ")"
-        + authorClause + " AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
-      ).bind(...reqChannels, ...reqAuthors, floorSec, isSingle ? 500 : 1500).all()).results || [];
+        + authorClause + " AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?"
+      ).bind(...reqChannels, ...reqAuthors, floorSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var zapRows = [];
     if (rows.length) {
@@ -1510,6 +1542,245 @@ function zapIsValidReceipt(ev, nowMs) {
   } catch (e) { return false; }
 }
 
+var ZAP_LNURL_TIMEOUT_MS = 4000;
+var ZAP_LNURL_MAX_BYTES = 65536;
+var ZAP_LNURL_MAX_REDIRECTS = 3;
+var ZAP_LNURL_TTL_S = 600;
+var ZAP_LNURL_MISS_TTL_S = 60;
+var ZAP_LNURL_MAX_LOOKUPS = 20;
+var ZAP_LNURL_MEMO_MAX = 2000;
+var zapLnurlMemo = new Map();
+var BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+function zapBech32Lnurl(raw) {
+  var s = String(raw || "").trim().toLowerCase();
+  if (s.indexOf("lightning:") === 0) s = s.slice(10);
+  var sep = s.lastIndexOf("1");
+  if (s.slice(0, sep) !== "lnurl" || s.length > 2048 || s.length - sep < 8) return null;
+  var words = [];
+  for (var i = sep + 1; i < s.length; i++) {
+    var v = BECH32_CHARSET.indexOf(s.charAt(i));
+    if (v === -1) return null;
+    words.push(v);
+  }
+  words = words.slice(0, -6);
+  var acc = 0;
+  var bits = 0;
+  var bytes = [];
+  for (var j = 0; j < words.length; j++) {
+    acc = (acc << 5) | words[j];
+    bits += 5;
+    while (bits >= 8) {
+      bits -= 8;
+      bytes.push((acc >> bits) & 0xff);
+    }
+    acc &= (1 << bits) - 1;
+  }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)); } catch (e) { return null; }
+}
+
+function zapLnurlSafe(url) {
+  var u;
+  try { u = new URL(url); } catch (e) { return null; }
+  if (u.protocol !== "https:" || u.username || u.password) return null;
+  if (u.port && u.port !== "443") return null;
+  if (mcpHostBlocked(u.hostname) !== "") return null;
+  u.hash = "";
+  return u.toString();
+}
+
+function zapLnurlFromProfile(ev) {
+  if (!ev || typeof ev.content !== "string") return null;
+  var meta;
+  try { meta = JSON.parse(ev.content); } catch (e) { return null; }
+  if (!meta || typeof meta !== "object") return null;
+  var lud16 = typeof meta.lud16 === "string" ? meta.lud16.trim().toLowerCase() : "";
+  var m = /^([a-z0-9._+-]{1,64})@([a-z0-9.-]{1,253})$/.exec(lud16);
+  if (m) return zapLnurlSafe("https://" + m[2] + "/.well-known/lnurlp/" + encodeURIComponent(m[1]));
+  if (typeof meta.lud06 === "string") {
+    var decoded = zapBech32Lnurl(meta.lud06);
+    if (decoded) return zapLnurlSafe(decoded);
+  }
+  return null;
+}
+
+async function zapRecipientProfileStored(env, pubkey) {
+  var cached = await readCacheGet("/profile/" + pubkey);
+  if (cached && cached.rec && cached.rec.event) return cached.rec.event;
+  if (!hasD1(env.DB_PROFILES)) return null;
+  try {
+    var row = await replica(env.DB_PROFILES).prepare("SELECT event FROM profiles WHERE pubkey = ?").bind(pubkey).first();
+    var ev = row && typeof row.event === "string" ? JSON.parse(row.event) : null;
+    return ev && ev.pubkey === pubkey && ev.kind === 0 ? ev : null;
+  } catch (e) { return null; }
+}
+
+var ZAP_PROFILE_RELAY_TIMEOUT_MS = 2500;
+var zapRelayProfileMemo = new Map();
+
+function zapFetchRelayProfiles(pubkey, relays, timeoutMs) {
+  var filter = { kinds: [0], authors: [pubkey], limit: 3 };
+  function fromRelay(url) {
+    return new Promise(function (resolve) {
+      var out = [];
+      var done = false;
+      var ws;
+      var timer;
+      function finish() {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch (e) { }
+        resolve(out);
+      }
+      try { ws = new WebSocket(url); } catch (e) { resolve(out); return; }
+      timer = setTimeout(finish, timeoutMs);
+      ws.addEventListener("open", function () {
+        try { ws.send(JSON.stringify(["REQ", "zp-" + bytesToHex(crypto.getRandomValues(new Uint8Array(4))), filter])); }
+        catch (e) { finish(); }
+      });
+      ws.addEventListener("message", function (msg) {
+        try {
+          var data = JSON.parse(msg.data);
+          if (Array.isArray(data)) {
+            if (data[0] === "EVENT" && data[2] && out.length < 10) out.push(data[2]);
+            else if (data[0] === "EOSE") finish();
+          }
+        } catch (e) { }
+      });
+      ws.addEventListener("error", finish);
+      ws.addEventListener("close", finish);
+    });
+  }
+  return Promise.all((relays || []).map(fromRelay)).then(function (lists) {
+    var all = [];
+    for (var i = 0; i < lists.length; i++) all = all.concat(lists[i]);
+    return all;
+  }).catch(function () { return []; });
+}
+
+async function zapRecipientRelayProfile(context, pubkey) {
+  var now = Date.now();
+  var memo = zapRelayProfileMemo.get(pubkey);
+  if (memo && memo.exp > now) return memo.ev;
+  var key = "/zap-profile/" + pubkey;
+  var edge = await readCacheGet(key);
+  var newest = null;
+  if (edge && Object.prototype.hasOwnProperty.call(edge, "ev")) {
+    newest = edge.ev && profileIsValidEvent(edge.ev, pubkey) ? edge.ev : null;
+  } else {
+    var events = await zapFetchRelayProfiles(pubkey, STORAGE_PQ_RELAYS, ZAP_PROFILE_RELAY_TIMEOUT_MS);
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      if (!ev || ev.kind !== 0 || ev.pubkey !== pubkey) continue;
+      if (newest && (ev.created_at || 0) <= (newest.created_at || 0)) continue;
+      if (JSON.stringify(ev).length > PROFILE_MAX_EVENT) continue;
+      if (!profileIsValidEvent(ev, pubkey)) continue;
+      newest = ev;
+    }
+    readCachePut(context, key, { ev: newest }, newest ? ZAP_LNURL_TTL_S : ZAP_LNURL_MISS_TTL_S);
+  }
+  if (zapRelayProfileMemo.size >= ZAP_LNURL_MEMO_MAX) zapRelayProfileMemo.delete(zapRelayProfileMemo.keys().next().value);
+  zapRelayProfileMemo.set(pubkey, { ev: newest, exp: now + (newest ? ZAP_LNURL_TTL_S : ZAP_LNURL_MISS_TTL_S) * 1000 });
+  return newest;
+}
+
+async function zapRecipientProfile(context, pubkey) {
+  var stored = await zapRecipientProfileStored(context.env || {}, pubkey);
+  if (stored && zapLnurlFromProfile(stored)) return stored;
+  var fromRelays = await zapRecipientRelayProfile(context, pubkey);
+  if (fromRelays && zapLnurlFromProfile(fromRelays)) return fromRelays;
+  return stored;
+}
+
+async function zapLnurlFetchNostrPubkey(url) {
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, ZAP_LNURL_TIMEOUT_MS);
+  try {
+    var at = url;
+    var resp = null;
+    for (var hop = 0; hop <= ZAP_LNURL_MAX_REDIRECTS; hop++) {
+      resp = await fetch(at, { headers: { "Accept": "application/json" }, redirect: "manual", signal: controller.signal });
+      if (!(resp.status >= 300 && resp.status < 400)) break;
+      var loc = resp.headers.get("Location");
+      try { if (resp.body && resp.body.cancel) await resp.body.cancel(); } catch (e) { }
+      if (!loc || hop === ZAP_LNURL_MAX_REDIRECTS) return "";
+      var next = zapLnurlSafe(new URL(loc, at).toString());
+      if (!next) return "";
+      at = next;
+    }
+    if (!resp || !resp.ok) return "";
+    var declared = Number(resp.headers.get("Content-Length")) || 0;
+    if (declared > ZAP_LNURL_MAX_BYTES) return "";
+    var text = "";
+    if (resp.body && resp.body.getReader) {
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var total = 0;
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        total += r.value.length;
+        if (total > ZAP_LNURL_MAX_BYTES) {
+          try { await reader.cancel(); } catch (e) { }
+          return "";
+        }
+        text += decoder.decode(r.value, { stream: true });
+      }
+      text += decoder.decode();
+    } else {
+      text = await resp.text();
+      if (text.length > ZAP_LNURL_MAX_BYTES) return "";
+    }
+    var data = JSON.parse(text);
+    if (!data || data.allowsNostr !== true || typeof data.nostrPubkey !== "string") return "";
+    var npk = data.nostrPubkey.toLowerCase();
+    return /^[0-9a-f]{64}$/.test(npk) ? npk : "";
+  } catch (e) {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function zapProviderPubkey(context, recipient) {
+  var profile = await zapRecipientProfile(context, recipient);
+  var url = zapLnurlFromProfile(profile);
+  if (!url) return "";
+  var now = Date.now();
+  var memo = zapLnurlMemo.get(url);
+  if (memo && memo.exp > now) return memo.pk;
+  var key = "/zap-lnurl/" + bytesToHex(sha256(utf8ToBytes(url)));
+  var edge = await readCacheGet(key);
+  var pk;
+  if (edge && typeof edge.pk === "string") {
+    pk = edge.pk;
+  } else {
+    pk = await zapLnurlFetchNostrPubkey(url);
+    readCachePut(context, key, { pk: pk }, pk ? ZAP_LNURL_TTL_S : ZAP_LNURL_MISS_TTL_S);
+  }
+  if (zapLnurlMemo.size >= ZAP_LNURL_MEMO_MAX) zapLnurlMemo.delete(zapLnurlMemo.keys().next().value);
+  zapLnurlMemo.set(url, { pk: pk, exp: now + (pk ? ZAP_LNURL_TTL_S : ZAP_LNURL_MISS_TTL_S) * 1000 });
+  return pk;
+}
+
+async function zapFilterByProvider(context, candidates) {
+  var recipients = [];
+  candidates.forEach(function (c) {
+    var r = zapRecipientPubkey(c.ev);
+    c.recipient = r;
+    if (r && recipients.indexOf(r) === -1 && recipients.length < ZAP_LNURL_MAX_LOOKUPS) recipients.push(r);
+  });
+  var providers = new Map();
+  await Promise.all(recipients.map(async function (r) {
+    providers.set(r, await zapProviderPubkey(context, r));
+  }));
+  return candidates.filter(function (c) {
+    var want = c.recipient ? providers.get(c.recipient) : "";
+    return !!want && String(c.ev.pubkey).toLowerCase() === want;
+  });
+}
+
 function zapTargetId(ev) {
   var tags = ev.tags || [];
   var e = tags.find(function (t) {
@@ -1635,17 +1906,22 @@ async function handleZapAction(context, body) {
     }
     var chan = [];
     var pm = [];
+    var candidates = [];
     for (var n = 0; n < events.length; n++) {
       var ev = events[n];
       if (!zapIsValidReceipt(ev, now)) continue;
       if (JSON.stringify(ev).length > ZAP_EVENT_MAX) continue;
       var info = zapClassify(ev);
       if (!info) continue;
+      candidates.push({ ev: ev, info: info });
+    }
+    var verified = candidates.length ? await zapFilterByProvider(context, candidates) : [];
+    verified.forEach(function (c) {
       // Channel and profile zaps live in the channels DB (profile zaps keyed by
       // recipient pubkey); PM zaps in the PM DB.
-      if (info.scope === "channel" || info.scope === "profile") chan.push({ ev: ev, targetId: info.targetId });
-      else if (info.scope === "pm") pm.push({ ev: ev, targetId: info.targetId });
-    }
+      if (c.info.scope === "channel" || c.info.scope === "profile") chan.push({ ev: c.ev, targetId: c.info.targetId });
+      else if (c.info.scope === "pm") pm.push({ ev: c.ev, targetId: c.info.targetId });
+    });
     var added = 0;
     added += await zapInsert(env.DB_CHANNELS, chan, now);
     added += await zapInsert(env.DB_PM, pm, now);
@@ -1658,6 +1934,8 @@ async function handleZapAction(context, body) {
 // Dispatch a parsed body to the matching action handler. Shared by the HTTP
 // endpoint and the /api WebSocket worker (which sets context._wsAuthedPubkey).
 async function routeStorageAction(context, body) {
+  var replayed = await storageReplayRefusal(context, body);
+  if (replayed) return replayed;
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);

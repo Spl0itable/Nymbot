@@ -86,6 +86,14 @@ const MEDIA_API_ORIGINS = ['https://nymbot.ai'];
 const MEDIA_BLOSSOM_HOSTS = ['blossom.band', 'blossom.primal.net', 'nostr.download'];
 const MEDIA_TYPE = /^(?:image|video|audio)\//i;
 const CONTENT_HASH = /\/([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?$/i;
+const SHARE_CACHE = 'nymbot-share-v1';
+const SHARE_PATH = '/app/share-target';
+const SHARE_MAX_FILES = 10;
+const SHARE_FILE_MAX_BYTES = 50 * 1024 * 1024;
+const SHARE_TOTAL_MAX_BYTES = 80 * 1024 * 1024;
+const SHARE_TEXT_MAX = 100000;
+const SHARE_NAME_MAX = 120;
+const SHARE_TTL_MS = 3600 * 1000;
 let mediaGeneration = 0;
 let mediaPruning = null;
 let mediaPruneAgain = false;
@@ -323,13 +331,92 @@ function wipeMedia() {
     return caches.delete(MEDIA_CACHE).catch(() => false);
 }
 
+function shareId() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function shareName(raw) {
+    let name = String(raw || '').split(/[\\/]/).pop();
+    name = name.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+    name = name.trim().replace(/^\.+/, '').trim();
+    if (name.length > SHARE_NAME_MAX) {
+        const dot = name.lastIndexOf('.');
+        const ext = dot > 0 && name.length - dot <= 10 ? name.slice(dot) : '';
+        name = name.slice(0, SHARE_NAME_MAX - ext.length) + ext;
+    }
+    return name || 'shared';
+}
+
+function shareText(form) {
+    const parts = [];
+    for (const key of ['title', 'text', 'url']) {
+        const value = form.get(key);
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (!trimmed || parts.some(p => p.includes(trimmed))) continue;
+        parts.push(trimmed);
+    }
+    return parts.join('\n\n').slice(0, SHARE_TEXT_MAX);
+}
+
+async function pruneShares(cache, now) {
+    for (const key of await cache.keys()) {
+        const url = new URL(key.url);
+        if (!/^\/app\/share-target\/[0-9a-f]{32}$/.test(url.pathname)) continue;
+        const res = await cache.match(key);
+        let at = 0;
+        try { at = Number((await res.json()).at) || 0; } catch (_) { at = 0; }
+        if (now - at <= SHARE_TTL_MS) continue;
+        const prefix = url.pathname + '/';
+        await Promise.all((await cache.keys())
+            .filter(k => k.url === key.url || new URL(k.url).pathname.startsWith(prefix))
+            .map(k => cache.delete(k)));
+    }
+}
+
+async function stashShare(request) {
+    const form = await request.formData();
+    const text = shareText(form);
+    const picked = [];
+    let total = 0;
+    for (const file of form.getAll('files')) {
+        if (!file || typeof file !== 'object' || typeof file.arrayBuffer !== 'function') continue;
+        if (picked.length >= SHARE_MAX_FILES) break;
+        const size = Number(file.size) || 0;
+        if (size <= 0 || size > SHARE_FILE_MAX_BYTES || total + size > SHARE_TOTAL_MAX_BYTES) continue;
+        total += size;
+        picked.push(file);
+    }
+    if (!text && !picked.length) return '';
+    const id = shareId();
+    const base = new URL(SHARE_PATH + '/' + id, location.origin).href;
+    const cache = await caches.open(SHARE_CACHE);
+    await pruneShares(cache, Date.now()).catch(() => { });
+    const files = [];
+    for (let i = 0; i < picked.length; i++) {
+        const file = picked[i];
+        const type = String(file.type || '');
+        await cache.put(base + '/' + i, new Response(file, { headers: { 'content-type': type || 'application/octet-stream' } }));
+        files.push({ name: shareName(file.name), type, size: Number(file.size) || 0 });
+    }
+    await cache.put(base, new Response(JSON.stringify({ at: Date.now(), text, files }), { headers: { 'content-type': 'application/json' } }));
+    return id;
+}
+
+async function receiveShare(request) {
+    let id = '';
+    try { id = await stashShare(request); } catch (_) { id = ''; }
+    const target = new URL('/app/' + (id ? '#share=' + id : ''), location.origin).href;
+    return Response.redirect(target, 303);
+}
+
 self.addEventListener('install', (e) => {
     e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
     e.waitUntil(caches.keys()
-        .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== MEDIA_CACHE).map(k => caches.delete(k))))
+        .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== MEDIA_CACHE && k !== SHARE_CACHE).map(k => caches.delete(k))))
         .then(() => {
             mediaStartupPruned = true;
             return trimMedia();
@@ -422,6 +509,10 @@ function networkFirst(request, navigate) {
 
 self.addEventListener('fetch', (e) => {
     const url = new URL(e.request.url);
+    if (e.request.method === 'POST' && url.origin === location.origin && url.pathname === SHARE_PATH) {
+        e.respondWith(receiveShare(e.request));
+        return;
+    }
     if (e.request.method !== 'GET') return;
     const media = e.request.cache === 'no-store' ? null : mediaRoute(url);
     if (media) {

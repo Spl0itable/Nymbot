@@ -21,6 +21,79 @@ var TRIM_MARK = "[trimmed: ";
 
 function str(v) { return v == null ? "" : String(v); }
 
+function own(obj, key) { return obj != null && Object.prototype.hasOwnProperty.call(obj, key); }
+
+var GIT_RESERVED_KEYS = ["__proto__", "constructor", "prototype"];
+
+export function gitReservedKey(k) {
+  return GIT_RESERVED_KEYS.indexOf(str(k)) !== -1;
+}
+
+export var GIT_REF_MAX = 100;
+
+export function gitRefValid(raw) {
+  var r = str(raw);
+  if (!r || r.length > GIT_REF_MAX) return false;
+  if (/[\x00-\x20\x7f~^:?*[\\%]/.test(r)) return false;
+  if (r.charAt(0) === "/" || r.charAt(r.length - 1) === "/" || r.charAt(0) === "-") return false;
+  if (r.indexOf("//") !== -1 || r.indexOf("..") !== -1 || r.indexOf("@{") !== -1) return false;
+  if (r.charAt(r.length - 1) === "." || r === "@" || r === "HEAD") return false;
+  var segs = r.split("/");
+  for (var i = 0; i < segs.length; i++) {
+    var sg = segs[i];
+    if (!sg || sg.charAt(0) === "." || /\.lock$/i.test(sg)) return false;
+    if (gitReservedKey(sg)) return false;
+  }
+  return true;
+}
+
+export function gitRefNorm(raw) {
+  return str(raw).replace(/^refs\/heads\//, "");
+}
+
+export function gitSameBranch(a, b) {
+  var x = gitRefNorm(a).replace(/^heads\//, "").toLowerCase();
+  var y = gitRefNorm(b).replace(/^heads\//, "").toLowerCase();
+  return !!x && x === y;
+}
+
+export function gitStageNew() { return Object.create(null); }
+
+export function gitUntrusted(label, text) {
+  var body = str(text);
+  if (/^Error:/.test(body)) return body;
+  var tag = str(label).replace(/[\x00-\x1f\x7f"]+/g, " ").replace(/<<<|>>>/g, "").slice(0, 300);
+  return "<<<UNTRUSTED REPOSITORY CONTENT from " + tag + ">>>\n" + body.replace(/<<<|>>>/g, "\u2039\u2039\u2039") +
+    "\n<<<END UNTRUSTED REPOSITORY CONTENT>>>";
+}
+
+export function gitStageBranch(stage, branch) {
+  return own(stage, branch) && stage[branch] && typeof stage[branch] === "object" ? stage[branch] : null;
+}
+
+export function gitStageRestore(raw) {
+  var out = gitStageNew();
+  if (!raw || typeof raw !== "object") return out;
+  Object.keys(raw).forEach(function (br) {
+    if (!gitRefValid(br)) return;
+    var files = raw[br];
+    if (!files || typeof files !== "object") return;
+    var map = Object.create(null);
+    Object.keys(files).forEach(function (p) {
+      var e = files[p];
+      if (!e || typeof e !== "object" || gitSafePath(p) !== p) return;
+      map[p] = {
+        content: typeof e.content === "string" ? e.content : null,
+        before: typeof e.before === "string" ? e.before : null,
+        existed: !!e.existed,
+        message: typeof e.message === "string" ? e.message.slice(0, 200) : ""
+      };
+    });
+    out[br] = map;
+  });
+  return out;
+}
+
 function gitArgsOf(call) {
   var raw = call && call.function && call.function.arguments;
   if (raw && typeof raw === "object") return raw;
@@ -85,7 +158,7 @@ export function gitCompactConvo(convo, options) {
   var minChars = Number(opts.minChars) > 0 ? Number(opts.minChars) : GIT_TRIM_MIN_CHARS;
   var list = Array.isArray(convo) ? convo : [];
   var steps = [];
-  var calls = {};
+  var calls = Object.create(null);
   for (var i = 0; i < list.length; i++) {
     var m = list[i];
     if (m && m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length) {
@@ -100,8 +173,8 @@ export function gitCompactConvo(convo, options) {
   if (!steps.length) return list.slice();
   var current = steps[steps.length - 1];
   var cutoff = steps.length > keep ? steps[steps.length - keep] : -1;
-  var lastRead = {};
-  var editedAt = {};
+  var lastRead = Object.create(null);
+  var editedAt = Object.create(null);
   for (var j = 0; j < list.length; j++) {
     var t = list[j];
     if (!t || t.role !== "tool") continue;
@@ -351,19 +424,23 @@ export function gitUnifiedDiff(path, before, after, context) {
 }
 
 export function gitStageEntry(stage, branch, path) {
-  var b = stage && stage[branch];
-  return b && Object.prototype.hasOwnProperty.call(b, path) ? b[path] : null;
+  var b = gitStageBranch(stage, branch);
+  return b && own(b, path) ? b[path] : null;
 }
 
 export function gitStagePut(stage, branch, path, content, before, message) {
-  if (!stage[branch]) stage[branch] = {};
-  var had = stage[branch][path];
+  if (!gitRefValid(branch)) return "Error: invalid branch name '" + str(branch).slice(0, 100) + "'.";
+  if (gitSafePath(path) !== path) return "Error: invalid path '" + str(path).slice(0, 200) + "'.";
+  if (!gitStageBranch(stage, branch)) stage[branch] = Object.create(null);
+  var had = gitStageEntry(stage, branch, path);
   var files = 0;
   var bytes = 0;
   Object.keys(stage).forEach(function (br) {
-    Object.keys(stage[br]).forEach(function (p) {
+    var bm = gitStageBranch(stage, br);
+    if (!bm) return;
+    Object.keys(bm).forEach(function (p) {
       files++;
-      bytes += str(stage[br][p].content).length;
+      bytes += str(bm[p] && bm[p].content).length;
     });
   });
   if (!had && files >= GIT_STAGE_MAX_FILES) {
@@ -382,7 +459,7 @@ export function gitStagePut(stage, branch, path, content, before, message) {
 }
 
 export function gitStageFiles(stage, branch) {
-  var b = (stage && stage[branch]) || {};
+  var b = gitStageBranch(stage, branch) || Object.create(null);
   return Object.keys(b).sort().map(function (p) {
     return { path: p, content: b[p].content, before: b[p].before, existed: !!b[p].existed, message: b[p].message || "" };
   }).filter(function (f) { return f.content !== f.before; });
@@ -398,11 +475,92 @@ export function gitSafePath(raw, allowRoot) {
   if (p.charAt(0) === "/" && p.replace(/\/+/g, "") !== "") return null;
   var segs = p.split("/").filter(function (s) { return s !== "" && s !== "."; });
   for (var i = 0; i < segs.length; i++) {
-    if (segs[i].toLowerCase() === ".git") return null;
+    if (segs[i].toLowerCase() === ".git" || gitReservedKey(segs[i])) return null;
   }
   var out = segs.join("/");
   if (!out && !allowRoot) return null;
   return out;
+}
+
+export var GIT_SCOPE_MAX_PATHS = 32;
+export var GIT_SCOPE_MAX_PATH_CHARS = 300;
+export var GIT_SCOPE_MAX_RAW_CHARS = 4000;
+
+export function gitParsePaths(raw) {
+  var parts = [];
+  if (Array.isArray(raw)) {
+    parts = raw.slice(0, GIT_SCOPE_MAX_PATHS * 4).map(function (x) { return typeof x === "string" ? x : ""; });
+  } else if (typeof raw === "string") {
+    parts = raw.slice(0, GIT_SCOPE_MAX_RAW_CHARS).split(/[,\n\r]+/);
+  } else {
+    return { set: false, paths: [], dropped: [] };
+  }
+  var out = [];
+  var dropped = [];
+  var given = false;
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim();
+    if (!t) continue;
+    given = true;
+    var clean = t.length <= GIT_SCOPE_MAX_PATH_CHARS ? gitSafePath(t.replace(/^\/+/, "").replace(/\/+$/, "")) : null;
+    if (!clean) { dropped.push(t.slice(0, 80)); continue; }
+    if (out.indexOf(clean) === -1 && out.length < GIT_SCOPE_MAX_PATHS) out.push(clean);
+  }
+  return { set: given, paths: out, dropped: dropped };
+}
+
+export function gitPathInScope(cfg, path) {
+  if (!cfg || !cfg.pathsSet) return true;
+  var p = str(path).replace(/^\/+|\/+$/g, "");
+  var list = cfg.paths || [];
+  for (var i = 0; i < list.length; i++) {
+    var pre = list[i];
+    if (p === pre || p.indexOf(pre + "/") === 0) return true;
+  }
+  return false;
+}
+
+export function gitDirInScope(cfg, dir) {
+  if (!cfg || !cfg.pathsSet) return true;
+  var d = str(dir).replace(/^\/+|\/+$/g, "");
+  if (gitPathInScope(cfg, d)) return true;
+  var list = cfg.paths || [];
+  for (var i = 0; i < list.length; i++) {
+    if (!d || list[i].indexOf(d + "/") === 0) return true;
+  }
+  return false;
+}
+
+export function gitScopeRefusal(cfg, path) {
+  var list = (cfg && cfg.paths) || [];
+  return "Error: '" + str(path).slice(0, 200) + "' in " + (cfg ? cfg.repo : "this repository") +
+    " is outside the paths the user limited this repository to (" + (list.length ? list.join(", ") : "none are valid") +
+    "). Only files under those paths can be read, searched, listed or changed. Work within them, or tell the user the task needs a path outside them.";
+}
+
+export function gitScopeListing(cfg, text) {
+  if (!cfg || !cfg.pathsSet) return text;
+  var lines = str(text).split("\n");
+  var kept = lines.filter(function (line) {
+    var m = /^(dir|file|tree|blob|symlink|submodule)\t([^\t]*?)(?: \(\d+ bytes\))?$/.exec(line);
+    if (!m) return false;
+    return m[1] === "dir" || m[1] === "tree" ? gitDirInScope(cfg, m[2]) : gitPathInScope(cfg, m[2]);
+  });
+  return kept.length ? kept.join("\n") : "(nothing here is inside the paths this repository is limited to)";
+}
+
+export function gitScopeSnapshot(cfg, snap) {
+  if (!snap || !cfg || !cfg.pathsSet) return snap;
+  var keep = function (p) { return gitPathInScope(cfg, p); };
+  var pick = function (map) {
+    var out = Object.create(null);
+    Object.keys(map).forEach(function (p) { if (keep(p)) out[p] = map[p]; });
+    return out;
+  };
+  return {
+    files: pick(snap.files), sizes: pick(snap.sizes), big: pick(snap.big), binary: pick(snap.binary),
+    paths: snap.paths.filter(keep), partial: snap.partial
+  };
 }
 
 export function gitIsCiPath(raw) {
@@ -418,7 +576,7 @@ export function gitIsCiPath(raw) {
 
 export function gitNeedsReview(cfg, branch, path) {
   var def = cfg && (cfg.defaultBranch || (!cfg.branch ? cfg.resolvedBranch : null));
-  if (def && branch === def) return true;
+  if (def && gitSameBranch(branch, def)) return true;
   return gitIsCiPath(path);
 }
 
@@ -484,10 +642,10 @@ export function gitParseStaged(raw, repo, refRe) {
   if (!raw || typeof raw !== "object") return null;
   if (typeof raw.repo !== "string" || raw.repo !== repo) return null;
   var branch = typeof raw.branch === "string" ? raw.branch : "";
-  if (!branch || !(refRe || /^[\w./-]{1,100}$/).test(branch)) return null;
+  if (!branch || !gitRefValid(branch) || (refRe && !refRe.test(branch))) return null;
   if (!Array.isArray(raw.files) || !raw.files.length || raw.files.length > GIT_STAGE_MAX_FILES) return null;
   var bytes = 0;
-  var seen = {};
+  var seen = Object.create(null);
   var files = [];
   for (var i = 0; i < raw.files.length; i++) {
     var f = raw.files[i];
@@ -614,7 +772,7 @@ export function gitSnapshotFromTar(bytes, options) {
     if (entries[i].path.indexOf("/") === -1 && entries[i].type !== "5") shared = false;
   }
   var decoder = new TextDecoder("utf-8");
-  var snap = { files: {}, sizes: {}, paths: [], big: {}, binary: {}, partial: false };
+  var snap = { files: Object.create(null), sizes: Object.create(null), paths: [], big: Object.create(null), binary: Object.create(null), partial: false };
   var total = 0;
   entries.forEach(function (e) {
     if (e.type !== "0" && e.type !== "7") return;
@@ -661,8 +819,8 @@ export async function gitGunzip(bytes, maxBytes) {
 export function gitSnapshotList(snap, dir, stage) {
   var base = str(dir).replace(/^\/+|\/+$/g, "");
   var prefix = base ? base + "/" : "";
-  var dirs = {};
-  var files = {};
+  var dirs = Object.create(null);
+  var files = Object.create(null);
   var add = function (p, size) {
     if (prefix && p.indexOf(prefix) !== 0) return;
     var rest = p.slice(prefix.length);
@@ -673,6 +831,7 @@ export function gitSnapshotList(snap, dir, stage) {
   };
   snap.paths.forEach(function (p) { add(p, snap.sizes[p] || 0); });
   Object.keys(stage || {}).forEach(function (p) {
+    if (!own(stage, p) || !stage[p]) return;
     if (stage[p].content == null) { delete files[p]; return; }
     add(p, stage[p].content.length);
   });
@@ -793,7 +952,12 @@ function gitB64(text) {
   return btoa(bin);
 }
 
-function gitSeg(p) { return String(p).split("/").map(encodeURIComponent).join("/"); }
+function gitSeg(p) {
+  return String(p).split("/").map(function (sg) {
+    if (sg === "." || sg === "..") throw new Error("Invalid path segment in '" + String(p).slice(0, 200) + "'.");
+    return encodeURIComponent(sg);
+  }).join("/");
+}
 
 function gitJsonOf(r) { try { return JSON.parse(r.text); } catch (e) { return null; } }
 
@@ -984,6 +1148,7 @@ function gitCiLine(name, state, url) {
 
 export async function gitCiStatus(cfg, call, ref) {
   var repo = cfg.repo;
+  if (!gitRefValid(ref) && !/^[0-9a-f]{7,64}$/i.test(str(ref))) return "Error: invalid ref '" + str(ref).slice(0, 100) + "'.";
   var r;
   var j;
   var lines = [];

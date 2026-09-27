@@ -74,6 +74,22 @@
         return n;
     };
 
+    const SHARE_CACHE = 'nymbot-share-v1';
+    const SHARE_SEARCH_ABOVE = 6;
+    const SHARE_MAX_FILES = 10;
+
+    const shareLabel = (raw) => {
+        let name = String(raw || '').split(/[\\/]/).pop();
+        name = name.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+        name = name.trim().replace(/^\.+/, '').trim();
+        if (name.length > 120) {
+            const dot = name.lastIndexOf('.');
+            const ext = dot > 0 && name.length - dot <= 10 ? name.slice(dot) : '';
+            name = name.slice(0, 120 - ext.length) + ext;
+        }
+        return name || 'shared';
+    };
+
     // How far to look for the epoch an account's announced key sits at.
     const PQ_EPOCH_SCAN = 12;
 
@@ -261,6 +277,7 @@
             };
             Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
             this.offerBotFromUrl();
+            this.offerShareFromUrl().catch(() => { });
             Notify.attach({
                 enabled: () => this.settings.replyNotify !== false,
                 titleOf: (id) => {
@@ -4538,6 +4555,11 @@
             this.browsedPicked = new Set();
         },
 
+        gitWhere(provider, host) {
+            const fallback = { github: 'github.com', gitlab: 'gitlab.com', gitea: 'codeberg.org' };
+            return (String(host || '').trim() || fallback[provider || 'github'] || '').toLowerCase();
+        },
+
         /// Reads a NIP-34 announcement and fills the form in from it.
         async resolveNgit() {
             const typed = ($('ngitAddress').value || '').trim();
@@ -4566,6 +4588,10 @@
                         { name: found.name }), 'warn');
                 return;
             }
+            const wasWhere = this.gitWhere($('gitProvider').value, $('gitHost').value);
+            const nowWhere = this.gitWhere(found.forge.provider, found.forge.host);
+            const tokenDropped = !!$('gitToken').value.trim() && wasWhere !== nowWhere;
+            if (tokenDropped) $('gitToken').value = '';
             $('gitProvider').value = found.forge.provider;
             $('gitHost').value = found.forge.host;
             $('gitRepo').value = found.forge.repo;
@@ -4575,8 +4601,11 @@
             if (found.head) parts.push(t('It says {branch} is current.', { branch: found.head }));
             if (found.forge.guessed) {
                 parts.push(t('The host is self-hosted, so the provider is a guess — change it if that is wrong.'));
+                parts.push(t('Only paste a token that was created on {host}.', { host: found.forge.host }));
             }
-            parts.push(t('Add a token for {host} to read it.', { host: found.forge.host }));
+            parts.push(tokenDropped
+                ? t('The token you had was for {was}, so it was cleared. Enter a token for {host}.', { was: wasWhere, host: found.forge.host })
+                : t('Add a token for {host} to read it.', { host: found.forge.host }));
             this.modalStatus('gitStatus', parts.join(' '), 'ok');
         },
 
@@ -4601,6 +4630,14 @@
             }
             if (!cfg.token || !cfg.repo) {
                 this.modalStatus('gitStatus', t('A token and a repository are both needed.'), 'warn');
+                return;
+            }
+            const before = this.repoEditing ? Store.repo(this.repoEditing) : null;
+            if (before && before.token && cfg.token === before.token
+                && this.gitWhere(cfg.provider, cfg.host) !== this.gitWhere(before.provider, before.host)) {
+                $('gitToken').value = '';
+                this.modalStatus('gitStatus', t('Enter the token for {host} again. A saved token is only sent to the host it was added for.',
+                    { host: this.gitWhere(cfg.provider, cfg.host) }), 'warn');
                 return;
             }
             let entry;
@@ -6753,6 +6790,127 @@
             this.showBotPreview(bot);
         },
 
+        async offerShareFromUrl() {
+            const hash = location.hash || '';
+            if (!/(^|[#&])share=/.test(hash)) return;
+            const m = /(?:^|[#&])share=([0-9a-f]{32})(?:&|$)/.exec(hash);
+            try { history.replaceState(null, '', location.pathname + location.search); } catch (_) { }
+            if (this.conv) this.showChatInUrl(this.conv);
+            const share = m ? await this.takeShare(m[1]) : null;
+            if (!share) {
+                this.toast(t('That share could not be read. Try sharing it again.'));
+                return;
+            }
+            this.offerShare(share);
+        },
+
+        async takeShare(id) {
+            if (typeof caches === 'undefined' || !/^[0-9a-f]{32}$/.test(String(id))) return null;
+            let cache;
+            try { cache = await caches.open(SHARE_CACHE); } catch (_) { return null; }
+            const base = new URL('/app/share-target/' + id, location.origin).href;
+            try {
+                const res = await cache.match(base);
+                if (!res) return null;
+                const meta = await res.json();
+                const list = Array.isArray(meta.files) ? meta.files.slice(0, SHARE_MAX_FILES) : [];
+                const files = [];
+                for (let i = 0; i < list.length; i++) {
+                    const hit = await cache.match(base + '/' + i);
+                    if (!hit) continue;
+                    const blob = await hit.blob();
+                    const info = list[i] || {};
+                    files.push(new File([blob], shareLabel(info.name), { type: String(info.type || blob.type || '') }));
+                }
+                const text = typeof meta.text === 'string' ? meta.text : '';
+                if (!text.trim() && !files.length) return null;
+                return { text, files };
+            } catch (_) {
+                return null;
+            } finally {
+                try {
+                    for (const key of await cache.keys()) {
+                        if (key.url === base || key.url.startsWith(base + '/')) await cache.delete(key);
+                    }
+                } catch (_) { }
+            }
+        },
+
+        offerShare(share) {
+            this.openModal('modalShareTarget');
+            this.pendingShare = share;
+            const text = String(share.text || '').trim().replace(/\s+/g, ' ');
+            const clipped = text.length > 80 ? text.slice(0, 80) + '…' : text;
+            const n = share.files.length;
+            const count = n ? (n === 1 ? t('1 file') : t('{n} files', { n })) : '';
+            const summary = [count, clipped].filter(Boolean).join(' · ');
+            $('shareTargetSummary').textContent = summary;
+            $('shareTargetSummary').hidden = !summary;
+            const search = $('shareTargetSearch');
+            search.value = '';
+            search.hidden = this.shareTargets('').length <= SHARE_SEARCH_ABOVE;
+            this.renderShareTargets();
+        },
+
+        shareTargets(term) {
+            const needle = String(term || '').toLowerCase().trim();
+            return Store.conversations()
+                .filter(c => !c.archived)
+                .filter(c => !needle
+                    || (c.title || '').toLowerCase().includes(needle)
+                    || (c.tags || []).some(x => String(x).toLowerCase().includes(needle)))
+                .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        },
+
+        renderShareTargets() {
+            const list = $('shareTargetList');
+            list.innerHTML = '';
+            const fresh = el('button', 'chip-menu-item');
+            fresh.type = 'button';
+            fresh.dataset.share = 'new';
+            fresh.appendChild(Icons.node('plus', { size: 14 }));
+            fresh.appendChild(el('span', 'chip-menu-label', t('New chat')));
+            fresh.addEventListener('click', () => this.acceptShare(null));
+            list.appendChild(fresh);
+            const all = this.shareTargets('');
+            const shown = this.shareTargets($('shareTargetSearch').value);
+            if (all.length) list.appendChild(el('div', 'chip-menu-head', t('Your chats')));
+            for (const conv of shown) {
+                const row = el('button', 'chip-menu-item'
+                    + (this.conv && this.conv.id === conv.id ? ' is-active' : ''));
+                row.type = 'button';
+                row.dataset.share = conv.id;
+                if (conv.pinned) row.appendChild(Icons.node('star', { size: 11, filled: true }));
+                row.appendChild(el('span', 'chip-menu-label', conv.title || t('New chat')));
+                row.addEventListener('click', () => this.acceptShare(conv));
+                list.appendChild(row);
+            }
+            if (all.length && !shown.length) list.appendChild(el('p', 'hint share-target-none', t('No chat matches that.')));
+        },
+
+        async acceptShare(conv) {
+            const share = this.pendingShare;
+            this.closeModals();
+            if (!share) return;
+            const target = conv ? Store.conversation(conv.id) : null;
+            if (target) {
+                if (!this.conv || this.conv.id !== target.id) this.open(target);
+            } else if (!this.conv || Store.messages(this.conv.id).length) {
+                this.open(this.newConversation());
+            }
+            const input = $('input');
+            const text = String(share.text || '').trim();
+            if (text) {
+                const draft = input.value.trim();
+                input.value = draft ? draft + '\n\n' + text : text;
+                Store.setDraft(this.conv.id, input.value);
+                this.autoGrow();
+                this.updateHints();
+            }
+            if (share.files.length) await this.addFiles(share.files);
+            input.focus();
+        },
+
         // --- workspaces --------------------------------------------------------
 
         openWorkspaces() {
@@ -7474,9 +7632,7 @@
             this._invoiceRestored = true;
             const live = this.invoice;
             this.creditTier = live ? live.tier : (this.proTier() ? 'pro' : 'standard');
-            for (const b of document.querySelectorAll('#creditTier .tier-btn')) {
-                b.classList.toggle('is-active', b.dataset.tier === this.creditTier);
-            }
+            this.syncCreditTier();
             const grid = $('amountGrid');
             grid.innerHTML = '';
             for (const n of CREDIT_PRESETS) {
@@ -7546,7 +7702,10 @@
             if (this._resumingInvoices) return;
             this._resumingInvoices = true;
             try {
-                Store.write('pendingInvoices', this.keptInvoices());
+                const held = Store.read('pendingInvoices', null);
+                if (held != null && (!Array.isArray(held) || held.length !== this.keptInvoices().length)) {
+                    Store.write('pendingInvoices', this.keptInvoices());
+                }
                 for (const kept of this.keptInvoices()) {
                     if (this.invoice && this.invoice.id === kept.invoiceId) continue;
                     const opts = this.invoiceOpts(kept);
@@ -7589,8 +7748,13 @@
                 ['pro', t('Pro'), this.balance.pro]
             ];
             for (const [tier, label, value] of rows) {
-                const cell = el('div', 'credit-balance'
+                const cell = el('button', 'credit-balance'
                     + (this.creditTier === tier ? ' is-active' : ''));
+                cell.type = 'button';
+                cell.dataset.act = 'credit-tier';
+                cell.dataset.tier = tier;
+                cell.setAttribute('aria-pressed', String(this.creditTier === tier));
+                cell.title = tier === 'pro' ? t('Buy Pro credits') : t('Buy Standard credits');
                 cell.appendChild(el('span', 'credit-balance-label', label));
                 cell.appendChild(el('span', 'credit-balance-value',
                     value == null ? '—' : t('{n} credits', { n: creditAmount(value) })));
@@ -7599,6 +7763,21 @@
                         t('{n} free left today', { n: num(free) })));
                 }
                 box.appendChild(cell);
+            }
+        },
+
+        setCreditTier(tier) {
+            if (tier !== 'standard' && tier !== 'pro') return;
+            this.creditTier = tier;
+            this.syncCreditTier();
+            this.creditSats();
+        },
+
+        syncCreditTier() {
+            for (const b of document.querySelectorAll('#creditTier .tier-btn, #creditBalances .credit-balance')) {
+                const on = b.dataset.tier === this.creditTier;
+                b.classList.toggle('is-active', on);
+                b.setAttribute('aria-pressed', String(on));
             }
         },
 
@@ -8465,6 +8644,7 @@
 
         closeModals(opts) {
             this.modelPick = null;
+            this.pendingShare = null;
             this._overFrom = null;
             const wasOpen = !!document.querySelector('.modal:not([hidden])');
             for (const m of document.querySelectorAll('.modal.is-over')) m.classList.remove('is-over');
@@ -8875,14 +9055,7 @@
                     await Anon.rotate(true);
                     this.openAnon();
                 },
-                'credit-tier': (target) => {
-                    this.creditTier = target.dataset.tier;
-                    for (const b of document.querySelectorAll('#creditTier .tier-btn')) {
-                        b.classList.toggle('is-active', b === target);
-                    }
-                    this.creditSats();
-                    this.renderCreditBalances();
-                },
+                'credit-tier': (target) => this.setCreditTier(target.dataset.tier),
                 'credit-buy': () => this.buyCredits(),
                 'credit-check': () => this.checkPaid(),
                 // Anything that grants the account is covered until it is
@@ -9213,6 +9386,7 @@
                 clearTimeout(this._convSearchTimer);
                 this._convSearchTimer = setTimeout(() => this.renderList(), 150);
             });
+            $('shareTargetSearch').addEventListener('input', () => this.renderShareTargets());
             $('modelSearch').addEventListener('input', () => {
                 $('modelSearchClear').hidden = !$('modelSearch').value;
                 this.renderModels();

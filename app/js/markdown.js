@@ -16,7 +16,7 @@
 
     function safeUrl(href) {
         const u = String(href || '').trim();
-        return /^(https?:\/\/|mailto:|nostr:)/i.test(u) ? u : '';
+        return /^(https?:\/\/|mailto:)/i.test(u) ? u : '';
     }
 
     function trustedHosts() {
@@ -24,22 +24,66 @@
         const B = window.NymbotBlossom;
         const hosts = new Set();
         if (C.apiHost) hosts.add(String(C.apiHost).toLowerCase());
-        for (const h of (B && Array.isArray(B.HOSTS) ? B.HOSTS : [])) {
+        for (const h of Array.isArray(C.mediaHosts) ? C.mediaHosts : []) hosts.add(String(h).toLowerCase());
+        const urls = [].concat(B && Array.isArray(B.HOSTS) ? B.HOSTS : [], Array.isArray(C.shareHosts) ? C.shareHosts : []);
+        for (const h of urls) {
             try { hosts.add(new URL(h).hostname.toLowerCase()); } catch (_) { }
         }
         return hosts;
+    }
+
+    function trusted(raw) {
+        let u;
+        try { u = new URL(String(raw || '').trim()); } catch (_) { return false; }
+        if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+        const host = u.hostname.toLowerCase();
+        for (const h of trustedHosts()) {
+            if (h.startsWith('.') ? host.endsWith(h) : host === h) return true;
+        }
+        return false;
     }
 
     function mediaSrc(raw) {
         let u;
         try { u = new URL(String(raw || '').trim()); } catch (_) { return ''; }
         if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
-        if (u.protocol === 'https:' && !u.username && !u.password && !u.port
-            && trustedHosts().has(u.hostname.toLowerCase())) {
-            return u.href;
-        }
+        if (trusted(u.href)) return u.href;
         const C = window.NymbotConfig || {};
         return C.apiHost ? `https://${C.apiHost}/api/proxy?url=${encodeURIComponent(u.href)}` : '';
+    }
+
+    function gate(inner, url, kind) {
+        let host = '';
+        try { host = new URL(url).hostname; } catch (_) { }
+        const label = kind === 'video' ? t('Load video') : (kind === 'audio' ? t('Load audio') : t('Load image'));
+        return `<span class="msg-media-gate">`
+            + `<button type="button" class="msg-media-load" data-act="load-media"`
+            + ` title="${esc(t('Load from {host}', { host }))}">`
+            + `<span class="msg-media-load-label">${esc(label)}</span>`
+            + `<span class="msg-media-host">${esc(host)}</span></button>`
+            + `<template>${inner}</template></span>`;
+    }
+
+    function reveal(e) {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-act="load-media"]') : null;
+        if (!btn) return;
+        const box = btn.parentElement;
+        const tpl = box && box.classList.contains('msg-media-gate') ? box.querySelector('template') : null;
+        if (!tpl) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const frag = document.importNode(tpl.content, true);
+        for (const media of frag.querySelectorAll('img, audio, video')) {
+            const wrap = media.closest('.msg-media-box');
+            if (!wrap) continue;
+            const settle = () => wrap.classList.remove('is-loading');
+            for (const type of ['load', 'loadedmetadata', 'error']) media.addEventListener(type, settle);
+        }
+        box.replaceWith(frag);
+    }
+
+    if (typeof document !== 'undefined' && document.addEventListener) {
+        document.addEventListener('click', reveal, true);
     }
 
     const MARK = '\u0000';
@@ -74,10 +118,12 @@
         out = out.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`, c));
 
         out = out.replace(/!\[([^\]\n]*)\]\(([^)\s\u0000]+)\)/g, (m, alt, href) => {
-            const u = /^https?:\/\//i.test(unesc(href).trim()) ? mediaSrc(unesc(href)) : '';
+            const raw = unesc(href).trim();
+            const u = /^https?:\/\//i.test(raw) ? mediaSrc(raw) : '';
             if (!u) return m;
             const label = esc(unesc(flat(alt)));
-            return hold(`<img class="msg-media" src="${esc(u)}" alt="${label}" loading="lazy" referrerpolicy="no-referrer">`, label);
+            const img = `<img class="msg-media" src="${esc(u)}" alt="${label}" loading="lazy" referrerpolicy="no-referrer">`;
+            return hold(trusted(raw) ? img : gate(img, raw, 'image'), label);
         });
         out = out.replace(/\[([^\]\n]+)\]\(([^)\s\u0000]+)\)/g, (m, label, href) => {
             const u = safeUrl(unesc(href));
@@ -112,14 +158,15 @@
         const bare = !/\.[a-z0-9]{2,5}(\?|$)/i.test(url);
         const src = mediaSrc(url);
         if (!src) return null;
+        const shown = (html, what) => (trusted(url) ? html : gate(html, url, what));
         if (/\.(png|jpe?g|gif|webp|avif|bmp)(\?|$)/i.test(url) || (bare && kind === 'image')) {
-            return mediaBox(`<img class="msg-media" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">`, url, true);
+            return shown(mediaBox(`<img class="msg-media" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">`, url, true), 'image');
         }
         if (/\.(mp3|wav|ogg|m4a|opus|flac)(\?|$)/i.test(url) || (bare && kind === 'speak')) {
-            return mediaBox(`<audio class="msg-media" controls preload="none" referrerpolicy="no-referrer" src="${esc(src)}"></audio>`, url);
+            return shown(mediaBox(`<audio class="msg-media" controls preload="none" referrerpolicy="no-referrer" src="${esc(src)}"></audio>`, url), 'audio');
         }
         if (/\.(mp4|webm|mov)(\?|$)/i.test(url) || (bare && kind === 'video')) {
-            return mediaBox(`<video class="msg-media" controls preload="metadata" referrerpolicy="no-referrer" src="${esc(src)}"></video>`, url, true);
+            return shown(mediaBox(`<video class="msg-media" controls preload="metadata" referrerpolicy="no-referrer" src="${esc(src)}"></video>`, url, true), 'video');
         }
         return null;
     }
@@ -455,6 +502,7 @@
         render,
         code: (body, lang, options) => codeBlock(String(body || ''), lang || '', options),
         mediaSrc,
+        trusted,
         escape: esc,
         plain,
         inline,

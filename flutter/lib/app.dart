@@ -7,6 +7,7 @@ import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
 import 'features/signer_wait.dart';
 import 'models/workspace.dart';
+import 'services/nostr/signer_links.dart';
 import 'state/app_controller.dart';
 import 'features/i18n/language_select.dart';
 
@@ -69,7 +70,10 @@ class NymbotApp extends StatelessWidget {
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         builder: (context, child) => appFrame(
             context,
-            SignerWait(waiting: controller.identity.waiting, child: child),
+            SignerWait(
+                waiting: controller.identity.waiting,
+                authUrl: signerAuthUrl,
+                child: child),
             settings),
         home: const _Root(),
       );

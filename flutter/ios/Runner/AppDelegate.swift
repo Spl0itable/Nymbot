@@ -5,6 +5,7 @@ import Flutter
 import LocalAuthentication
 import Security
 import UIKit
+import UniformTypeIdentifiers
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -15,6 +16,12 @@ import UIKit
     GeneratedPluginRegistrant.register(with: self)
     if let registrar = self.registrar(forPlugin: "NymbotIntents") {
       Intents.attach(registrar.messenger())
+    }
+    ShareInbox.drain()
+    _ = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { _ in
+      ShareInbox.drain()
     }
     if let registrar = self.registrar(forPlugin: "NymbotDictation") {
       let channel = FlutterMethodChannel(
@@ -30,6 +37,13 @@ import UIKit
         VaultKey.handle(call, result: result)
       }
     }
+    if let registrar = self.registrar(forPlugin: "NymbotSecure") {
+      let channel = FlutterMethodChannel(
+        name: "ai.nymbot/secure", binaryMessenger: registrar.messenger())
+      channel.setMethodCallHandler { call, result in
+        SecretClipboard.handle(call, result: result)
+      }
+    }
     if let registrar = self.registrar(forPlugin: "NymbotReplyNotify") {
       ReplyNotify.register(with: registrar)
     }
@@ -41,6 +55,18 @@ import UIKit
       }
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    if url.scheme?.lowercased() == "nymbot" {
+      if url.host?.lowercased() == "share" { ShareInbox.drain() }
+      return true
+    }
+    return super.application(app, open: url, options: options)
   }
 
   override func application(
@@ -62,6 +88,7 @@ import UIKit
 enum Intents {
   private static var channel: FlutterMethodChannel?
   private static var pending: [[String: Any]] = []
+  private static var listening = false
 
   static func attach(_ messenger: FlutterBinaryMessenger) {
     let made = FlutterMethodChannel(name: "ai.nymbot/intents", binaryMessenger: messenger)
@@ -69,6 +96,7 @@ enum Intents {
       if call.method == "initial" {
         let held = pending
         pending = []
+        listening = true
         result(held)
       } else {
         result(FlutterMethodNotImplemented)
@@ -78,10 +106,125 @@ enum Intents {
   }
 
   static func deliver(_ payload: [String: Any]) {
-    if let channel = channel {
+    if listening, let channel = channel {
       channel.invokeMethod("incoming", arguments: payload)
     } else {
       pending.append(payload)
+    }
+  }
+}
+
+enum ShareInbox {
+  static let group = "group.ai.nymbot"
+  static let maxFileBytes = 50 * 1024 * 1024
+  static let maxTotalBytes = 80 * 1024 * 1024
+  static let maxFiles = 10
+  private static let queue = DispatchQueue(label: "ai.nymbot.share-inbox")
+  private static let stale: TimeInterval = 3600
+
+  static func drain() {
+    queue.async {
+      let found = collect()
+      if found.isEmpty { return }
+      DispatchQueue.main.async {
+        for payload in found { Intents.deliver(payload) }
+      }
+    }
+  }
+
+  static func collect() -> [[String: Any]] {
+    let manager = FileManager.default
+    guard
+      let root = manager.containerURL(forSecurityApplicationGroupIdentifier: group)?
+        .appendingPathComponent("ShareInbox", isDirectory: true),
+      let entries = try? manager.contentsOfDirectory(
+        at: root, includingPropertiesForKeys: [.creationDateKey],
+        options: [.skipsHiddenFiles])
+    else {
+      return []
+    }
+    let dated = entries.map { entry -> (URL, Date) in
+      let made = (try? entry.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+      return (entry, made)
+    }
+    var found: [[String: Any]] = []
+    for (entry, made) in dated.sorted(by: { $0.1 < $1.1 }) {
+      guard let data = try? Data(contentsOf: entry.appendingPathComponent("manifest.json")) else {
+        if Date().timeIntervalSince(made) > stale { try? manager.removeItem(at: entry) }
+        continue
+      }
+      defer { try? manager.removeItem(at: entry) }
+      guard let manifest = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        continue
+      }
+      if let payload = payload(manifest, in: entry) { found.append(payload) }
+    }
+    return found
+  }
+
+  private static func payload(_ manifest: [String: Any], in folder: URL) -> [String: Any]? {
+    let text = (manifest["text"] as? String) ?? ""
+    var files: [[String: Any]] = []
+    var total = 0
+    for item in (manifest["files"] as? [[String: Any]] ?? []).prefix(maxFiles) {
+      guard
+        let stored = item["file"] as? String,
+        stored.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil
+      else { continue }
+      let url = folder.appendingPathComponent(stored)
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+      guard size <= maxFileBytes, total + size <= maxTotalBytes,
+        let bytes = try? Data(contentsOf: url)
+      else { continue }
+      total += bytes.count
+      files.append([
+        "name": label(item["name"] as? String ?? ""),
+        "bytes": FlutterStandardTypedData(bytes: bytes),
+      ])
+    }
+    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && files.isEmpty {
+      return nil
+    }
+    return ["type": "share", "text": text, "files": files]
+  }
+
+  static func label(_ raw: String) -> String {
+    var name = raw.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? ""
+    name = String(
+      String.UnicodeScalarView(
+        name.unicodeScalars.filter {
+          !CharacterSet.controlCharacters.contains($0) && $0.properties.generalCategory != .format
+        }))
+    name = name.trimmingCharacters(in: .whitespaces)
+    while name.hasPrefix(".") { name.removeFirst() }
+    name = name.trimmingCharacters(in: .whitespaces)
+    if name.count > 120 {
+      let ext = (name as NSString).pathExtension
+      let tail = ext.isEmpty || ext.count > 9 ? "" : ".\(ext)"
+      name = String(name.prefix(120 - tail.count)) + tail
+    }
+    return name.isEmpty ? "shared" : name
+  }
+}
+
+enum SecretClipboard {
+  static func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "copySecret":
+      let args = call.arguments as? [String: Any] ?? [:]
+      guard let text = args["text"] as? String else {
+        result(FlutterError(code: "failed", message: nil, details: nil))
+        return
+      }
+      let seconds = (args["seconds"] as? NSNumber)?.doubleValue ?? 60
+      UIPasteboard.general.setItems(
+        [[UTType.plainText.identifier: text]],
+        options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(seconds)])
+      result(true)
+    case "secure":
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
     }
   }
 }

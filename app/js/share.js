@@ -302,15 +302,18 @@
         text.innerHTML = MD().render(m.content || '', { wrap: true, lineNumbers: false, media: null });
         const strip = interactive ? '[data-act="code-download"], [data-act="save-media"]'
             : '[data-act="code-preview"], [data-act="code-download"], [data-act="save-media"]';
-        for (const b of text.querySelectorAll(strip)) b.remove();
-        for (const media of text.querySelectorAll('img, audio, video, source')) {
-            const src = media.getAttribute('src');
-            if (src) media.setAttribute('src', proxied(src));
-            media.setAttribute('referrerpolicy', 'no-referrer');
-            const box = media.closest('.msg-media-box');
-            if (box) {
-                const settle = () => box.classList.remove('is-loading');
-                for (const type of ['load', 'loadedmetadata', 'error']) media.addEventListener(type, settle);
+        const scopes = [text].concat(Array.from(text.querySelectorAll('template'), (tpl) => tpl.content));
+        for (const scope of scopes) {
+            for (const b of scope.querySelectorAll(strip)) b.remove();
+            for (const media of scope.querySelectorAll('img, audio, video, source')) {
+                const src = media.getAttribute('src');
+                if (src) media.setAttribute('src', proxied(src));
+                media.setAttribute('referrerpolicy', 'no-referrer');
+                const box = scope === text ? media.closest('.msg-media-box') : null;
+                if (box) {
+                    const settle = () => box.classList.remove('is-loading');
+                    for (const type of ['load', 'loadedmetadata', 'error']) media.addEventListener(type, settle);
+                }
             }
         }
         body.appendChild(text);

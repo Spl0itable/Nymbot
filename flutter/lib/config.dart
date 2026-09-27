@@ -9,6 +9,15 @@ class NymbotConfig {
       'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2';
   static const String botName = 'Nymbot';
 
+  static const List<String> mediaHosts = [
+    'blossom.band',
+    '.blossom.band',
+    'blossom.primal.net',
+    'blossom.yakihonne.com',
+    'files.sovbit.host',
+    'nostr.download',
+  ];
+
   static const List<String> shareHosts = [
     'https://blossom.yakihonne.com',
     'https://files.sovbit.host',

@@ -9,13 +9,37 @@
     const MEMORY_TEXT_CAP = 400;
     const MEMORY_MAX = 200;
 
-    function read(key, fallback) {
+    function load(key, fallback) {
         const V = window.NymbotVault;
         if (V && V.covers(key)) return V.read(key, fallback);
         try {
             const raw = localStorage.getItem(P + key);
             return raw == null ? fallback : JSON.parse(raw);
         } catch (_) { return fallback; }
+    }
+
+    function scrub(key, value) {
+        if (key !== 'settings' || !value || typeof value !== 'object' || !('git' in value)) return value;
+        const copy = Object.assign({}, value);
+        delete copy.git;
+        return copy;
+    }
+
+    function read(key, fallback) {
+        if (key === 'settings') migrateGit();
+        return scrub(key, load(key, fallback));
+    }
+
+    function migrateGit() {
+        const held = load('settings', null);
+        if (!held || typeof held !== 'object' || !('git' in held)) return;
+        const legacy = held.git;
+        const done = load('gitMigrated', false) === true || Array.isArray(load('repos', null));
+        if (!done && legacy && legacy.repo && legacy.token) {
+            if (!write('repos', [Object.assign({ id: uid(), enabled: true }, legacy)])) return;
+        }
+        write('gitMigrated', true);
+        write('settings', scrub('settings', held));
     }
 
     // Anything that wants to know when this device changed something.
@@ -35,6 +59,7 @@
     }
 
     function write(key, value) {
+        value = scrub(key, value);
         const V = window.NymbotVault;
         if (V && V.covers(key)) {
             let done;
@@ -67,7 +92,6 @@
         tier: 'standard',
         proModel: null,
         mediaModel: null,
-        git: null,
         anon: false,
         anonAutoTop: true,
         anonAutoTopFloor: 10,
@@ -228,20 +252,15 @@
             return next;
         },
         resetSettings() {
+            migrateGit();
             drop('settings');
             return this.settings();
         },
 
         repos() {
+            migrateGit();
             const list = read('repos', null);
-            if (Array.isArray(list)) return list;
-            const legacy = (read('settings', {}) || {}).git;
-            if (legacy && legacy.repo && legacy.token) {
-                const migrated = [Object.assign({ id: uid(), enabled: true }, legacy)];
-                write('repos', migrated);
-                return migrated;
-            }
-            return [];
+            return Array.isArray(list) ? list : [];
         },
 
         saveRepos(list) {

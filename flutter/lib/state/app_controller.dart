@@ -977,31 +977,42 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  static const _gitMigratedKey = 'gitMigrated';
+
   Future<void> _loadRepos() async {
     repos = await store.repos();
-    if (repos.isEmpty) {
-      final legacy = store.getString('settings');
-      if (legacy != null) {
-        try {
-          final j = jsonDecode(legacy) as Map<String, dynamic>;
-          final git = j['git'] as Map<String, dynamic>?;
-          if (git != null && git['repo'] != null && git['token'] != null) {
-            repos = [
-              GitRepo(
-                id: bytesToHex(randomBytes(8)),
-                repo: '${git['repo']}',
-                token: '${git['token']}',
-                provider: '${git['provider'] ?? 'github'}',
-                host: '${git['host'] ?? ''}',
-                branch: '${git['branch'] ?? ''}',
-                allowWrites: git['allowWrites'] == true,
-              )
-            ];
-            await store.saveRepos(repos);
-          }
-        } catch (_) {}
-      }
+    final legacy = store.getString('settings');
+    if (legacy == null) return;
+    Map<String, dynamic>? held;
+    try {
+      final j = jsonDecode(legacy);
+      if (j is Map<String, dynamic>) held = j;
+    } catch (_) {}
+    if (held == null || !held.containsKey('git')) return;
+    final git = held['git'];
+    final migrated = store.getBool(_gitMigratedKey) ||
+        repos.isNotEmpty ||
+        await store.secret('repos') != null;
+    if (!migrated &&
+        git is Map &&
+        git['repo'] != null &&
+        git['token'] != null) {
+      repos = [
+        GitRepo(
+          id: bytesToHex(randomBytes(8)),
+          repo: '${git['repo']}',
+          token: '${git['token']}',
+          provider: '${git['provider'] ?? 'github'}',
+          host: '${git['host'] ?? ''}',
+          branch: '${git['branch'] ?? ''}',
+          allowWrites: git['allowWrites'] == true,
+        )
+      ];
+      await store.saveRepos(repos);
     }
+    await store.setBool(_gitMigratedKey, true);
+    held.remove('git');
+    await store.setString('settings', jsonEncode(held));
   }
 
   Workspace? get activeWorkspace => workspaceOf(current);

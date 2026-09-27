@@ -10,6 +10,7 @@ import '../models/conversation.dart';
 import '../services/media_cache.dart';
 import '../services/tasks.dart';
 import '../state/app_controller.dart';
+import 'citation_cards.dart';
 import 'i18n/i18n.dart';
 import 'motion.dart';
 import 'nym_glyph.dart';
@@ -404,7 +405,7 @@ class _TasksPaneState extends State<TasksPane> {
               padding: const EdgeInsets.only(left: 27, top: 1),
               child: Row(
                 children: [
-                  if (it.favicons) _favicon(c),
+                  if (it.favicons && Citation.faviconHost(c)) _favicon(c),
                   Expanded(child: Text(c, style: faint)),
                 ],
               ),

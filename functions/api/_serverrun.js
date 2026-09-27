@@ -5,7 +5,8 @@ import {
   runnerBuildRequest, runnerImageOpen, runnerMaxTimeout, runnerBase64, runnerSafePath, runnerBilledMs,
   runnerUsdPerSecond, callRunner
 } from "./_runner.js";
-import { tarEntries, gitGunzip, gitStageFiles } from "./_gitrun.js";
+import { tarEntries, gitGunzip, gitStageFiles, gitUnifiedDiff, gitNeedsReview, gitTextHash, gitPathInScope,
+  gitDirInScope } from "./_gitrun.js";
 
 export var SERVER_RUN_TOOL = "run_command";
 export var SERVER_RUN_ARCHIVE_MAX_BYTES = 60 * 1024 * 1024;
@@ -15,6 +16,7 @@ export var SERVER_RUN_HEARTBEAT_MS = 15000;
 export var SERVER_RUN_HOLD_SLACK_S = 600;
 export var SERVER_RUN_DEFAULT_TIMEOUT_SEC = 300;
 export var SERVER_RUN_CHANGED_MAX = 60;
+export var SERVER_RUN_STAGED_LIST_MAX = 40;
 
 function newId() {
   var b = crypto.getRandomValues(new Uint8Array(16));
@@ -373,7 +375,13 @@ function stripTop(entries) {
   return shared;
 }
 
-export function serverRunOverlay(tarBytes, staged) {
+function serverRunEntryInScope(cfg, e) {
+  if (!cfg || !cfg.pathsSet) return true;
+  if (e.type === "5") return gitDirInScope(cfg, e.path);
+  return gitPathInScope(cfg, e.path);
+}
+
+export function serverRunOverlay(tarBytes, staged, cfg) {
   var entries = tarEntries(tarBytes);
   var shared = stripTop(entries);
   var byPath = new Map();
@@ -383,13 +391,16 @@ export function serverRunOverlay(tarBytes, staged) {
     var p = shared ? e.path.split("/").slice(1).join("/") : e.path;
     p = runnerSafePath(p.replace(/^\.\//, ""));
     if (!p) continue;
-    byPath.set(p, { path: p, type: e.type === "7" ? "0" : e.type, mode: e.mode, data: e.data, link: e.link });
+    var entry = { path: p, type: e.type === "7" ? "0" : e.type, mode: e.mode, data: e.data, link: e.link };
+    if (!serverRunEntryInScope(cfg, entry)) continue;
+    byPath.set(p, entry);
   }
   var applied = [];
   for (var j = 0; j < (staged || []).length; j++) {
     var f = staged[j];
     var sp = runnerSafePath(f.path);
     if (!sp) continue;
+    if (cfg && cfg.pathsSet && !gitPathInScope(cfg, sp)) continue;
     if (f.content == null) {
       byPath.delete(sp);
     } else {
@@ -402,10 +413,43 @@ export function serverRunOverlay(tarBytes, staged) {
   return { entries: list, applied: applied };
 }
 
-export async function serverRunRepoArchive(cfg, record, fetchArchive, opts) {
-  var o = opts || {};
+export function serverRunStagedBranch(cfg, record) {
   var branch = cfg.resolvedBranch;
   if (record && record.stageBranch && gitStageFiles(record.stage, record.stageBranch).length) branch = record.stageBranch;
+  return branch;
+}
+
+function serverRunStagedPrint(staged) {
+  return gitTextHash(staged.map(function (f) {
+    return f.path + "\u0000" + (f.content == null ? "-" : gitTextHash(f.content));
+  }).join("\u0001")) || "";
+}
+
+export function serverRunStagedSummary(cfg, record) {
+  var empty = { branch: cfg ? cfg.resolvedBranch || null : null, files: [], more: 0, unreviewed: false, fingerprint: "" };
+  if (!cfg || !record || !record.stage) return empty;
+  var branch = serverRunStagedBranch(cfg, record);
+  var staged = gitStageFiles(record.stage, branch);
+  if (!staged.length) return Object.assign(empty, { branch: branch });
+  var unreviewed = !!cfg.approve || !!record.reviewForced;
+  var files = [];
+  for (var i = 0; i < staged.length; i++) {
+    var f = staged[i];
+    if (gitNeedsReview(cfg, branch, f.path)) unreviewed = true;
+    if (files.length < SERVER_RUN_STAGED_LIST_MAX) {
+      var d = gitUnifiedDiff(f.path, f.existed ? f.before : null, f.content);
+      files.push({ path: f.path, added: d.added, removed: d.removed, deleted: f.content == null });
+    }
+  }
+  return {
+    branch: branch, files: files, more: Math.max(0, staged.length - files.length),
+    unreviewed: unreviewed, fingerprint: serverRunStagedPrint(staged)
+  };
+}
+
+export async function serverRunRepoArchive(cfg, record, fetchArchive, opts) {
+  var o = opts || {};
+  var branch = serverRunStagedBranch(cfg, record);
   var staged = record ? gitStageFiles(record.stage, branch) : [];
   var got;
   try {
@@ -423,7 +467,7 @@ export async function serverRunRepoArchive(cfg, record, fetchArchive, opts) {
     return { ok: false, error: "the repository is too large to unpack for a server run" };
   }
   got = null;
-  var over = serverRunOverlay(tar, staged);
+  var over = serverRunOverlay(tar, staged, cfg);
   var packed = await serverRunGzip(serverRunTarParts(over.entries), Number(o.maxBytes) || SERVER_RUN_ARCHIVE_MAX_BYTES);
   if (!packed.ok) return { ok: false, error: "the working tree is larger than 60 MiB once packed" };
   return { ok: true, bytes: packed.bytes, branch: branch, applied: over.applied, files: over.entries.length };
@@ -514,6 +558,11 @@ export function serverRunTool(o) {
   var price = function (image, timeoutSec) {
     return runnerMaxMilli(image, timeoutSec, o.btcUsd, { margin: o.margin, milliForUsd: o.milliForUsd });
   };
+  var serverRunGateStaged = function (item) {
+    var cfg = typeof o.pickRepo === "function" ? o.pickRepo(item.args && item.args.repo) : null;
+    var record = cfg && typeof o.recordOf === "function" ? o.recordOf(cfg) : null;
+    return serverRunStagedSummary(cfg, record);
+  };
   var gate = function (item, usage) {
     if (!item || item.name !== SERVER_RUN_TOOL) return null;
     if (!item.run || !(item.run.maxMilli > 0)) {
@@ -528,6 +577,11 @@ export function serverRunTool(o) {
       };
     }
     var run = item.run;
+    var stagedNow = serverRunGateStaged(item);
+    if (run.staged === undefined) {
+      run.staged = stagedNow.fingerprint;
+      run.unreviewed = stagedNow.unreviewed;
+    }
     if (o.capGuard && typeof o.capGuard.left === "function") {
       var left = o.capGuard.left(usage || {});
       if (run.maxMilli > left) {
@@ -542,6 +596,12 @@ export function serverRunTool(o) {
       timeoutSec: run.timeoutSec, maxCredits: runnerCredits(run.maxMilli)
     };
     if (many && item.args && item.args.repo) pending.repo = String(item.args.repo).slice(0, 200);
+    if (stagedNow.files.length) {
+      pending.stagedBranch = stagedNow.branch;
+      pending.stagedFiles = stagedNow.files;
+      pending.stagedMore = stagedNow.more;
+      pending.unreviewedStaged = stagedNow.unreviewed;
+    }
     return {
       pending: pending,
       declined: "The user declined this server run. Nothing ran and nothing was charged. Carry on without it, and do not ask to run it again unless the user says so."
@@ -552,6 +612,10 @@ export function serverRunTool(o) {
     if (!run) return "Error: run_command needs the user's approval first.";
     var cfg = o.pickRepo(item.args && item.args.repo);
     if (!cfg) return "Error: no such repository is connected to this chat.";
+    var stagedAt = serverRunStagedSummary(cfg, typeof o.recordOf === "function" ? o.recordOf(cfg) : null);
+    if ((stagedAt.unreviewed || run.unreviewed) && stagedAt.fingerprint !== String(run.staged || "")) {
+      return "Error: run_command was not run. The staged edits changed after the user approved this run, and those edits still need the user's review, so they cannot go into the server unseen. Nothing ran and nothing was charged. Call run_command again so the user can approve it with the current edits.";
+    }
     var opened = await serverRunOpen(o.env, {
       pubkey: o.pubkey, maxMilli: run.maxMilli, timeoutSec: run.timeoutSec,
       rateLimit: o.rateLimit, rateWindowMs: o.rateWindowMs

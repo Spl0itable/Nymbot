@@ -9,7 +9,8 @@ export var MCP_MAX_RESULT_CHARS = 16000;
 export var MCP_MAX_LIST_PAGES = 5;
 export var MCP_MAX_DESC_CHARS = 600;
 export var MCP_MAX_SCHEMA_CHARS = 8000;
-export var MCP_MAX_ARGS_CHARS = 2000;
+export var MCP_MAX_ARGS_CHARS = 20000;
+export var MCP_MAX_TITLE_CHARS = 120;
 export var MCP_TOOL_NAME_MAX = 64;
 var MCP_MAX_HEADERS = 4;
 var MCP_CLIENT_INFO = { name: "Nymbot", version: "1.0.0" };
@@ -21,7 +22,7 @@ var MCP_RESERVED_HEADERS = {
 };
 var MCP_BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa",
   ".corp", ".intranet", ".private", ".localdomain"];
-var MCP_ALLOWED_PORTS = { "": 1, "443": 1, "8443": 1 };
+var MCP_ALLOWED_PORTS = ["", "443", "8443"];
 var MCP_BLOCKED_HOSTS = { "localhost": 1, "metadata": 1, "metadata.google.internal": 1,
   "instance-data": 1, "ip6-localhost": 1, "ip6-loopback": 1 };
 
@@ -70,7 +71,7 @@ export function mcpHostBlocked(rawHost) {
   var v4 = mcpIpv4Blocked(host);
   if (v4 === true) return "address";
   if (v4 === null && v6 === null) {
-    if (MCP_BLOCKED_HOSTS[host] || host.indexOf(".") === -1) return "local";
+    if (Object.prototype.hasOwnProperty.call(MCP_BLOCKED_HOSTS, host) || host.indexOf(".") === -1) return "local";
     for (var i = 0; i < MCP_BLOCKED_SUFFIXES.length; i++) {
       var suf = MCP_BLOCKED_SUFFIXES[i];
       if (host.slice(-suf.length) === suf) return "local";
@@ -87,7 +88,7 @@ export function mcpCheckUrl(raw) {
   try { u = new URL(s); } catch (e) { return { ok: false, error: "That connector URL is not a valid URL." }; }
   if (u.protocol !== "https:") return { ok: false, error: "Connectors must use https." };
   if (u.username || u.password) return { ok: false, error: "Put credentials in the connector's token or header, not in its URL." };
-  if (!MCP_ALLOWED_PORTS[u.port]) return { ok: false, error: "Connectors must use the standard https port (443 or 8443)." };
+  if (MCP_ALLOWED_PORTS.indexOf(String(u.port)) === -1) return { ok: false, error: "Connectors must use the standard https port (443 or 8443)." };
   var host = u.hostname.toLowerCase().replace(/\.$/, "");
   if (!host) return { ok: false, error: "That connector URL has no host." };
   var kind = mcpHostBlocked(host);
@@ -122,7 +123,7 @@ export function mcpParseServer(raw) {
       var hv = raw.headers[hk];
       if (!/^[A-Za-z0-9-]{1,64}$/.test(hk)) return { error: name + ": invalid header name." };
       var lk = hk.toLowerCase();
-      if (MCP_RESERVED_HEADERS[lk] || /^(cf-|x-forwarded-|sec-)/.test(lk)) {
+      if (Object.prototype.hasOwnProperty.call(MCP_RESERVED_HEADERS, lk) || /^(cf-|x-forwarded-|sec-)/.test(lk)) {
         return { error: name + ": the header " + hk + " cannot be set on a connector." };
       }
       if (typeof hv !== "string" || !hv || hv.length > 4096 || /[\r\n\x00]/.test(hv)) {
@@ -139,14 +140,14 @@ export function mcpParseServer(raw) {
   if (raw.autoAllow === true) {
     autoAllow = true;
   } else if (Array.isArray(raw.autoAllow)) {
-    autoAllow = {};
+    autoAllow = Object.create(null);
     for (var k = 0; k < raw.autoAllow.length && k < 500; k++) {
       if (typeof raw.autoAllow[k] === "string" && raw.autoAllow[k]) autoAllow[raw.autoAllow[k].slice(0, 128)] = true;
     }
   }
   var allowed = null;
   if (Array.isArray(raw.tools)) {
-    allowed = {};
+    allowed = Object.create(null);
     for (var j = 0; j < raw.tools.length && j < 500; j++) {
       if (typeof raw.tools[j] === "string" && raw.tools[j]) allowed[raw.tools[j].slice(0, 128)] = true;
     }
@@ -163,7 +164,7 @@ export function mcpParseServers(raw) {
     return { error: "At most " + MCP_MAX_SERVERS + " connectors can be on in one chat." };
   }
   var out = [];
-  var seen = {};
+  var seen = Object.create(null);
   for (var i = 0; i < raw.length; i++) {
     var p = mcpParseServer(raw[i]);
     if (p.error) return { error: p.error };
@@ -374,7 +375,7 @@ export function mcpSlug(name, taken) {
   if (!base || !/^[a-z]/.test(base)) base = ("mcp" + (base ? "_" + base : "")).slice(0, 12).replace(/_+$/, "");
   var slug = base;
   var n = 2;
-  while (taken && taken[slug]) slug = base.slice(0, 10) + n++;
+  while (taken && Object.prototype.hasOwnProperty.call(taken, slug)) slug = base.slice(0, 10) + n++;
   if (taken) taken[slug] = true;
   return slug;
 }
@@ -384,7 +385,7 @@ export function mcpExposedName(slug, toolName, taken) {
   var full = (slug + "__" + clean).slice(0, MCP_TOOL_NAME_MAX);
   var name = full;
   var n = 2;
-  while (taken && taken[name]) {
+  while (taken && Object.prototype.hasOwnProperty.call(taken, name)) {
     var tail = "_" + n++;
     name = full.slice(0, MCP_TOOL_NAME_MAX - tail.length) + tail;
   }
@@ -395,7 +396,19 @@ export function mcpExposedName(slug, toolName, taken) {
 export function mcpAutoAllowed(server, toolName) {
   var auto = server ? server.autoAllow : null;
   if (auto === true) return true;
-  return !!(auto && typeof auto === "object" && typeof toolName === "string" && auto[toolName] === true);
+  return !!(auto && typeof auto === "object" && typeof toolName === "string" &&
+    Object.prototype.hasOwnProperty.call(auto, toolName) && auto[toolName] === true);
+}
+
+export function mcpToolAllowed(server, toolName) {
+  var allowed = server ? server.allowed : null;
+  if (!allowed) return true;
+  return typeof toolName === "string" && Object.prototype.hasOwnProperty.call(allowed, toolName) && allowed[toolName] === true;
+}
+
+export function mcpSpec(runtime, name) {
+  var map = runtime && runtime.byName;
+  return map && typeof name === "string" && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
 }
 
 export function mcpNeedsConfirm(tool, autoAllowed) {
@@ -404,15 +417,34 @@ export function mcpNeedsConfirm(tool, autoAllowed) {
   return autoAllowed !== true;
 }
 
-function mcpSchema(schema) {
+var MCP_SCHEMA_TEXT_KEYS = ["description", "title", "$comment"];
+
+function mcpSchemaText(node, depth) {
+  if (depth > 32 || !node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (var i = 0; i < node.length; i++) mcpSchemaText(node[i], depth + 1);
+    return;
+  }
+  Object.keys(node).forEach(function (k) {
+    var v = node[k];
+    if (typeof v === "string" && MCP_SCHEMA_TEXT_KEYS.indexOf(k) !== -1) {
+      node[k] = mcpInert(mcpText(v, k === "title" ? MCP_MAX_TITLE_CHARS : MCP_MAX_DESC_CHARS));
+    } else if (v && typeof v === "object") {
+      mcpSchemaText(v, depth + 1);
+    }
+  });
+}
+
+export function mcpSchema(schema) {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return { type: "object", properties: {} };
   var s;
   try { s = JSON.stringify(schema); } catch (e) { s = ""; }
   if (!s || s.length > MCP_MAX_SCHEMA_CHARS) return { type: "object", properties: {} };
   var copy = JSON.parse(s);
   if (copy.type !== "object") copy.type = "object";
-  if (!copy.properties || typeof copy.properties !== "object") copy.properties = {};
+  if (!copy.properties || typeof copy.properties !== "object" || Array.isArray(copy.properties)) copy.properties = {};
   delete copy.$schema;
+  mcpSchemaText(copy, 0);
   return copy;
 }
 
@@ -442,9 +474,9 @@ export async function mcpProbe(server, deps) {
 
 export async function mcpPrepare(servers, deps, progress) {
   var say = typeof progress === "function" ? progress : function () { };
-  var slugs = {};
-  var names = {};
-  var runtime = { servers: [], tools: [], byName: {}, failures: [], dropped: 0, secrets: [] };
+  var slugs = Object.create(null);
+  var names = Object.create(null);
+  var runtime = { servers: [], tools: [], byName: Object.create(null), failures: [], dropped: 0, secrets: [] };
   for (var i = 0; i < servers.length; i++) {
     var server = servers[i];
     runtime.secrets = runtime.secrets.concat(server.secrets || []);
@@ -463,7 +495,7 @@ export async function mcpPrepare(servers, deps, progress) {
     }
     for (var j = 0; j < listed.length; j++) {
       var tool = listed[j];
-      if (server.allowed && !server.allowed[tool.name]) continue;
+      if (!mcpToolAllowed(server, tool.name)) continue;
       if (runtime.tools.length >= MCP_MAX_TOOLS) { runtime.dropped++; continue; }
       var exposed = mcpExposedName(slug, tool.name, names);
       var desc = mcpInert(mcpText(tool.description, MCP_MAX_DESC_CHARS));
@@ -548,6 +580,16 @@ export function mcpArgsPreview(args) {
   return s.length > MCP_MAX_ARGS_CHARS ? s.slice(0, MCP_MAX_ARGS_CHARS) + "\u2026" : s;
 }
 
+export function mcpArgsTooLong(args) {
+  return mcpArgsLength(args) > MCP_MAX_ARGS_CHARS;
+}
+
+export function mcpArgsTooLongReply(args) {
+  return "Error: the arguments for this tool call are " + mcpArgsLength(args) + " characters long, more than the " +
+    MCP_MAX_ARGS_CHARS + " the user can review before approving it. Nothing ran. Call the tool again with smaller arguments, " +
+    "for example by splitting the work into several calls.";
+}
+
 function mcpTarget(args) {
   if (!args || typeof args !== "object") return "";
   var keys = ["query", "q", "path", "name", "title", "id", "url", "channel", "repo"];
@@ -600,7 +642,7 @@ export async function runMcpToolLoop(ctx) {
       progress({ kind: "tool", tool: item.name, target: git.target(item.name, item.args) });
       try { return String(await git.exec(item.name, item.args, item, usage)); } catch (e) { return "Error: " + ((e && e.message) || String(e)); }
     }
-    var spec = runtime.byName[item.name];
+    var spec = mcpSpec(runtime, item.name);
     if (!spec) return "Error: no tool called '" + String(item.name || "").slice(0, 80) + "' is available.";
     progress({ kind: "tool", tool: spec.tool, connector: spec.entry.server.name, target: mcpTarget(item.args) });
     if (spec.entry.failed) return "Error: the " + spec.entry.server.name + " connector could not be reached.";
@@ -615,7 +657,7 @@ export async function runMcpToolLoop(ctx) {
   async function drain() {
     while (queue.length) {
       var item = queue[0];
-      var spec = item.kind === "mcp" ? runtime.byName[item.name] : null;
+      var spec = item.kind === "mcp" ? mcpSpec(runtime, item.name) : null;
       var gate = item.kind === "git" && git && typeof git.gate === "function" ? git.gate(item, usage) : null;
       if (gate && gate.refuse) {
         queue.shift();
@@ -636,6 +678,12 @@ export async function runMcpToolLoop(ctx) {
         }
       }
       if (spec && spec.confirm) {
+        if (mcpArgsTooLong(item.args)) {
+          if (approve && approve === item.id) approve = "";
+          queue.shift();
+          convo.push({ role: "tool", tool_call_id: item.id, content: mcpArgsTooLongReply(item.args) });
+          continue;
+        }
         if (approve && approve === item.id) {
           approve = "";
         } else {
@@ -704,7 +752,7 @@ export async function runMcpToolLoop(ctx) {
     }
     wantedMore = true;
     if (String(d.proMessageText(msg) || "").trim()) sofar = d.proMessageText(msg);
-    var gitNames = {};
+    var gitNames = Object.create(null);
     if (git) for (var g = 0; g < git.tools.length; g++) gitNames[git.tools[g].function.name] = true;
     var fixed = [];
     for (var i = 0; i < toolCalls.length; i++) {

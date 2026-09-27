@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
+import '../core/utils/safe_url.dart';
 import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
 import '../services/media_cache.dart';
@@ -56,9 +56,14 @@ class Citation {
     return from.isEmpty ? '?' : from.substring(0, 1).toUpperCase();
   }
 
+  static final _hostname = RegExp(r'^[a-z0-9-]+(\.[a-z0-9-]+)+$', caseSensitive: false);
+
+  static bool faviconHost(String host) => host.length <= 253 && _hostname.hasMatch(host);
+
   String get faviconUrl {
-    if (host.isEmpty) return '';
-    final target = Uri.encodeComponent(host);
+    final bare = (Uri.tryParse(url)?.host ?? '').replaceFirst(RegExp(r'^www\.'), '');
+    if (!faviconHost(bare)) return '';
+    final target = Uri.encodeComponent(bare);
     return 'https://${NymbotConfig.apiHost}/api/proxy?action=favicon&host=$target';
   }
 }
@@ -194,8 +199,7 @@ class _Card extends StatelessWidget {
     final theme = Theme.of(context);
     final open = citation.url.isEmpty
         ? null
-        : () => launchUrl(Uri.parse(citation.url),
-            mode: LaunchMode.externalApplication);
+        : () => launchSafeUrl(citation.url);
 
     return InkWell(
       borderRadius: BorderRadius.circular(8),

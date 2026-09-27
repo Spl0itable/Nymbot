@@ -11,5 +11,33 @@
     { "src": "/app/icons/nymbot-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/app/icons/nymbot-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/app/icons/nymbot-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
-  ]
+  ],
+  "share_target": {
+    "action": "/app/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "image/*", "video/*", "text/*", "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/json",
+            "application/xml", "application/x-yaml", "application/yaml", "application/javascript",
+            "application/x-sh", "application/sql", ".pdf", ".docx", ".mp4", ".m4v", ".webm", ".mov", ".txt",
+            ".md", ".markdown", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
+            ".csv", ".tsv", ".log", ".sql", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".js", ".mjs",
+            ".cjs", ".jsx", ".ts", ".tsx", ".dart", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".kts",
+            ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".php", ".lua", ".r", ".scala", ".clj", ".ex",
+            ".exs", ".erl", ".hs", ".ml", ".vue", ".svelte", ".html", ".htm", ".xml", ".svg", ".css", ".scss",
+            ".less", ".gradle", ".properties", ".lock", ".diff", ".patch", ".gitignore", ".dockerfile",
+            ".makefile"
+          ]
+        }
+      ]
+    }
+  }
 }

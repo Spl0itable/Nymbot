@@ -448,7 +448,10 @@
                 // The local ones win on the keys this device has changed since
                 // its last push; everything else comes across.
                 const local = Store.read('settings', {}) || {};
-                const merged = Object.assign({}, remote.settings, local);
+                const theirs = Object.assign({}, remote.settings);
+                delete theirs.git;
+                delete local.git;
+                const merged = Object.assign({}, theirs, local);
                 if ((Number(remote.settings.nicknameAt) || 0) > (Number(local.nicknameAt) || 0)) {
                     merged.nickname = typeof remote.settings.nickname === 'string' ? remote.settings.nickname : '';
                     merged.nicknameAt = Number(remote.settings.nicknameAt);

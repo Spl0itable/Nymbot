@@ -5,6 +5,15 @@ window.NymbotConfig = {
     botName: 'Nymbot',
     botAvatar: '/images/nymbot-icon.png',
 
+    mediaHosts: [
+        'blossom.band',
+        '.blossom.band',
+        'blossom.primal.net',
+        'blossom.yakihonne.com',
+        'files.sovbit.host',
+        'nostr.download'
+    ],
+
     shareHosts: [
         'https://blossom.yakihonne.com',
         'https://files.sovbit.host',

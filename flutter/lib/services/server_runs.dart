@@ -264,6 +264,40 @@ class ServerRuns {
       ? t('{n} min', {'n': sec ~/ 60})
       : t('{n} s', {'n': sec});
 
+  static const stagedKept = 40;
+  static const stagedShown = 8;
+
+  static Map<String, dynamic>? stagedFrom(Map p) {
+    final list = p['stagedFiles'] is List ? p['stagedFiles'] as List : const [];
+    final files = <Map<String, dynamic>>[];
+    for (final f in list) {
+      final path = f is String ? f : (f is Map ? '${f['path'] ?? ''}' : '');
+      if (path.isEmpty) continue;
+      if (files.length >= stagedKept) break;
+      final added = f is Map && f['added'] is num ? (f['added'] as num).toInt() : 0;
+      final removed = f is Map && f['removed'] is num ? (f['removed'] as num).toInt() : 0;
+      files.add({
+        'path': path.length > 400 ? path.substring(0, 400) : path,
+        if (added > 0) 'added': added,
+        if (removed > 0) 'removed': removed,
+        if (f is Map && f['deleted'] == true) 'deleted': true,
+      });
+    }
+    if (files.isEmpty) return null;
+    final extra = list.length - files.length;
+    final given = p['stagedMore'];
+    final more = given == true
+        ? (extra > 1 ? extra : 1)
+        : (given is num && given > 0 ? given.toInt() : 0) + (extra > 0 ? extra : 0);
+    final branch = p['stagedBranch'] is String ? p['stagedBranch'] as String : '';
+    return {
+      'branch': branch.length > 200 ? branch.substring(0, 200) : branch,
+      'files': files,
+      'more': more,
+      'unreviewed': p['unreviewedStaged'] == true,
+    };
+  }
+
   static Map<String, dynamic> pendingFrom(Map p, String token) => {
         'kind': 'server-run',
         'id': '${p['id'] ?? ''}',
@@ -273,6 +307,7 @@ class ServerRuns {
         'maxCredits': p['maxCredits'] is num ? (p['maxCredits'] as num).toDouble() : 0.0,
         if (p['repo'] is String && (p['repo'] as String).isNotEmpty) 'repo': p['repo'],
         if (p['team'] == true) 'team': true,
+        if (stagedFrom(p) case final staged?) 'staged': staged,
         'token': token,
         'state': 'waiting',
       };

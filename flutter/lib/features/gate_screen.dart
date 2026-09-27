@@ -11,6 +11,7 @@ import '../core/crypto/bech32_codec.dart' as bech32;
 import '../core/crypto/keys.dart';
 import '../core/crypto/pq.dart' as pq;
 import '../core/theme/theme.dart';
+import '../core/utils/safe_url.dart';
 import '../services/key_backup.dart';
 import '../services/nickname.dart';
 import '../services/passkey_backup.dart';
@@ -60,6 +61,7 @@ class _GateScreenState extends State<GateScreen> {
   bool _remoteOpen = false;
   Nip46Signer? _offer;
   String? _signerStatus;
+  String? _authUrl;
   String? _backupStatus;
   bool _backupSpin = false;
   bool _passkeyReady = false;
@@ -88,12 +90,19 @@ class _GateScreenState extends State<GateScreen> {
   void _dropOffer() {
     final offer = _offer;
     _offer = null;
+    _authUrl = null;
     if (offer != null) unawaited(offer.close());
   }
 
   void _openAuth(String url) {
-    unawaited(launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)
-        .catchError((_) => false));
+    if (!mounted) return;
+    setState(() => _authUrl = url);
+  }
+
+  void _approveAuth() {
+    final url = _authUrl;
+    setState(() => _authUrl = null);
+    if (url != null) unawaited(launchSafeUrl(url));
   }
 
   String _signerError(Object e) =>
@@ -1009,7 +1018,7 @@ class _GateScreenState extends State<GateScreen> {
               icon: const NymGlyph('copy', size: 18),
               tooltip: t('Copy the link'),
               onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: link));
+                await SecretScreen.copy(link);
                 if (!mounted) return;
                 ScaffoldMessenger.of(context)
                     .showSnackBar(SnackBar(content: Text(t('Copied.'))));
@@ -1041,6 +1050,14 @@ class _GateScreenState extends State<GateScreen> {
               ),
           ],
         ),
+        if (_authUrl != null) ...[
+          const SizedBox(height: 8),
+          FilledButton.tonal(
+            key: const ValueKey('gate-signer-auth'),
+            onPressed: _approveAuth,
+            child: Text(t('Open the approval page')),
+          ),
+        ],
       ],
       const SizedBox(height: 8),
     ];

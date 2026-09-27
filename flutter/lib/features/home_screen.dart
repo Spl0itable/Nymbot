@@ -40,6 +40,7 @@ import 'progress_lines.dart';
 import 'research_view.dart';
 import 'team_view.dart';
 import 'share_chat_sheet.dart';
+import 'share_target_sheet.dart';
 import 'shared_chat_screen.dart';
 import 'sticky_avatar.dart';
 import '../services/research.dart';
@@ -177,9 +178,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       return;
     }
-    if (app.current == null || app.messages.isNotEmpty) {
+    final target = await showShareTargetSheet(context, app,
+        text: item.text ?? '', files: item.files.length);
+    if (target == null || !mounted) return;
+    final chosen = target.conversation;
+    if (chosen != null && app.conversations.any((c) => c.id == chosen.id)) {
+      if (app.current?.id != chosen.id) await app.open(chosen);
+    } else if (app.current == null || app.messages.isNotEmpty) {
       await app.newConversation();
     }
+    if (!mounted) return;
     final text = item.text?.trim() ?? '';
     if (text.isNotEmpty) {
       final draft = _input.markdown.trim();

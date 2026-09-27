@@ -1,8 +1,10 @@
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart';
 
 import 'event_signer.dart';
 import 'nip46.dart';
 import 'nip55.dart';
+
+final ValueNotifier<String?> signerAuthUrl = ValueNotifier<String?>(null);
 
 RemoteSigner? restoreRemoteSigner(Map<String, dynamic> session,
     {Nip46SocketFactory? sockets}) {
@@ -10,8 +12,7 @@ RemoteSigner? restoreRemoteSigner(Map<String, dynamic> session,
     case 'nip46':
       return Nip46Signer.restore(session, sockets: sockets)
         ?..onAuthUrl = (url) {
-          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)
-              .catchError((_) => false);
+          signerAuthUrl.value = url;
         };
     case 'nip55':
       return Nip55Signer.restore(session);

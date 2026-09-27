@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/theme/theme.dart';
@@ -13,6 +12,7 @@ import 'i18n/i18n.dart';
 import 'markdown_body.dart';
 import 'sheets/sheet.dart';
 import 'nym_glyph.dart';
+import 'secret_guard.dart';
 
 ChatShareService chatShareFor(AppController app) => ChatShareService(
       blossom: app.blossom,
@@ -87,7 +87,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
   }
 
   Future<void> _copy(String link) async {
-    await Clipboard.setData(ClipboardData(text: link));
+    await SecretScreen.copy(link);
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()

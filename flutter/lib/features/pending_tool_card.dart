@@ -46,6 +46,57 @@ class _PendingToolCardState extends State<PendingToolCard> {
     );
   }
 
+  Widget? _staged(BuildContext context, Object? raw) {
+    if (raw is! Map || raw['files'] is! List) return null;
+    final files = [
+      for (final f in raw['files'] as List)
+        if (f is Map && '${f['path'] ?? ''}'.isNotEmpty) f,
+    ];
+    if (files.isEmpty) return null;
+    final theme = Theme.of(context);
+    final hint = TextStyle(fontSize: 12, color: theme.hintColor);
+    const mono = TextStyle(fontSize: 11, fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback);
+    final branch = '${raw['branch'] ?? ''}';
+    final shown = files.take(ServerRuns.stagedShown).toList();
+    final more = ((raw['more'] as num?)?.toInt() ?? 0) + files.length - shown.length;
+    String diff(Map f) {
+      if (f['deleted'] == true) return t('deleted');
+      final added = (f['added'] as num?)?.toInt() ?? 0;
+      final removed = (f['removed'] as num?)?.toInt() ?? 0;
+      return [if (added > 0) '+$added', if (removed > 0) '\u2212$removed'].join(' ');
+    }
+
+    return Column(
+      key: const ValueKey('server-run-staged'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        Text(
+          branch.isNotEmpty ? t('Staged changes on {branch}:', {'branch': branch}) : t('Staged changes:'),
+          style: hint,
+        ),
+        for (final f in shown)
+          Text.rich(
+            TextSpan(children: [
+              TextSpan(text: '${f['path']}'),
+              if (diff(f).isNotEmpty) TextSpan(text: '  ${diff(f)}', style: TextStyle(color: theme.hintColor)),
+            ]),
+            style: mono,
+          ),
+        if (more > 0) Text(t('+{n} more', {'n': more}), style: hint),
+        if (raw['unreviewed'] == true)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              t("You haven't reviewed these staged changes. If you allow this run, they go to the server with it."),
+              key: const ValueKey('server-run-staged-warn'),
+              style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _serverRun(BuildContext context) {
     final theme = Theme.of(context);
     final pending = widget.pending;
@@ -57,6 +108,7 @@ class _PendingToolCardState extends State<PendingToolCard> {
     final credits = (pending['maxCredits'] as num?)?.toDouble() ?? 0;
     final repo = '${pending['repo'] ?? ''}';
     final hint = TextStyle(fontSize: 12, color: theme.hintColor);
+    final staged = _staged(context, pending['staged']);
     return _frame(context, state != 'waiting', [
       Text(
         pending['team'] == true
@@ -94,6 +146,7 @@ class _PendingToolCardState extends State<PendingToolCard> {
         t('Up to {credits} Pro credits', {'credits': ServerRuns.credits(credits)}),
         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
       ),
+      if (staged != null) staged,
       const SizedBox(height: 6),
       if (state == 'allowed')
         Text(t('Allowed once.'), style: hint)

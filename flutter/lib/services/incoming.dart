@@ -18,10 +18,27 @@ class IncomingItem {
     final files = <({String name, Uint8List bytes})>[
       for (final f in (raw['files'] as List?) ?? const [])
         if (f is Map && f['bytes'] is Uint8List)
-          (name: '${f['name'] ?? 'shared'}', bytes: f['bytes'] as Uint8List),
+          (name: safeName(f['name']), bytes: f['bytes'] as Uint8List),
     ];
     if ((text == null || text.trim().isEmpty) && files.isEmpty) return null;
     return IncomingItem(text: text, files: files);
+  }
+
+  static const maxNameLength = 120;
+
+  static String safeName(Object? raw) {
+    var name = raw is String ? raw : '';
+    name = name.split(RegExp(r'[/\\]')).last;
+    name = name.replaceAll(RegExp(r'[\x00-\x1F\x7F\u0080-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]'), '');
+    name = name.trim().replaceFirst(RegExp(r'^\.+'), '').trim();
+    if (name.runes.length > maxNameLength) {
+      final dot = name.lastIndexOf('.');
+      final ext = dot > 0 && name.length - dot <= 10 ? name.substring(dot) : '';
+      final stem = String.fromCharCodes(
+          name.runes.take(maxNameLength - ext.runes.length));
+      name = '$stem$ext';
+    }
+    return name.isEmpty ? 'shared' : name;
   }
 }
 

@@ -786,6 +786,15 @@
         </div>
     </div>
 
+    <div class="modal" id="modalShareTarget" hidden>
+        <div class="modal-card">
+            <header><h2>Share to Nymbot</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede share-target-summary" id="shareTargetSummary" data-i18n-skip hidden></p>
+            <input type="search" id="shareTargetSearch" placeholder="Find a chat" aria-label="Find a chat" autocomplete="off" hidden>
+            <div class="chip-menu-list share-target-list" id="shareTargetList"></div>
+        </div>
+    </div>
+
     <!-- Workspaces -->
     <div class="modal" id="modalWorkspaces" hidden>
         <div class="modal-card modal-wide">
@@ -1422,8 +1431,8 @@
             <div class="credit-balances" id="creditBalances"></div>
             <p class="modal-lede">Standard picks a model for you, per question. Pro answers with the one frontier model you choose. Separate balances, and neither converts into the other.</p>
             <div class="tier-switch wide" id="creditTier">
-                <button class="tier-btn is-active" type="button" data-act="credit-tier" data-tier="standard">Standard &middot; 10 sats</button>
-                <button class="tier-btn" type="button" data-act="credit-tier" data-tier="pro">Pro &middot; 100 sats</button>
+                <button class="tier-btn is-active" type="button" data-act="credit-tier" data-tier="standard" aria-pressed="true">Standard &middot; 10 sats</button>
+                <button class="tier-btn" type="button" data-act="credit-tier" data-tier="pro" aria-pressed="false">Pro &middot; 100 sats</button>
             </div>
             <div class="amount-grid" id="amountGrid"></div>
             <label for="creditAmount">Credits</label>

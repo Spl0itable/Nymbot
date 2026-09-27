@@ -12,6 +12,7 @@ import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
+import '../secret_guard.dart';
 
 Future<void> showGiftSheet(BuildContext context) =>
     showNymSheet<void>(context, (_) => const GiftSheet());
@@ -188,7 +189,7 @@ class _GiftSheetState extends State<GiftSheet> {
                 icon: const NymGlyph('copy', size: 16),
                 label: Text(t('Copy the link')),
                 onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: link));
+                  await SecretScreen.copy(link);
                   _say(t('Copied.'));
                 },
               ),
@@ -196,7 +197,7 @@ class _GiftSheetState extends State<GiftSheet> {
                 icon: const NymGlyph('copy', size: 16),
                 label: Text(t('Copy the code')),
                 onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: made.code));
+                  await SecretScreen.copy(made.code);
                   _say(t('Copied.'));
                 },
               ),

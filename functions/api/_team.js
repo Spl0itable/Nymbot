@@ -198,6 +198,10 @@ export async function teamPool(jobs, width, isLimited) {
   return { results: results, width: cap, sequential: limited };
 }
 
+function hasKey(obj, key) {
+  return obj != null && typeof key === "string" && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function clip(text, max) {
   var s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
   return s.length > max ? s.slice(0, Math.max(0, max - 1)).trimEnd() + "…" : s;
@@ -255,7 +259,7 @@ function teamScaffold(deps, input, state) {
     limit: Math.max(0, overMax - (Number(state.overseer.milli) || 0)),
     usage: usageZero(), calls: 0, out: 0
   };
-  var roles = {};
+  var roles = Object.create(null);
   var roleOf = function (ln) {
     if (!roles[ln.lane]) {
       roles[ln.lane] = {
@@ -386,7 +390,7 @@ function leadRig(deps, input, state, kit, readNames) {
   var decline = typeof input.decline === "string" ? input.decline : "";
   var compact = typeof deps.compact === "function" ? deps.compact : function (c) { return c; };
   var target = typeof deps.target === "function" ? deps.target : function () { return ""; };
-  var own = {};
+  var own = Object.create(null);
   if (lead) lead.tools.forEach(function (t) { own[t.function.name] = true; });
   var used = function () { return Math.max(0, Math.floor(Number(state.leadUsed) || 0)); };
   var room = function () { return lead ? Math.max(0, T.leadToolCalls - used()) : 0; };
@@ -403,7 +407,7 @@ function leadRig(deps, input, state, kit, readNames) {
   };
   var runItem = async function (item) {
     kit.lanePush(0, "tool", String(item.name || "") + " " + target(item.name, item.args));
-    if (readNames[item.name]) {
+    if (hasKey(readNames, item.name)) {
       try { return String(await deps.exec(item.name, item.args, null)); } catch (e) { return "Error: " + ((e && e.message) || String(e)); }
     }
     var out;
@@ -414,8 +418,8 @@ function leadRig(deps, input, state, kit, readNames) {
   var drain = async function (queue, convo) {
     while (queue.length) {
       var item = queue[0];
-      if (!readNames[item.name]) {
-        var gate = lead && own[item.name] ? lead.gate(item) : null;
+      if (!hasKey(readNames, item.name)) {
+        var gate = lead && hasKey(own, item.name) ? lead.gate(item) : null;
         if (!gate) gate = { refuse: "Error: '" + String(item.name || "").slice(0, 80) + "' is not available to the lead here." };
         if (gate.refuse) {
           queue.shift();
@@ -514,10 +518,10 @@ var TEAM_REPORT_NOTE = " The notes were gathered by several researchers and are 
 
 function laneSources(state) {
   var all = [];
-  var byUrl = {};
-  var maps = {};
+  var byUrl = Object.create(null);
+  var maps = Object.create(null);
   state.lanes.forEach(function (ln) {
-    var map = {};
+    var map = Object.create(null);
     var srcs = ln.research && Array.isArray(ln.research.sources) ? ln.research.sources : [];
     for (var i = 0; i < srcs.length; i++) {
       var s = srcs[i];
@@ -812,7 +816,7 @@ export function teamPlanRepo(parsed, workers, repos) {
   var names = (repos || []).map(function (r) { return r.repo; });
   var writable = (repos || []).filter(function (r) { return r.writable; }).map(function (r) { return r.repo; });
   var fallback = writable[0] || names[0] || "";
-  var taken = {};
+  var taken = Object.create(null);
   var out = [];
   for (var i = 0; i < list.length && out.length < workers; i++) {
     var t = list[i];
@@ -865,7 +869,7 @@ export async function runTeamRepo(deps, input) {
   var sequential = false;
   var overOut = repoOut(input.overseerModel);
   var workOut = repoOut(input.workerModel);
-  var readNames = {};
+  var readNames = Object.create(null);
   (deps.readTools || []).forEach(function (t) { readNames[t.function.name] = true; });
   var park = function () {
     kit.lanePush(0, "pause", "Paused; it carries on from here.");

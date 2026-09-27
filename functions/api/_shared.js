@@ -2695,12 +2695,31 @@ var AUTH_MAX_AGE_S = 120;
 var AUTH_MAX_FUTURE_S = 15;
 var AUTH_REPLAY_TTL_S = AUTH_MAX_AGE_S + AUTH_MAX_FUTURE_S + 15;
 
-var AUTH_PAYLOAD_REQUIRED = {
-  "transfer-credits": 1,
-  "shop-transfer": 1,
-  "voucher-issue": 1,
-  "gift-create": 1
-};
+var AUTH_PAYLOAD_REQUIRED = ["transfer-credits", "shop-transfer", "voucher-issue", "gift-create"];
+
+var AUTH_REPLAY_ACTIONS = [
+  "transfer-credits", "create-invoice", "claim-credits", "clear-history",
+  "voucher-issue", "voucher-redeem", "gift-create", "gift-redeem", "gift-cancel",
+  "pm-revert", "git-apply", "runner-run", "mcp-probe",
+  "shop-set-active", "shop-buy-invoice", "shop-claim", "shop-transfer", "shop-redeem",
+  "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
+  "channel-delete", "zap-put"
+];
+
+function authPayloadRequired(action) {
+  return typeof action === "string" && AUTH_PAYLOAD_REQUIRED.indexOf(action) !== -1;
+}
+
+var AUTH_REPLAY_SOFT = [
+  "mcp-probe", "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
+  "channel-delete", "zap-put"
+];
+
+function authReplayRequired(action, env) {
+  if (typeof action !== "string" || AUTH_REPLAY_ACTIONS.indexOf(action) === -1) return false;
+  if (env && !env.NYM_LEDGER && AUTH_REPLAY_SOFT.indexOf(action) !== -1) return false;
+  return true;
+}
 
 function verifyClientAuth(auth, expectedPubkey, binding) {
   try {
@@ -2735,7 +2754,7 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
         } catch (e) { return false; }
       }
       var payloadTag = tagVal("payload");
-      if (payloadTag == null && typeof binding.body !== "undefined" && AUTH_PAYLOAD_REQUIRED[binding.action]) return false;
+      if (payloadTag == null && typeof binding.body !== "undefined" && authPayloadRequired(binding.action)) return false;
       if (payloadTag != null && typeof binding.body !== "undefined") {
         var expected = authPayloadHashHex(JSON.stringify(canonicalAuthBody(binding.body)));
         if (String(payloadTag).toLowerCase() !== expected) return false;
@@ -3131,6 +3150,8 @@ export {
   canonicalAuthBody,
   authPayloadHashHex,
   enforceAuthReplay,
+  authReplayRequired,
+  authPayloadRequired,
   AUTH_REPLAY_TTL_S,
   validateZapReceipt,
   parseNwcUri,

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'artifact_preview.dart';
 import 'code_highlight.dart';
@@ -17,6 +16,7 @@ import 'server_run_sheet.dart';
 import '../app.dart';
 import '../config.dart';
 import '../core/theme/theme.dart';
+import '../core/utils/safe_url.dart';
 import '../services/media_cache.dart';
 import '../services/sandbox_host.dart';
 import '../services/sandbox_protocol.dart';
@@ -96,6 +96,18 @@ class MarkdownBody extends StatelessWidget {
     return 'https://${NymbotConfig.apiHost}/api/proxy?url=${Uri.encodeComponent(url)}';
   }
 
+  static bool trustedMedia(String url) {
+    final u = Uri.tryParse(url.trim());
+    if (u == null || u.scheme.toLowerCase() != 'https' || u.host.isEmpty) return false;
+    if (u.userInfo.isNotEmpty || u.hasPort) return false;
+    final host = u.host.toLowerCase();
+    if (host == NymbotConfig.apiHost) return true;
+    for (final h in NymbotConfig.mediaHosts) {
+      if (h.startsWith('.') ? host.endsWith(h) : host == h) return true;
+    }
+    return false;
+  }
+
   static final _hostLike = RegExp(
       r'^(?:[a-z][a-z0-9+.-]*://)?((?:[a-z0-9-]+\.)+[a-z]{2,})\.?(?::\d+)?(?:[/?#]\S*)?$',
       caseSensitive: false);
@@ -130,7 +142,7 @@ class MarkdownBody extends StatelessWidget {
       );
       if (go != true) return;
     }
-    await launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+    await launchSafeUrl(href);
   }
 
   static String plain(String source) => source
@@ -399,15 +411,18 @@ class MarkdownBody extends StatelessWidget {
         spans.add(_link(context, alt.isEmpty ? m.group(3)! : alt, m.group(3)!, base));
       } else if (m.group(2) != null || m.group(3) != null) {
         spans.add(WidgetSpan(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
-                  loadingBuilder: (c, child, p) => p == null
-                      ? child
-                      : mediaWaiting(c, p, width: 200, height: 140),
-                  errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
+          child: MediaGate(
+            url: m.group(3)!,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
+                    loadingBuilder: (c, child, p) => p == null
+                        ? child
+                        : mediaWaiting(c, p, width: 200, height: 140),
+                    errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
+              ),
             ),
           ),
         ));
@@ -832,7 +847,7 @@ class _MediaBlockState extends State<MediaBlock> {
     setState(() => _saving = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final res = await http.get(Uri.parse(widget.url));
+      final res = await http.get(Uri.parse(MarkdownBody.imageSource(widget.url) ?? widget.url));
       if (res.statusCode < 200 || res.statusCode >= 300) {
         throw Exception('HTTP ${res.statusCode}');
       }
@@ -841,7 +856,7 @@ class _MediaBlockState extends State<MediaBlock> {
       await file.writeAsBytes(res.bodyBytes);
       await Share.shareXFiles([XFile(file.path)]);
     } catch (_) {
-      await launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication);
+      await launchSafeUrl(widget.url);
       messenger.showSnackBar(
           SnackBar(content: Text(t('Opened it outside the app — save it from there.'))));
     } finally {
@@ -884,8 +899,7 @@ class _MediaBlockState extends State<MediaBlock> {
             iconSize: 18,
             tooltip: t('Open'),
             icon: const NymGlyph('link', size: 18),
-            onPressed: () => launchUrl(Uri.parse(widget.url),
-                mode: LaunchMode.externalApplication),
+            onPressed: () => launchSafeUrl(widget.url),
           ),
           IconButton(
             iconSize: 18,
@@ -904,15 +918,66 @@ class _MediaBlockState extends State<MediaBlock> {
     if (src == null) {
       return Text(widget.url, style: TextStyle(fontSize: 12, color: theme.hintColor));
     }
-    return Stack(children: [
-      ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image(image: CachedMediaImage(src),
-            loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
-            errorBuilder: (c, e, s) => Text(widget.url,
-                style: TextStyle(fontSize: 12, color: theme.hintColor))),
+    return MediaGate(
+      url: widget.url,
+      child: Stack(children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image(image: CachedMediaImage(src),
+              loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
+              errorBuilder: (c, e, s) => Text(widget.url,
+                  style: TextStyle(fontSize: 12, color: theme.hintColor))),
+        ),
+        Positioned(top: 6, right: 6, child: save),
+      ]),
+    );
+  }
+}
+
+class MediaGate extends StatefulWidget {
+  const MediaGate({super.key, required this.url, required this.child});
+
+  final String url;
+  final Widget child;
+
+  @override
+  State<MediaGate> createState() => _MediaGateState();
+}
+
+class _MediaGateState extends State<MediaGate> {
+  late bool _shown = MarkdownBody.trustedMedia(widget.url);
+
+  @override
+  void didUpdateWidget(MediaGate old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) _shown = MarkdownBody.trustedMedia(widget.url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_shown) return widget.child;
+    final theme = Theme.of(context);
+    final host = Uri.tryParse(widget.url)?.host ?? '';
+    return OutlinedButton.icon(
+      key: const ValueKey('media-gate'),
+      style: OutlinedButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       ),
-      Positioned(top: 6, right: 6, child: save),
-    ]);
+      icon: NymGlyph('picture', size: 16, color: theme.colorScheme.primary),
+      label: Text.rich(
+        TextSpan(children: [
+          TextSpan(text: t('Load image')),
+          if (host.isNotEmpty)
+            TextSpan(
+              text: '  $host',
+              style: TextStyle(fontSize: 12, color: theme.hintColor),
+            ),
+        ]),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      onPressed: () => setState(() => _shown = true),
+    );
   }
 }

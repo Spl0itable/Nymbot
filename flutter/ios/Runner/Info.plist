@@ -81,6 +81,16 @@
 				<string>com.googleusercontent.apps.435441872913-ejlcpebd2jspm0lvg1l8grlatv56e806</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>ai.nymbot.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nymbot</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

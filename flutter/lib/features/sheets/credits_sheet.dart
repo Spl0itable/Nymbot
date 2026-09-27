@@ -90,42 +90,61 @@ class _CreditsSheetState extends State<_CreditsSheet> {
   /// What the account holds right now, read through [AppScope.of] so a purchase
   /// that lands while this is open is reflected here rather than only behind
   /// it. This is the section a buyer is looking at when the credits arrive.
-  Widget _balances(BuildContext context, AppController app) {
-    Widget cell(String label, double? value, bool active, {bool freeTier = false}) {
+  Widget _balances(BuildContext context, AppController app, {bool pick = false}) {
+    Widget cell(String tier, String label, double? value, {bool freeTier = false}) {
       final free = app.freeLeft;
-      return Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: active
-                  ? NymbotColors.lightning
-                  : Theme.of(context).dividerColor,
-            ),
+      final active = _tier == tier;
+      final radius = BorderRadius.circular(10);
+      final body = Container(
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          border: Border.all(
+            color: active
+                ? NymbotColors.lightning
+                : Theme.of(context).dividerColor,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 11, color: Theme.of(context).hintColor)),
+            const SizedBox(height: 2),
+            Text(
+              value == null
+                  ? '—'
+                  : t('{n} credits', {'n': creditFigure(value)}),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            // With nothing to spend, the day's allowance is what is left —
+            // which is a thing still working, where a zero is a wall.
+            if (freeTier && (value ?? 0) == 0 && free != null)
+              Text(t('{n} free left today', {'n': figure(free)}),
                   style: TextStyle(
                       fontSize: 11, color: Theme.of(context).hintColor)),
-              const SizedBox(height: 2),
-              Text(
-                value == null
-                    ? '—'
-                    : t('{n} credits', {'n': creditFigure(value)}),
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-              // With nothing to spend, the day's allowance is what is left —
-              // which is a thing still working, where a zero is a wall.
-              if (freeTier && (value ?? 0) == 0 && free != null)
-                Text(t('{n} free left today', {'n': figure(free)}),
-                    style: TextStyle(
-                        fontSize: 11, color: Theme.of(context).hintColor)),
-            ],
+          ],
+        ),
+      );
+      return Expanded(
+        child: Semantics(
+          button: pick,
+          selected: active,
+          child: Material(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: radius,
+            child: pick
+                ? InkWell(
+                    key: ValueKey('credit-balance-$tier'),
+                    borderRadius: radius,
+                    mouseCursor: SystemMouseCursors.click,
+                    onTap: () => setState(() => _tier = tier),
+                    child: body,
+                  )
+                : body,
           ),
         ),
       );
@@ -135,10 +154,9 @@ class _CreditsSheetState extends State<_CreditsSheet> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          cell(t('Standard'), app.standardBalance, _tier == 'standard',
-              freeTier: true),
+          cell('standard', t('Standard'), app.standardBalance, freeTier: true),
           const SizedBox(width: 8),
-          cell(t('Pro'), app.proBalance, _tier == 'pro'),
+          cell('pro', t('Pro'), app.proBalance),
         ],
       ),
     );
@@ -213,7 +231,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           children: [
             Text(t('Buy credits'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            _balances(context, app),
+            _balances(context, app, pick: true),
             const SizedBox(height: 12),
             Text(
               t('Standard picks a model for you, per question. Pro answers with '
