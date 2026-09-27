@@ -130,12 +130,22 @@ String creditFigure(num? value) {
   final n = value.toDouble();
   if (n == n.roundToDouble()) return figure(n.round());
   if (n > 0 && n < 0.01) return '<0.01';
-  var two = n.toStringAsFixed(2);
-  while (two.endsWith('0')) {
-    two = two.substring(0, two.length - 1);
+  return decimalFigure(n, 2);
+}
+
+String decimalFigure(num value, [int places = 2]) {
+  final fixed = value.toDouble().toStringAsFixed(places);
+  final negative = fixed.startsWith('-');
+  final body = negative ? fixed.substring(1) : fixed;
+  final dot = body.indexOf('.');
+  final whole = dot < 0 ? body : body.substring(0, dot);
+  var frac = dot < 0 ? '' : body.substring(dot + 1);
+  while (frac.endsWith('0')) {
+    frac = frac.substring(0, frac.length - 1);
   }
-  if (two.endsWith('.')) two = two.substring(0, two.length - 1);
-  return two;
+  final grouped = figure(int.parse(whole));
+  final signed = negative && (whole != '0' || frac.isNotEmpty) ? '-$grouped' : grouped;
+  return frac.isEmpty ? signed : '$signed.$frac';
 }
 
 String creditAmount(double value, bool metered) {

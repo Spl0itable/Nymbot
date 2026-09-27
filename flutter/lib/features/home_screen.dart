@@ -96,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _suggestTerm = '';
   bool _hasText = false;
+  bool _inputEmpty = true;
 
   /// What the composer held before the last change, so a paste can be told
   /// apart from typing by how much one change added.
@@ -132,6 +133,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!_scroll.hasClients) return;
       final near = _scroll.position.maxScrollExtent - _scroll.offset < 140;
       if (near != _atBottom) setState(() => _atBottom = near);
+    });
+    _input.addListener(() {
+      final empty = _input.text.trim().isEmpty;
+      if (empty != _inputEmpty) setState(() => _inputEmpty = empty);
     });
     _voice.addListener(() => setState(() {}));
     RunOutputs.toComposer.addListener(_takeRunOutput);
@@ -1540,9 +1545,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               for (final (key, icon, label) in [
-                ('photos', const NymGlyph('picture', size: 20), t('Photos')),
+                ('photos', const NymGlyph('picture', size: 20),
+                    t('Photos or videos')),
                 ('camera', const Icon(Icons.photo_camera_outlined),
-                    t('Take a photo')),
+                    t('Take photo or video')),
                 ('files', const NymGlyph('attach', size: 20), t('Files')),
               ])
                 ListTile(
@@ -1556,11 +1562,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (source == null) return;
+    var video = false;
+    if (source == 'camera') {
+      if (!mounted) return;
+      final kind = await showNymSheet<String>(
+        context,
+        (sheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                key: const ValueKey('camera-photo'),
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: Text(t('Photo')),
+                onTap: () => Navigator.pop(sheet, 'photo'),
+              ),
+              ListTile(
+                key: const ValueKey('camera-video'),
+                leading: const NymGlyph('film', size: 20),
+                title: Text(t('Video')),
+                onTap: () => Navigator.pop(sheet, 'video'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (kind == null) return;
+      video = kind == 'video';
+    }
     final ({List<Attachment> files, List<String> problems}) picked;
     try {
       picked = source == 'files'
           ? await Attachments.pick()
-          : await Attachments.pickPictures(camera: source == 'camera');
+          : await Attachments.pickMedia(camera: source == 'camera', video: video);
     } catch (_) {
       _say(t('Could not open that. Check that Nymbot may use it in your '
           'device settings.'));
@@ -1736,7 +1770,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
                   child: Chip(
-                    label: Text(t('anon'), style: const TextStyle(fontSize: 11)),
+                    label: Text(t('Anon'), style: const TextStyle(fontSize: 11)),
                     visualDensity: VisualDensity.compact,
                     side: BorderSide(color: Theme.of(context).colorScheme.secondary),
                   ),
@@ -2151,9 +2185,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     size: 15,
                                     color: Theme.of(context).colorScheme.error)
                                 : NymGlyph(
-                                    a.kind == AttachmentKind.image
-                                        ? 'picture'
-                                        : 'artifacts',
+                                    switch (a.kind) {
+                                      AttachmentKind.image => 'picture',
+                                      AttachmentKind.video => 'film',
+                                      AttachmentKind.text => 'artifacts',
+                                    },
                                     size: 15),
                         tooltip: a.uploadError,
                         label: Text(
@@ -2277,20 +2313,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   tooltip: t('Attach a file'),
                   onPressed: _attach,
                 ),
-                if (Dictation.supported)
-                  IconButton(
-                    key: const ValueKey('mic'),
-                    onPressed: _dictation == 'starting' || _dictation == 'sending'
-                        ? null
-                        : _toggleDictation,
-                    tooltip: _dictation == 'recording'
-                        ? t('Stop and transcribe')
-                        : t('Dictate a message'),
-                    isSelected: _dictation == 'recording',
-                    icon: const NymGlyph('mic', size: 20),
-                    selectedIcon: const NymGlyph('mic',
-                        size: 20, color: NymbotColors.danger),
-                  ),
                 Expanded(
                   child: CodeFrame(
                     controller: _input,
@@ -2347,6 +2369,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           fontSize: 12,
                           color: Theme.of(context).hintColor.withValues(alpha: 0.7),
                         ),
+                        suffixIcon: Dictation.supported &&
+                                (_dictation != null || _inputEmpty)
+                            ? IconButton(
+                                key: const ValueKey('mic'),
+                                onPressed: _dictation == 'starting' ||
+                                        _dictation == 'sending'
+                                    ? null
+                                    : _toggleDictation,
+                                tooltip: _dictation == 'recording'
+                                    ? t('Stop and transcribe')
+                                    : t('Dictate a message'),
+                                isSelected: _dictation == 'recording',
+                                icon: const NymGlyph('mic', size: 20),
+                                selectedIcon: const NymGlyph('mic',
+                                    size: 20, color: NymbotColors.danger),
+                              )
+                            : null,
                       ),
                     ),
                   ),

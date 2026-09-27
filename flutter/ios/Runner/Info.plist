@@ -62,11 +62,11 @@
 	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
 	     so no annual self-classification export filing is required. -->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Attaching a picture to a message reads it from your library. When you send it, the picture is uploaded to a picture host under a one-time key and linked in your message.</string>
+	<string>Attaching a photo or video to a message reads it from your library. When you send it, the file is uploaded to a media host under a one-time key and linked in your message.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Taking a photo to attach to a message uses the camera. The photo is only sent when you send the message.</string>
+	<string>Taking a photo or recording a video to attach to a message uses the camera. It is only sent when you send the message.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dictating a message records a short clip and sends it to Nymbot's server to be turned into text, which you review before anything is sent.</string>
+	<string>Dictating a message records a short clip and sends it to Nymbot's server to be turned into text, which you review before anything is sent. Recording a video to attach also records its sound.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleURLTypes</key>

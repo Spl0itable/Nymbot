@@ -164,13 +164,7 @@ class Team {
   static String _clip(String text, int n) =>
       text.length > n ? text.substring(0, n) : text;
 
-  static String _decimals(double v, int places) {
-    var s = v.toStringAsFixed(places);
-    while (s.contains('.') && (s.endsWith('0') || s.endsWith('.'))) {
-      s = s.substring(0, s.length - 1);
-    }
-    return s;
-  }
+  static String _decimals(double v, int places) => decimalFigure(v, places);
 
   static String credits(double v) => _decimals(v < 0 ? 0 : v, 3);
 

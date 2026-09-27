@@ -64,7 +64,9 @@
                 lines.push('');
                 lines.push(a.kind === 'image'
                     ? `![${a.name}](${a.dataUrl})`
-                    : `**Attached:** \`${a.name}\``);
+                    : (a.kind === 'video' && a.url
+                        ? `**Attached video:** [${a.name}](${a.url})`
+                        : `**Attached:** \`${a.name}\``));
             }
         }
         lines.push('');

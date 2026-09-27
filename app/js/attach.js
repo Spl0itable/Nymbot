@@ -10,6 +10,9 @@
     const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
     const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024;
     const MAX_IMAGE_EDGE = 1280;
+    const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+    const MAX_DOC_BYTES = 50 * 1024 * 1024;
+    const VIDEO_NAME = /\.(mp4|m4v|webm|mov)$/i;
 
     const TEXTUAL = /\.(txt|md|markdown|json|jsonl|ya?ml|toml|ini|cfg|conf|env|csv|tsv|log|sql|sh|bash|zsh|fish|ps1|bat|js|mjs|cjs|jsx|ts|tsx|dart|py|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|lua|r|scala|clj|ex|exs|erl|hs|ml|vue|svelte|html|htm|xml|svg|css|scss|less|gradle|properties|lock|diff|patch|gitignore|dockerfile|makefile)$/i;
 
@@ -115,9 +118,21 @@
                 dataUrl: shrunk
             };
         }
+        if (/^video\//i.test(file.type) || (!file.type && VIDEO_NAME.test(file.name || ''))) {
+            if (file.size > MAX_VIDEO_BYTES) throw new Error(t('That video is too large — 50 MB is the limit.'));
+            return {
+                id: window.NymbotStore.uid(),
+                kind: 'video',
+                name: file.name || 'video',
+                mime: file.type || 'video/mp4',
+                size: file.size,
+                file
+            };
+        }
         const Docs = window.NymbotDocs;
         if (Docs && Docs.handles(file)) return Docs.fromFile(file);
-        if (!looksTextual(file)) throw new Error(t('Only text, code, document and image files can be attached.'));
+        if (!looksTextual(file)) throw new Error(t('Only text, code, document, image and video files can be attached.'));
+        if (file.size > MAX_DOC_BYTES) throw new Error(t('That document is too large — 50 MB is the limit.'));
         if (file.size > MAX_TEXT_BYTES && Docs) {
             return Docs.fromText(await readAsText(file), { name: file.name || 'file.txt', mime: file.type || 'text/plain', size: file.size });
         }
@@ -188,6 +203,10 @@
         if (attachment.kind === 'doc') return '';
         if (attachment.kind === 'text') {
             return `\n\n--- attached file: ${attachment.name} ---\n\`\`\`${attachment.lang || ''}\n${attachment.text}\n\`\`\``;
+        }
+        if (attachment.kind === 'video') {
+            if (attachment.url) return `\n\n--- attached video: ${attachment.name} ---\n${attachment.url}`;
+            return `\n\n--- attached video: ${attachment.name} (${((attachment.size || 0) / (1024 * 1024)).toFixed(1)} MB, could not be uploaded — you cannot see this one) ---`;
         }
         if (attachment.url) {
             return `\n\n--- attached image: ${attachment.name} ---\n${attachment.url}`;

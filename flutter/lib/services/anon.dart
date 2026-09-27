@@ -210,7 +210,10 @@ class AnonMode {
     if (data['insufficient'] == true) {
       _state['pending'] = null;
       await _save();
-      final vars = {'have': data['balance'], 'need': data['required']};
+      final vars = {
+        'have': creditFigure(data['balance'] as num?),
+        'need': creditFigure(data['required'] as num?)
+      };
       throw StateError(tier == 'pro'
           ? t('Not enough Pro credits on your nym — {have} left, {need} needed.',
               vars)

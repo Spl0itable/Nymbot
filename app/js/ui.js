@@ -559,7 +559,7 @@
                 if ((conv.tags || []).length) bits.push((conv.tags || []).map(x => '#' + x).join(' '));
                 if (bits.length) main.appendChild(el('span', 'conv-sub', bits.join(' · ')));
                 btn.appendChild(main);
-                if (conv.anon) btn.appendChild(el('span', 'conv-badge', 'anon'));
+                if (conv.anon) btn.appendChild(el('span', 'conv-badge', t('Anon')));
                 if (this.sendingIn(conv.id)) btn.appendChild(this.busyMark());
                 btn.addEventListener('click', () => this.open(Store.conversation(conv.id)));
                 li.className = 'conv-row';
@@ -1747,7 +1747,7 @@
 
             // A picture has to be uploaded before the message is priced, since it
             // is the link that travels and the link that is charged for.
-            if (attachments.some(a => a.kind === 'image' && !a.url)) {
+            if (attachments.some(a => (a.kind === 'image' || a.kind === 'video') && !a.url)) {
                 const stranded = await this.settleAttachments(attachments);
                 if (stranded.length) {
                     const go = await this.ask({
@@ -2876,6 +2876,8 @@
             if (a.kind === 'image') {
                 record.dataUrl = a.dataUrl;
                 if (a.url) record.url = a.url;
+            } else if (a.kind === 'video') {
+                if (a.url) record.url = a.url;
             } else if (a.kind === 'text') {
                 record.text = a.text;
                 record.lang = a.lang || '';
@@ -2886,7 +2888,7 @@
 
         carriedFrom(list, quote) {
             const attachments = (Array.isArray(list) ? list : [])
-                .filter(a => a && ((a.kind === 'image' && (a.url || a.dataUrl)) || (a.kind === 'text' && typeof a.text === 'string')))
+                .filter(a => a && ((a.kind === 'image' && (a.url || a.dataUrl)) || (a.kind === 'video' && a.url) || (a.kind === 'text' && typeof a.text === 'string')))
                 .map(a => Object.assign({}, a));
             return { attachments, quote: quote || null };
         },
@@ -3421,7 +3423,7 @@
         /// A picture has to be somewhere the worker can fetch it before the model
         /// can be handed the image rather than the file's name.
         async uploadAttachment(attachment) {
-            if (!attachment || attachment.kind !== 'image' || attachment.url) return;
+            if (!attachment || (attachment.kind !== 'image' && attachment.kind !== 'video') || attachment.url) return;
             if (attachment.uploading) return attachment.uploading;
             attachment.error = null;
             attachment.uploading = Blossom.upload(attachment, { signer: this.uploadSigner() })
@@ -3443,7 +3445,7 @@
         /// Everything still on its way up, finished before the message goes.
         async settleAttachments(list) {
             await Promise.all(list.map(a => this.uploadAttachment(a)));
-            return list.filter(a => a.kind === 'image' && !a.url);
+            return list.filter(a => (a.kind === 'image' || a.kind === 'video') && !a.url);
         },
 
         renderAttachments() {
@@ -5695,7 +5697,7 @@
                 conv.title || t('New chat'),
                 this.dayLabel(a.updatedAt || a.createdAt || Date.now())
             ].join(' · '));
-            if (conv.anon) sub.appendChild(el('span', 'conv-badge', 'anon'));
+            if (conv.anon) sub.appendChild(el('span', 'conv-badge', t('Anon')));
             open.appendChild(sub);
             open.setAttribute('aria-label', t('Open {title} from {chat}', {
                 title: a.title || t('Untitled'), chat: conv.title || t('New chat')

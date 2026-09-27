@@ -123,7 +123,7 @@ class _CompareSheetState extends State<_CompareSheet> {
     if (have != null && have < price) {
       setState(() => _status = t(
           'Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
-          {'n': price, 'have': have}));
+          {'n': figure(price), 'have': creditFigure(have)}));
       return;
     }
     final go = await showDialog<bool>(
@@ -132,7 +132,7 @@ class _CompareSheetState extends State<_CompareSheet> {
         title: Text(t('Ask both?')),
         content: Text(t(
             '{a} and {b} each answer once, so this costs two replies — about {n} Pro credits.',
-            {'a': a['label'], 'b': b['label'], 'n': price})),
+            {'a': a['label'], 'b': b['label'], 'n': figure(price)})),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),

@@ -258,13 +258,7 @@ class ServerRuns {
     }
   }
 
-  static String credits(num value) {
-    var s = value.toDouble().toStringAsFixed(3);
-    while (s.contains('.') && (s.endsWith('0') || s.endsWith('.'))) {
-      s = s.substring(0, s.length - 1);
-    }
-    return s;
-  }
+  static String credits(num value) => decimalFigure(value, 3);
 
   static String minutes(int sec) => sec % 60 == 0
       ? t('{n} min', {'n': sec ~/ 60})

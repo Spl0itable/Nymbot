@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 class GitRepo {
   GitRepo({
@@ -486,7 +487,7 @@ class ChatFolder {
   }
 }
 
-enum AttachmentKind { image, text }
+enum AttachmentKind { image, text, video }
 
 class Attachment {
   Attachment({
@@ -498,6 +499,7 @@ class Attachment {
     this.lang = '',
     this.text,
     this.bytesBase64,
+    this.bytes,
     this.lines = 0,
     this.url,
     this.uploadError,
@@ -517,6 +519,8 @@ class Attachment {
   final String? text;
   final String? bytesBase64;
 
+  Uint8List? bytes;
+
   /// Where a picture was uploaded to, once it has been.
   String? url;
 
@@ -533,6 +537,9 @@ class Attachment {
   /// What to put on the chip: lines for something pasted, bytes for a file.
   String get measure => label ?? (lines > 0 ? '$lines lines' : humanSize);
 
+  bool get uploads =>
+      kind == AttachmentKind.image || kind == AttachmentKind.video;
+
   String get humanSize {
     if (size < 1024) return '$size B';
     if (size < 1024 * 1024) return '${(size / 1024).round()} KB';
@@ -546,6 +553,14 @@ class Attachment {
       return '\n\n--- attached file: $name ---\n```$lang\n${text ?? ''}\n```';
     }
     final at = url;
+    if (kind == AttachmentKind.video) {
+      if (at != null && at.isNotEmpty) {
+        return '\n\n--- attached video: $name ---\n$at';
+      }
+      return '\n\n--- attached video: $name '
+          '(${(size / (1024 * 1024)).toStringAsFixed(1)} MB, '
+          'could not be uploaded — you cannot see this one) ---';
+    }
     if (at != null && at.isNotEmpty) {
       return '\n\n--- attached image: $name ---\n$at';
     }
@@ -563,7 +578,8 @@ class Attachment {
         'lang': lang,
         if (lines > 0) 'lines': lines,
         if (text != null) 'text': text,
-        if (bytesBase64 != null) 'bytesBase64': bytesBase64,
+        if (bytesBase64 != null && kind != AttachmentKind.video)
+          'bytesBase64': bytesBase64,
         if (url != null) 'url': url,
         if (searched) 'searched': true,
       };
@@ -580,13 +596,18 @@ class Attachment {
 
   static Attachment fromJson(Map<String, dynamic> j) => Attachment(
         id: j['id'] as String? ?? '',
-        kind: j['kind'] == 'image' ? AttachmentKind.image : AttachmentKind.text,
+        kind: switch (j['kind']) {
+          'image' => AttachmentKind.image,
+          'video' => AttachmentKind.video,
+          _ => AttachmentKind.text,
+        },
         name: j['name'] as String? ?? '',
         mime: j['mime'] as String? ?? '',
         size: (j['size'] as num?)?.toInt() ?? 0,
         lang: j['lang'] as String? ?? '',
         text: j['text'] as String?,
-        bytesBase64: j['bytesBase64'] as String?,
+        bytesBase64:
+            j['kind'] == 'video' ? null : j['bytesBase64'] as String?,
         lines: (j['lines'] as num?)?.toInt() ?? 0,
         url: j['url'] as String?,
         searched: j['searched'] == true,

@@ -62,7 +62,7 @@ class Blossom {
           },
           body: bytes,
         )
-        .timeout(const Duration(seconds: 45));
+        .timeout(Duration(seconds: 45 + bytes.length ~/ (256 * 1024)));
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw BlossomFailure('HTTP ${resp.statusCode}');
     }

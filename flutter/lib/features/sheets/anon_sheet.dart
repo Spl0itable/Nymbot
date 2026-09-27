@@ -240,11 +240,17 @@ class _AnonSheetState extends State<_AnonSheet> {
             if (b != null) ...[
               Text(
                   t('Your nym: {standard} standard · {pro} Pro',
-                      {'standard': b.identity ?? '–', 'pro': b.identityPro ?? '–'}),
+                      {
+                        'standard': b.identity == null ? '–' : figure(b.identity),
+                        'pro': b.identityPro == null ? '–' : figure(b.identityPro)
+                      }),
                   style: const TextStyle(fontSize: 12)),
               Text(
                   t('Throwaway key: {standard} standard · {pro} Pro',
-                      {'standard': b.anon ?? '–', 'pro': b.anonPro ?? '–'}),
+                      {
+                        'standard': b.anon == null ? '–' : figure(b.anon),
+                        'pro': b.anonPro == null ? '–' : figure(b.anonPro)
+                      }),
                   style: const TextStyle(fontSize: 12)),
             ] else
               Text(t('Checking balances…'), style: TextStyle(fontSize: 12)),

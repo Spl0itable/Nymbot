@@ -117,8 +117,14 @@
 
         /// Uploads one attachment and records where it landed.
         async upload(attachment, opts) {
-            if (!attachment || attachment.kind !== 'image') return attachment;
+            if (!attachment || (attachment.kind !== 'image' && attachment.kind !== 'video')) return attachment;
             if (attachment.url) return attachment;
+            if (attachment.kind === 'video') {
+                if (!attachment.file) throw new Error(t('Upload failed.'));
+                const video = new Uint8Array(await attachment.file.arrayBuffer());
+                attachment.url = await this.put(video, attachment.mime || 'video/mp4', opts);
+                return attachment;
+            }
             const bytes = bytesOfDataUrl(attachment.dataUrl);
             attachment.url = await this.put(bytes, attachment.mime || mimeOfDataUrl(attachment.dataUrl), opts);
             return attachment;

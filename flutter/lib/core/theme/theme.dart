@@ -150,6 +150,13 @@ ThemeData nymbotTheme(Brightness brightness,
 extension NymSurfaceTint on ThemeData {
   Color tint(double strength) =>
       dividerColor.withValues(alpha: dividerColor.a * strength);
+
+  Color get lineStrong => colorScheme.primary.withValues(
+      alpha: brightness == Brightness.light
+          ? 0.3
+          : colorScheme.primary == NymbotColors.primaryMidnight
+              ? 0.35
+              : 0.25);
 }
 
 final _buttonStyle = ButtonStyle(

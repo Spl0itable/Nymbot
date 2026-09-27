@@ -567,7 +567,7 @@ kbd {
 .conv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .conv-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-sub { font-size: 0.7rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-badge { font-size: 0.62rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; flex: 0 0 auto; }
+.conv-badge { display: inline-flex; align-items: center; line-height: 1.4; font-size: 0.62rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; flex: 0 0 auto; }
 .conv-badge.is-repo { color: var(--lightning); }
 .conv-badge.is-tag { color: var(--text-faint); }
 .conv-busy { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
@@ -677,7 +677,7 @@ kbd {
     position: relative;
 }
 .chat-title { flex: 1; min-width: 0; font-size: 1rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-anon, .chat-badge { font-size: 0.7rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.4rem; white-space: nowrap; flex: 0 0 auto; }
+.chat-anon, .chat-badge { display: inline-flex; align-items: center; line-height: 1.4; font-size: 0.7rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.4rem; white-space: nowrap; flex: 0 0 auto; }
 .chat-badge { color: var(--text-dim); }
 
 .menu {

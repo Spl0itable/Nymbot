@@ -315,7 +315,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const NymGlyph('bolt', size: 11, color: NymbotColors.lightning),
-              Text('${m.cost}',
+              Text(creditFigure(m.cost),
                   style: const TextStyle(
                       fontSize: 10, color: NymbotColors.lightning)),
             ],
@@ -520,7 +520,11 @@ class _MessageBubbleState extends State<MessageBubble> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     NymGlyph(
-                      a.kind == AttachmentKind.image ? 'picture' : 'artifacts',
+                      switch (a.kind) {
+                        AttachmentKind.image => 'picture',
+                        AttachmentKind.video => 'film',
+                        AttachmentKind.text => 'artifacts',
+                      },
                       size: 13,
                     ),
                     const SizedBox(width: 4),
@@ -554,6 +558,7 @@ class _MessageBubbleState extends State<MessageBubble> {
 
   Widget _followUps(BuildContext context) {
     final theme = Theme.of(context);
+    final ink = theme.textTheme.bodyMedium?.color ?? theme.colorScheme.onSurface;
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Semantics(
@@ -596,8 +601,18 @@ class _MessageBubbleState extends State<MessageBubble> {
                           horizontal: 12, vertical: 8),
                       alignment: AlignmentDirectional.centerStart,
                       shape: const StadiumBorder(),
-                      side: BorderSide(color: theme.dividerColor),
+                      backgroundColor: Colors.transparent,
                       textStyle: const TextStyle(fontSize: 13),
+                    ).copyWith(
+                      foregroundColor: WidgetStateProperty.resolveWith(
+                          (states) => states.contains(WidgetState.hovered)
+                              ? theme.colorScheme.primary
+                              : ink),
+                      side: WidgetStateProperty.resolveWith((states) =>
+                          BorderSide(
+                              color: states.contains(WidgetState.hovered)
+                                  ? theme.colorScheme.primary
+                                  : theme.lineStrong)),
                     ),
                   ),
                 ),

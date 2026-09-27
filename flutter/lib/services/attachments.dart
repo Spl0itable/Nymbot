@@ -18,6 +18,9 @@ class Attachments {
   static const maxTextBytes = 96 * 1024;
   static const maxImageBytes = 4 * 1024 * 1024;
   static const maxImageEdge = 1280;
+  static const maxVideoBytes = 50 * 1024 * 1024;
+  static const maxImageSourceBytes = 25 * 1024 * 1024;
+  static const maxDocBytes = 50 * 1024 * 1024;
 
   static const _textual = {
     'txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini',
@@ -31,6 +34,13 @@ class Attachments {
 
   static const _images = {
     'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'heic', 'heif',
+  };
+
+  static const _videos = {
+    'mp4': 'video/mp4',
+    'm4v': 'video/x-m4v',
+    'webm': 'video/webm',
+    'mov': 'video/quicktime',
   };
 
   static const _langs = {
@@ -76,23 +86,60 @@ class Attachments {
     return at == -1 ? '' : name.substring(at + 1).toLowerCase();
   }
 
+  static String? tooLarge(String name, int size) {
+    if (isVideo(name) && size > maxVideoBytes) {
+      return t('That video is too large — 50 MB is the limit.');
+    }
+    if (isImage(name) && size > maxImageSourceBytes) {
+      return t('That image is too large — 25 MB is the limit.');
+    }
+    if (!isImage(name) && !isVideo(name) && size > maxDocBytes) {
+      return t('That document is too large — 50 MB is the limit.');
+    }
+    return null;
+  }
+
+  static Future<Uint8List> _drain(Stream<List<int>> stream) async {
+    final out = BytesBuilder(copy: false);
+    await for (final chunk in stream) {
+      out.add(chunk);
+    }
+    return out.takeBytes();
+  }
+
   static Future<({List<Attachment> files, List<String> problems})> pick() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
-      withData: true,
+      withReadStream: true,
       type: FileType.any,
     );
     if (result == null) return (files: <Attachment>[], problems: <String>[]);
-    return intake([
-      for (final f in result.files) (name: f.name, bytes: f.bytes),
-    ]);
+    final problems = <String>[];
+    final readable = <({String name, Uint8List? bytes})>[];
+    for (final f in result.files) {
+      final refused = tooLarge(f.name, f.size);
+      if (refused != null) {
+        problems.add('${f.name} ($refused)');
+        continue;
+      }
+      final stream = f.readStream;
+      readable.add((
+        name: f.name,
+        bytes: f.bytes ?? (stream == null ? null : await _drain(stream)),
+      ));
+    }
+    final taken = await intake(readable);
+    return (files: taken.files, problems: [...problems, ...taken.problems]);
   }
 
-  static Future<({List<Attachment> files, List<String> problems})> pickPictures(
-      {bool camera = false}) async {
+  static Future<({List<Attachment> files, List<String> problems})> pickMedia(
+      {bool camera = false, bool video = false}) async {
     final picker = ImagePicker();
     final picked = <XFile>[];
-    if (camera) {
+    if (camera && video) {
+      final clip = await picker.pickVideo(source: ImageSource.camera);
+      if (clip != null) picked.add(clip);
+    } else if (camera) {
       final shot = await picker.pickImage(
         source: ImageSource.camera,
         maxWidth: maxImageEdge.toDouble(),
@@ -101,15 +148,29 @@ class Attachments {
       );
       if (shot != null) picked.add(shot);
     } else {
-      picked.addAll(await picker.pickMultiImage(
+      picked.addAll(await picker.pickMultipleMedia(
         maxWidth: maxImageEdge.toDouble(),
         maxHeight: maxImageEdge.toDouble(),
         imageQuality: 85,
       ));
     }
-    return intake([
-      for (final f in picked) (name: f.name, bytes: await f.readAsBytes()),
-    ]);
+    return takeMedia(picked);
+  }
+
+  static Future<({List<Attachment> files, List<String> problems})> takeMedia(
+      List<XFile> picked) async {
+    final problems = <String>[];
+    final readable = <({String name, Uint8List? bytes})>[];
+    for (final f in picked) {
+      final refused = tooLarge(f.name, await f.length());
+      if (refused != null) {
+        problems.add('${f.name} ($refused)');
+        continue;
+      }
+      readable.add((name: f.name, bytes: await f.readAsBytes()));
+    }
+    final taken = await intake(readable);
+    return (files: taken.files, problems: [...problems, ...taken.problems]);
   }
 
   static Future<({List<Attachment> files, List<String> problems})> intake(
@@ -146,14 +207,38 @@ class Attachments {
 
   static bool isImage(String name) => _images.contains(_ext(name));
 
+  static bool isVideo(String name) => _videos.containsKey(_ext(name));
+
+  static ({Attachment? file, String? problem}) video(
+      String name, Uint8List bytes) {
+    if (bytes.length > maxVideoBytes) {
+      return (
+        file: null,
+        problem: t('That video is too large — 50 MB is the limit.'),
+      );
+    }
+    return (
+      file: Attachment(
+        id: bytesToHex(randomBytes(8)),
+        kind: AttachmentKind.video,
+        name: name,
+        mime: _videos[_ext(name)]!,
+        size: bytes.length,
+        bytes: bytes,
+      ),
+      problem: null,
+    );
+  }
+
   static Future<({Attachment? file, String? problem})> fromBytes(
       String name, Uint8List bytes) async {
     final ext = _ext(name);
     if (_images.contains(ext)) return image(name, bytes);
+    if (_videos.containsKey(ext)) return video(name, bytes);
     if (!_textual.contains(ext)) {
       return (
         file: null,
-        problem: t('only text, code, document and image files can be attached'),
+        problem: t('only text, code, document, image and video files can be attached'),
       );
     }
     if (bytes.length > maxTextBytes) {
@@ -253,7 +338,7 @@ class Attachments {
         file: null,
         problem: foreign
             ? t('this HEIC picture could not be converted here — pick it from '
-                'Photos instead')
+                'Photos or videos instead')
             : t('not a picture this device can read'),
       );
     } finally {

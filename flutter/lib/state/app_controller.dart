@@ -2667,16 +2667,25 @@ class AppController extends ChangeNotifier {
   /// A picture has to be somewhere the worker can fetch it before the model can
   /// be handed the image rather than the file's name.
   Future<void> uploadAttachment(Attachment a) async {
-    if (a.kind != AttachmentKind.image) return;
+    if (!a.uploads) return;
     if (a.url != null || a.uploading) return;
-    final raw = a.bytesBase64;
-    if (raw == null || raw.isEmpty) return;
+    final Uint8List data;
+    if (a.kind == AttachmentKind.video) {
+      final held = a.bytes;
+      if (held == null || held.isEmpty) return;
+      data = held;
+    } else {
+      final raw = a.bytesBase64;
+      if (raw == null || raw.isEmpty) return;
+      data = base64Decode(raw);
+    }
     a.uploading = true;
     a.uploadError = null;
     notifyListeners();
     try {
-      final placed = await blossom.placeUnlinked(base64Decode(raw), a.mime);
+      final placed = await blossom.placeUnlinked(data, a.mime);
       a.url = placed.url;
+      a.bytes = null;
       try {
         await uploads.remember(placed);
       } catch (_) {}
@@ -2692,7 +2701,7 @@ class AppController extends ChangeNotifier {
   Future<List<Attachment>> settleAttachments(List<Attachment> list) async {
     await Future.wait(list.map(uploadAttachment));
     return list
-        .where((a) => a.kind == AttachmentKind.image && a.url == null)
+        .where((a) => a.uploads && a.url == null)
         .toList();
   }
 
@@ -3026,7 +3035,7 @@ class AppController extends ChangeNotifier {
 
     // A picture has to be uploaded before the message goes, since it is the link
     // that travels and the link the model is handed.
-    if (sent.any((a) => a.kind == AttachmentKind.image && a.url == null)) {
+    if (sent.any((a) => a.uploads && a.url == null)) {
       final stranded = await settleAttachments(sent);
       if (stranded.isNotEmpty) {
         await note(
@@ -3200,9 +3209,9 @@ class AppController extends ChangeNotifier {
           await note(
               res.pro
                   ? t('Pro credits running low: {n} left. Tap Buy to top up.',
-                      {'n': res.balance})
+                      {'n': creditFigure(res.balance)})
                   : t('Credits running low: {n} left. Tap Buy to top up.',
-                      {'n': res.balance}),
+                      {'n': creditFigure(res.balance)}),
               conv: conv);
         }
       }
@@ -3477,7 +3486,7 @@ class AppController extends ChangeNotifier {
     }
     if (stall == null && reserve > left) {
       await note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-          {'n': reserve - left}), conv: conv);
+          {'n': creditFigure(reserve - left)}), conv: conv);
       return;
     }
 
@@ -3617,12 +3626,12 @@ class AppController extends ChangeNotifier {
       }
       if (token != null && token.isNotEmpty && reserve > left) {
         await note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-            {'n': reserve, 'left': left}), conv: conv);
+            {'n': creditFigure(reserve), 'left': creditFigure(left)}), conv: conv);
         return;
       }
       if (token != null && token.isNotEmpty && left <= 0) {
         await note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-            {'n': turn.continuedSpend}), conv: conv);
+            {'n': creditFigure(turn.continuedSpend)}), conv: conv);
         return;
       }
     }
@@ -3632,7 +3641,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (turn.continuedSpend > 0 && (token == null || token.isEmpty)) {
-      await note(t('Finished. Carrying on cost {n} extra credits.', {'n': turn.continuedSpend}),
+      await note(t('Finished. Carrying on cost {n} extra credits.', {'n': creditFigure(turn.continuedSpend)}),
           conv: conv);
     }
   }
@@ -3979,13 +3988,15 @@ class AppController extends ChangeNotifier {
       await note(inAnonChat
           ? t("This chat's anonymous balance: {standard} standard, {pro} Pro. "
               'Your nym still holds {nymStandard} standard and {nymPro} Pro.', {
-              'standard': anonStandardBalance,
-              'pro': anonProBalance,
-              'nymStandard': standardBalance,
-              'nymPro': proBalance,
+              'standard': creditFigure(anonStandardBalance),
+              'pro': creditFigure(anonProBalance),
+              'nymStandard': creditFigure(standardBalance),
+              'nymPro': creditFigure(proBalance),
             })
-          : t('Your balance: {standard} standard, {pro} Pro.',
-              {'standard': standardBalance, 'pro': proBalance}));
+          : t('Your balance: {standard} standard, {pro} Pro.', {
+              'standard': creditFigure(standardBalance),
+              'pro': creditFigure(proBalance)
+            }));
     }
   }
 

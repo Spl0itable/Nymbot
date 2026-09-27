@@ -1252,12 +1252,19 @@ function botExtractImageUrls(text) {
 // Anthropic's own image shape for the Claude models.
 var BOT_VISION_HISTORY_TURNS = 3;
 
+var BOT_ATTACHED_VIDEO_RE = /---\s*attached video:[^\n]*---\s*\n\s*(https?:\/\/[^\s<>"']+)/gi;
+
 function botExtractVideoUrls(text) {
   var out = [];
-  var m = String(text || "").match(BOT_MEDIA_VIDEO_URL_RE);
-  for (var i = 0; m && i < m.length && out.length < BOT_MAX_VIDEOS; i++) {
-    if (out.indexOf(m[i]) === -1 && !isPrivateHostUrl(m[i])) out.push(m[i]);
-  }
+  var body = String(text || "");
+  var push = function (url) {
+    if (url && out.length < BOT_MAX_VIDEOS && out.indexOf(url) === -1 && !isPrivateHostUrl(url)) out.push(url);
+  };
+  BOT_ATTACHED_VIDEO_RE.lastIndex = 0;
+  var a;
+  while ((a = BOT_ATTACHED_VIDEO_RE.exec(body)) !== null) push(a[1]);
+  var m = body.match(BOT_MEDIA_VIDEO_URL_RE);
+  for (var i = 0; m && i < m.length; i++) push(m[i]);
   return out;
 }
 

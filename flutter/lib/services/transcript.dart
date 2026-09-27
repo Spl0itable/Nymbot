@@ -1,3 +1,4 @@
+import '../features/i18n/i18n.dart';
 import '../models/conversation.dart';
 import '../models/workspace.dart';
 
@@ -50,7 +51,7 @@ class Transcript {
       };
       final meta = <String>[];
       if (m.model != null) meta.add(m.model!);
-      if (m.cost > 0) meta.add('${m.cost} credits');
+      if (m.cost > 0) meta.add('${creditFigure(m.cost)} credits');
       meta.add(_stamp(m.at));
       out.add('### $who — ${meta.join(' · ')}');
       out.add('');
