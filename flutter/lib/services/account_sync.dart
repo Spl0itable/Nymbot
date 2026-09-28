@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart' as crypto;
 
@@ -37,7 +38,21 @@ class AccountSync {
 
   static const int artifactKeptVersions = 30;
 
-  static const int artifactMaxChars = 300000;
+  static const int artifactMaxChars = 240000;
+
+  static const int rowMaxBytes = 240000;
+
+  static const int rowHardBytes = 880000;
+
+  static const int sealMaxBytes = 900000;
+
+  static const int overlapMs = 10000;
+
+  static const int fullEveryMs = 24 * 3600 * 1000;
+
+  static const int partBytes = 60000;
+
+  static const String partsPrefix = 'parts1:';
 
   static const List<String> libraryNames = [
     'personas',
@@ -62,7 +77,25 @@ class AccountSync {
 
   final Map<String, String> _hashes = {};
 
+  final Map<String, String> _names = {};
+
+  final Map<String, String> _prints = {};
+
+  String? _statePk;
+
+  ({String pk, int cursor, int now, bool full, int at})? _pending;
+
+  bool _lastPullFull = false;
+
+  bool _remoteFull = false;
+
+  bool _bare = false;
+
+  int Function() clock = () => DateTime.now().millisecondsSinceEpoch;
+
   Map<String, dynamic> _remote = {};
+
+  Map<String, dynamic> get _overlaySource => _bare ? const {} : _remote;
 
   bool get enabled => _identity.present && _store.settings().sync;
 
@@ -74,7 +107,77 @@ class AccountSync {
 
   bool get _hybrid => !_identity.rootLocked && _identity.kem != null;
 
+  static int _runeBytes(int rune) =>
+      rune < 0x80 ? 1 : rune < 0x800 ? 2 : rune < 0x10000 ? 3 : 4;
+
+  static List<String> splitParts(String text) {
+    final parts = <String>[];
+    final current = StringBuffer();
+    var size = 0;
+    for (final rune in text.runes) {
+      final n = _runeBytes(rune);
+      if (size + n > partBytes) {
+        parts.add(current.toString());
+        current.clear();
+        size = 0;
+      }
+      current.writeCharCode(rune);
+      size += n;
+    }
+    if (current.isNotEmpty) parts.add(current.toString());
+    return parts;
+  }
+
+  static bool _isParts(String blob) => blob.startsWith(partsPrefix);
+
+  static List<String> _partsOf(String blob) {
+    final parts = jsonDecode(blob.substring(partsPrefix.length));
+    if (parts is! List ||
+        parts.isEmpty ||
+        parts.any((p) => p is! String || p.isEmpty)) {
+      throw const FormatException('bad parts');
+    }
+    return parts.cast<String>();
+  }
+
+  static String blobMode(String blob) {
+    final first = _isParts(blob) ? _partsOf(blob).first : blob;
+    return pq.isPq2Payload(first) ? 'pq' : 'c';
+  }
+
+  static List<Map<String, dynamic>> fitMessages(
+      List<Map<String, dynamic>> msgs) {
+    var total = 64;
+    final sizes = [
+      for (final m in msgs) utf8.encode(jsonEncode(m)).length + 1,
+    ];
+    for (final n in sizes) {
+      total += n;
+    }
+    final budget = sizes.isNotEmpty && 64 + sizes.last > rowMaxBytes
+        ? rowHardBytes
+        : rowMaxBytes;
+    var start = 0;
+    while (total > budget && start < msgs.length - 1) {
+      total -= sizes[start++];
+    }
+    return start == 0 ? msgs : msgs.sublist(start);
+  }
+
   Future<String?> _seal(String plaintext) async {
+    final size = utf8.encode(plaintext).length;
+    if (size > sealMaxBytes) return null;
+    if (size <= partBytes) return _sealPart(plaintext);
+    final sealed = <String>[];
+    for (final part in splitParts(plaintext)) {
+      final blob = await _sealPart(part);
+      if (blob == null) return null;
+      sealed.add(blob);
+    }
+    return partsPrefix + jsonEncode(sealed);
+  }
+
+  Future<String?> _sealPart(String plaintext) async {
     if (!_identity.present) return null;
     final signer = _identity.signer;
     final self = signer.pubkey;
@@ -120,6 +223,15 @@ class AccountSync {
   }
 
   Future<String> _openWith(EventSigner signer, String blob) async {
+    if (!_isParts(blob)) return _openPart(signer, blob);
+    final plain = StringBuffer();
+    for (final part in _partsOf(blob)) {
+      plain.write(await _openPart(signer, part));
+    }
+    return plain.toString();
+  }
+
+  Future<String> _openPart(EventSigner signer, String blob) async {
     final self = signer.pubkey;
     if (pq.isPq2Payload(blob)) {
       final kems = _identity.kemCandidates();
@@ -339,7 +451,7 @@ class AccountSync {
       : const [];
 
   Map<String, dynamic>? _remoteRecord(String path, String id) {
-    Object? held = _remote;
+    Object? held = _overlaySource;
     for (final step in path.split('.')) {
       if (held is! Map) return null;
       held = held[step];
@@ -419,11 +531,21 @@ class AccountSync {
   static Map<String, dynamic> settingsToWire(AppSettings s) =>
       _settingsToWire(s, null);
 
-  Future<Map<String, dynamic>> snapshot() async {
+  Future<Map<String, dynamic>> snapshot({bool bare = false}) async {
+    _bare = bare;
+    try {
+      return await _snapshot();
+    } finally {
+      _bare = false;
+    }
+  }
+
+  Future<Map<String, dynamic>> _snapshot() async {
     final graves = _store.syncGraves();
     final out = <String, dynamic>{};
 
-    out['settings'] = _settingsToWire(_store.settings(), _remote['settings']);
+    out['settings'] =
+        _settingsToWire(_store.settings(), _overlaySource['settings']);
 
     final library = <String, dynamic>{
       'personas': [
@@ -492,10 +614,10 @@ class AccountSync {
           : msgs;
       out['chat-${conv.id}'] = {
         'id': conv.id,
-        'messages': [
+        'messages': fitMessages([
           for (final m in kept)
             _msgToWire(m, _remoteRecord('chat-${conv.id}', m.id))
-        ],
+        ]),
       };
     }
     for (final conv in chats) {
@@ -688,10 +810,89 @@ class AccountSync {
     return touched;
   }
 
-  Future<Map<String, dynamic>?> pull() async {
-    final data = await _storage.settingsGet(_identity.signer);
-    final categories = data == null ? null : data['categories'];
-    if (categories is! Map) return null;
+  void _load() {
+    final pk = _identity.present ? _identity.pubkey : null;
+    if (_statePk == pk) return;
+    _statePk = pk;
+    _pending = null;
+    _hashes.clear();
+    _names.clear();
+    _prints.clear();
+    if (pk == null) return;
+    final raw = _store.getString('sync_hashes');
+    if (raw == null) return;
+    try {
+      final held = jsonDecode(raw);
+      if (held is! Map || held['pk'] != pk) return;
+      void fill(Map<String, String> into, Object? from) {
+        if (from is! Map) return;
+        from.forEach((k, v) {
+          if (v is String) into['$k'] = v;
+        });
+      }
+
+      fill(_hashes, held['hashes']);
+      fill(_names, held['names']);
+      fill(_prints, held['prints']);
+    } catch (_) {}
+  }
+
+  Future<void> _saveHashes() async {
+    final pk = _statePk;
+    if (pk == null || !_identity.present || pk != _identity.pubkey) return;
+    await _store.setString(
+        'sync_hashes',
+        jsonEncode({
+          'pk': pk,
+          'hashes': _hashes,
+          'names': _names,
+          'prints': _prints,
+        }));
+  }
+
+  ({int cursor, int now, int fullAt})? cursor() {
+    if (!_identity.present) return null;
+    final raw = _store.getString('sync_cursor');
+    if (raw == null) return null;
+    try {
+      final held = jsonDecode(raw);
+      if (held is! Map || held['pk'] != _identity.pubkey) return null;
+      final c = held['cursor'];
+      final n = held['now'];
+      final f = held['fullAt'];
+      if (c is! num || n is! num) return null;
+      return (cursor: c.toInt(), now: n.toInt(), fullAt: f is num ? f.toInt() : 0);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int? since() {
+    if (blocked) return null;
+    final held = cursor();
+    if (held == null) return null;
+    final age = clock() - held.fullAt;
+    if (age < 0 || age >= fullEveryMs) return null;
+    return math.max(0, math.min(held.cursor, held.now - overlapMs));
+  }
+
+  Future<void> _commit() async {
+    final p = _pending;
+    _pending = null;
+    if (p == null || !_identity.present || p.pk != _identity.pubkey) return;
+    final held = cursor();
+    await _store.setString(
+        'sync_cursor',
+        jsonEncode({
+          'pk': p.pk,
+          'cursor': p.cursor,
+          'now': p.now,
+          'fullAt': p.full ? p.at : (held?.fullAt ?? 0),
+        }));
+  }
+
+  Future<({Map<String, dynamic> out, Map<String, String> pulled, int unreadable})>
+      _decode(Map categories) async {
     final out = <String, dynamic>{};
     final pulled = <String, String>{};
     var unreadable = 0;
@@ -717,20 +918,62 @@ class AccountSync {
       if (row.key == categoryFor(name)) {
         final plain = jsonEncode({'__cat': name, 'v': out[name]});
         _hashes[row.key as String] = _sha256Hex(
-            '${_identity.pubkey}|${pq.isPq2Payload(blob) ? 'pq' : 'c'}|$plain');
+            '${_identity.pubkey}|${blobMode(blob)}|$plain');
+        _names[row.key as String] = name;
       }
     }
-    blocked = unreadable > 0 && out.isEmpty;
-    _pulledBlobs = pulled;
-    _unchanged = {
-      for (final e in pulled.entries)
-        if (_appliedBlobs[e.key] == e.value) e.key: out[e.key]
-    };
-    return out;
+    return (out: out, pulled: pulled, unreadable: unreadable);
   }
+
+  Future<Map<String, dynamic>?> pull({bool full = false}) async {
+    _load();
+    final data = await _storage.settingsGet(_identity.signer,
+        since: full ? null : since());
+    final categories = data == null ? null : data['categories'];
+    if (categories is! Map) return null;
+    final isFull = data!['full'] != false;
+    final read = await _decode(categories);
+    if (isFull) blocked = read.unreadable > 0 && read.out.isEmpty;
+    _lastPullFull = isFull;
+    _pulledBlobs = read.pulled;
+    _unchanged = {
+      for (final e in read.pulled.entries)
+        if (_appliedBlobs[e.key] == e.value) e.key: read.out[e.key]
+    };
+    final c = data['cursor'];
+    final n = data['now'];
+    _pending = c is num && n is num
+        ? (
+            pk: _identity.pubkey,
+            cursor: c.toInt(),
+            now: n.toInt(),
+            full: isFull,
+            at: clock(),
+          )
+        : null;
+    await _saveHashes();
+    return read.out;
+  }
+
+  Future<bool> _fetch(List<String> categories) async {
+    for (var i = 0; i < categories.length; i += 10) {
+      final data = await _storage.settingsGet(_identity.signer,
+          only: categories.sublist(i, math.min(i + 10, categories.length)));
+      final rows = data == null ? null : data['categories'];
+      if (rows is! Map) return false;
+      _remote.addAll((await _decode(rows)).out);
+    }
+    return true;
+  }
+
+  static String _print(Object? value) => _sha256Hex(jsonEncode(value));
+
+  static bool _tooLong(String dTag, Object? value) =>
+      utf8.encode(jsonEncode({'__cat': dTag, 'v': value})).length > sealMaxBytes;
 
   Future<bool> push(String dTag, Object? value) async {
     if (blocked) return false;
+    _load();
     final plain = jsonEncode({'__cat': dTag, 'v': value});
     final category = categoryFor(dTag);
     final hash = _sha256Hex('${_identity.pubkey}|${_hybrid ? 'pq' : 'c'}|$plain');
@@ -741,6 +984,7 @@ class AccountSync {
         category: category, blob: blob, contentHash: hash);
     if (!ok) return false;
     _hashes[category] = hash;
+    _names[category] = dTag;
     _remember(_sha256Hex(blob), plain);
     _appliedBlobs[dTag] = _sha256Hex(blob);
     return true;
@@ -766,21 +1010,65 @@ class AccountSync {
     try {
       final remote = await pull();
       if (remote == null) return const SyncRound.offline();
-      _remote = remote;
+      if (_lastPullFull) {
+        _remote = remote;
+        _remoteFull = true;
+      } else {
+        _remote = {..._remote, ...remote};
+      }
       touched = await apply(remote);
       _appliedBlobs.addAll(_pulledBlobs);
       _unchanged = {};
       if (blocked) return const SyncRound.blocked();
+      await _commit();
 
-      final local = await snapshot();
-      for (final key in remote.keys) {
-        if (key.startsWith('chat-') && !local.containsKey(key)) {
-          local[key] = {'id': '', 'messages': const []};
+      final known = {...remote.keys, ..._names.values};
+      void emptied(Map<String, dynamic> into) {
+        for (final key in known) {
+          if (key.startsWith('chat-') && !into.containsKey(key)) {
+            into[key] = {'id': '', 'messages': const []};
+          }
         }
       }
-      for (final entry in local.entries) {
-        await _breathe();
-        await push(entry.key, entry.value);
+
+      var local = await snapshot();
+      final bare = await snapshot(bare: true);
+      emptied(local);
+      emptied(bare);
+      final skip = <String>{};
+      if (!_remoteFull) {
+        final wanted = <String>[];
+        for (final key in local.keys) {
+          if (remote.containsKey(key)) continue;
+          final category = categoryFor(key);
+          if (_prints[category] == _print(bare[key])) {
+            skip.add(key);
+          } else if (_hashes.containsKey(category)) {
+            wanted.add(category);
+          }
+        }
+        if (wanted.isNotEmpty) {
+          if (await _fetch(wanted)) {
+            local = await snapshot();
+            emptied(local);
+          } else {
+            for (final key in local.keys) {
+              if (wanted.contains(categoryFor(key))) skip.add(key);
+            }
+          }
+        }
+      }
+      try {
+        for (final entry in local.entries) {
+          if (skip.contains(entry.key)) continue;
+          await _breathe();
+          if (await push(entry.key, entry.value) ||
+              _tooLong(entry.key, entry.value)) {
+            _prints[categoryFor(entry.key)] = _print(bare[entry.key]);
+          }
+        }
+      } finally {
+        await _saveHashes();
       }
       lastAt = DateTime.now();
     } catch (_) {
@@ -817,25 +1105,32 @@ class AccountSync {
   }
 
   Future<bool> wipeRemote() async {
-    final remote = await pull();
+    final remote = await pull(full: true);
     if (remote == null) return false;
-    blocked = false;
-    _hashes.clear();
-    _remote = {};
+    forget();
+    _load();
     for (final dTag in remote.keys) {
       await push(dTag, null);
     }
+    await _saveHashes();
     return true;
   }
 
   void forget() {
     _hashes.clear();
+    _names.clear();
+    _prints.clear();
     _opened.clear();
     _appliedBlobs.clear();
     _pulledBlobs = {};
     _unchanged = {};
     _remote = {};
+    _remoteFull = false;
+    _pending = null;
+    _statePk = _identity.present ? _identity.pubkey : null;
     blocked = false;
+    unawaited(_store.remove('sync_cursor'));
+    unawaited(_store.remove('sync_hashes'));
   }
 }
 

@@ -273,12 +273,7 @@ class _TeamModelChoice extends StatelessWidget {
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, controller) => Padding(
-        padding: EdgeInsets.only(
-          left: 12,
-          right: 12,
-          top: 12,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-        ),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

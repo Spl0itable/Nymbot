@@ -300,6 +300,7 @@ class _BotsSheetState extends State<_BotsSheet> {
               controller: _body,
               maxLines: 5,
               minLines: 3,
+              scrollPadding: textAreaScrollPadding(context, 3),
               decoration: InputDecoration(
                 labelText: t('Standing instructions'),
                 hintText: t('How it should answer, every time'),
@@ -320,6 +321,7 @@ class _BotsSheetState extends State<_BotsSheet> {
               controller: _starters,
               maxLines: 4,
               minLines: 2,
+              scrollPadding: textAreaScrollPadding(context, 2),
               decoration: InputDecoration(
                 labelText: t('Openers, one per line'),
               ),
@@ -609,6 +611,7 @@ class _AddBotState extends State<_AddBot> {
               controller: _input,
               maxLines: 3,
               minLines: 2,
+              scrollPadding: textAreaScrollPadding(context, 2),
               decoration: InputDecoration(
                 labelText: t('Link or address'),
                 hintText: 'naddr1…',

@@ -1045,7 +1045,7 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
   if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Video generation needs the AI binding and AI_GATEWAY_NAME configured on the worker.");
   }
-  var body = botVideoRequestBody(videoModel.family, prompt, imageUrl);
+  var body = botVideoRequestBody(videoModel.family, prompt, imageUrl ? await botMediaDirectUrl(imageUrl) : imageUrl);
   body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, videoModel.model));
   var result;
   try {
@@ -1402,6 +1402,43 @@ async function botImageDataUrl(url) {
   return "data:" + mime + ";base64," + botBase64Encode(bytes);
 }
 
+var BOT_MEDIA_URL_MAX_HOPS = 3;
+var BOT_MEDIA_URL_TIMEOUT_MS = 4000;
+
+async function botMediaDirectUrl(url) {
+  var start = String(url || "");
+  if (!/^https:\/\//i.test(start) || isPrivateHostUrl(start)) return start;
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, BOT_MEDIA_URL_TIMEOUT_MS);
+  try {
+    var at = start;
+    for (var hop = 0; hop <= BOT_MEDIA_URL_MAX_HOPS; hop++) {
+      var resp = await fetch(at, {
+        method: "GET",
+        headers: { "User-Agent": BOT_BROWSER_AGENT, "Range": "bytes=0-0" },
+        redirect: "manual",
+        signal: controller.signal
+      });
+      try { if (resp.body && resp.body.cancel) await resp.body.cancel(); } catch (e) { }
+      if (!(resp.status >= 300 && resp.status < 400)) return resp.ok ? at : start;
+      var loc = resp.headers.get("Location");
+      if (!loc || hop === BOT_MEDIA_URL_MAX_HOPS) return start;
+      var next = new URL(loc, at).toString();
+      if (!/^https:\/\//i.test(next) || isPrivateHostUrl(next)) return start;
+      at = next;
+    }
+    return start;
+  } catch (e) {
+    return start;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function botMediaDirectUrls(urls) {
+  return Promise.all((urls || []).map(function (u) { return botMediaDirectUrl(u); }));
+}
+
 async function botFetchCapped(url, maxBytes, timeoutMs, accept) {
   if (!/^https?:\/\//i.test(url) || isPrivateHostUrl(url)) return null;
   var controller = new AbortController();
@@ -1556,7 +1593,7 @@ async function botProImageGenerate(env, imageModel, prompt, refs) {
     throw new Error("Frontier image models need the AI binding and AI_GATEWAY_NAME configured on the worker. Standard-tier ?image still works.");
   }
   var body = refs && refs.length
-    ? mediaEditBody(imageModel.family, prompt, refs)
+    ? mediaEditBody(imageModel.family, prompt, await botMediaDirectUrls(refs))
     : botImageRequestBody(imageModel.family, prompt);
   body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, imageModel.model));
   var result;
@@ -12454,6 +12491,7 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botMediaDirectUrl,
   onRequest,
   handleBotPMAction,
   botProCatalog,

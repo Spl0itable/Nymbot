@@ -4,6 +4,7 @@ import '../../state/app_controller.dart';
 import '../../app.dart';
 import 'i18n.dart';
 import '../nym_glyph.dart';
+import '../sheets/sheet.dart';
 
 class LanguageSelectScreen extends StatelessWidget {
   const LanguageSelectScreen({super.key, required this.onDone});
@@ -195,7 +196,7 @@ class _LanguageRow extends StatelessWidget {
 }
 
 Future<void> showLanguagePicker(BuildContext context, AppController app) {
-  return showDialog<void>(
+  return showNymDialog<void>(
     context: context,
     builder: (dialogContext) => Dialog(
       insetPadding: const EdgeInsets.all(24),

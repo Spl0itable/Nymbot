@@ -201,6 +201,49 @@ class _ArtifactLibrarySheetState extends State<_ArtifactLibrarySheet> {
       (ArtifactKind.data, t('Data')),
     ];
     final shown = matches.take(_limit).toList();
+    final head = <Widget>[
+      const SizedBox(height: 8),
+      Semantics(
+        label: t('Filter by type'),
+        container: true,
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final kind in kinds)
+              ChoiceChip(
+                key: ValueKey('artifact-kind-${kind.$1?.name ?? 'all'}'),
+                label: Text(kind.$2, style: const TextStyle(fontSize: 11)),
+                selected: _kind == kind.$1,
+                visualDensity: VisualDensity.compact,
+                onSelected: (_) => setState(() {
+                  _kind = kind.$1;
+                  _limit = 100;
+                }),
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      Semantics(
+        liveRegion: true,
+        child: Text(
+          _rows.isEmpty
+              ? t('Nothing yet. A reply with a whole file in it lands here.')
+              : matches.length == 1
+                  ? t('1 artifact')
+                  : t('{n} artifacts', {'n': matches.length}),
+          style: TextStyle(fontSize: 12, color: theme.hintColor),
+        ),
+      ),
+      const SizedBox(height: 6),
+      if (_rows.isNotEmpty && matches.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text(t('Nothing matches that.'),
+              style: TextStyle(fontSize: 12, color: theme.hintColor)),
+        ),
+    ];
 
     return Padding(
       padding: EdgeInsets.only(
@@ -233,52 +276,16 @@ class _ArtifactLibrarySheetState extends State<_ArtifactLibrarySheet> {
             ),
             onChanged: (_) => setState(() => _limit = 100),
           ),
-          const SizedBox(height: 8),
-          Semantics(
-            label: t('Filter by type'),
-            container: true,
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: [
-                for (final kind in kinds)
-                  ChoiceChip(
-                    key: ValueKey('artifact-kind-${kind.$1?.name ?? 'all'}'),
-                    label: Text(kind.$2, style: const TextStyle(fontSize: 11)),
-                    selected: _kind == kind.$1,
-                    visualDensity: VisualDensity.compact,
-                    onSelected: (_) => setState(() {
-                      _kind = kind.$1;
-                      _limit = 100;
-                    }),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Semantics(
-            liveRegion: true,
-            child: Text(
-              _rows.isEmpty
-                  ? t('Nothing yet. A reply with a whole file in it lands here.')
-                  : matches.length == 1
-                      ? t('1 artifact')
-                      : t('{n} artifacts', {'n': matches.length}),
-              style: TextStyle(fontSize: 12, color: theme.hintColor),
-            ),
-          ),
-          const SizedBox(height: 6),
-          if (_rows.isNotEmpty && matches.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(t('Nothing matches that.'),
-                  style: TextStyle(fontSize: 12, color: theme.hintColor)),
-            ),
           Flexible(
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: shown.length + (matches.length > _limit ? 1 : 0),
-              itemBuilder: (context, i) {
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              itemCount: head.length +
+                  shown.length +
+                  (matches.length > _limit ? 1 : 0),
+              itemBuilder: (context, at) {
+                if (at < head.length) return head[at];
+                final i = at - head.length;
                 if (i == shown.length) {
                   return TextButton(
                     onPressed: () => setState(() => _limit += 100),

@@ -190,6 +190,7 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
               controller: _body,
               maxLines: 4,
               minLines: 2,
+              scrollPadding: textAreaScrollPadding(context, 2),
               decoration: InputDecoration(
                 labelText: t('Standing instructions'),
                 hintText: t('What every chat in here should know'),

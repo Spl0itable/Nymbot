@@ -7,6 +7,7 @@ import '../services/key_backup.dart';
 import '../services/passkey_backup.dart';
 import 'brand_buttons.dart';
 import 'i18n/i18n.dart';
+import 'sheets/sheet.dart';
 
 typedef BackupStatusSink = void Function(String? text, {bool spin});
 
@@ -67,7 +68,7 @@ class BackupStatusLine extends StatelessWidget {
 
 Future<String?> askBackupPin(BuildContext context, BackupProvider provider,
         {String? error}) =>
-    showDialog<String>(
+    showNymDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (_) => _PinDialog(provider: provider, confirm: false, error: error),
@@ -75,7 +76,7 @@ Future<String?> askBackupPin(BuildContext context, BackupProvider provider,
 
 Future<String?> chooseBackupPin(BuildContext context, BackupProvider provider,
         {String? intro}) =>
-    showDialog<String>(
+    showNymDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (_) => _PinDialog(provider: provider, confirm: true, intro: intro),
@@ -145,44 +146,43 @@ class _PinDialogState extends State<_PinDialog> {
   Widget build(BuildContext context) {
     final provider = {'provider': widget.provider.label};
     return AlertDialog(
+      scrollable: true,
       title: Text(widget.confirm ? t('Choose a backup PIN') : t('Enter your backup PIN')),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.intro != null) ...[
-              Text(widget.intro!),
-              const SizedBox(height: 10),
-            ],
-            if (widget.confirm) ...[
-              Text(t('Your key stays yours. {provider} only stores an encrypted '
-                  'copy, which it cannot read without this PIN.', provider)),
-              const SizedBox(height: 10),
-              Text(
-                t('This PIN cannot be recovered. If you forget it, the backup '
-                    'cannot be opened. Anyone who has both your {provider} '
-                    'account and this PIN can get your key.', provider),
-                key: const ValueKey('backup-pin-warning'),
-                style: const TextStyle(color: NymbotColors.danger),
-              ),
-            ] else
-              Text(t('Enter the PIN you chose when you backed up your key to '
-                  '{provider}.', provider)),
-            const SizedBox(height: 12),
-            _field(_pin, t('PIN (4 to 8 digits)'), const ValueKey('backup-pin'),
-                last: !widget.confirm),
-            if (widget.confirm)
-              _field(_again, t('PIN again'), const ValueKey('backup-pin-again'),
-                  last: true),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(_error!,
-                  key: const ValueKey('backup-pin-error'),
-                  style: const TextStyle(color: NymbotColors.danger)),
-            ],
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.intro != null) ...[
+            Text(widget.intro!),
+            const SizedBox(height: 10),
           ],
-        ),
+          if (widget.confirm) ...[
+            Text(t('Your key stays yours. {provider} only stores an encrypted '
+                'copy, which it cannot read without this PIN.', provider)),
+            const SizedBox(height: 10),
+            Text(
+              t('This PIN cannot be recovered. If you forget it, the backup '
+                  'cannot be opened. Anyone who has both your {provider} '
+                  'account and this PIN can get your key.', provider),
+              key: const ValueKey('backup-pin-warning'),
+              style: const TextStyle(color: NymbotColors.danger),
+            ),
+          ] else
+            Text(t('Enter the PIN you chose when you backed up your key to '
+                '{provider}.', provider)),
+          const SizedBox(height: 12),
+          _field(_pin, t('PIN (4 to 8 digits)'), const ValueKey('backup-pin'),
+              last: !widget.confirm),
+          if (widget.confirm)
+            _field(_again, t('PIN again'), const ValueKey('backup-pin-again'),
+                last: true),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!,
+                key: const ValueKey('backup-pin-error'),
+                style: const TextStyle(color: NymbotColors.danger)),
+          ],
+        ],
       ),
       actions: [
         TextButton(

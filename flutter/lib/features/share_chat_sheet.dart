@@ -132,36 +132,36 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
     if (record == null || widget.conv.anon) return;
     final comment = TextEditingController();
     var understood = false;
-    final ok = await showDialog<bool>(
+    final ok = await showNymDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
+          scrollable: true,
           title: Text(t('Post to Nostr')),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(t(
-                    'This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat until the link expires 24 hours after you shared it.')),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: comment,
-                  maxLines: 4,
-                  minLines: 2,
-                  decoration:
-                      InputDecoration(labelText: t('Comment (optional)')),
-                ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: understood,
-                  onChanged: (v) => setLocal(() => understood = v ?? false),
-                  title: Text(
-                      t('I understand this note is public and signed by my key'),
-                      style: const TextStyle(fontSize: 13)),
-                ),
-              ],
-            ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(t(
+                  'This publishes a public note, signed by your key, that anyone can read and that cannot be reliably deleted. It contains the link, so anyone who sees the note can open this chat until the link expires 24 hours after you shared it.')),
+              const SizedBox(height: 10),
+              TextField(
+                controller: comment,
+                maxLines: 4,
+                minLines: 2,
+                scrollPadding: textAreaScrollPadding(context, 2),
+                decoration:
+                    InputDecoration(labelText: t('Comment (optional)')),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: understood,
+                onChanged: (v) => setLocal(() => understood = v ?? false),
+                title: Text(
+                    t('I understand this note is public and signed by my key'),
+                    style: const TextStyle(fontSize: 13)),
+              ),
+            ],
           ),
           actions: [
             TextButton(

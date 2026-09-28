@@ -461,38 +461,40 @@ class _RedeemGiftSheetState extends State<RedeemGiftSheet> {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(t('Redeem a gift'), style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 6),
-          Text(t('Paste the gift link or code someone sent you. The credits go onto this key\'s balance.')),
-          const SizedBox(height: 10),
-          TextField(
-            key: const ValueKey('redeem-code'),
-            controller: _code,
-            autocorrect: false,
-            decoration: InputDecoration(labelText: t('Gift link or code')),
-            onChanged: (_) => _peek(),
-          ),
-          if (_what.isNotEmpty) ...[
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(t('Redeem a gift'), style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 6),
-            Text(_what, key: const ValueKey('redeem-what')),
+            Text(t('Paste the gift link or code someone sent you. The credits go onto this key\'s balance.')),
+            const SizedBox(height: 10),
+            TextField(
+              key: const ValueKey('redeem-code'),
+              controller: _code,
+              autocorrect: false,
+              decoration: InputDecoration(labelText: t('Gift link or code')),
+              onChanged: (_) => _peek(),
+            ),
+            if (_what.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(_what, key: const ValueKey('redeem-what')),
+            ],
+            if (_status != null) ...[
+              const SizedBox(height: 6),
+              Text(_status!,
+                  key: const ValueKey('redeem-status'),
+                  style: TextStyle(color: _warn ? NymbotColors.danger : null)),
+            ],
+            const SizedBox(height: 12),
+            FilledButton(
+              key: const ValueKey('redeem-go'),
+              onPressed: _ready && !_busy ? _redeem : null,
+              child: Text(t('Add to my balance')),
+            ),
           ],
-          if (_status != null) ...[
-            const SizedBox(height: 6),
-            Text(_status!,
-                key: const ValueKey('redeem-status'),
-                style: TextStyle(color: _warn ? NymbotColors.danger : null)),
-          ],
-          const SizedBox(height: 12),
-          FilledButton(
-            key: const ValueKey('redeem-go'),
-            onPressed: _ready && !_busy ? _redeem : null,
-            child: Text(t('Add to my balance')),
-          ),
-        ],
+        ),
       ),
     );
   }

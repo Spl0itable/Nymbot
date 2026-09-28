@@ -65,14 +65,16 @@ class _PromptsSheetState extends State<_PromptsSheet> {
   Future<String?> _askBlank(BuildContext context, String title, String blank) {
     final controller = TextEditingController();
     final long = blank == 'code' || blank == 'diff' || blank == 'text';
-    return showDialog<String>(
+    return showNymDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text(title),
         content: TextField(
           controller: controller,
           autofocus: true,
           minLines: long ? 4 : 1,
+          scrollPadding: textAreaScrollPadding(context, long ? 4 : 1),
           maxLines: long ? 10 : 1,
           decoration: InputDecoration(labelText: blank),
         ),
@@ -173,6 +175,7 @@ class _PromptsSheetState extends State<_PromptsSheet> {
             TextField(
               controller: _body,
               minLines: 4,
+              scrollPadding: textAreaScrollPadding(context, 4),
               maxLines: 8,
               decoration: InputDecoration(
                 labelText: t('Body'),

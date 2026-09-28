@@ -90,70 +90,72 @@ class _CapsSheetState extends State<CapsSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(
           16, 0, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(t('Spending caps'), style: theme.textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text(
-            t('Limits for this chat, in sats, whichever tier answers. Replies are counted at each tier\'s price per credit. A bot\'s own caps apply too, and the stricter one wins.'),
-            style: TextStyle(fontSize: 12, color: theme.hintColor),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const Key('capTotal'),
-            controller: _total,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: t('Stop this chat at (sats)'),
-              hintText: t('No cap'),
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            key: const Key('capReply'),
-            controller: _reply,
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              labelText: t('Ask me before a reply that could cost more than (sats)'),
-              hintText: t('No cap'),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            [
-              t('Spent here so far: {n} sats.',
-                  {'n': figure(app.capSpentOf(widget.conv).round())}),
-              if (botCaps)
-                t('{bot} also sets caps; the stricter of the two applies.',
-                    {'bot': bot.name.isEmpty ? t('This bot') : bot.name}),
-            ].join(' '),
-            style: TextStyle(fontSize: 12, color: theme.hintColor),
-          ),
-          if (_status.isNotEmpty) ...[
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(t('Spending caps'), style: theme.textTheme.titleMedium),
             const SizedBox(height: 6),
-            Text(_status,
-                style: TextStyle(fontSize: 12, color: theme.colorScheme.error)),
-          ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  key: const Key('capSave'),
-                  onPressed: () => _save(app),
-                  child: Text(t('Save')),
-                ),
+            Text(
+              t('Limits for this chat, in sats, whichever tier answers. Replies are counted at each tier\'s price per credit. A bot\'s own caps apply too, and the stricter one wins.'),
+              style: TextStyle(fontSize: 12, color: theme.hintColor),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('capTotal'),
+              controller: _total,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: t('Stop this chat at (sats)'),
+                hintText: t('No cap'),
               ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: () => _save(app, clear: true),
-                child: Text(t('Remove caps')),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              key: const Key('capReply'),
+              controller: _reply,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: t('Ask me before a reply that could cost more than (sats)'),
+                hintText: t('No cap'),
               ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              [
+                t('Spent here so far: {n} sats.',
+                    {'n': figure(app.capSpentOf(widget.conv).round())}),
+                if (botCaps)
+                  t('{bot} also sets caps; the stricter of the two applies.',
+                      {'bot': bot.name.isEmpty ? t('This bot') : bot.name}),
+              ].join(' '),
+              style: TextStyle(fontSize: 12, color: theme.hintColor),
+            ),
+            if (_status.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(_status,
+                  style: TextStyle(fontSize: 12, color: theme.colorScheme.error)),
             ],
-          ),
-        ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('capSave'),
+                    onPressed: () => _save(app),
+                    child: Text(t('Save')),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () => _save(app, clear: true),
+                  child: Text(t('Remove caps')),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

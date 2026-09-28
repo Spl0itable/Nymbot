@@ -61,6 +61,8 @@ const messagesContainer = document.getElementById('phoneMessages');
 const toolbar = document.getElementById('phoneToolbar');
 const titleEl = document.getElementById('phoneTitle');
 const modelChip = document.getElementById('phoneModelChip');
+const modelChipIcon = modelChip ? modelChip.querySelector('svg') : null;
+const MODEL_BRANDS = [[/^claude\b/i, 'anthropic'], [/^(gpt|o\d)\b/i, 'openai'], [/^gemini\b/i, 'google'], [/^grok\b/i, 'xai'], [/^(llama|meta)\b/i, 'meta'], [/^mistral\b/i, 'mistralai'], [/^deepseek\b/i, 'deepseek'], [/^qwen\b/i, 'qwen'], [/^kimi\b/i, 'moonshotai']];
 const gitChip = document.getElementById('phoneGitChip');
 const placeholderEl = document.getElementById('phonePlaceholder');
 const draftEl = document.getElementById('phoneDraft');
@@ -329,6 +331,20 @@ async function typeAndSend(text, id) {
     sendEl.classList.remove('is-pressed');
 }
 
+function modelBrand(label) {
+    const hit = MODEL_BRANDS.find(([re]) => re.test(String(label || '')));
+    return hit ? hit[1] : '';
+}
+
+function setModelIcon(label, active) {
+    if (!modelChip || !modelChipIcon) return;
+    const slug = active ? modelBrand(label) : '';
+    const Brands = window.NymbotBrands;
+    const current = modelChip.querySelector('svg');
+    const next = slug && Brands ? Brands.mark(slug, 18) : modelChipIcon;
+    if (current !== next) current.replaceWith(next);
+}
+
 function setChip(chip, label, active) {
     if (!chip) return;
     const labelEl = chip.querySelector('.phone-chip-label');
@@ -337,6 +353,7 @@ function setChip(chip, label, active) {
         labelEl.hidden = !label;
     }
     chip.classList.toggle('is-active', !!active);
+    if (chip === modelChip) setModelIcon(label, active);
 }
 
 function setTier(next) {

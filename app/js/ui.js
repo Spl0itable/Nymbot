@@ -199,6 +199,7 @@
             brand.appendChild(el('span', 'brand-name', 'Nymbot'));
             this.applyAppearance();
             this.bind();
+            this.watchKeyboard();
             this.watchSigner();
             if (window.NymbotVault && !(await window.NymbotVault.gate())) return;
             Anon.load();
@@ -398,6 +399,7 @@
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) Sync.touch(1500);
             });
+            window.addEventListener('focus', () => Sync.touch(1500));
         },
 
         /// Something arrived from another device.
@@ -8118,8 +8120,7 @@
                 this.modalStatus('settingsStatus', t('That does not look like a recovery code.'), 'warn');
                 return;
             }
-            Sync.blocked = false;
-            Sync._hashes = new Map();
+            Sync.forget();
             if (replace || !rowPresent || !record) {
                 try { await Sync.publishRootRecord(); } catch (_) { }
             }
@@ -8625,6 +8626,37 @@
                 if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
                 card.focus({ preventScroll: true });
             }
+        },
+
+        watchKeyboard() {
+            const vv = window.visualViewport;
+            const root = document.documentElement;
+            const typing = () => {
+                const el = document.activeElement;
+                if (!el || !el.matches || !el.matches('input, textarea, select, [contenteditable="true"]')) return null;
+                return el.closest('.modal, .gate, .palette') ? el : null;
+            };
+            const reveal = () => {
+                const el = typing();
+                if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+            };
+            const fit = () => {
+                const steady = !vv || Math.abs((vv.scale || 1) - 1) < 0.01;
+                const height = steady && vv ? vv.height : window.innerHeight;
+                const top = steady && vv ? vv.offsetTop : 0;
+                root.style.setProperty('--vv-height', Math.round(height) + 'px');
+                root.style.setProperty('--vv-top', Math.round(top) + 'px');
+                requestAnimationFrame(reveal);
+            };
+            if (vv) {
+                vv.addEventListener('resize', fit);
+                vv.addEventListener('scroll', fit);
+            }
+            window.addEventListener('resize', fit);
+            document.addEventListener('focusin', () => {
+                if (typing()) setTimeout(reveal, 300);
+            });
+            fit();
         },
 
         closeTop() {

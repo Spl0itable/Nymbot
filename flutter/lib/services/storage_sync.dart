@@ -55,8 +55,17 @@ class StorageSync {
         ),
       );
 
-  Future<Map<String, dynamic>?> settingsGet(EventSigner signer) =>
-      _call('settings-get', signer, timeout: const Duration(seconds: 20));
+  Future<Map<String, dynamic>?> settingsGet(
+    EventSigner signer, {
+    int? since,
+    List<String>? only,
+  }) =>
+      _call('settings-get', signer,
+          extra: {
+            if (since != null) 'since': since,
+            if (only != null) 'only': only,
+          },
+          timeout: const Duration(seconds: 20));
 
   Future<bool> settingsSet(
     EventSigner signer, {
@@ -99,10 +108,11 @@ class StorageSync {
   /// Null when the read did not complete — which is not the same answer as
   /// "there is no root", and the caller must not treat it as one.
   Future<PqRootLookup?> pqRootRecord(EventSigner signer) async {
-    final data = await _call('settings-get', signer);
+    final hashed = categoryFor(signer.pubkey, pqRootDTag);
+    final data =
+        await _call('settings-get', signer, extra: {'only': [hashed, pqRootDTag]});
     final cats = data == null ? null : data['categories'];
     if (cats is! Map) return null;
-    final hashed = categoryFor(signer.pubkey, pqRootDTag);
     String? blob;
     for (final name in [hashed, pqRootDTag]) {
       final entry = cats[name];

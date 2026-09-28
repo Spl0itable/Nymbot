@@ -28,6 +28,8 @@ import 'research_view.dart';
 class NymbotToolbar extends StatelessWidget {
   const NymbotToolbar({super.key});
 
+  static const double scrollBelow = 340;
+
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
@@ -211,7 +213,8 @@ class NymbotToolbar extends StatelessWidget {
       color: app.spendingAnon ? theme.colorScheme.secondary : NymbotColors.lightning,
       onTap: () => showCreditsSheet(context),
     );
-    if (MediaQuery.textScalerOf(context).scale(1) > 1.15) {
+    if (MediaQuery.textScalerOf(context).scale(1) > 1.15 ||
+        MediaQuery.sizeOf(context).width < scrollBelow) {
       return Container(
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: theme.dividerColor)),

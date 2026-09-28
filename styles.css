@@ -615,6 +615,11 @@ body {
     height: 1.07em;
 }
 
+.phone-chip .brand-tile {
+    width: 1.25em;
+    height: 1.25em;
+}
+
 .phone-chip.is-active {
     border-color: var(--secondary);
     color: var(--secondary);
@@ -874,6 +879,7 @@ body {
 }
 
 .phone-composer {
+    --phone-ctl: 2.5em;
     display: flex;
     align-items: flex-end;
     gap: 0.4em;
@@ -885,8 +891,8 @@ body {
 .phone-btn {
     display: grid;
     place-items: center;
-    width: 2.25em;
-    height: 2.25em;
+    width: var(--phone-ctl);
+    height: var(--phone-ctl);
     flex: 0 0 auto;
     border: 1px solid var(--phone-line);
     border-radius: 0.5em;
@@ -894,15 +900,21 @@ body {
 }
 
 .phone-btn svg,
-.phone-send svg {
+.phone-send svg,
+.phone-mic svg {
     width: 1.125em;
     height: 1.125em;
 }
 
 .phone-input {
+    position: relative;
+    display: flex;
+    align-items: center;
     flex: 1 1 auto;
     min-width: 0;
-    padding: 0.5em 0.75em;
+    min-height: var(--phone-ctl);
+    padding: 0.35em 2.3em 0.35em 0.75em;
+    line-height: 1.4;
     border: 1px solid var(--phone-line-strong);
     border-radius: 0.5em;
     background: var(--phone-sunken);
@@ -910,15 +922,38 @@ body {
     overflow-wrap: anywhere;
 }
 
+.phone-input:has(.phone-draft:not(:empty)) {
+    padding-right: 0.75em;
+}
+
 .phone-placeholder {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     color: var(--phone-text-faint);
+}
+
+.phone-mic {
+    position: absolute;
+    right: 0.2em;
+    bottom: calc((var(--phone-ctl) - 2px - 2em) / 2);
+    display: grid;
+    place-items: center;
+    width: 2em;
+    height: 2em;
+    color: var(--phone-text-dim);
+}
+
+.phone-input:has(.phone-draft:not(:empty)) .phone-mic {
+    display: none;
 }
 
 .phone-send {
     display: grid;
     place-items: center;
-    width: 2.5em;
-    height: 2.5em;
+    width: var(--phone-ctl);
+    height: var(--phone-ctl);
     flex: 0 0 auto;
     border: 1px solid var(--primary);
     border-radius: 50%;

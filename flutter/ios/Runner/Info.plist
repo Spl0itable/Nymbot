@@ -63,6 +63,8 @@
 	     so no annual self-classification export filing is required. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Attaching a photo or video to a message reads it from your library. When you send it, the file is uploaded to a media host under a one-time key and linked in your message.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saving a picture from a chat to your library adds it there. Nymbot never reads your library to do this.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Taking a photo or recording a video to attach to a message uses the camera. It is only sent when you send the message.</string>
 	<key>NSMicrophoneUsageDescription</key>

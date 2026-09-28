@@ -52,6 +52,7 @@ import 'sheets/sheet.dart';
 import 'command_palette.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
+import 'media_viewer.dart';
 import 'motion.dart';
 import 'mention_suggestions.dart';
 import 'message_bubble.dart';
@@ -1499,10 +1500,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final app = AppScope.read(context);
     final controller = TextEditingController(text: m.content);
     var branch = true;
-    final value = await showDialog<String>(
+    final value = await showNymDialog<String>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
+          scrollable: true,
           title: Text(t('Ask this differently')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1511,6 +1513,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 controller: controller,
                 autofocus: true,
                 minLines: 3,
+                scrollPadding: textAreaScrollPadding(context, 3),
                 maxLines: 10,
               ),
               CheckboxListTile(
@@ -2195,6 +2198,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ? Icon(Icons.error_outline,
                                     size: 15,
                                     color: Theme.of(context).colorScheme.error)
+                                : ViewerItem.attachment(a) != null
+                                ? AttachmentThumb(attachment: a, size: 24)
                                 : NymGlyph(
                                     switch (a.kind) {
                                       AttachmentKind.image => 'picture',
@@ -2216,6 +2221,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 : null,
                           ),
                         ),
+                        onPressed: ViewerItem.attachment(a) == null
+                            ? null
+                            : () => MediaViewer.openAttachments(
+                                context, app.attachments, a),
                         onDeleted: () => app.removeAttachment(a.id),
                       ),
                   ],
@@ -2640,9 +2649,10 @@ Future<void> exportChat(
 Future<void> renameChatDialog(
     BuildContext context, AppController app, Conversation conv) async {
   final controller = TextEditingController(text: conv.title);
-  final value = await showDialog<String>(
+  final value = await showNymDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
+      scrollable: true,
       title: Text(t('Name this chat')),
       content: TextField(controller: controller, autofocus: true),
       actions: [

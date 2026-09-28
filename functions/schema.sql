@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS settings (
   PRIMARY KEY (pubkey, category)
 );
 CREATE INDEX IF NOT EXISTS settings_pubkey ON settings (pubkey);
+CREATE INDEX IF NOT EXISTS settings_pubkey_updated ON settings (pubkey, updated_at);
 
 CREATE TABLE IF NOT EXISTS profiles (
   pubkey TEXT PRIMARY KEY,

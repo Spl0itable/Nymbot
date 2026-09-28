@@ -14,6 +14,7 @@ import 'doc_tray.dart';
 import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
+import 'media_viewer.dart';
 import 'motion.dart';
 import 'nym_avatar.dart';
 import 'nym_glyph.dart';
@@ -393,7 +394,8 @@ class _MessageBubbleState extends State<MessageBubble> {
       constraints: BoxConstraints(
         maxWidth: bubbles ? MediaQuery.of(context).size.width * 0.82 : double.infinity,
       ),
-      child: Container(
+      child: MediaViewerScope(
+        child: Container(
         width: bubbles ? null : double.infinity,
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
         decoration: BoxDecoration(
@@ -490,6 +492,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -509,33 +512,42 @@ class _MessageBubbleState extends State<MessageBubble> {
           spacing: 6,
           runSpacing: 6,
           children: [
-            for (final a in m.attachments)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Theme.of(context).dividerColor),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    NymGlyph(
-                      switch (a.kind) {
-                        AttachmentKind.image => 'picture',
-                        AttachmentKind.video => 'film',
-                        AttachmentKind.text => 'artifacts',
-                      },
-                      size: 13,
-                    ),
-                    const SizedBox(width: 4),
-                    Text('${a.name} · ${a.humanSize}',
-                        style: const TextStyle(fontSize: 11)),
-                  ],
-                ),
-              ),
+            for (final a in m.attachments) _attachmentChip(context, a),
           ],
         ),
       );
+
+  Widget _attachmentChip(BuildContext context, Attachment a) {
+    final item = ViewerItem.attachment(a);
+    final chip = Container(
+      key: ValueKey('sent-attachment-${a.id}'),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (item != null)
+            AttachmentThumb(attachment: a, size: 40)
+          else
+            NymGlyph(
+              switch (a.kind) {
+                AttachmentKind.image => 'picture',
+                AttachmentKind.video => 'film',
+                AttachmentKind.text => 'artifacts',
+              },
+              size: 13,
+            ),
+          const SizedBox(width: 4),
+          Text('${a.name} · ${a.humanSize}', style: const TextStyle(fontSize: 11)),
+        ],
+      ),
+    );
+    if (item == null) return chip;
+    return ViewableImage(item: item, child: chip);
+  }
 
   Widget _quoted(BuildContext context, String quote) => Container(
         margin: const EdgeInsets.only(bottom: 6),

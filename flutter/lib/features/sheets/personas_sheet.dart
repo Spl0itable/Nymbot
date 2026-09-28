@@ -176,6 +176,7 @@ class _PersonasSheetState extends State<_PersonasSheet> {
             TextField(
               controller: _body,
               minLines: 4,
+              scrollPadding: textAreaScrollPadding(context, 4),
               maxLines: 8,
               decoration: InputDecoration(
                   labelText: t('Instructions'), hintText: 'Answer as…'),
@@ -262,6 +263,7 @@ class _SystemSheetState extends State<_SystemSheet> {
             TextField(
               controller: _body,
               minLines: 5,
+              scrollPadding: textAreaScrollPadding(context, 5),
               maxLines: 10,
               decoration: InputDecoration(
                 hintText: t('Always answer in British English, and show the diff before '

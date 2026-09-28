@@ -1,0 +1,156 @@
+.message-content img.msg-media,
+.msg-attachment img,
+#attachTray .attach-item img,
+img.run-image {
+    cursor: zoom-in;
+}
+
+.message-content a img.msg-media {
+    cursor: pointer;
+}
+
+html.viewer-open,
+html.viewer-open body {
+    overflow: hidden;
+}
+
+.viewer {
+    --viewer-fade: 1;
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, calc(0.85 * var(--viewer-fade)));
+    touch-action: none;
+    overscroll-behavior: contain;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+}
+
+.viewer[hidden] {
+    display: none;
+}
+
+.viewer-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    max-height: 90dvh;
+    object-fit: contain;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius, 12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    transform-origin: center center;
+    will-change: transform;
+    cursor: zoom-in;
+}
+
+.viewer.is-zoomed .viewer-img {
+    cursor: grab;
+}
+
+.viewer-img.is-animating {
+    transition: transform 0.25s ease;
+}
+
+.viewer-img.is-fading {
+    opacity: 0;
+    transition: opacity 0.12s linear, transform 0.18s ease;
+}
+
+.viewer-btn {
+    position: absolute;
+    top: calc(20px + env(safe-area-inset-top, 0px));
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: rgba(20, 20, 35, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 1;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.viewer-btn[hidden] {
+    display: none;
+}
+
+.viewer-btn:hover,
+.viewer-btn:focus-visible {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.viewer-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.viewer-btn:disabled {
+    opacity: 0.5;
+    cursor: progress;
+}
+
+.viewer-close {
+    right: calc(20px + env(safe-area-inset-right, 0px));
+}
+
+.viewer-save {
+    right: calc(70px + env(safe-area-inset-right, 0px));
+}
+
+.viewer-nav {
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translateY(-50%);
+}
+
+.viewer-prev {
+    left: calc(20px + env(safe-area-inset-left, 0px));
+}
+
+.viewer-next {
+    right: calc(20px + env(safe-area-inset-right, 0px));
+}
+
+.viewer-prev svg {
+    transform: rotate(90deg);
+}
+
+.viewer-next svg {
+    transform: rotate(-90deg);
+}
+
+.viewer-count {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+    text-align: center;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.viewer-count[hidden] {
+    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .viewer-img.is-animating,
+    .viewer-img.is-fading,
+    .viewer-btn {
+        transition: none;
+    }
+}

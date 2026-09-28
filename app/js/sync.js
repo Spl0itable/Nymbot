@@ -17,7 +17,14 @@
     const MAX_MESSAGES = 400;
     const ART_VERSIONS = 5;
     const ART_KEEP_VERSIONS = 30;
-    const ART_MAX_CHARS = 300000;
+    const ART_MAX_CHARS = 240000;
+    const ROW_MAX_BYTES = 240000;
+    const ROW_HARD_BYTES = 880000;
+    const SEAL_MAX_BYTES = 900000;
+    const OVERLAP_MS = 10000;
+    const FULL_EVERY_MS = 24 * 3600 * 1000;
+    const PART_BYTES = 60000;
+    const PARTS_PREFIX = 'parts1:';
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
 
@@ -68,7 +75,75 @@
         return Identity._kem ? Identity.kemPk : null;
     }
 
+    function utf8Bytes(text) {
+        return new TextEncoder().encode(text).length;
+    }
+
+    function charBytes(ch) {
+        const cp = ch.codePointAt(0);
+        return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    }
+
+    function splitParts(text) {
+        const parts = [];
+        let current = '';
+        let size = 0;
+        for (const ch of text) {
+            const n = charBytes(ch);
+            if (size + n > PART_BYTES) {
+                parts.push(current);
+                current = '';
+                size = 0;
+            }
+            current += ch;
+            size += n;
+        }
+        if (current) parts.push(current);
+        return parts;
+    }
+
+    function isParts(blob) {
+        return typeof blob === 'string' && blob.startsWith(PARTS_PREFIX);
+    }
+
+    function partsOf(blob) {
+        const parts = JSON.parse(blob.slice(PARTS_PREFIX.length));
+        if (!Array.isArray(parts) || !parts.length || parts.some(p => typeof p !== 'string' || !p)) throw new Error('bad parts');
+        return parts;
+    }
+
+    function blobMode(blob) {
+        const first = isParts(blob) ? partsOf(blob)[0] : blob;
+        return NC().isPq2Payload(first) ? 'pq' : 'c';
+    }
+
+    function fitMessages(msgs) {
+        let total = 64;
+        const sizes = msgs.map(m => {
+            const n = utf8Bytes(JSON.stringify(m)) + 1;
+            total += n;
+            return n;
+        });
+        const budget = sizes.length && 64 + sizes[sizes.length - 1] > ROW_MAX_BYTES ? ROW_HARD_BYTES : ROW_MAX_BYTES;
+        let start = 0;
+        while (total > budget && start < msgs.length - 1) total -= sizes[start++];
+        return start ? msgs.slice(start) : msgs;
+    }
+
     async function seal(plaintext) {
+        const size = utf8Bytes(plaintext);
+        if (size > SEAL_MAX_BYTES) return null;
+        if (size <= PART_BYTES) return sealPart(plaintext);
+        const sealed = [];
+        for (const part of splitParts(plaintext)) {
+            const blob = await sealPart(part);
+            if (!blob) return null;
+            sealed.push(blob);
+        }
+        return PARTS_PREFIX + JSON.stringify(sealed);
+    }
+
+    async function sealPart(plaintext) {
         const kem = selfKem();
         if (Identity._sk) {
             if (kem) {
@@ -108,6 +183,13 @@
     }
 
     async function openWith(blob) {
+        if (!isParts(blob)) return openPart(blob);
+        let plain = '';
+        for (const part of partsOf(blob)) plain += await openPart(part);
+        return plain;
+    }
+
+    async function openPart(blob) {
         const NCx = NC();
         if (Identity._sk) {
             if (NCx.isPq2Payload(blob)) {
@@ -236,9 +318,9 @@
     async function rootRecordFor(account) {
         const pubkey = account ? account.pubkey : Identity.pubkey;
         if (!pubkey) return null;
-        const data = await call('settings-get', {}, account);
-        if (!data || !data.categories || typeof data.categories !== 'object') return null;
         const hashed = await nymchatCategoryFor(pubkey, PQ_ROOT_D_TAG);
+        const data = await call('settings-get', { only: [hashed, PQ_ROOT_D_TAG] }, account);
+        if (!data || !data.categories || typeof data.categories !== 'object') return null;
         let blob = null;
         for (const name of [hashed, PQ_ROOT_D_TAG]) {
             const entry = data.categories[name];
@@ -360,6 +442,9 @@
         _following: null,
         _again: false,
         _hashes: new Map(),
+        _names: new Map(),
+        _statePk: null,
+        _pending: null,
         onChange: null,
 
         rootRecord(account) { return rootRecordFor(account); },
@@ -368,6 +453,66 @@
 
         enabled() {
             return !!(Identity.pubkey && Store.settings().sync !== false);
+        },
+
+        _load() {
+            const pk = Identity.pubkey || null;
+            if (this._statePk === pk) return;
+            this._statePk = pk;
+            this._pending = null;
+            const held = pk ? Store.read('sync_hashes', null) : null;
+            const mine = !!(held && typeof held === 'object' && held.pk === pk);
+            const map = (v) => new Map(mine && v && typeof v === 'object' ? Object.entries(v).filter(e => typeof e[1] === 'string') : []);
+            this._hashes = map(held && held.hashes);
+            this._names = map(held && held.names);
+        },
+
+        _saveHashes() {
+            if (!this._statePk || this._statePk !== Identity.pubkey) return;
+            Store.write('sync_hashes', {
+                pk: this._statePk,
+                hashes: Object.fromEntries(this._hashes),
+                names: Object.fromEntries(this._names)
+            });
+        },
+
+        cursor() {
+            const held = Store.read('sync_cursor', null);
+            if (!held || typeof held !== 'object' || !Identity.pubkey || held.pk !== Identity.pubkey) return null;
+            if (!Number.isFinite(held.cursor) || !Number.isFinite(held.now)) return null;
+            return held;
+        },
+
+        since() {
+            if (this.blocked) return null;
+            const held = this.cursor();
+            if (!held) return null;
+            const age = Date.now() - (Number(held.fullAt) || 0);
+            if (!(age >= 0 && age < FULL_EVERY_MS)) return null;
+            return Math.max(0, Math.min(held.cursor, held.now - OVERLAP_MS));
+        },
+
+        _commit() {
+            const p = this._pending;
+            this._pending = null;
+            if (!p || p.pk !== Identity.pubkey) return;
+            const held = this.cursor();
+            Store.write('sync_cursor', {
+                pk: p.pk,
+                cursor: p.cursor,
+                now: p.now,
+                fullAt: p.full ? p.at : (held ? Number(held.fullAt) || 0 : 0)
+            });
+        },
+
+        forget() {
+            this.blocked = false;
+            this._hashes = new Map();
+            this._names = new Map();
+            this._pending = null;
+            this._statePk = Identity.pubkey || null;
+            Store.drop('sync_cursor');
+            Store.drop('sync_hashes');
         },
 
         /// Every record this device has deleted, so a device that still holds it
@@ -418,7 +563,7 @@
             for (const conv of chats) {
                 const msgs = Store.messages(conv.id);
                 if (!msgs.length) continue;
-                out['chat-' + conv.id] = { id: conv.id, messages: msgs.slice(-MAX_MESSAGES) };
+                out['chat-' + conv.id] = { id: conv.id, messages: fitMessages(msgs.slice(-MAX_MESSAGES)) };
             }
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
@@ -539,10 +684,12 @@
             return touched;
         },
 
-        /// Reads every row back and decrypts it.
-        async pull() {
-            const data = await call('settings-get', {});
+        async pull(opts) {
+            this._load();
+            const since = opts && opts.full ? null : this.since();
+            const data = await call('settings-get', since == null ? {} : { since });
             if (!data || !data.categories || typeof data.categories !== 'object') return null;
+            const full = data.full !== false;
             const out = {};
             let unreadable = 0;
             for (const [category, entry] of Object.entries(data.categories)) {
@@ -562,27 +709,35 @@
                 out[name] = payload.v !== undefined ? payload.v : payload;
                 if (category === await categoryFor(name)) {
                     const plain = JSON.stringify({ __cat: name, v: out[name] });
-                    const mode = NC().isPq2Payload(entry.blob) ? 'pq' : 'c';
+                    const mode = blobMode(entry.blob);
                     this._hashes.set(category, await sha256Hex(Identity.pubkey + '|' + mode + '|' + plain));
+                    this._names.set(category, name);
                 }
             }
             // Rows exist and none of them opened: this device holds a key that
             // cannot read the account's own settings, so it must not write.
-            this.blocked = unreadable > 0 && Object.keys(out).length === 0;
+            if (full) this.blocked = unreadable > 0 && Object.keys(out).length === 0;
+            this._pending = Number.isFinite(data.cursor) && Number.isFinite(data.now)
+                ? { pk: Identity.pubkey, cursor: data.cursor, now: data.now, full, at: Date.now() }
+                : null;
+            this._saveHashes();
             return out;
         },
 
         async push(dTag, value) {
             if (this.blocked) return false;
+            this._load();
             const plain = JSON.stringify({ __cat: dTag, v: value });
             const category = await categoryFor(dTag);
             const hash = await sha256Hex(Identity.pubkey + '|' + (selfKem() ? 'pq' : 'c') + '|' + plain);
             if (this._hashes.get(category) === hash) return true;
-            const blob = await seal(plain);
+            let blob;
+            try { blob = await seal(plain); } catch (_) { return false; }
             if (!blob) return false;
             const resp = await call('settings-set', { category, blob, contentHash: hash });
             if (!resp || resp.error) return false;
             this._hashes.set(category, hash);
+            this._names.set(category, dTag);
             if (Identity.isRemote) remember(await sha256Hex(blob), plain);
             return true;
         },
@@ -598,23 +753,29 @@
             const options = opts || {};
             this._running = (async () => {
                 let touched = [];
+                let failed = false;
                 try {
                     const remote = await this.pull();
                     if (remote === null) return { offline: true };
                     touched = this.apply(remote);
                     if (this.blocked) return { blocked: true };
+                    this._commit();
                     const local = this.snapshot();
                     // A row the server holds for a conversation this device has
                     // since deleted is emptied rather than left behind.
-                    for (const key of Object.keys(remote)) {
+                    for (const key of new Set(Object.keys(remote).concat([...this._names.values()]))) {
                         if (key.indexOf('chat-') === 0 && !local[key]) local[key] = { id: '', messages: [] };
                     }
-                    for (const [dTag, value] of Object.entries(local)) {
-                        await this.push(dTag, value);
+                    try {
+                        for (const [dTag, value] of Object.entries(local)) {
+                            await this.push(dTag, value);
+                        }
+                    } finally {
+                        this._saveHashes();
                     }
                     this.lastAt = Date.now();
                 } catch (_) {
-                    return { failed: true };
+                    failed = true;
                 } finally {
                     this._running = null;
                     if (this._again) {
@@ -625,6 +786,7 @@
                 if (touched.length && typeof this.onChange === 'function') {
                     try { this.onChange(touched); } catch (_) { }
                 }
+                if (failed) return { failed: true, touched };
                 return { ok: true, touched, quiet: !!options.quiet };
             })();
             return this._running;
@@ -659,6 +821,7 @@
                     pubkey: Identity.pubkey
                 });
             } catch (_) { return false; }
+            this.forget();
             try {
                 await Edge.fetch(url(), {
                     method: 'POST',
@@ -673,11 +836,11 @@
         /// Everything this account has on the server, gone.
         async wipeRemote() {
             if (!Identity.pubkey) return false;
-            const remote = await this.pull();
+            const remote = await this.pull({ full: true });
             if (!remote) return false;
-            this.blocked = false;
-            this._hashes.clear();
+            this.forget();
             for (const dTag of Object.keys(remote)) await this.push(dTag, null);
+            this._saveHashes();
             return true;
         }
     };

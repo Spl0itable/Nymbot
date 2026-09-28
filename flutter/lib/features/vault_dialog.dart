@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import '../core/theme/theme.dart';
 import '../state/vault.dart';
 import 'i18n/i18n.dart';
+import 'sheets/sheet.dart';
 
 enum VaultAction { enable, change, disable, useBiometric, usePassphrase }
 
 Future<bool> showVaultDialog(BuildContext context, Vault vault, VaultAction action,
         {bool biometricAvailable = false}) async =>
-    await showDialog<bool>(
+    await showNymDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => VaultDialog(
@@ -183,59 +184,58 @@ class _VaultDialogState extends State<VaultDialog> {
   Widget build(BuildContext context) {
     final danger = widget.action == VaultAction.disable;
     return AlertDialog(
+      scrollable: true,
       title: Text(_title),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.action == VaultAction.enable && widget.biometricAvailable)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Wrap(
-                  spacing: 6,
-                  children: [
-                    ChoiceChip(
-                      key: const ValueKey('vault-method-passphrase'),
-                      label: Text(t('Passphrase')),
-                      selected: !_bio,
-                      onSelected: _busy ? null : (_) => setState(() => _bio = false),
-                    ),
-                    ChoiceChip(
-                      key: const ValueKey('vault-method-biometric'),
-                      label: Text(t('Biometrics')),
-                      selected: _bio,
-                      onSelected: _busy ? null : (_) => setState(() => _bio = true),
-                    ),
-                  ],
-                ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.action == VaultAction.enable && widget.biometricAvailable)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  ChoiceChip(
+                    key: const ValueKey('vault-method-passphrase'),
+                    label: Text(t('Passphrase')),
+                    selected: !_bio,
+                    onSelected: _busy ? null : (_) => setState(() => _bio = false),
+                  ),
+                  ChoiceChip(
+                    key: const ValueKey('vault-method-biometric'),
+                    label: Text(t('Biometrics')),
+                    selected: _bio,
+                    onSelected: _busy ? null : (_) => setState(() => _bio = true),
+                  ),
+                ],
               ),
-            Text(_intro, style: const TextStyle(fontSize: 13)),
-            if (_asksCurrent)
-              _field(const ValueKey('vault-current'), _current,
-                  widget.action == VaultAction.change
-                      ? t('Current passphrase')
-                      : t('Passphrase'),
-                  last: !_asksNext),
-            if (_asksNext) ...[
-              _field(
-                  const ValueKey('vault-next'),
-                  _next,
-                  widget.action == VaultAction.change
-                      ? t('New passphrase')
-                      : t('Passphrase')),
-              _field(const ValueKey('vault-confirm'), _confirm,
-                  t('Confirm passphrase'),
-                  last: true),
-            ],
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(_error!,
-                    style: const TextStyle(color: NymbotColors.danger, fontSize: 12)),
-              ),
+            ),
+          Text(_intro, style: const TextStyle(fontSize: 13)),
+          if (_asksCurrent)
+            _field(const ValueKey('vault-current'), _current,
+                widget.action == VaultAction.change
+                    ? t('Current passphrase')
+                    : t('Passphrase'),
+                last: !_asksNext),
+          if (_asksNext) ...[
+            _field(
+                const ValueKey('vault-next'),
+                _next,
+                widget.action == VaultAction.change
+                    ? t('New passphrase')
+                    : t('Passphrase')),
+            _field(const ValueKey('vault-confirm'), _confirm,
+                t('Confirm passphrase'),
+                last: true),
           ],
-        ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(_error!,
+                  style: const TextStyle(color: NymbotColors.danger, fontSize: 12)),
+            ),
+        ],
       ),
       actions: [
         TextButton(

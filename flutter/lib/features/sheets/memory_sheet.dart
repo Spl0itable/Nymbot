@@ -151,6 +151,7 @@ class _MemorySheetState extends State<_MemorySheet> {
             TextField(
               controller: _text,
               minLines: 2,
+              scrollPadding: textAreaScrollPadding(context, 2),
               maxLines: 4,
               decoration: InputDecoration(
                 hintText: t('I prefer answers that show the code first.'),

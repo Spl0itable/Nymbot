@@ -25,6 +25,7 @@ import 'brand_buttons.dart';
 import 'key_backup_ui.dart';
 import 'secret_guard.dart';
 import 'nym_glyph.dart';
+import 'sheets/sheet.dart';
 
 const String nymbotWordmark = r'''                                  ##\                  ##\
                                   ## |                 ## |
@@ -644,40 +645,39 @@ class _GateScreenState extends State<GateScreen> {
       {String? note}) async {
     var entered = '';
     String? error;
-    final result = await showDialog<({Uint8List root, int epoch})?>(
+    final result = await showNymDialog<({Uint8List root, int epoch})?>(
       context: context,
       barrierDismissible: false,
       builder: (context) => StatefulBuilder(
         builder: (context, setSheet) => AlertDialog(
+          scrollable: true,
           title: Text(t('This key already has a post-quantum root')),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (note != null) ...[
-                  Text(note,
-                      key: const ValueKey('gate-code-note'),
-                      style: const TextStyle(color: NymbotColors.danger)),
-                  const SizedBox(height: 10),
-                ],
-                Text(t('Your settings and conversations are sealed to it, and '
-                    'so are your replies. Paste the recovery code from the '
-                    'device that made it — Identity → Post-quantum root, in '
-                    'Nymbot or Nymchat.\n\nWithout it this device can still '
-                    'chat, but it cannot open anything the other one saved.')),
-                const SizedBox(height: 14),
-                TextField(
-                  onChanged: (value) => entered = value,
-                  autocorrect: false,
-                  decoration: InputDecoration(
-                    labelText: t('Recovery code'),
-                    hintText: 'nympq1…',
-                    errorText: error,
-                  ),
-                ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (note != null) ...[
+                Text(note,
+                    key: const ValueKey('gate-code-note'),
+                    style: const TextStyle(color: NymbotColors.danger)),
+                const SizedBox(height: 10),
               ],
-            ),
+              Text(t('Your settings and conversations are sealed to it, and '
+                  'so are your replies. Paste the recovery code from the '
+                  'device that made it — Identity → Post-quantum root, in '
+                  'Nymbot or Nymchat.\n\nWithout it this device can still '
+                  'chat, but it cannot open anything the other one saved.')),
+              const SizedBox(height: 14),
+              TextField(
+                onChanged: (value) => entered = value,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: t('Recovery code'),
+                  hintText: 'nympq1…',
+                  errorText: error,
+                ),
+              ),
+            ],
           ),
           actions: [
             TextButton(

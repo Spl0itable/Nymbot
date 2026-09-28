@@ -366,12 +366,7 @@ class _ModelChoice extends StatelessWidget {
       minChildSize: 0.5,
       maxChildSize: 0.95,
       builder: (context, controller) => Padding(
-        padding: EdgeInsets.only(
-          left: 12,
-          right: 12,
-          top: 12,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-        ),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -389,22 +384,25 @@ class _ModelChoice extends StatelessWidget {
                 unavailable: unavailable,
                 scrollController: controller,
                 onPick: (m, _) => Navigator.pop(context, m),
+                footer: [
+                  if (noneLabel != null) ...[
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      key: const ValueKey('model-choice-none'),
+                      style: current == null
+                          ? OutlinedButton.styleFrom(
+                              side: BorderSide(
+                                  color:
+                                      Theme.of(context).colorScheme.primary))
+                          : null,
+                      onPressed: () =>
+                          Navigator.pop(context, const <String, dynamic>{}),
+                      child: Text(noneLabel!),
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (noneLabel != null) ...[
-              const SizedBox(height: 8),
-              OutlinedButton(
-                key: const ValueKey('model-choice-none'),
-                style: current == null
-                    ? OutlinedButton.styleFrom(
-                        side: BorderSide(
-                            color: Theme.of(context).colorScheme.primary))
-                    : null,
-                onPressed: () =>
-                    Navigator.pop(context, const <String, dynamic>{}),
-                child: Text(noneLabel!),
-              ),
-            ],
           ],
         ),
       ),
@@ -424,7 +422,10 @@ class ModelList extends StatefulWidget {
     this.selectedKeys = const {},
     this.unavailable = const {},
     this.scrollController,
+    this.footer = const [],
   });
+
+  static const double roomyHeight = 460;
 
   static const List<String> everyFilter = [
     'all',
@@ -447,6 +448,7 @@ class ModelList extends StatefulWidget {
   final Set<String> selectedKeys;
   final Map<String, String> unavailable;
   final ScrollController? scrollController;
+  final List<Widget> footer;
 
   @override
   State<ModelList> createState() => _ModelListState();
@@ -585,7 +587,6 @@ class _ModelListState extends State<ModelList> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final theme = Theme.of(context);
     final flat = _sort != 'provider';
     final rows = <Widget>[];
     Map<String, dynamic>? heading;
@@ -603,6 +604,54 @@ class _ModelListState extends State<ModelList> {
       rows.add(_tile(app, m, group));
     }
 
+    return LayoutBuilder(
+        builder: (context, box) => _layout(
+            context, rows, box.maxHeight < ModelList.roomyHeight));
+  }
+
+  Widget _message(String text, bool scrolls) => scrolls
+      ? Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Center(child: Text(text)),
+        )
+      : Center(child: Text(text));
+
+  Widget _body(List<Widget> rows, bool tight) {
+    final trailing = tight ? widget.footer : const <Widget>[];
+    final scrolls = trailing.isNotEmpty;
+    final Widget? note = widget.loading
+        ? null
+        : widget.catalog == null
+            ? _message(t('The model catalog is unavailable right now.'), scrolls)
+            : rows.isEmpty
+                ? _message(t('Nothing matches that.'), scrolls)
+                : null;
+    if (widget.loading && !scrolls) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (note != null && !scrolls) return note;
+    return ListView(
+      controller: widget.scrollController,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      children: [
+        if (widget.loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (note != null)
+          note
+        else
+          ...rows,
+        ...trailing,
+      ],
+    );
+  }
+
+  Widget _layout(BuildContext context, List<Widget> rows, bool tight) {
+    final app = AppScope.of(context);
+    final theme = Theme.of(context);
+    final flat = _sort != 'provider';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -681,22 +730,8 @@ class _ModelListState extends State<ModelList> {
           ),
         ),
         const SizedBox(height: 8),
-        Expanded(
-          child: widget.loading
-              ? const Center(child: CircularProgressIndicator())
-              : widget.catalog == null
-                  ? Center(
-                      child: Text(
-                          t('The model catalog is unavailable right now.')))
-                  : rows.isEmpty
-                      ? Center(child: Text(t('Nothing matches that.')))
-                      : ListView(
-                          controller: widget.scrollController,
-                          keyboardDismissBehavior:
-                              ScrollViewKeyboardDismissBehavior.onDrag,
-                          children: rows,
-                        ),
-        ),
+        Expanded(child: _body(rows, tight)),
+        if (!tight) ...widget.footer,
       ],
     );
   }
@@ -784,12 +819,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
       initialChildSize: 0.75,
       maxChildSize: 0.95,
       builder: (context, controller) => Padding(
-        padding: EdgeInsets.only(
-          left: 12,
-          right: 12,
-          top: 12,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-        ),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -804,26 +834,29 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                 selectedKeys: pinned,
                 scrollController: controller,
                 onPick: (m, group) => _pick(app, m, group),
+                footer: [
+                  const SizedBox(height: 8),
+                  Text(
+                    t('An estimate for one reply at these rates: the low end is a '
+                        'short answer, the high end a long one. Whatever the model '
+                        'has to read pushes it up — web results, repository files, '
+                        'attachments, and a long chat behind you — and a task that '
+                        'takes several passes costs more again. You pay for the '
+                        'tokens actually used, never a flat price per message.'),
+                    style: TextStyle(
+                        fontSize: 11, color: Theme.of(context).hintColor),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      await app.dropProMedia();
+                      await app.setProModel(null);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+                    child: Text(t('Auto-routed (standard)')),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              t('An estimate for one reply at these rates: the low end is a '
-                  'short answer, the high end a long one. Whatever the model '
-                  'has to read pushes it up — web results, repository files, '
-                  'attachments, and a long chat behind you — and a task that '
-                  'takes several passes costs more again. You pay for the '
-                  'tokens actually used, never a flat price per message.'),
-              style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: () async {
-                await app.dropProMedia();
-                await app.setProModel(null);
-                if (context.mounted) Navigator.pop(context);
-              },
-              child: Text(t('Auto-routed (standard)')),
             ),
           ],
         ),

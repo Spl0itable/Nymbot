@@ -10,6 +10,7 @@ import 'artifact_preview.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
 import 'i18n/i18n.dart';
+import 'media_viewer.dart';
 import 'nym_glyph.dart';
 import 'run_output.dart';
 import 'server_run_sheet.dart';
@@ -353,7 +354,8 @@ class MarkdownBody extends StatelessWidget {
       }
     }
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: blocks);
+    final column = Column(crossAxisAlignment: CrossAxisAlignment.start, children: blocks);
+    return MediaViewerScope.present(context) ? column : MediaViewerScope(child: column);
   }
 
   static List<String> _row(String line) => line
@@ -413,15 +415,18 @@ class MarkdownBody extends StatelessWidget {
         spans.add(WidgetSpan(
           child: MediaGate(
             url: m.group(3)!,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
-                    loadingBuilder: (c, child, p) => p == null
-                        ? child
-                        : mediaWaiting(c, p, width: 200, height: 140),
-                    errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
+            child: ViewableImage(
+              item: ViewerItem.network(m.group(3)!, label: m.group(2) ?? ''),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 240),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
+                      loadingBuilder: (c, child, p) => p == null
+                          ? child
+                          : mediaWaiting(c, p, width: 200, height: 140),
+                      errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
+                ),
               ),
             ),
           ),
@@ -820,14 +825,7 @@ class MediaBlock extends StatefulWidget {
   final String url;
   final bool image;
 
-  @override
-  State<MediaBlock> createState() => _MediaBlockState();
-}
-
-class _MediaBlockState extends State<MediaBlock> {
-  bool _saving = false;
-
-  static String _name(String url, String? mime) {
+  static String fileName(String url, String? mime) {
     final path = url.split(RegExp(r'[?#]')).first;
     var tail = path.substring(path.lastIndexOf('/') + 1);
     if (tail.isEmpty) tail = 'nymbot';
@@ -842,6 +840,13 @@ class _MediaBlockState extends State<MediaBlock> {
     return ext == null ? tail : '$tail.$ext';
   }
 
+  @override
+  State<MediaBlock> createState() => _MediaBlockState();
+}
+
+class _MediaBlockState extends State<MediaBlock> {
+  bool _saving = false;
+
   Future<void> _save() async {
     if (_saving) return;
     setState(() => _saving = true);
@@ -852,7 +857,7 @@ class _MediaBlockState extends State<MediaBlock> {
         throw Exception('HTTP ${res.statusCode}');
       }
       final file = File(
-          '${Directory.systemTemp.path}/${_name(widget.url, res.headers['content-type'])}');
+          '${Directory.systemTemp.path}/${MediaBlock.fileName(widget.url, res.headers['content-type'])}');
       await file.writeAsBytes(res.bodyBytes);
       await Share.shareXFiles([XFile(file.path)]);
     } catch (_) {
@@ -921,12 +926,15 @@ class _MediaBlockState extends State<MediaBlock> {
     return MediaGate(
       url: widget.url,
       child: Stack(children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image(image: CachedMediaImage(src),
-              loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
-              errorBuilder: (c, e, s) => Text(widget.url,
-                  style: TextStyle(fontSize: 12, color: theme.hintColor))),
+        ViewableImage(
+          item: ViewerItem.network(widget.url),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image(image: CachedMediaImage(src),
+                loadingBuilder: (c, child, p) => p == null ? child : mediaWaiting(c, p),
+                errorBuilder: (c, e, s) => Text(widget.url,
+                    style: TextStyle(fontSize: 12, color: theme.hintColor))),
+          ),
         ),
         Positioned(top: 6, right: 6, child: save),
       ]),

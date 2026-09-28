@@ -2014,7 +2014,7 @@ class AppController extends ChangeNotifier {
         } catch (_) {}
       }
     }
-    sync.blocked = false;
+    sync.forget();
     try {
       identity.rootLocked =
           await pq.announceRoot(identity.signer, identity) == null;
@@ -2040,7 +2040,7 @@ class AppController extends ChangeNotifier {
       recorded = false;
     }
     if (!recorded) return false;
-    sync.blocked = false;
+    sync.forget();
     try {
       await pq.announceRoot(identity.signer, identity, force: true);
     } catch (_) {}
@@ -3871,6 +3871,7 @@ class AppController extends ChangeNotifier {
   Future<void> resumed() async {
     if (!signedIn || identity.pubkey.isEmpty) return;
     if (_entered) relays.wake();
+    if (_entered) sync.touch(const Duration(milliseconds: 1500));
     await refreshNotices();
     await refreshBalance();
     await resumeInvoice();

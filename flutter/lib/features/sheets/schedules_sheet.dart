@@ -283,6 +283,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
               controller: _prompt,
               maxLines: 4,
               minLines: 2,
+              scrollPadding: textAreaScrollPadding(context, 2),
               decoration: InputDecoration(
                 labelText: t('Prompt'),
                 hintText: t('What should it ask?'),

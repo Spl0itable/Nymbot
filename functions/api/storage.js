@@ -584,7 +584,7 @@ var SETTINGS_CATEGORY_RE = /^nym(?:chat|bot)-[a-z0-9-]{1,120}$/i;
 var SETTINGS_MAX_CATEGORIES = 50000;
 var SETTINGS_MAX_NYMBOT_CATEGORIES = 1000;
 var SETTINGS_MAX_BYTES = 256 * 1024 * 1024;
-var SETTINGS_MAX_BLOB = 512 * 1024;
+var SETTINGS_MAX_BLOB = 1900000;
 function isValidSettingsCategory(cat) { return SETTINGS_CATEGORY_RE.test(cat); }
 
 async function handleSettingsAction(context, body) {
@@ -604,15 +604,38 @@ async function handleSettingsAction(context, body) {
 
   if (body.action === "settings-get") {
     var categories = {};
+    var now = Date.now();
+    var since = body.since;
+    var incremental = typeof since === "number" && isFinite(since) && since >= 0;
+    var only = Array.isArray(body.only) && body.only.length && body.only.length <= 10 &&
+      body.only.every(function (c) { return typeof c === "string" && isValidSettingsCategory(c); })
+      ? body.only : null;
+    var cursor = null;
     try {
-      var rs = await env.DB_SETTINGS.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ?").bind(userPubkey).all();
+      var rs;
+      if (incremental || only) {
+        var top = await env.DB_SETTINGS.prepare("SELECT MAX(updated_at) AS m FROM settings WHERE pubkey = ?").bind(userPubkey).first();
+        cursor = top && top.m != null ? Number(top.m) || 0 : now;
+        var q = "SELECT category, blob, updated_at FROM settings WHERE pubkey = ?";
+        var binds = [userPubkey];
+        if (incremental) { q += " AND updated_at > ?"; binds.push(Math.floor(since)); }
+        if (only) { q += " AND category IN (" + only.map(function () { return "?"; }).join(", ") + ")"; binds = binds.concat(only); }
+        rs = await env.DB_SETTINGS.prepare(q).bind(...binds).all();
+      } else {
+        rs = await env.DB_SETTINGS.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ?").bind(userPubkey).all();
+        var rows = rs.results || [];
+        cursor = rows.length ? 0 : now;
+        rows.forEach(function (r) { cursor = Math.max(cursor, Number(r.updated_at) || 0); });
+      }
       (rs.results || []).forEach(function (r) {
         if (isValidSettingsCategory(r.category) && typeof r.blob === "string") {
           categories[r.category] = { blob: r.blob, updatedAt: r.updated_at || 0 };
         }
       });
-    } catch (e) { }
-    return json({ categories: categories });
+    } catch (e) {
+      return json({ categories: {} });
+    }
+    return json({ categories: categories, cursor: cursor, now: now, full: !incremental && !only });
   }
 
   if (body.action === "settings-set") {

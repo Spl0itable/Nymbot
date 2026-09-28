@@ -828,9 +828,10 @@ Future<({bool ok, String message})?> moveWholeBalance(
     BuildContext context, AppController app,
     {String prefill = ''}) async {
   final controller = TextEditingController(text: prefill);
-  final target = await showDialog<String>(
+  final target = await showNymDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
+      scrollable: true,
       title: Text(t('Move your whole balance')),
       content: Column(
         mainAxisSize: MainAxisSize.min,
