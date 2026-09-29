@@ -583,9 +583,17 @@
         return { low: low, high: high, max: max };
     }
 
+    function catalogModel(saved, pricing) {
+        if (!saved || !pricing || !Array.isArray(pricing.models)) return saved;
+        const aliases = pricing.aliases || {};
+        const find = (k) => pricing.models.find(m => m && m.key === k && (!m.kind || m.kind === 'chat'));
+        const row = find(saved.key) || (aliases[saved.key] ? find(aliases[saved.key]) : null);
+        return row ? Object.assign({}, saved, row) : saved;
+    }
+
     function estimateCredits(text, settings, conv, options, pricing) {
         const extra = partSurcharge(conv, text, options);
-        const model = (conv && conv.proModel) || settings.proModel;
+        const model = catalogModel((conv && conv.proModel) || (settings && settings.proModel), pricing);
         const wire = wireTextFor(conv || {}, text || '', options || {});
         const web = !!((settings && settings.webSearch) || (options && options.web));
         const history = estHistory(conv);

@@ -4349,6 +4349,7 @@ class AppController extends ChangeNotifier {
   }
 
   Map<String, dynamic>? catalogPricing;
+  int _pricingTriedAt = 0;
 
   Map<String, dynamic>? mentionCatalog;
 
@@ -4386,6 +4387,12 @@ class AppController extends ChangeNotifier {
       'estimate': catalog['estimate'],
       'bulkBonus': catalog['bulkBonus'],
       'researchByKey': Research.researchByKey(catalog),
+      'models': [
+        for (final m in (catalog['models'] as List?) ?? const [])
+          if (m is Map && (m['kind'] == null || m['kind'] == 'chat') && m['command'] == null)
+            Map<String, dynamic>.from(m),
+      ],
+      'aliases': catalog['aliases'] is Map ? Map<String, dynamic>.from(catalog['aliases'] as Map) : const <String, dynamic>{},
     };
     notifyListeners();
   }
@@ -4398,6 +4405,11 @@ class AppController extends ChangeNotifier {
   }
 
   CostEstimate estimate(String text) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (catalogPricing == null && now - _pricingTriedAt > 60000) {
+      _pricingTriedAt = now;
+      unawaited(ensureMentionCatalog());
+    }
     final media = activeMediaModel;
     if (activeModel == null &&
         mediaNeedsPro(media) &&

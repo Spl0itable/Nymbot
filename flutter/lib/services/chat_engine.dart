@@ -556,7 +556,25 @@ class ChatEngine {
     );
   }
 
-  static CostEstimate estimate(String text, Map<String, dynamic>? model,
+  static Map<String, dynamic>? catalogModel(
+      Map<String, dynamic>? saved, Map<String, dynamic>? pricing) {
+    final rows = pricing?['models'];
+    if (saved == null || rows is! List) return saved;
+    final aliases = pricing?['aliases'];
+    Map<String, dynamic>? find(Object? key) {
+      if (key == null) return null;
+      for (final r in rows) {
+        if (r is Map && r['key'] == key) return Map<String, dynamic>.from(r);
+      }
+      return null;
+    }
+
+    final row = find(saved['key']) ??
+        (aliases is Map ? find(aliases[saved['key']]) : null);
+    return row == null ? saved : {...saved, ...row};
+  }
+
+  static CostEstimate estimate(String text, Map<String, dynamic>? pinned,
       {Conversation? conv,
       bool hasRepos = false,
       String wireText = '',
@@ -569,6 +587,7 @@ class ChatEngine {
     final wire = wireText.isEmpty ? text : wireText;
     final extra = WireLimits.partSurcharge(wire);
     final unpriced = pricing?['priceUnavailable'] == true;
+    final model = catalogModel(pinned, pricing);
     if (model == null) {
       final std = unpriced
           ? null
