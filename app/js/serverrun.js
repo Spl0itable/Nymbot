@@ -330,7 +330,7 @@
 
     function signerFor(conv) {
         const Anon = window.NymbotAnon;
-        return conv.anon && Anon && Anon.ready() ? Anon.signer() : null;
+        return conv.anon && Anon ? Anon.signer(Anon.forConv(conv)) : null;
     }
 
     function spend(U, convId, amount) {

@@ -6,6 +6,7 @@ class PendingInvoice {
     required this.pr,
     required this.tier,
     required this.anon,
+    this.anonPk,
     required this.credits,
     required this.sats,
     DateTime? createdAt,
@@ -18,6 +19,7 @@ class PendingInvoice {
   final String pr;
   final String tier;
   final bool anon;
+  final String? anonPk;
   final int credits;
   final int sats;
   final DateTime createdAt;
@@ -30,6 +32,7 @@ class PendingInvoice {
         'pr': pr,
         'tier': tier,
         'anon': anon,
+        if (anonPk != null) 'anonPk': anonPk,
         'credits': credits,
         'sats': sats,
         'createdAt': createdAt.millisecondsSinceEpoch,
@@ -51,6 +54,7 @@ class PendingInvoice {
         pr: pr,
         tier: j['tier'] == 'pro' ? 'pro' : 'standard',
         anon: j['anon'] == true,
+        anonPk: j['anonPk'] is String ? j['anonPk'] as String : null,
         credits: (j['credits'] as num?)?.toInt() ?? 0,
         sats: (j['sats'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.fromMillisecondsSinceEpoch(

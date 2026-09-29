@@ -21,6 +21,10 @@
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
     const PREV_MAX = 4;
+    const SYNC_KEYS_MAX = 32;
+    const SYNC_TOKENS_MAX = 512;
+    const SPENT_MAX = 1024;
+    const HEX64 = /^[0-9a-f]{64}$/;
     const ANNOUNCE_TTL_SEC = 7 * 24 * 3600;
 
     const enc = new TextEncoder();
@@ -89,6 +93,40 @@
         return left === 0 ? out : null;
     }
 
+    function denomsFor(amount) {
+        const out = [];
+        let left = Math.floor(amount);
+        for (let i = DENOMS.length - 1; i >= 0 && left > 0; i--) {
+            while (left >= DENOMS[i]) {
+                out.push(DENOMS[i]);
+                left -= DENOMS[i];
+            }
+        }
+        return out;
+    }
+
+    const newestKey = (a, b) => (b.createdAt - a.createdAt) || (a.pk < b.pk ? 1 : a.pk > b.pk ? -1 : 0);
+    const beats = (a, b) => a.createdAt > b.createdAt || (a.createdAt === b.createdAt && a.pk > b.pk);
+
+    function tokenOf(t) {
+        if (!t || typeof t !== 'object') return null;
+        const d = Number(t.d);
+        if (!DENOMS.includes(d)) return null;
+        if (typeof t.x !== 'string' || !HEX64.test(t.x)) return null;
+        if (typeof t.C !== 'string' || !/^0[23][0-9a-f]{64}$/.test(t.C)) return null;
+        const tier = t.tier || 'standard';
+        if (!TIERS.includes(tier)) return null;
+        return { d, x: t.x, C: t.C, tier };
+    }
+
+    function creditsOf(data, tier) {
+        if (!data || data.error) return null;
+        const v = tier === 'pro'
+            ? (data.proBalanceCredits != null ? data.proBalanceCredits : data.proBalance)
+            : (data.balanceCredits != null ? data.balanceCredits : data.balance);
+        return Number(v) || 0;
+    }
+
     const Anon = {
         state: null,
         onKeysetChange: null,   // (oldId, newId) => Promise<boolean>
@@ -96,7 +134,7 @@
         // --- identity -------------------------------------------------------
 
         load() {
-            this.state = Store.read('anon', null) || { current: null, prev: [], tokens: [], pending: null };
+            this.state = Store.read('anon', null) || { current: null, prev: [], tokens: [], pending: null, spent: [] };
             return this.state;
         },
 
@@ -113,6 +151,8 @@
         },
 
         ready() { return !!(this.enabled() && this.state && this.state.current); },
+
+        holds() { return !!(this.state && this.state.current); },
 
         _newIdentity() {
             const sk = NT().generateSecretKey();
@@ -135,9 +175,66 @@
 
         pubkey() { return this.state && this.state.current ? this.state.current.pk : null; },
 
+        held() {
+            const st = this.state || this.load();
+            const out = [];
+            for (const id of [st.current].concat(st.prev || [])) {
+                if (id && id.pk && !out.some(o => o.pk === id.pk)) out.push(id);
+            }
+            return out;
+        },
+
+        identity(pk) {
+            if (!pk) return null;
+            return this.held().find(id => id.pk === pk) || null;
+        },
+
+        forConv(conv) {
+            try {
+                return (conv && this.identity(conv.anonPk)) || this.ensure();
+            } catch (_) {
+                return null;
+            }
+        },
+
+        bind(conv) {
+            const id = this.forConv(conv);
+            if (!id) return null;
+            if (conv && conv.anonPk !== id.pk) {
+                conv.anonPk = id.pk;
+                if (conv.id) Store.updateConversation(conv.id, { anonPk: id.pk, silent: true });
+            }
+            return id;
+        },
+
+        _referenced(chatsOnly) {
+            const out = new Set();
+            for (const c of Store.conversations()) {
+                if (c && typeof c.anonPk === 'string') out.add(c.anonPk);
+            }
+            if (chatsOnly) return out;
+            const st = this.state || this.load();
+            if (st.pending && st.pending.from) out.add(st.pending.from);
+            for (const t of st.tokens || []) if (t && t.redeemTo) out.add(t.redeemTo);
+            return out;
+        },
+
+        _prune() {
+            const st = this.state;
+            const refs = this._referenced();
+            const cur = st.current ? st.current.pk : null;
+            const seen = new Set(cur ? [cur] : []);
+            let spare = 0;
+            st.prev = (st.prev || []).filter(id => {
+                if (!id || !id.pk || seen.has(id.pk)) return false;
+                seen.add(id.pk);
+                return refs.has(id.pk) || spare++ < PREV_MAX;
+            });
+        },
+
         /// The signing key material, for wrapping and for opening replies.
-        sender() {
-            const id = this.ensure();
+        sender(identity) {
+            const id = identity || this.ensure();
             return { sk: unhex(id.sk), pubkey: id.pk };
         },
 
@@ -150,15 +247,25 @@
             try { return NC().pqKeypairFromRoot(unhex(id.root), 0); } catch (_) { return null; }
         },
 
-        recipient() {
-            const id = this.ensure();
+        recipient(identity) {
+            const id = identity || this.ensure();
             const kp = this.kem(id);
             return { sk: unhex(id.sk), kemSk: kp ? kp.secretKey : undefined, kemPk: kp ? kp.publicKey : undefined };
         },
 
+        openers(identity, event) {
+            const tags = event && Array.isArray(event.tags) ? event.tags : [];
+            const tagged = (tags.find(t => Array.isArray(t) && t[0] === 'p') || [])[1];
+            const out = [];
+            for (const id of [this.identity(tagged), identity || this.ensure()].concat(this.held())) {
+                if (id && !out.includes(id)) out.push(id);
+            }
+            return out.map(id => this.recipient(id));
+        },
+
         /// The auth signer the worker sees: this key, never the account's.
-        signer() {
-            const id = this.ensure();
+        signer(identity) {
+            const id = identity || this.ensure();
             const sk = unhex(id.sk);
             return { pubkey: id.pk, sign: (evt) => NT().finalizeEvent(Object.assign({ pubkey: id.pk }, evt), sk) };
         },
@@ -166,8 +273,8 @@
         /// A signed announcement carrying the throwaway KEM key, handed to the
         /// worker with each request so the reply comes back hybrid without a
         /// lookup that would have nothing to find.
-        announcement() {
-            const id = this.ensure();
+        announcement(identity) {
+            const id = identity || this.ensure();
             const kp = this.kem(id);
             if (!kp) return null;
             const nowSec = Math.floor(Date.now() / 1000);
@@ -193,25 +300,100 @@
             this.ensure();
             const old = this.state.current;
             if (old) {
-                this.state.prev = [old].concat(this.state.prev || []).slice(0, PREV_MAX);
+                this.state.prev = [old].concat(this.state.prev || []);
             }
             this.state.current = this._newIdentity();
             this._annCache = null;
+            this._prune();
             this.save();
             if (!sweep || !old) return 0;
             return this._sweep(old);
         },
 
-        /// Moves a previous key's balance onto the current one. The worker sees
-        /// one anonymous key paying another, which is the documented limit.
         async _sweep(identity) {
-            const sk = unhex(identity.sk);
-            const signer = {
-                pubkey: identity.pk,
-                sign: (evt) => NT().finalizeEvent(Object.assign({ pubkey: identity.pk }, evt), sk)
-            };
-            const { data } = await Api.transferCredits(this.state.current.pk, { signer });
-            return (data && !data.error) ? 1 : 0;
+            const { data } = await Api.balance({ signer: this.signer(identity) });
+            if (!data || data.error) return 0;
+            this.rememberData(identity.pk, data);
+            let issued = 0;
+            for (const tier of TIERS) {
+                const whole = Math.floor(creditsOf(data, tier) || 0);
+                if (whole <= 0) continue;
+                try {
+                    const tokens = await this._issue(whole, tier, identity);
+                    issued += tokens.reduce((n, t) => n + t.d, 0);
+                } catch (_) { }
+            }
+            return issued;
+        },
+
+        _checked(k) {
+            if (!k || typeof k !== 'object') return null;
+            if (typeof k.pk !== 'string' || !HEX64.test(k.pk)) return null;
+            if (typeof k.sk !== 'string' || !HEX64.test(k.sk)) return null;
+            if (typeof k.root !== 'string' || !/^([0-9a-f]{2})*$/.test(k.root)) return null;
+            const createdAt = Number(k.createdAt);
+            if (!Number.isFinite(createdAt) || createdAt < 0) return null;
+            try {
+                if (NT().getPublicKey(unhex(k.sk)) !== k.pk) return null;
+            } catch (_) { return null; }
+            return { sk: k.sk, pk: k.pk, root: k.root, createdAt };
+        },
+
+        syncCopy() {
+            const st = this.state || this.load();
+            if (!st.current) return null;
+            const refs = this._referenced(true);
+            const all = this.held().slice().sort(newestKey);
+            const keys = all.filter((id, i) => i < SYNC_KEYS_MAX || id.pk === st.current.pk || refs.has(id.pk))
+                .map(id => ({ pk: id.pk, sk: id.sk, root: id.root || '', createdAt: Number(id.createdAt) || 0 }));
+            const tokens = (st.tokens || []).map(tokenOf).filter(Boolean)
+                .sort((a, b) => (a.x < b.x ? -1 : a.x > b.x ? 1 : 0)).slice(0, SYNC_TOKENS_MAX);
+            const spent = [...new Set((st.spent || []).filter(x => typeof x === 'string' && HEX64.test(x)))]
+                .sort().slice(0, SPENT_MAX);
+            return { v: 1, current: st.current.pk, keys, tokens, spent };
+        },
+
+        syncMerge(remote) {
+            if (!remote || typeof remote !== 'object' || remote.v !== 1 || !Array.isArray(remote.keys)) return false;
+            const st = this.state || this.load();
+            const before = JSON.stringify(this.syncCopy());
+            const byPk = new Map();
+            for (const id of this.held()) byPk.set(id.pk, id);
+            const theirs = new Map();
+            for (const k of remote.keys) {
+                const id = this._checked(k);
+                if (!id) continue;
+                theirs.set(id.pk, id);
+                if (!byPk.has(id.pk)) byPk.set(id.pk, id);
+            }
+            const mine = st.current;
+            const came = typeof remote.current === 'string' && theirs.has(remote.current) ? byPk.get(remote.current) : null;
+            const winner = came && (!mine || beats(came, mine)) ? came : mine;
+            if (winner && (!mine || winner.pk !== mine.pk)) this._annCache = null;
+            st.current = winner || null;
+            st.prev = [...byPk.values()].filter(id => !winner || id.pk !== winner.pk).sort(newestKey);
+
+            const theirSpent = [];
+            for (const x of Array.isArray(remote.spent) ? remote.spent : []) {
+                if (typeof x === 'string' && HEX64.test(x) && !theirSpent.includes(x)) theirSpent.push(x);
+            }
+            const mySpent = (st.spent || []).filter(x => typeof x === 'string' && HEX64.test(x));
+            const spent = new Set(mySpent.concat(theirSpent));
+            st.spent = mySpent.filter(x => !theirSpent.includes(x)).concat(theirSpent).slice(0, SPENT_MAX);
+
+            const local = (st.tokens || []).filter(tk => tk && !spent.has(tk.x));
+            const localByX = new Map(local.map(tk => [tk.x, tk]));
+            const arrived = [];
+            for (const raw of Array.isArray(remote.tokens) ? remote.tokens : []) {
+                const tk = tokenOf(raw);
+                if (!tk || spent.has(tk.x) || arrived.some(a => a.x === tk.x)) continue;
+                arrived.push(localByX.get(tk.x) || tk);
+            }
+            const arrivedX = new Set(arrived.map(tk => tk.x));
+            const newestFirst = local.filter(tk => !arrivedX.has(tk.x)).reverse().concat(arrived).slice(0, SYNC_TOKENS_MAX);
+            st.tokens = newestFirst.reverse();
+            this.save();
+            return JSON.stringify(this.syncCopy()) !== before;
         },
 
         // --- vouchers -------------------------------------------------------
@@ -267,18 +449,31 @@
         _dropTokens(batch) {
             const gone = new Set(batch.map(t => t.x));
             this.state.tokens = (this.state.tokens || []).filter(t => !gone.has(t.x));
+            this.state.spent = [...gone].concat((this.state.spent || []).filter(x => !gone.has(x))).slice(0, SPENT_MAX);
             this.save();
+        },
+
+        vouchers() {
+            const out = { standard: 0, pro: 0 };
+            for (const tier of TIERS) out[tier] = this._tokens(tier).reduce((n, t) => n + (Number(t.d) || 0), 0);
+            return out;
         },
 
         /// Finishes an issuance whose response was lost: the same reqId and the
         /// same outputs re-sign without a second debit.
         async _finishIssue(pending) {
             const keyset = await this.keyset();
+            const from = pending.from ? this.identity(pending.from) : null;
+            if (pending.from && !from) {
+                this.state.pending = null;
+                this.save();
+                throw new Error(t('Could not issue vouchers.'));
+            }
             const { status, data } = await Api.voucherIssue({
                 tier: pending.tier,
                 reqId: pending.reqId,
                 outputs: pending.outputs.map(o => ({ d: o.d, B: o.B }))
-            });
+            }, from ? { signer: this.signer(from) } : {});
             if (status >= 400 || !data || data.error) {
                 if (status >= 400 && status < 500 && !(data && data.insufficient)) {
                     this.state.pending = null;
@@ -321,42 +516,91 @@
             return tokens;
         },
 
-        async _redeem(tier) {
-            const tokens = this._tokens(tier);
+        _pick(tokens, want) {
+            if (!(want > 0)) return tokens.slice(0, MAX_OUTPUTS);
+            const out = [];
+            let sum = 0;
+            for (const tk of tokens.slice().sort((a, b) => b.d - a.d)) {
+                if (sum >= want || out.length >= MAX_OUTPUTS) break;
+                out.push(tk);
+                sum += tk.d;
+            }
+            return out;
+        },
+
+        async _redeem(tier, identity, options) {
+            const opts = options || {};
+            const target = identity || this.ensure();
+            let tokens = this._tokens(tier);
+            if (opts.only) tokens = tokens.filter(tk => opts.only.has(tk.x));
             if (!tokens.length) return 0;
-            const claimed = tokens.find(t => t.redeemId);
-            let redeemId, batch;
+            const claimed = tokens.find(tk => tk.redeemId);
+            let redeemId, batch, to;
             if (claimed) {
                 redeemId = claimed.redeemId;
-                batch = tokens.filter(t => t.redeemId === redeemId).slice(0, MAX_OUTPUTS);
+                batch = tokens.filter(tk => tk.redeemId === redeemId).slice(0, MAX_OUTPUTS);
+                to = claimed.redeemTo ? this.identity(claimed.redeemTo) : this.ensure();
+                if (!to) {
+                    for (const tk of batch) { delete tk.redeemId; delete tk.redeemTo; }
+                    this.save();
+                    return 0;
+                }
             } else {
                 redeemId = hex(crypto.getRandomValues(new Uint8Array(32)));
-                batch = tokens.slice(0, MAX_OUTPUTS);
-                for (const t of batch) t.redeemId = redeemId;
+                batch = this._pick(tokens, opts.want);
+                to = target;
+                for (const tk of batch) { tk.redeemId = redeemId; tk.redeemTo = to.pk; }
                 this.save();
             }
             const { status, data } = await Api.voucherRedeem({
                 tier, redeemId,
-                tokens: batch.map(t => ({ d: t.d, x: t.x, C: t.C }))
-            }, { signer: this.signer() });
+                tokens: batch.map(tk => ({ d: tk.d, x: tk.x, C: tk.C }))
+            }, { signer: this.signer(to) });
             if (status >= 400 || !data || data.error) {
-                if (data && data.alreadySpent) this._dropTokens(batch);
+                if (data && data.alreadySpent) {
+                    if (batch.length === 1) {
+                        this._dropTokens(batch);
+                        return 0;
+                    }
+                    for (const tk of batch) { delete tk.redeemId; delete tk.redeemTo; }
+                    this.save();
+                    let credited = 0;
+                    for (const tk of batch) {
+                        try {
+                            credited += await this._redeem(tier, to, { only: new Set([tk.x]) });
+                        } catch (_) { }
+                    }
+                    return to.pk === target.pk ? credited : 0;
+                }
                 throw new Error((data && data.error) || t('Could not redeem vouchers.'));
             }
             this._dropTokens(batch);
-            return data.credited || 0;
+            if (typeof data.balance === 'number') this.remember(to.pk, tier, data.balance);
+            return to.pk === target.pk ? (data.credited || 0) : 0;
+        },
+
+        async _fromVouchers(tier, identity, want) {
+            let credited = 0;
+            while (credited < want && this._tokens(tier).length) {
+                credited += await this._redeem(tier, identity, { want: want - credited });
+            }
+            return credited;
         },
 
         /// Resumes anything a previous session left half-done.
         async flush() {
-            if (this._flushing || !this.ready()) return;
+            if (this._flushing || !this.holds()) return;
             const st = this.state;
-            if (!st.pending && !(st.tokens || []).length) return;
+            const claimed = (tier) => this._tokens(tier).filter(tk => tk.redeemId);
+            if (!st.pending && !claimed('standard').length && !claimed('pro').length) return;
             this._flushing = true;
             try {
                 if (st.pending) await this._finishIssue(st.pending);
-                for (const tier of ['standard', 'pro']) {
-                    while (this._tokens(tier).length) await this._redeem(tier);
+                for (const tier of TIERS) {
+                    while (claimed(tier).length) {
+                        const only = new Set(claimed(tier).map(tk => tk.x));
+                        await this._redeem(tier, null, { only });
+                    }
                 }
             } catch (_) {
                 // Left in place; the next flush picks it up.
@@ -365,35 +609,45 @@
             }
         },
 
-        async moveCredits(amount, tier) {
-            amount = Math.floor(Number(amount) || 0);
-            tier = tier === 'pro' ? 'pro' : 'standard';
-            if (amount <= 0) throw new Error(t('Enter how many credits to move.'));
-            const denoms = splitAmount(amount);
-            if (!denoms) throw new Error(t('That amount needs too many vouchers — move a smaller amount.'));
+        async _issue(amount, tier, from) {
             this.ensure();
             await this.keyset();
             if (this.state.pending) await this._finishIssue(this.state.pending);
-
+            const denoms = denomsFor(amount);
             const Pt = P();
-            const outputs = denoms.map(d => {
-                const x = crypto.getRandomValues(new Uint8Array(32));
-                const r = randomScalar();
-                const B = hashToCurve(x).add(Pt.BASE.multiply(r));
-                return { d, x: hex(x), r: scalarHex(r), B: B.toHex(true) };
-            });
-            // Persisted BEFORE the call: a lost response has to be retried with
-            // the same reqId and the same outputs, or it pays twice.
-            this.state.pending = {
-                tier,
-                reqId: hex(crypto.getRandomValues(new Uint8Array(32))),
-                outputs
-            };
-            this.save();
-            await this._finishIssue(this.state.pending);
+            let tokens = [];
+            for (let i = 0; i < denoms.length; i += MAX_OUTPUTS) {
+                const outputs = denoms.slice(i, i + MAX_OUTPUTS).map(d => {
+                    const x = crypto.getRandomValues(new Uint8Array(32));
+                    const r = randomScalar();
+                    const B = hashToCurve(x).add(Pt.BASE.multiply(r));
+                    return { d, x: hex(x), r: scalarHex(r), B: B.toHex(true) };
+                });
+                // Persisted BEFORE the call: a lost response has to be retried
+                // with the same reqId and the same outputs, or it pays twice.
+                this.state.pending = Object.assign({
+                    tier,
+                    reqId: hex(crypto.getRandomValues(new Uint8Array(32))),
+                    outputs
+                }, from ? { from: from.pk } : {});
+                this.save();
+                tokens = tokens.concat(await this._finishIssue(this.state.pending));
+            }
+            return tokens;
+        },
 
+        async moveCredits(amount, tier, identity) {
+            amount = Math.floor(Number(amount) || 0);
+            tier = tier === 'pro' ? 'pro' : 'standard';
+            if (amount <= 0) throw new Error(t('Enter how many credits to move.'));
+            if (!splitAmount(amount)) throw new Error(t('That amount needs too many vouchers — move a smaller amount.'));
+            const target = identity || this.ensure();
+            const issued = await this._issue(amount, tier, null);
+            const fresh = new Set(issued.map(tk => tk.x));
             let credited = 0;
-            while (this._tokens(tier).length) credited += await this._redeem(tier);
+            while (this._tokens(tier).some(tk => fresh.has(tk.x))) {
+                credited += await this._redeem(tier, target, { only: fresh });
+            }
             return credited;
         },
 
@@ -407,8 +661,9 @@
         async autoTopUp(options) {
             const opts = options || {};
             const settings = Store.settings();
-            if (!settings.anonAutoTop || !this.ready()) return null;
+            if (!settings.anonAutoTop || !(opts.identity || this.ready())) return null;
             if (this._topping) return this._topping;
+            const target = opts.identity || this.ensure();
 
             const floor = Math.max(0, parseInt(settings.anonAutoTopFloor, 10) || 0);
             const amount = Math.max(1, parseInt(settings.anonAutoTopAmount, 10) || 25);
@@ -418,22 +673,25 @@
             this._topping = (async () => {
                 const moved = {};
                 try {
-                    const b = await this.balances();
+                    const b = await this.balances(target);
                     for (const tier of tiers) {
                         const here = tier === 'pro' ? b.anonPro : b.anon;
                         const nym = tier === 'pro' ? b.identityPro : b.identity;
-                        if (here == null || nym == null) continue;
+                        if (here == null) continue;
                         if (!opts.force && here >= floor) continue;
                         if (opts.force && here >= floor + amount) continue;
-                        const take = Math.min(amount, nym);
-                        if (take <= 0) continue;
+                        let credited = 0;
                         try {
-                            const credited = await this.moveCredits(take, tier);
-                            if (credited > 0) moved[tier] = credited;
-                        } catch (_) {
-                            // A tier that cannot be funded is not a reason to
-                            // skip the other one.
+                            credited += await this._fromVouchers(tier, target, amount);
+                        } catch (_) { }
+                        const take = Math.min(amount - credited, nym || 0);
+                        if (take > 0) {
+                            try {
+                                credited += await this.moveCredits(take, tier, target);
+                            } catch (_) {
+                            }
                         }
+                        if (credited > 0) moved[tier] = credited;
                     }
                 } catch (_) {
                     return null;
@@ -445,10 +703,87 @@
             return this._topping;
         },
 
-        async balances() {
+        async fund(identity, tier, need, known) {
+            if (!identity && !this.ready()) return null;
+            const target = identity || this.ensure();
+            const which = tier === 'pro' ? 'pro' : 'standard';
+            const want = Math.max(0, Number(need) || 0);
+            if (known != null && known >= want) return null;
+            while (this._topping) await this._topping;
+            this._topping = (async () => {
+                try {
+                    const { data } = await Api.balance({ signer: this.signer(target) });
+                    this.rememberData(target.pk, data);
+                    const here = creditsOf(data, which);
+                    if (here == null || here >= want) return null;
+                    if (which === 'standard' && data.free && Number(data.free.left) > 0) return null;
+                    const short = Math.ceil(want - here);
+                    let credited = 0;
+                    try {
+                        credited = await this._fromVouchers(which, target, short);
+                    } catch (_) { }
+                    const settings = Store.settings();
+                    if (credited < short && settings.anonAutoTop) {
+                        const amount = Math.max(short - credited, parseInt(settings.anonAutoTopAmount, 10) || 25);
+                        const r = await Api.balance();
+                        const take = Math.min(amount, Math.floor(creditsOf(r && r.data, which) || 0));
+                        if (take > 0) {
+                            try {
+                                credited += await this.moveCredits(take, which, target);
+                            } catch (_) { }
+                        }
+                    }
+                    return credited > 0 ? { [which]: credited } : null;
+                } catch (_) {
+                    return null;
+                } finally {
+                    this._topping = null;
+                }
+            })();
+            return this._topping;
+        },
+
+        known() {
+            const held = Store.read('anon_balances', null);
+            return held && typeof held === 'object' ? held : {};
+        },
+
+        remember(pk, tier, value) {
+            if (!pk || value == null || !Number.isFinite(Number(value))) return;
+            const all = this.known();
+            const row = Object.assign({ standard: null, pro: null }, all[pk]);
+            row[tier === 'pro' ? 'pro' : 'standard'] = Number(value);
+            row.at = Date.now();
+            all[pk] = row;
+            Store.quiet(() => Store.write('anon_balances', all));
+        },
+
+        rememberData(pk, data) {
+            if (!pk || !data || data.error) return;
+            this.remember(pk, 'standard', creditsOf(data, 'standard'));
+            this.remember(pk, 'pro', creditsOf(data, 'pro'));
+        },
+
+        lastKnown() {
+            const all = this.known();
+            const out = { keys: {}, total: { standard: 0, pro: 0 } };
+            const round = (v) => Math.round(v * 1000) / 1000;
+            for (const id of this.held()) {
+                const row = all[id.pk];
+                if (!row) continue;
+                out.keys[id.pk] = row;
+                out.total.standard = round(out.total.standard + (Number(row.standard) || 0));
+                out.total.pro = round(out.total.pro + (Number(row.pro) || 0));
+            }
+            return out;
+        },
+
+        async balances(identity) {
             const out = { anon: null, anonPro: null, identity: null, identityPro: null };
-            if (this.ready()) {
-                const a = await Api.balance({ signer: this.signer() });
+            if (identity || this.ready()) {
+                const payer = identity || this.ensure();
+                const a = await Api.balance({ signer: this.signer(payer) });
+                this.rememberData(payer.pk, a.data);
                 if (a.data && !a.data.error) { out.anon = a.data.balance || 0; out.anonPro = a.data.proBalance || 0; }
             }
             const r = await Api.balance();

@@ -1042,10 +1042,19 @@ class ChatEngine {
     // Anonymous mode: the throwaway key signs the rumor, the seal and the
     // request, and the reply comes back to it. The account key signs nothing in
     // this conversation at all.
-    final useAnon = anonymous && anon.ready;
-    final EventSigner signer = useAnon ? await anon.signer() : identity.signer;
-    final selfKem = useAnon
-        ? anon.kemOf(await anon.ensure())?.publicKey
+    Map<String, dynamic>? anonId;
+    if (anonymous) {
+      try {
+        anonId = await anon.bind(conv);
+      } catch (_) {
+        throw ChatFailure(t(
+            'This chat is anonymous, but its anonymous key is not available on this device, so nothing was sent.'));
+      }
+    }
+    final EventSigner signer =
+        anonId != null ? anon.signerOf(anonId) : identity.signer;
+    final selfKem = anonId != null
+        ? anon.kemOf(anonId)?.publicKey
         : (identity.rootLocked ? null : identity.kemPublicKey);
 
     final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
@@ -1121,7 +1130,9 @@ class ChatEngine {
     }
 
     final announcement =
-        useAnon ? await anon.announcement() : pq.selfAnnouncement;
+        anonId != null
+            ? await anon.announcement(pk: anonId['pk'] as String)
+            : pq.selfAnnouncement;
     final handed = freshTurn ? const <NostrEvent>[] : heldHistory(conv.id);
     final extra = <String, dynamic>{
       'eventId': wrap!.id,
@@ -1139,7 +1150,7 @@ class ChatEngine {
       if (maxCost != null && maxCost > 0) 'maxCost': maxCost,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (announcement == null &&
-          !useAnon &&
+          !anonymous &&
           (identity.rootLocked || identity.kem == null))
         'pqClassical': true,
       if (webSearch) 'web': true,
@@ -1255,14 +1266,10 @@ class ChatEngine {
       }
     }
 
-    final anonKem = useAnon ? anon.kemOf(await anon.ensure()) : null;
-    final kems = useAnon
-        ? <giftwrap.KemPair>[
-            if (anonKem != null)
-              (kemSk: anonKem.secretKey, kemPk: anonKem.publicKey),
-          ]
-        : identity.kemCandidates();
-    final opened = await giftwrap.unwrapWith(replyEvent, signer, kems);
+    final opened = anonId != null
+        ? await anon.open(replyEvent, pk: anonId['pk'] as String)
+        : await giftwrap.unwrapWith(
+            replyEvent, signer, identity.kemCandidates());
     if (opened == null) {
       throw ChatFailure(t('Nymbot replied, but this device could not decrypt it.'));
     }

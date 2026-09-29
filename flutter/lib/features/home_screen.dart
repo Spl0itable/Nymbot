@@ -1920,9 +1920,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // An anonymous chat deliberately shows the throwaway key's own generated
     // nym, never the published profile: the avatar would give away exactly
     // what the mode exists to hide.
-    final anonymous = (app.current?.anon ?? false) && app.anon.ready;
+    final anonymous = app.current?.anon ?? false;
     final selfPubkey =
-        anonymous ? (app.anon.pubkey ?? app.identity.pubkey) : app.identity.pubkey;
+        anonymous ? (app.shownAnonPk ?? app.identity.pubkey) : app.identity.pubkey;
     final me = anonymous ? null : app.profiles.of(selfPubkey);
     final offer = app.sending ||
             app.queued.isNotEmpty ||

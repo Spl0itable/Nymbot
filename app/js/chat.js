@@ -692,11 +692,16 @@
             };
             if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
 
-            const anon = !!conv.anon && Anon.ready();
-            const sender = anon ? Anon.sender() : null;
+            const anon = !!conv.anon;
+            const payer = anon ? Anon.bind(conv) : null;
+            if (anon && !payer) {
+                throw new Error(t('This chat is anonymous, but no throwaway key could be used on this device, so nothing was sent.'));
+            }
+            const sender = anon ? Anon.sender(payer) : null;
             const senderPubkey = anon ? sender.pubkey : Identity.pubkey;
+            const payerKem = anon ? Anon.kem(payer) : null;
             const selfKemPk = anon
-                ? (Anon.kem() ? Anon.kem().publicKey : null)
+                ? (payerKem ? payerKem.publicKey : null)
                 : (Identity.rootLocked || !Identity._kem ? null : Identity.kemPk);
 
             const repos = reposFor(conv);
@@ -751,7 +756,7 @@
             // The turn is now identifiable, so anything watching it can start
             // before the answer comes back.
             if (typeof opts.onTurn === 'function') {
-                try { opts.onTurn(wrap.id, anon ? Anon.signer() : null); } catch (_) { }
+                try { opts.onTurn(wrap.id, anon ? Anon.signer(payer) : null); } catch (_) { }
             }
 
             const extra = {
@@ -783,7 +788,7 @@
             if (connectors.length) extra.mcp = connectors;
             if (opts.mcpApprove) extra.mcpApprove = opts.mcpApprove;
             if (opts.mcpDecline) extra.mcpDecline = opts.mcpDecline;
-            const announcement = anon ? Anon.announcement() : PQ.selfAnnouncement;
+            const announcement = anon ? Anon.announcement(payer) : PQ.selfAnnouncement;
             if (announcement) extra.pqAnnouncement = announcement;
             else if (!anon && (Identity.rootLocked || !PQ.selfKeys())) extra.pqClassical = true;
             if (settings.webSearch || opts.web) extra.web = true;
@@ -822,7 +827,7 @@
                 for (;;) {
                     ({ status, data } = await Api.call('pm', extra, {
                         timeout: C.pmTimeoutMs,
-                        signer: anon ? Anon.signer() : null,
+                        signer: anon ? Anon.signer(payer) : null,
                         controller
                     }));
                     if (data && data.pending && held < 5 && !controller.signal.aborted) {
@@ -891,7 +896,9 @@
                 }
             }
 
-            const opened = await Wire.unwrap(data.event, anon ? Anon.recipient() : null, { from: C.botPubkey });
+            const opened = anon
+                ? await this.openReply(data.event, payer)
+                : await Wire.unwrap(data.event, null, { from: C.botPubkey });
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
             // A '!' question is answered without the conversation and stays out
@@ -1023,6 +1030,17 @@
         knowledgeBlock,
         chunkFile,
         rankChunks,
+
+        async openReply(event, identity) {
+            for (const recipient of Anon.openers(identity, event)) {
+                try {
+                    const opened = await Wire.unwrap(event, recipient, { from: C.botPubkey });
+                    if (opened && opened.rumor) return opened;
+                } catch (_) { }
+            }
+            return null;
+        },
+
         /// Puts a repo run back: each path the run wrote is read at the commit
         /// the branch stood on before it and committed as it was. A revert,
         /// not a rewrite — what the model did stays in the history, it is
@@ -1033,8 +1051,8 @@
             const repo = repos.find(r => r.repo === checkpoint.repo) || repos[0];
             if (!repo) throw new Error(t('That repository is no longer connected.'));
             if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
-            const anon = !!(conv.anon && Anon.ready());
-            const signer = anon ? Anon.signer() : null;
+            const anon = !!conv.anon;
+            const signer = anon ? Anon.signer(Anon.forConv(conv)) : null;
             const { status, data } = await Api.call('pm-revert', {
                 git: repoPayload(repo),
                 checkpoint: {
@@ -1057,8 +1075,8 @@
             const repo = repos.find(r => r.repo === staged.repo);
             if (!repo) throw new Error(t('That repository is no longer connected.'));
             if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
-            const anon = !!(conv.anon && Anon.ready());
-            const signer = anon ? Anon.signer() : null;
+            const anon = !!conv.anon;
+            const signer = anon ? Anon.signer(Anon.forConv(conv)) : null;
             const { status, data } = await Api.call('git-apply', {
                 git: repoPayload(repo),
                 staged: {

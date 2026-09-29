@@ -138,6 +138,7 @@
         models: null,
         balance: { standard: null, pro: null },
         anonBalance: { standard: null, pro: null },
+        anonBalancePk: null,
         invoice: null,
         attachments: [],
         turns: new Map(),
@@ -502,6 +503,11 @@
             this.renderQuote();
             $('chatTitle').textContent = conv.title || t('New chat');
             $('chatAnon').hidden = !conv.anon;
+            const payer = conv.anon ? Anon.forConv(conv) : null;
+            if (payer && payer.pk !== this.anonBalancePk) {
+                this.anonBalance = { standard: null, pro: null };
+                this.refreshBalance().catch(() => { });
+            }
             this.toggleSidebar(false);
             this.closeFind();
             this.closeArtifact();
@@ -611,8 +617,9 @@
         /// generated nym, never the published profile, or the whole point of
         /// the mode would be undone by the avatar.
         selfIdentity() {
-            const anon = !!(this.conv && this.conv.anon && Anon.ready() && Anon.sender());
-            const pk = anon ? Anon.sender().pubkey : Identity.pubkey;
+            const payer = this.conv && this.conv.anon ? Anon.forConv(this.conv) : null;
+            const anon = !!payer;
+            const pk = anon ? payer.pk : Identity.pubkey;
             if (anon) {
                 return {
                     pubkey: pk,
@@ -1686,7 +1693,7 @@
                     this.note(t('Say what to ask {name} after the mention.', { name: mention.model.label }), conv.id);
                     return;
                 }
-                const wallet = conv.anon && Anon.ready() ? this.anonBalance : this.balance;
+                const wallet = conv.anon ? this.anonBalance : this.balance;
                 if (mention && mention.model && wallet.pro != null && !(wallet.pro > 0)) {
                     this.note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
                         { name: mention.model.key }), conv.id);
@@ -1882,6 +1889,10 @@
             }
 
             try {
+                if (live.anon && Anon.bind(live)) {
+                    await this.fundAnon(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
+                        text, { attachments, quote });
+                }
                 const res = await Chat.send(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
                     text, this.settings, {
                     attachments, quote, maxCost,
@@ -1944,14 +1955,18 @@
                 }
                 this.creditBalance(res.pro,
                     res.balanceCredits != null ? res.balanceCredits : res.balance);
-                if (live.anon && Anon.ready() && this.anonBalance.standard == null) {
+                if (live.anon) {
+                    const payer = Anon.forConv(live);
+                    if (payer) Anon.remember(payer.pk, res.pro ? 'pro' : 'standard', res.balanceCredits != null ? res.balanceCredits : res.balance);
+                }
+                if (live.anon && this.anonBalance.standard == null) {
                     this.refreshBalance().catch(() => { });
                 }
                 if (res.lowBalance) {
                     // In an anonymous chat a low balance is usually the
                     // throwaway key running dry rather than the nym, and that
                     // is exactly what the automatic transfer is for.
-                    const topped = live.anon ? await this.runAutoTopUp() : null;
+                    const topped = live.anon ? await this.runAutoTopUp({ conv: live }) : null;
                     if (!topped) {
                         this.note(res.pro
                             ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) })
@@ -1979,6 +1994,10 @@
                 } else if (e && e.noCredits) {
                     this.creditBalance(e.pro,
                         e.balanceCredits != null ? e.balanceCredits : e.balance);
+                    if (live.anon) {
+                        const payer = Anon.forConv(live);
+                        if (payer) Anon.remember(payer.pk, e.pro ? 'pro' : 'standard', e.balanceCredits != null ? e.balanceCredits : e.balance);
+                    }
                     // The worker says the day is spent. Believe it over the
                     // device's own count, which can only ever be behind.
                     if (e.free) {
@@ -1994,7 +2013,7 @@
                         return;
                     }
                     const topped = live.anon
-                        ? await this.runAutoTopUp({ force: true })
+                        ? await this.runAutoTopUp({ force: true, conv: live })
                         : null;
                     if (topped && !(opts && opts.toppedUp)) {
                         Store.deleteMessage(live.id, mine.id);
@@ -2471,7 +2490,7 @@
                 settle(t('You are offline, so it could not be transcribed.'));
                 return;
             }
-            const opts = this.spendingAnon() ? { signer: Anon.signer() } : {};
+            const opts = this.spendingAnon() ? { signer: Anon.signer(Anon.forConv(this.conv)) } : {};
             let data = null;
             try { ({ data } = await Api.transcribe(audio, opts)); } catch (e) { data = { error: e && e.message }; }
             if (this._dictateRun !== run) return;
@@ -2923,6 +2942,7 @@
                 title: (this.conv.title || t('New chat')) + ' ' + t('(branch)'),
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
                 anon: this.conv.anon,
+                anonPk: this.conv.anonPk,
                 ephemeral: this.conv.ephemeral,
                 folderId: this.conv.folderId,
                 tags: (this.conv.tags || []).slice(),
@@ -3505,7 +3525,7 @@
         // --- balances --------------------------------------------------------
 
         async refreshBalance(announce) {
-            const inAnonChat = !!(this.conv && this.conv.anon && Anon.ready());
+            const inAnonChat = !!(this.conv && this.conv.anon);
             const { data } = await Api.balance({});
             if (!data || data.error) {
                 if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
@@ -3515,17 +3535,21 @@
                 standard: data.balanceCredits != null ? data.balanceCredits : (data.balance || 0),
                 pro: data.proBalanceCredits != null ? data.proBalanceCredits : (data.proBalance || 0)
             };
-            if (Anon.ready()) {
-                const mine = await Api.balance({ signer: Anon.signer() });
+            const payer = inAnonChat ? Anon.forConv(this.conv) : (Anon.ready() ? Anon.forConv(null) : null);
+            if (payer) {
+                const mine = await Api.balance({ signer: Anon.signer(payer) });
+                Anon.rememberData(payer.pk, mine.data);
                 if (mine.data && !mine.data.error) {
                     const d = mine.data;
                     this.anonBalance = {
                         standard: d.balanceCredits != null ? d.balanceCredits : (d.balance || 0),
                         pro: d.proBalanceCredits != null ? d.proBalanceCredits : (d.proBalance || 0)
                     };
+                    this.anonBalancePk = payer.pk;
                 }
             } else {
                 this.anonBalance = { standard: null, pro: null };
+                this.anonBalancePk = null;
             }
             // The worker is the authority on what this key has used; the
             // device keeps its own count so signing in with a fresh key does
@@ -3545,6 +3569,23 @@
             }
         },
 
+        async fundAnon(conv, text, opts) {
+            if (!conv || !conv.anon) return null;
+            const payer = Anon.forConv(conv);
+            if (!payer) return null;
+            const est = Chat.estimateCredits(text, this.settings, conv, opts || {}, this.models);
+            const pro = est.tier === 'pro';
+            const known = this.anonBalancePk === payer.pk ? this.anonBalance[pro ? 'pro' : 'standard'] : null;
+            const moved = await Anon.fund(payer, est.tier, est.high, known).catch(() => null);
+            if (!moved) return null;
+            const parts = [];
+            if (moved.standard) parts.push(t('{n} standard', { n: moved.standard }));
+            if (moved.pro) parts.push(t('{n} Pro', { n: moved.pro }));
+            this.note(t('Moved {what} onto the throwaway key.', { what: parts.join(', ') }), conv.id);
+            await this.refreshBalance().catch(() => { });
+            return moved;
+        },
+
         proTier() {
             return !!((this.conv && this.conv.proModel) || this.settings.proModel)
                 || this.mediaNeedsPro(this.mediaModel());
@@ -3552,14 +3593,14 @@
 
         creditBalance(pro, value) {
             if (value == null) return;
-            const wallet = (this.conv && this.conv.anon && Anon.ready())
+            const wallet = (this.conv && this.conv.anon)
                 ? this.anonBalance : this.balance;
             wallet[pro ? 'pro' : 'standard'] = value;
             this.renderBalance();
         },
 
         spendingAnon() {
-            return !!(this.conv && this.conv.anon && Anon.ready());
+            return !!(this.conv && this.conv.anon);
         },
 
         renderBalance() {
@@ -7624,13 +7665,27 @@
             $('anonStatus').textContent = '';
             $('anonBalances').textContent = t('Checking balances…');
             this.openModal('modalAnon');
-            Anon.balances().then((b) => {
+            const inAnonChat = !!(this.conv && this.conv.anon);
+            const payer = inAnonChat ? Anon.forConv(this.conv) : (Anon.ready() ? Anon.forConv(null) : null);
+            Anon.balances(payer).then((b) => {
                 const box = $('anonBalances');
                 box.innerHTML = '';
                 box.appendChild(el('div', null, t('Your nym: {standard} standard · {pro} Pro',
                     { standard: b.identity ?? '–', pro: b.identityPro ?? '–' })));
-                box.appendChild(el('div', null, t('Throwaway key: {standard} standard · {pro} Pro',
-                    { standard: b.anon ?? '–', pro: b.anonPro ?? '–' })));
+                const last = Anon.lastKnown();
+                const here = payer ? last.keys[payer.pk] : null;
+                box.appendChild(el('div', null, (inAnonChat
+                    ? t('This chat\'s key: {standard} standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' })
+                    : t('Throwaway key: {standard} standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' }))));
+                if (Object.keys(last.keys).length > 1) {
+                    box.appendChild(el('div', null, t('All throwaway keys, as of each one\'s last use: {standard} standard · {pro} Pro',
+                        { standard: last.total.standard, pro: last.total.pro })));
+                }
+                const held = Anon.vouchers();
+                if (held.standard || held.pro) {
+                    box.appendChild(el('div', null, t('Vouchers on this device: {standard} standard · {pro} Pro',
+                        { standard: held.standard, pro: held.pro })));
+                }
             }).catch(() => { $('anonBalances').textContent = t('Could not read the balances.'); });
         },
 
@@ -7676,8 +7731,11 @@
         /// does not mean funding a key by hand before every chat.
         async runAutoTopUp(options) {
             const opts = options || {};
-            if (!this.settings.anonAutoTop || !Anon.enabled()) return null;
-            const moved = await Anon.autoTopUp(opts).catch(() => null);
+            const conv = opts.conv || (this.conv && this.conv.anon ? this.conv : null);
+            if (!this.settings.anonAutoTop || !(Anon.enabled() || conv)) return null;
+            const identity = conv ? Anon.forConv(conv) : (Anon.ready() ? Anon.forConv(null) : null);
+            if (!identity) return null;
+            const moved = await Anon.autoTopUp(Object.assign({}, opts, { identity })).catch(() => null);
             if (!moved) return null;
             const parts = [];
             if (moved.standard) parts.push(t('{n} standard', { n: moved.standard }));
@@ -7693,13 +7751,15 @@
         async moveCredits() {
             const amount = parseInt($('anonAmount').value, 10);
             const tier = $('anonTier').value === 'pro' ? 'pro' : 'standard';
-            if (!Anon.enabled()) {
+            const inAnonChat = !!(this.conv && this.conv.anon);
+            if (!Anon.enabled() && !inAnonChat) {
                 this.modalStatus('anonStatus', t('Turn anonymous mode on first.'), 'warn');
                 return;
             }
             this.modalStatus('anonStatus', t('Moving credits…'));
             try {
-                const credited = await Anon.moveCredits(amount, tier);
+                const payer = inAnonChat ? Anon.forConv(this.conv) : null;
+                const credited = await Anon.moveCredits(amount, tier, payer);
                 this.modalStatus('anonStatus', tier === 'pro'
                     ? t('Moved {n} Pro credits onto the throwaway key.', { n: num(credited) })
                     : t('Moved {n} credits onto the throwaway key.', { n: num(credited) }), 'ok');
@@ -7754,7 +7814,9 @@
             const rest = this.keptInvoices().filter(x => x.invoiceId !== invoice.id);
             rest.push({
                 invoiceId: invoice.id, pr: invoice.pr, tier: invoice.tier, credits: invoice.credits,
-                sats: invoice.sats, anon: !!(invoice.opts && invoice.opts.signer), createdAt: invoice.createdAt || Date.now(),
+                sats: invoice.sats, anon: !!(invoice.opts && invoice.opts.signer),
+                anonPk: invoice.opts && invoice.opts.signer ? invoice.opts.signer.pubkey : null,
+                createdAt: invoice.createdAt || Date.now(),
                 paid: !!invoice.paid
             });
             Store.write('pendingInvoices', rest.slice(-8));
@@ -7766,7 +7828,8 @@
 
         invoiceOpts(kept) {
             if (!kept.anon) return {};
-            return Anon.ready() ? { signer: Anon.signer() } : null;
+            const payer = Anon.identity(kept.anonPk) || Anon.forConv(null);
+            return payer ? { signer: Anon.signer(payer) } : null;
         },
 
         restoreInvoice() {
@@ -7976,7 +8039,7 @@
             this.creditWorking(true);
             this.modalStatus('creditStatus', t('Creating an invoice…'));
 
-            const opts = this.conv && this.conv.anon && Anon.ready() ? { signer: Anon.signer() } : {};
+            const opts = this.conv && this.conv.anon ? { signer: Anon.signer(Anon.forConv(this.conv)) } : {};
             let data;
             try {
                 ({ data } = await Api.createInvoice(sats, tier, null, opts));
@@ -9162,7 +9225,7 @@
                 'anon-rotate': async () => {
                     const ok = await this.ask({
                         title: t('Rotate the throwaway key'),
-                        body: t('Rotate the throwaway key? Its balance moves across, which shows Nymbot one anonymous key paying another.'),
+                        body: t('Rotate the throwaway key? Its balance becomes anonymous vouchers kept on this device, and whichever key runs short uses them as it needs credits. Chats already started keep their own key.'),
                         confirm: t('Rotate'),
                         danger: true
                     });

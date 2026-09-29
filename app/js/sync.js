@@ -573,6 +573,8 @@
                 }
             }
             out['graves'] = graves;
+            const anonKeys = window.NymbotAnon ? window.NymbotAnon.syncCopy() : null;
+            if (anonKeys) out['anonKeys'] = anonKeys;
             return out;
         },
 
@@ -648,7 +650,12 @@
                 const mine = Store.conversations();
                 const ghosts = new Set(mine.filter(c => Store.isGhost(c.id)).map(c => c.id));
                 const incoming = remote.chats.filter(c => c && c.id && !ghosts.has(c.id));
+                const anonPks = new Map();
+                for (const c of [].concat(mine, incoming)) {
+                    if (c && c.id && typeof c.anonPk === 'string' && !anonPks.has(c.id)) anonPks.set(c.id, c.anonPk);
+                }
                 const merged = mergeById(mine, incoming, graves)
+                    .map(c => c.anonPk || !anonPks.has(c.id) ? c : Object.assign({}, c, { anonPk: anonPks.get(c.id) }))
                     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
                 Store.saveConversations(merged);
                 touched.push('chats');
@@ -666,6 +673,10 @@
                     Store.saveMessages(entry.id, merged);
                     touched.push(key);
                 }
+            }
+
+            if (remote.anonKeys && typeof remote.anonKeys === 'object' && window.NymbotAnon) {
+                if (window.NymbotAnon.syncMerge(remote.anonKeys)) touched.push('anonKeys');
             }
 
             const Artifacts = window.NymbotArtifacts;

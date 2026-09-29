@@ -11,6 +11,7 @@ class Conversation {
     required this.rootId,
     this.title = '',
     this.anon = false,
+    this.anonPk,
     this.ephemeral = false,
     this.effort = 'normal',
     this.pinned = false,
@@ -45,6 +46,7 @@ class Conversation {
   String rootId;
   String title;
   bool anon;
+  String? anonPk;
 
   /// A ghost chat: nothing it says is written to this device, and no archive
   /// copy is published for it. It exists for as long as the app is open.
@@ -83,6 +85,7 @@ class Conversation {
         'rootId': rootId,
         'title': title,
         'anon': anon,
+        if (anonPk != null) 'anonPk': anonPk,
         'ephemeral': ephemeral,
         'effort': effort,
         'pinned': pinned,
@@ -114,6 +117,7 @@ class Conversation {
         rootId: j['rootId'] as String? ?? '',
         title: j['title'] as String? ?? '',
         anon: j['anon'] as bool? ?? false,
+        anonPk: j['anonPk'] is String ? j['anonPk'] as String : null,
         ephemeral: j['ephemeral'] as bool? ?? false,
         effort: j['effort'] as String? ?? 'normal',
         pinned: j['pinned'] as bool? ?? false,

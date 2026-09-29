@@ -101,6 +101,8 @@ class Store {
 
   Future<String?> secret(String key) => vault.read(key);
   Future<void> setSecret(String key, String value) => vault.write(key, value);
+  Future<void> setSyncedSecret(String key, String value) =>
+      _watched(vault.write(key, value));
   Future<void> dropSecret(String key) async {
     await vault.remove(key);
     await _legacySecure.delete(key: key);

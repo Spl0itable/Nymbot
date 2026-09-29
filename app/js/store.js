@@ -556,6 +556,7 @@
             const copy = this.createConversation({
                 title: title || source.title,
                 anon: source.anon,
+                anonPk: source.anonPk,
                 ephemeral: source.ephemeral,
                 folderId: source.folderId,
                 tags: (source.tags || []).slice(),

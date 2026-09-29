@@ -21,7 +21,14 @@ class _AnonSheetState extends State<_AnonSheet> {
   String _tier = 'standard';
   String? _status;
   bool _warn = false;
-  ({int? anon, int? anonPro, int? identity, int? identityPro})? _balances;
+  ({
+    int? anon,
+    int? anonPro,
+    int? total,
+    int? totalPro,
+    int? identity,
+    int? identityPro
+  })? _balances;
 
   @override
   void initState() {
@@ -37,27 +44,22 @@ class _AnonSheetState extends State<_AnonSheet> {
 
   Future<void> _loadBalances() async {
     final app = AppScope.read(context);
-    int? anon, anonPro, mine, minePro;
-    if (app.anon.ready) {
-      final res = await app.api.balance(await app.anon.signer());
-      if (res.data['error'] == null) {
-        anon = (res.data['balance'] as num?)?.toInt();
-        anonPro = (res.data['proBalance'] as num?)?.toInt();
-      }
-    }
-    final res = await app.api.balance(app.identity.signer);
-    if (res.data['error'] == null) {
-      mine = (res.data['balance'] as num?)?.toInt();
-      minePro = (res.data['proBalance'] as num?)?.toInt();
-    }
+    await app.refreshBalance();
     if (!mounted) return;
-    setState(() => _balances =
-        (anon: anon, anonPro: anonPro, identity: mine, identityPro: minePro));
+    int? whole(double? v) => v?.toInt();
+    setState(() => _balances = (
+          anon: whole(app.anonStandardBalance),
+          anonPro: whole(app.anonProBalance),
+          total: whole(app.anonTotalStandard),
+          totalPro: whole(app.anonTotalPro),
+          identity: whole(app.standardBalance),
+          identityPro: whole(app.proBalance),
+        ));
   }
 
   Future<void> _move() async {
     final app = AppScope.read(context);
-    if (!app.anon.enabled) {
+    if (!app.anon.enabled && !(app.current?.anon ?? false)) {
       setState(() {
         _status = t('Turn anonymous mode on first.');
         _warn = true;
@@ -73,6 +75,7 @@ class _AnonSheetState extends State<_AnonSheet> {
         app.identity.signer,
         int.tryParse(_amount.text) ?? 0,
         _tier,
+        pk: app.shownAnonPk,
       );
       if (!mounted) return;
       setState(() {
@@ -252,6 +255,22 @@ class _AnonSheetState extends State<_AnonSheet> {
                         'pro': b.anonPro == null ? '–' : figure(b.anonPro)
                       }),
                   style: const TextStyle(fontSize: 12)),
+              Text(
+                  t('All anonymous keys, others as last used: {standard} standard · {pro} Pro',
+                      {
+                        'standard': b.total == null ? '–' : figure(b.total),
+                        'pro': b.totalPro == null ? '–' : figure(b.totalPro)
+                      }),
+                  style: const TextStyle(fontSize: 12)),
+              if (app.anon.heldCredits('standard') > 0 ||
+                  app.anon.heldCredits('pro') > 0)
+                Text(
+                    t('Anonymous vouchers held: {standard} standard · {pro} Pro',
+                        {
+                          'standard': figure(app.anon.heldCredits('standard')),
+                          'pro': figure(app.anon.heldCredits('pro'))
+                        }),
+                    style: const TextStyle(fontSize: 12)),
             ] else
               Text(t('Checking balances…'), style: TextStyle(fontSize: 12)),
             const SizedBox(height: 14),
@@ -309,8 +328,8 @@ class _AnonSheetState extends State<_AnonSheet> {
                   builder: (context) => AlertDialog(
                     title: Text(t('Rotate the throwaway key?')),
                     content: Text(
-                      t('Its balance moves across, which shows Nymbot one anonymous '
-                      'key paying another.'),
+                      t('Its balance becomes anonymous vouchers that the new key '
+                      'uses as needed.'),
                     ),
                     actions: [
                       TextButton(

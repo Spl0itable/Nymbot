@@ -91,7 +91,8 @@ typedef AccountRoot = ({
 class AppController extends ChangeNotifier {
   AppController._(this.store, this.identity, this.relays, this.pq, this.api,
       this.anon, this.storage) {
-    sync = AccountSync(store: store, identity: identity, storage: storage);
+    sync = AccountSync(
+        store: store, identity: identity, storage: storage, anon: anon);
     DocLibrary.bind(store);
   }
 
@@ -186,8 +187,9 @@ class AppController extends ChangeNotifier {
       String id, Map<String, dynamic> body) async {
     final conv = _conversationById(id);
     if (conv == null) return null;
-    final signer =
-        conv.anon && anon.ready ? await anon.signer() : identity.signer;
+    final signer = conv.anon
+        ? await anon.signer(pk: conv.anonPk)
+        : identity.signer;
     final res = await api.call('notify-turn', signer,
         extra: body, timeout: const Duration(seconds: 10));
     return res.status == 0 ? null : res.data;
@@ -392,6 +394,9 @@ class AppController extends ChangeNotifier {
   double? proBalance;
   double? anonStandardBalance;
   double? anonProBalance;
+  double? get anonTotalStandard => anon.knownTotals().standard;
+  double? get anonTotalPro => anon.knownTotals().pro;
+  String? _anonShownFor;
 
   /// What the day's free allowance has left on the key that is signed in, as
   /// the worker last reported it.
@@ -771,7 +776,9 @@ class AppController extends ChangeNotifier {
   }
 
   Future<({String? text, String? error})> transcribe(Uint8List audio) async {
-    final signer = spendingAnon ? await anon.signer() : identity.signer;
+    final signer = spendingAnon
+        ? await anon.signer(pk: current?.anonPk)
+        : identity.signer;
     final res = await api.call('transcribe', signer,
         extra: {'audio': base64Encode(audio)},
         timeout: const Duration(seconds: 60));
@@ -787,8 +794,8 @@ class AppController extends ChangeNotifier {
   /// Only ever moves from the nym to the throwaway key, never the other way,
   /// and never more than the nym actually holds. One call at a time: a second
   /// while the first is still minting would spend the same balance twice.
-  Future<Map<String, int>?> autoTopUp({bool force = false}) async {
-    if (!settings.anonAutoTop || !anon.ready) return null;
+  Future<Map<String, int>?> autoTopUp({bool force = false, String? pk}) async {
+    if (!settings.anonAutoTop || (pk == null && !anon.ready)) return null;
     if (_topping) return null;
     _topping = true;
     try {
@@ -798,7 +805,11 @@ class AppController extends ChangeNotifier {
       final want = settings.anonAutoTopTier;
       final tiers = want == 'both' ? const ['standard', 'pro'] : [want];
 
-      final here = await api.balance(await anon.signer());
+      final target = (await anon.identityFor(pk))['pk'] as String;
+      final here = await api.balance(await anon.signer(pk: target));
+      if (here.data['error'] == null) {
+        await anon.noteBalanceData(target, here.data);
+      }
       final mine = await api.balance(identity.signer);
       if (here.data['error'] != null || mine.data['error'] != null) return null;
 
@@ -810,18 +821,81 @@ class AppController extends ChangeNotifier {
         if (have == null || nym == null) continue;
         if (!force && have >= floor) continue;
         if (force && have >= floor + amount) continue;
-        final take = amount < nym ? amount : nym;
-        if (take <= 0) continue;
+        var credited = 0;
         try {
-          final credited = await anon.moveCredits(identity.signer, take, tier);
-          if (credited > 0) moved[tier] = credited;
-        } catch (_) {
-          // A tier that cannot be funded is not a reason to skip the other.
+          credited = await anon.redeemHeld(tier, pk: target, want: amount);
+        } catch (_) {}
+        final left = amount - credited;
+        final take = left < nym ? left : nym;
+        if (take > 0) {
+          try {
+            credited += await anon.moveCredits(identity.signer, take, tier,
+                pk: target);
+          } catch (_) {
+          }
         }
+        if (credited > 0) moved[tier] = credited;
       }
       if (moved.isEmpty) return null;
       await refreshBalance();
       return moved;
+    } catch (_) {
+      return null;
+    } finally {
+      _topping = false;
+    }
+  }
+
+  Future<Map<String, int>?> fundAnonTurn(Conversation conv,
+      {required double need, required String tier}) async {
+    if (!conv.anon || _topping) return null;
+    final Map<String, dynamic> id;
+    try {
+      id = await anon.bind(conv);
+    } catch (_) {
+      return null;
+    }
+    final pk = id['pk'] as String;
+    final pro = tier == 'pro';
+    final known = pk == _anonShownFor
+        ? (pro ? anonProBalance : anonStandardBalance)
+        : null;
+    if (known != null && known >= need) return null;
+    _topping = true;
+    try {
+      final here = await api.balance(anon.signerOf(id));
+      if (here.data['error'] != null) return null;
+      await anon.noteBalanceData(pk, here.data);
+      final have = _figureOf(here.data, pro);
+      if (have >= need) return null;
+      final short = (need - have).ceil();
+      var moved = 0;
+      try {
+        moved = await anon.redeemHeld(tier, pk: pk, want: short);
+      } catch (_) {}
+      final allowed = settings.anonAutoTopTier == 'both' ||
+          settings.anonAutoTopTier == tier;
+      if (moved < short && settings.anonAutoTop && allowed) {
+        final mine = await api.balance(identity.signer);
+        if (mine.data['error'] == null) {
+          final amount =
+              settings.anonAutoTopAmount < 1 ? 1 : settings.anonAutoTopAmount;
+          final gap = short - moved;
+          final nym = _figureOf(mine.data, pro).floor();
+          final want = gap > amount ? gap : amount;
+          final take = want < nym ? want : nym;
+          if (take > 0) {
+            try {
+              moved += await anon.moveCredits(identity.signer, take, tier,
+                  pk: pk);
+            } catch (_) {}
+          }
+        }
+      }
+      if (moved <= 0) return null;
+      _topping = false;
+      await refreshBalance();
+      return {tier: moved};
     } catch (_) {
       return null;
     } finally {
@@ -979,8 +1053,8 @@ class AppController extends ChangeNotifier {
       var after = 0;
       var draftAfter = 0;
       while (turn.watching) {
-        final signer = turn.conv.anon && anon.enabled
-            ? await anon.signer()
+        final signer = turn.conv.anon
+            ? await anon.signer(pk: turn.conv.anonPk)
             : identity.signer;
         String? draft;
         final raw = await chat.progressRaw(signer, eventId,
@@ -1218,14 +1292,17 @@ class AppController extends ChangeNotifier {
 
   Future<ServerRunResponse> startServerRun(
       Conversation? conv, Map<String, dynamic> body) async {
-    final useAnon = conv != null && conv.anon && anon.ready;
-    final signer = useAnon ? await anon.signer() : identity.signer;
+    final useAnon = conv != null && conv.anon;
+    final signer =
+        useAnon ? await anon.signer(pk: conv.anonPk) : identity.signer;
     return api.runnerRun(signer, body);
   }
 
   Future<void> serverRunCharged(Conversation? conv, ServerRunState state) async {
     final credits = state.charged ?? 0;
-    _creditBalance(true, state.balance, anonKey: conv != null && conv.anon && anon.ready);
+    _creditBalance(true, state.balance,
+        anonKey: conv != null && conv.anon,
+        anonPk: conv?.anonPk);
     if (conv != null && credits > 0) {
       _bumpSpent(conv, credits, true);
       conv.creditsSpent += credits;
@@ -1237,10 +1314,14 @@ class AppController extends ChangeNotifier {
   }
 
   Future<String> serverRunNoCredits(Conversation? conv, Map<String, dynamic> data) async {
-    final useAnon = conv != null && conv.anon && anon.ready;
+    final useAnon = conv != null && conv.anon;
     final free = data['balanceCredits'] ?? data['balance'];
-    if (free is num) _creditBalance(true, free.toDouble(), anonKey: useAnon);
-    final topped = useAnon ? await autoTopUp(force: true) : null;
+    if (free is num) {
+      _creditBalance(true, free.toDouble(),
+          anonKey: useAnon, anonPk: conv?.anonPk);
+    }
+    final topped =
+        useAnon ? await autoTopUp(force: true, pk: conv.anonPk) : null;
     notifyListeners();
     if (topped != null) {
       return '${describeTopUp(topped)} ${t('Run it again when you are ready.')}';
@@ -1475,7 +1556,8 @@ class AppController extends ChangeNotifier {
       _touch(conv);
       await store.saveConversations(conversations);
       await store.recordUsage(res.cost);
-      _creditBalance(res.pro, res.balance, anonKey: conv.anon && anon.ready);
+      _creditBalance(res.pro, res.balance,
+          anonKey: conv.anon, anonPk: conv.anonPk);
       if (res.truncated) carry = res;
     } on ChatFailure catch (e) {
       _stopWatching(turn);
@@ -1749,7 +1831,8 @@ class AppController extends ChangeNotifier {
     if (!repo.allowWrites) {
       throw ChatFailure(t('Writes are off for that repository.'));
     }
-    final signer = conv.anon ? await anon.signer() : identity.signer;
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
     final data = await chat.revert(
         repo: repo, checkpoint: mark, signer: signer);
     final failed = (data['failed'] as List?)?.length ?? 0;
@@ -1780,7 +1863,8 @@ class AppController extends ChangeNotifier {
         break;
       }
       try {
-        final signer = conv.anon ? await anon.signer() : identity.signer;
+        final signer =
+            conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
         final data = await chat.applyStaged(repo: repo, staged: one, signer: signer);
         final mark = data['checkpoint'];
         if (mark is Map<String, dynamic>) marks.add(mark);
@@ -2241,6 +2325,9 @@ class AppController extends ChangeNotifier {
         }
       }
     }
+    if (touched.contains('anonKeys') || touched.contains('chats')) {
+      unawaited(refreshBalance());
+    }
     final open = current;
     if (open != null && touched.contains('chat-${open.id}')) {
       messages = store.messages(open.id);
@@ -2301,6 +2388,13 @@ class AppController extends ChangeNotifier {
 
   Future<void> open(Conversation conv) async {
     current = conv;
+    if (conv.anon &&
+        _anonShownFor != null &&
+        shownAnonPk != _anonShownFor) {
+      anonStandardBalance = null;
+      anonProBalance = null;
+      unawaited(refreshBalance());
+    }
     replyNotify.viewingChat(conv.id);
     messages = store.messages(conv.id);
     artifacts = store.artifacts(conv.id);
@@ -2496,6 +2590,7 @@ class AppController extends ChangeNotifier {
       rootId: bytesToHex(randomBytes(32)),
       title: '${conv.title.isEmpty ? t('New chat') : conv.title} ${t('(copy)')}',
       anon: conv.anon,
+      anonPk: conv.anonPk,
       folderId: conv.folderId,
       tags: [...conv.tags],
       repoIds: [...conv.repoIds],
@@ -2533,6 +2628,7 @@ class AppController extends ChangeNotifier {
       rootId: bytesToHex(randomBytes(32)),
       title: '${conv.title.isEmpty ? t('New chat') : conv.title} ${t('(branch)')}',
       anon: conv.anon,
+      anonPk: conv.anonPk,
       ephemeral: conv.ephemeral,
       effort: conv.effort,
       folderId: conv.folderId,
@@ -2904,6 +3000,13 @@ class AppController extends ChangeNotifier {
       }
     }
 
+    if (conv.anon) {
+      try {
+        await anon.bind(conv);
+        await store.saveConversations(conversations);
+      } catch (_) {}
+    }
+
     final turn = ChatTurn(conv);
     turns[conv.id] = turn;
     notifyListeners();
@@ -2919,6 +3022,7 @@ class AppController extends ChangeNotifier {
         id: 'cmp-${bytesToHex(randomBytes(6))}',
         rootId: bytesToHex(randomBytes(32)),
         anon: conv.anon,
+        anonPk: conv.anonPk,
         ephemeral: conv.ephemeral,
         repoIds: [...conv.repoIds],
         personaId: conv.personaId,
@@ -3082,7 +3186,7 @@ class AppController extends ChangeNotifier {
         if (conv.id == current?.id) _capReturned = typed;
         return false;
       }
-      final wallet = conv.anon && anon.ready ? anonProBalance : proBalance;
+      final wallet = conv.anon ? anonProBalance : proBalance;
       if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
         await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
             {'name': mention.model!['key']}), conv: conv);
@@ -3178,6 +3282,15 @@ class AppController extends ChangeNotifier {
               pro: est.tier == 'pro');
         }
       }
+    }
+
+    if (conv.anon) {
+      final had = conv.anonPk;
+      final est = _capEstimate(conv, body, model: asked);
+      final funded = await fundAnonTurn(conv,
+          need: est.max, tier: est.tier == 'pro' ? 'pro' : 'standard');
+      if (had != conv.anonPk) await store.saveConversations(conversations);
+      if (funded != null) await note(describeTopUp(funded), conv: conv);
     }
 
     if (composing) {
@@ -3292,15 +3405,16 @@ class AppController extends ChangeNotifier {
         await store.freeTier.spent();
         await store.freeTier.observe(res.free!.used);
       }
-      _creditBalance(res.pro, res.balance, anonKey: conv.anon && anon.ready);
-      if (conv.anon && anon.ready && anonStandardBalance == null) {
+      _creditBalance(res.pro, res.balance,
+          anonKey: conv.anon, anonPk: conv.anonPk);
+      if (conv.anon && anonStandardBalance == null) {
         unawaited(refreshBalance());
       }
       if (res.lowBalance) {
         // In an anonymous chat a low balance is usually the throwaway key
         // running dry rather than the nym, which is what the automatic
         // transfer is for.
-        final topped = conv.anon ? await autoTopUp() : null;
+        final topped = conv.anon ? await autoTopUp(pk: conv.anonPk) : null;
         if (topped != null) {
           await note(describeTopUp(topped), conv: conv);
         } else {
@@ -3345,7 +3459,8 @@ class AppController extends ChangeNotifier {
           quote = quoted;
         }
       } else if (e.noCredits) {
-        _creditBalance(e.pro, e.balance, anonKey: conv.anon && anon.ready);
+        _creditBalance(e.pro, e.balance,
+            anonKey: conv.anon, anonPk: conv.anonPk);
         // The worker says the day is spent. Believe it over the device's own
         // count, which can only ever be behind.
         if (e.free != null) {
@@ -3357,7 +3472,9 @@ class AppController extends ChangeNotifier {
           // and there is nothing to top up from.
           await note(freeSpentMessage(), conv: conv);
         } else {
-          final topped = conv.anon ? await autoTopUp(force: true) : null;
+          final topped = conv.anon
+              ? await autoTopUp(force: true, pk: conv.anonPk)
+              : null;
           if (topped != null) {
             await note('${describeTopUp(topped)} '
                 '${t('Send that again when you are ready.')}', conv: conv);
@@ -3701,7 +3818,7 @@ class AppController extends ChangeNotifier {
       await store.recordUsage(next.cost);
       turn.continuedSpend += next.cost;
       _creditBalance(next.pro, next.balance,
-          anonKey: conv.anon && anon.ready);
+          anonKey: conv.anon, anonPk: conv.anonPk);
 
       left = research != null
           ? double.infinity
@@ -3752,9 +3869,15 @@ class AppController extends ChangeNotifier {
   void creditBalanceForTest(bool pro, double? value, {required bool anonKey}) =>
       _creditBalance(pro, value, anonKey: anonKey);
 
-  void _creditBalance(bool pro, double? value, {required bool anonKey}) {
+  void _creditBalance(bool pro, double? value,
+      {required bool anonKey, String? anonPk}) {
     if (value == null) return;
     if (anonKey) {
+      final key = anon.heldFor(anonPk)?['pk'] as String? ?? shownAnonPk;
+      unawaited(pro
+          ? anon.noteBalance(key, pro: value)
+          : anon.noteBalance(key, standard: value));
+      if (key != shownAnonPk) return;
       if (pro) {
         anonProBalance = value;
       } else {
@@ -3779,7 +3902,7 @@ class AppController extends ChangeNotifier {
   Timer? _invoicePoll;
 
   Future<EventSigner> _invoiceSigner(PendingInvoice inv) async =>
-      inv.anon ? await anon.signer() : identity.signer;
+      inv.anon ? await anon.signer(pk: inv.anonPk) : identity.signer;
 
   void _invoiceSay(String? text, {bool warn = false}) {
     invoiceStatus = text;
@@ -3807,8 +3930,11 @@ class AppController extends ChangeNotifier {
     final sats = credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
     invoiceBusy = true;
     _invoiceSay(t('Creating an invoice…'));
-    final useAnon = (current?.anon ?? false) && anon.ready;
-    final signer = useAnon ? await anon.signer() : identity.signer;
+    final useAnon = current?.anon ?? false;
+    final anonPk = useAnon
+        ? (await anon.identityFor(current?.anonPk))['pk'] as String
+        : null;
+    final signer = useAnon ? await anon.signer(pk: anonPk) : identity.signer;
     ApiResult res;
     try {
       res = await api.createInvoice(signer, amountSats: sats, tier: tier);
@@ -3828,6 +3954,7 @@ class AppController extends ChangeNotifier {
       pr: pr,
       tier: tier,
       anon: useAnon,
+      anonPk: anonPk,
       credits: credits,
       sats: sats,
     ));
@@ -4060,7 +4187,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> refreshBalance({bool announce = false}) async {
-    final inAnonChat = (current?.anon ?? false) && anon.ready;
+    final inAnonChat = current?.anon ?? false;
     final res = await api.balance(identity.signer);
     if (res.data['error'] != null) {
       if (announce) await note(t('Could not reach Nymbot to check your balance.'));
@@ -4070,13 +4197,16 @@ class AppController extends ChangeNotifier {
         ?? (res.data['balance'] as num?)?.toDouble() ?? 0;
     proBalance = (res.data['proBalanceCredits'] as num?)?.toDouble()
         ?? (res.data['proBalance'] as num?)?.toDouble() ?? 0;
-    if (anon.ready) {
-      final mine = await api.balance(await anon.signer());
+    final shown = shownAnonPk;
+    final shownId = anon.heldFor(shown);
+    if (shownId != null) {
+      final mine = await api.balance(anon.signerOf(shownId));
       if (mine.data['error'] == null) {
-        anonStandardBalance = (mine.data['balanceCredits'] as num?)?.toDouble()
-            ?? (mine.data['balance'] as num?)?.toDouble() ?? 0;
-        anonProBalance = (mine.data['proBalanceCredits'] as num?)?.toDouble()
-            ?? (mine.data['proBalance'] as num?)?.toDouble() ?? 0;
+        anonStandardBalance = _figureOf(mine.data, false);
+        anonProBalance = _figureOf(mine.data, true);
+        _anonShownFor = shown;
+        await anon.noteBalance(shown,
+            standard: anonStandardBalance, pro: anonProBalance);
       }
     } else {
       anonStandardBalance = null;
@@ -4093,9 +4223,12 @@ class AppController extends ChangeNotifier {
     if (announce) {
       await note(inAnonChat
           ? t("This chat's anonymous balance: {standard} standard, {pro} Pro. "
+              'All your anonymous keys hold {totalStandard} standard and {totalPro} Pro, the others as of their last use. '
               'Your nym still holds {nymStandard} standard and {nymPro} Pro.', {
               'standard': creditFigure(anonStandardBalance),
               'pro': creditFigure(anonProBalance),
+              'totalStandard': creditFigure(anonTotalStandard),
+              'totalPro': creditFigure(anonTotalPro),
               'nymStandard': creditFigure(standardBalance),
               'nymPro': creditFigure(proBalance),
             })
@@ -4108,7 +4241,15 @@ class AppController extends ChangeNotifier {
 
   bool get proTier => activeModel != null || mediaNeedsPro(activeMediaModel);
 
-  bool get spendingAnon => (current?.anon ?? false) && anon.ready;
+  bool get spendingAnon => current?.anon ?? false;
+
+  String? get shownAnonPk =>
+      anon.heldFor(current?.anonPk)?['pk'] as String? ?? anon.pubkey;
+
+  static double _figureOf(Map<String, dynamic> data, bool pro) =>
+      (data[pro ? 'proBalanceCredits' : 'balanceCredits'] as num?)?.toDouble() ??
+      (data[pro ? 'proBalance' : 'balance'] as num?)?.toDouble() ??
+      0;
 
   double? get shownBalance => spendingAnon
       ? (proTier ? anonProBalance : anonStandardBalance)

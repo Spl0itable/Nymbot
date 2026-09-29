@@ -13,6 +13,7 @@ import '../models/schedule.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import '../state/store.dart';
+import 'anon.dart';
 import 'connectors.dart';
 import 'nostr/event_signer.dart';
 import 'storage_sync.dart';
@@ -22,13 +23,16 @@ class AccountSync {
     required Store store,
     required Identity identity,
     required StorageSync storage,
+    AnonMode? anon,
   })  : _store = store,
         _identity = identity,
-        _storage = storage;
+        _storage = storage,
+        _anon = anon;
 
   final Store _store;
   final Identity _identity;
   final StorageSync _storage;
+  final AnonMode? _anon;
 
   static const int maxChats = 400;
 
@@ -650,6 +654,8 @@ class AccountSync {
         'artifacts': fitArtifacts(conv.id, arts),
       };
     }
+    final anonKeys = _anon?.syncValue();
+    if (anonKeys != null) out['anonKeys'] = anonKeys;
     out['graves'] = graves;
     return out;
   }
@@ -787,6 +793,14 @@ class AccountSync {
             ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       await _store.saveConversations(merged);
       touched.add('chats');
+    }
+
+    final anon = _anon;
+    if (anon != null &&
+        remote['anonKeys'] != null &&
+        !_alreadyApplied(remote, 'anonKeys') &&
+        await anon.mergeSync(remote['anonKeys'])) {
+      touched.add('anonKeys');
     }
 
     for (final key in remote.keys) {
