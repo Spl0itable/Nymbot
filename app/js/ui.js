@@ -3389,6 +3389,10 @@
             } else if (Chat.repoNeedsPro(this.conv, this.settings)) {
                 hint.textContent = t('Only a Pro model can read a repository — pick one with ?model, or this chat answers without it.');
             } else if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
+                if (!this.models && Date.now() - (this._pricingTriedAt || 0) > 60000) {
+                    this._pricingTriedAt = Date.now();
+                    this.loadMentionModels();
+                }
                 const est = Chat.estimateCredits(text, this.settings, this.conv, opts, this.models);
                 hint.textContent = Chat.estimateLine(est, creditAmount);
             } else {
