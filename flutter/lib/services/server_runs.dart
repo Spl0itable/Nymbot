@@ -10,6 +10,7 @@ class RunnerImage {
     this.instanceType = '',
     this.maxTimeoutSec = 900,
     this.creditsPerMinute = 0,
+    this.setupSec = 0,
   });
 
   final String name;
@@ -17,6 +18,7 @@ class RunnerImage {
   final String instanceType;
   final int maxTimeoutSec;
   final double creditsPerMinute;
+  final int setupSec;
 
   static RunnerImage? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -25,12 +27,14 @@ class RunnerImage {
     final label = raw['label'];
     final max = raw['maxTimeoutSec'];
     final cpm = raw['creditsPerMinute'];
+    final setup = raw['setupSec'];
     return RunnerImage(
       name: name,
       label: label is String && label.isNotEmpty ? label : name,
       instanceType: '${raw['instanceType'] ?? ''}',
       maxTimeoutSec: max is num && max > 0 ? max.toInt() : 900,
       creditsPerMinute: cpm is num && cpm > 0 ? cpm.toDouble() : 0,
+      setupSec: setup is num && setup > 0 ? setup.ceil() : 0,
     );
   }
 }
@@ -211,8 +215,13 @@ class ServerRuns {
     return out;
   }
 
+  static int billedSec(RunnerImage image, int timeoutSec) {
+    final billed = ((timeoutSec + image.setupSec) / 10).ceil() * 10;
+    return billed < 10 ? 10 : billed;
+  }
+
   static double maxCredits(RunnerImage image, int timeoutSec) {
-    final billed = (timeoutSec / 10).ceil() * 10;
+    final billed = billedSec(image, timeoutSec);
     final milli = ((image.creditsPerMinute * 1000 + 0.5) * billed / 60 - 1e-9).ceil();
     return (milli < 1 ? 1 : milli) / 1000;
   }

@@ -506,7 +506,7 @@ class AppController extends ChangeNotifier {
   bool get repoNeedsPro => activeRepos.isNotEmpty && activeModel == null;
 
   Map<String, dynamic>? mediaModelOf(Conversation? conv) =>
-      conv?.mediaModel ?? mediaModel;
+      settledMedia(conv?.mediaModel ?? mediaModel, mentionCatalog);
 
   Map<String, dynamic>? get activeMediaModel => mediaModelOf(current);
 
@@ -557,19 +557,90 @@ class AppController extends ChangeNotifier {
   }
 
   static Map<String, dynamic> mediaFor(Map<String, dynamic> m,
-      {String? slug, Map<String, dynamic>? catalog}) {
-    final credits = (m['credits'] as num?)?.toInt() ?? 0;
+      {String? slug, Map<String, dynamic>? catalog, String? resolution}) {
+    final top = defaultResolution(m);
+    final chosen = resolutionEntry(m, resolution);
+    final custom = chosen != null && chosen['res'] != top;
+    final credits = custom
+        ? (chosen['credits'] as num?)?.toInt() ?? 0
+        : (m['credits'] as num?)?.toInt() ?? 0;
+    final command = generatorCommand(m['command'] as String?);
     final media = <String, dynamic>{
       'key': m['key'],
       'label': m['label'],
       'kind': m['kind'] ?? 'image',
       'credits': credits,
-      'max': (m['max'] as num?)?.toInt() ?? credits,
-      'command': generatorCommand(m['command'] as String?),
+      'max': custom ? credits : (m['max'] as num?)?.toInt() ?? credits,
+      'command': custom ? '$command --res ${chosen['res']}' : command,
       'slug': slug,
     };
+    if (top != null) media['resolutionDefault'] = top;
+    if (custom) media['resolution'] = chosen['res'];
     if (mediaNeedsPro(media)) media['proKey'] = cheapestChatKey(catalog);
     return media;
+  }
+
+  static List<Map<String, dynamic>> resolutionsOf(Map<String, dynamic>? m) => [
+        for (final r in (m?['resolutions'] as List?) ?? const [])
+          if (r is Map && r['res'] is String && (r['res'] as String).isNotEmpty)
+            Map<String, dynamic>.from(r),
+      ];
+
+  static String? defaultResolution(Map<String, dynamic>? m) {
+    final list = resolutionsOf(m);
+    final named = m?['resolution'];
+    if (named is String && named.isNotEmpty) {
+      if (list.isEmpty || list.any((r) => r['res'] == named)) return named;
+    }
+    return list.isEmpty ? null : list.last['res'] as String;
+  }
+
+  static Map<String, dynamic>? resolutionEntry(
+      Map<String, dynamic>? m, String? res) {
+    if (res == null) return null;
+    for (final r in resolutionsOf(m)) {
+      if (r['res'] == res) return r;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? catalogRow(
+      Map<String, dynamic>? catalog, Object? key) {
+    for (final m in (catalog?['models'] as List?) ?? const []) {
+      if (m is Map<String, dynamic> && m['key'] == key) return m;
+    }
+    return null;
+  }
+
+  static final RegExp _resFlag =
+      RegExp(r'(?:^|\s)--res(?:olution)?(?:[\s=]\S+|(?=\s|$))',
+          caseSensitive: false);
+
+  static Map<String, dynamic>? settledMedia(
+      Map<String, dynamic>? media, Map<String, dynamic>? catalog) {
+    final res = media?['resolution'];
+    if (media == null || res == null) return media;
+    final row = catalogRow(catalog, media['key']);
+    if (row == null || resolutionsOf(row).isEmpty) return media;
+    if (resolutionEntry(row, res as String?) != null) return media;
+    final top = defaultResolution(row);
+    final credits = (row['credits'] as num?)?.toInt() ?? 0;
+    return {
+      ...media,
+      'resolutionDefault': top,
+      'credits': credits,
+      'max': (row['max'] as num?)?.toInt() ?? credits,
+      'command': '${media['command'] ?? ''}'.replaceAll(_resFlag, '').trim(),
+    }..remove('resolution');
+  }
+
+  static String? mediaResolution(Map<String, dynamic>? media) =>
+      (media?['resolution'] ?? media?['resolutionDefault']) as String?;
+
+  static String mediaLabel(Map<String, dynamic> media) {
+    final name = '${media['label'] ?? media['key'] ?? ''}';
+    final res = mediaResolution(media);
+    return res == null ? name : t('{name} · {res}', {'name': name, 'res': res});
   }
 
   static String? cheapestChatKey(Map<String, dynamic>? catalog) {
@@ -640,13 +711,18 @@ class AppController extends ChangeNotifier {
     final verb = _commandVerb.firstMatch(command)?.group(1) ?? '';
     final head = _commandHead.firstMatch(text);
     if (head == null) {
-      return text.startsWith('!') ? text : '$command $text';
+      if (text.startsWith('!')) return text;
+      return _resFlag.hasMatch(text)
+          ? '${command.replaceAll(_resFlag, '').trim()} $text'
+          : '$command $text';
     }
     final rest = (head.group(2) ?? '').trim();
     if (head.group(1)!.toLowerCase() != verb.toLowerCase()) return text;
     if (rest.isEmpty || _listsModels.hasMatch(rest)) return text;
     if (_hasModelFlag.hasMatch(rest)) return text;
-    return '$command $rest';
+    return _resFlag.hasMatch(rest)
+        ? '${command.replaceAll(_resFlag, '').trim()} $rest'
+        : '$command $rest';
   }
 
   Future<void> toggleFavouriteModel(String key) async {
@@ -1312,9 +1388,11 @@ class AppController extends ChangeNotifier {
       final est = ChatEngine.estimate(text, model,
           conv: conv,
           hasRepos: reposOf(conv).isNotEmpty,
+          web: settings.webSearch,
+          history: ChatEngine.estHistoryOf(_messagesOf(conv)),
           pricing: catalogPricing);
       if (!waived) {
-        final gate = await _capGate(conv, est.tier == 'pro' || run, est.high + runCredits);
+        final gate = await _capGate(conv, est.tier == 'pro' || run, est.max + runCredits);
         if (gate != 'send' && gate != 'ok') return;
         if (gate == 'ok') {
           maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
@@ -2808,11 +2886,13 @@ class AppController extends ChangeNotifier {
           ChatEngine.estimate(body, model,
               conv: conv,
               hasRepos: reposOf(conv).isNotEmpty,
+              web: settings.webSearch,
+              history: ChatEngine.estHistoryOf(_messagesOf(conv)),
               pricing: catalogPricing),
       ];
       final pro = ests.any((e) => e.tier == 'pro');
       final sats = ests.fold<double>(
-          0, (n, e) => n + SpendCaps.satsFor(e.high, e.tier == 'pro'));
+          0, (n, e) => n + SpendCaps.satsFor(e.max, e.tier == 'pro'));
       final gate = await _capGate(conv, pro, sats / SpendCaps.rate(pro));
       if (gate != 'send' && gate != 'ok') return const [];
       if (gate == 'ok') {
@@ -3035,6 +3115,11 @@ class AppController extends ChangeNotifier {
             lead: asked ?? teamLeadOf(conv),
             research: research != null,
             repos: reposOf(conv).isNotEmpty);
+    if (!bare &&
+        mentionCatalog == null &&
+        mediaModelOf(conv)?['resolution'] != null) {
+      await ensureMentionCatalog();
+    }
     final body = research != null
         ? research.question
         : asked != null
@@ -3076,11 +3161,13 @@ class AppController extends ChangeNotifier {
               tier: 'pro',
               low: priced.typical,
               high: priced.max.toDouble(),
-              metered: true
+              max: priced.max.toDouble(),
+              metered: true,
+              unpriced: false
             );
           }
         }
-        final gate = await _capGate(conv, est.tier == 'pro', est.high,
+        final gate = await _capGate(conv, est.tier == 'pro', est.max,
             unattended: unattended);
         if (gate != 'send' && gate != 'ok') {
           if (composing) _capReturned = typed;
@@ -3317,6 +3404,8 @@ class AppController extends ChangeNotifier {
     return ChatEngine.estimate(body, model ?? modelOf(conv),
         conv: conv,
         hasRepos: reposOf(conv).isNotEmpty,
+        web: settings.webSearch,
+        history: ChatEngine.estHistoryOf(_messagesOf(conv)),
         pricing: catalogPricing);
   }
 
@@ -3871,11 +3960,16 @@ class AppController extends ChangeNotifier {
   Future<void> resumed() async {
     if (!signedIn || identity.pubkey.isEmpty) return;
     if (_entered) relays.wake();
-    if (_entered) sync.touch(const Duration(milliseconds: 1500));
+    if (_entered) unawaited(sync.kick());
     await refreshNotices();
     await refreshBalance();
     await resumeInvoice();
     if (_entered) await runDueSchedules();
+  }
+
+  Future<SyncRound> refreshSync() {
+    return sync.refresh().timeout(const Duration(seconds: 15),
+        onTimeout: () => const SyncRound.failed());
   }
 
   Future<void> dropInvoice() async {
@@ -4139,13 +4233,16 @@ class AppController extends ChangeNotifier {
   void notePricing(Map<String, dynamic>? catalog) {
     if (catalog == null) return;
     final usd = (catalog['usdPerCredit'] as num?)?.toDouble() ?? 0;
-    if (usd <= 0) return;
+    final unpriced = catalog['priceUnavailable'] == true || usd <= 0;
+    if (unpriced && catalog['priceUnavailable'] != true) return;
     catalogPricing = {
-      'usdPerCredit': usd,
+      'usdPerCredit': unpriced ? null : usd,
+      'priceUnavailable': unpriced,
       'standardUsdPerCredit': catalog['standardUsdPerCredit'],
       'standardRoutes': catalog['standardRoutes'],
       'btcUsd': catalog['btcUsd'],
       'minChargeCredits': catalog['minChargeCredits'],
+      'estimate': catalog['estimate'],
       'bulkBonus': catalog['bulkBonus'],
       'researchByKey': Research.researchByKey(catalog),
     };
@@ -4153,28 +4250,34 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> ensurePricing() async {
-    if (catalogPricing != null) return;
+    if (catalogPricing != null && catalogPricing!['priceUnavailable'] != true) {
+      return;
+    }
     notePricing(await api.models());
   }
 
-  CostEstimate estimate(String text) => ChatEngine.estimate(text, activeModel,
+  CostEstimate estimate(String text) {
+    final media = activeMediaModel;
+    if (activeModel == null &&
+        mediaNeedsPro(media) &&
+        media!['credits'] is num &&
+        withMediaModel(text) != text) {
+      return ChatEngine.generatorEstimate(media);
+    }
+    return _chatEstimate(text);
+  }
+
+  CostEstimate _chatEstimate(String text) => ChatEngine.estimate(text, activeModel,
       conv: current,
       hasRepos: activeRepos.isNotEmpty,
       pricing: catalogPricing,
-      historyChars: _historyCharsNow(),
+      history: ChatEngine.estHistoryOf(messages),
+      web: settings.webSearch,
       // Priced against what will actually go on the wire — the standing
       // context and the attachments included — because that is what decides
       // whether the question needs more than one wrap, and each extra one is a
       // credit.
       wireText: _wireTextNow(text));
-
-  int _historyCharsNow() {
-    var n = 0;
-    for (var i = messages.length - 1; i >= 0 && n < 160000; i--) {
-      n += messages[i].content.length;
-    }
-    return n;
-  }
 
   String _wireTextNow(String text) {
     final conv = current;

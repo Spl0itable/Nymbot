@@ -39,7 +39,8 @@ class ChatFailure implements Exception {
       this.free,
       this.capExceeded = false,
       this.required = 0,
-      this.team = false});
+      this.team = false,
+      this.retryable = false});
 
   final String message;
   final bool noCredits;
@@ -56,6 +57,7 @@ class ChatFailure implements Exception {
   final bool capExceeded;
   final double required;
   final bool team;
+  final bool retryable;
 
   @override
   String toString() => message;
@@ -107,7 +109,16 @@ typedef TurnStep = ({
   bool flag,
 });
 
-typedef CostEstimate = ({String tier, double low, double high, bool metered});
+typedef CostEstimate = ({
+  String tier,
+  double low,
+  double high,
+  double max,
+  bool metered,
+  bool unpriced
+});
+
+typedef EstTurnText = ({bool bot, String text});
 
 class TurnControl {
   TurnControl({this.onStatus});
@@ -173,15 +184,11 @@ class ChatEngine {
     return (thinking: null, body: text);
   }
 
-  static const int estScaffoldTokens = 900;
   static const int estTypicalOut = 400;
   static const int estLongOut = 1600;
 
   static const int nominalTurnIn = 3000;
   static const int nominalTurnOut = 700;
-
-  static int estTokens(int chars) => chars <= 0 ? 0 : (chars / 4).ceil();
-
 
   static double? estMeteredCredits(Map<String, dynamic> model, int inTok,
       int outTok, int calls, double usdPerCredit) {
@@ -216,29 +223,316 @@ class ChatEngine {
     return (low < floor ? floor : low, high < floor ? floor : high);
   }
 
-  static (double, double)? estStandardCredits(
-      int inTok, Map<String, dynamic>? pricing) {
-    final routes = (pricing?['standardRoutes'] as List?) ?? const [];
-    final usd = (pricing?['standardUsdPerCredit'] as num?)?.toDouble() ?? 0;
-    if (routes.isEmpty || usd <= 0) return null;
-    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
-    double? low;
-    double? high;
-    for (final raw in routes) {
-      if (raw is! Map) continue;
-      final route = Map<String, dynamic>.from(raw);
-      final one = estMeteredCredits(route, inTok, estTypicalOut, 1, usd);
-      if (one == null) continue;
-      final cap = (route['maxTokens'] as num?)?.toInt() ?? estLongOut;
-      final long = estMeteredCredits(
-              route, inTok, cap < estLongOut ? cap : estLongOut, 1, usd) ??
-          one;
-      if (low == null || one < low) low = one;
-      if (high == null || long > high) high = long;
+  static int _estInt(Object? v) => v is num ? v.toInt() : 0;
+
+  static Map<String, dynamic> _estMap(Object? v) =>
+      v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
+
+  static Map<String, dynamic> estBudgets(Map<String, dynamic>? pricing) =>
+      _estMap(pricing?['estimate']);
+
+  static int estTokens(num chars, Map<String, dynamic> b) {
+    final per = _estInt(b['charsPerToken']) > 0 ? _estInt(b['charsPerToken']) : 4;
+    return chars <= 0 ? 0 : (chars / per).ceil();
+  }
+
+  static List<EstTurnText> estHistoryOf(List<ChatMessage> list) => [
+        for (final m in list)
+          if ((m.role == ChatRole.self || m.role == ChatRole.bot) &&
+              m.content.isNotEmpty)
+            (bot: m.role == ChatRole.bot, text: m.content),
+      ];
+
+  static ({int chars, List<EstTurnText> kept, int dropped}) estWindow(
+      List<EstTurnText> history, Map<String, dynamic> b) {
+    final h = _estMap(b['history']);
+    if (h.isEmpty) {
+      return (
+        chars: history.fold(0, (n, x) => n + x.text.length),
+        kept: history,
+        dropped: 0
+      );
     }
-    if (low == null || high == null) return null;
-    final lo = low < floor ? floor : low;
-    return (lo, high < lo ? lo : high);
+    final turns = _estInt(h['turns']);
+    final recent = history.length > turns
+        ? history.sublist(history.length - turns)
+        : history;
+    var budget = _estInt(h['chars']);
+    var chars = 0;
+    final kept = <EstTurnText>[];
+    for (var i = recent.length - 1; i >= 0; i--) {
+      if (budget < _estInt(h['turnMinChars'])) break;
+      final len = math.min(recent[i].text.length,
+          math.min(_estInt(h['turnChars']), budget));
+      budget -= len;
+      chars += len;
+      kept.insert(0, recent[i]);
+    }
+    return (chars: chars, kept: kept, dropped: history.length - kept.length);
+  }
+
+  static RegExp? _estPattern(Map<String, dynamic> b, String name) {
+    final src = _estMap(b['patterns'])[name];
+    return src is String && src.isNotEmpty
+        ? RegExp(src, caseSensitive: false)
+        : null;
+  }
+
+  static List<String> estUrls(String text, Map<String, dynamic> b, String bare,
+      String attached, int max) {
+    final out = <String>[];
+    void add(String? u) {
+      if (u != null && !out.contains(u) && out.length < max) out.add(u);
+    }
+
+    for (final m in _estPattern(b, attached)?.allMatches(text) ??
+        const <RegExpMatch>[]) {
+      add(m.group(1));
+    }
+    for (final m
+        in _estPattern(b, bare)?.allMatches(text) ?? const <RegExpMatch>[]) {
+      add(m.group(0));
+    }
+    return out;
+  }
+
+  static int estLinks(String text, Map<String, dynamic> b) {
+    final all = _estPattern(b, 'link');
+    final skip = _estPattern(b, 'linkSkip');
+    final max = _estInt(_estMap(b['links'])['pages']);
+    final out = <String>[];
+    for (final m in all?.allMatches(text) ?? const <RegExpMatch>[]) {
+      if (out.length >= max) break;
+      final url = m.group(0)!.replaceFirst(RegExp(r'[.,;:!?]+$'), '');
+      if (skip != null && skip.hasMatch(url)) continue;
+      if (!out.contains(url)) out.add(url);
+    }
+    return out.length;
+  }
+
+  static ({int images, int videos}) estMedia(String wire, List<EstTurnText> kept,
+      Map<String, dynamic>? model, Map<String, dynamic> b) {
+    final canSee = model == null || model['vision'] == true;
+    if (!canSee) return (images: 0, videos: 0);
+    final maxImages = _estInt(b['maxImages']);
+    final video = _estMap(b['video']);
+    final maxVideos = _estInt(video['max']);
+    final shown = estUrls(wire, b, 'image', 'attachedImage', maxImages).length;
+    final clips = estUrls(wire, b, 'video', 'attachedVideo', maxVideos).length;
+    final watches = model != null && model['video'] == true;
+    final frames = !watches && clips > 0
+        ? math.min(_estInt(video['frames']), maxImages - shown)
+        : 0;
+    var room = maxImages - shown - frames;
+    var videoRoom = watches ? maxVideos - clips : 0;
+    var images = shown + frames;
+    var videos = watches ? clips : 0;
+    final asked = kept.where((h) => !h.bot).toList();
+    final turns = _estInt(b['visionHistoryTurns']);
+    final recent = (asked.length > turns
+            ? asked.sublist(asked.length - turns)
+            : asked)
+        .reversed
+        .toList();
+    for (var i = 0; i < recent.length && (room > 0 || videoRoom > 0); i++) {
+      final pics = math.min(room,
+          estUrls(recent[i].text, b, 'image', 'attachedImage', maxImages).length);
+      final films = math.min(
+          videoRoom,
+          watches
+              ? estUrls(recent[i].text, b, 'video', 'attachedVideo', maxVideos)
+                  .length
+              : 0);
+      room -= pics;
+      videoRoom -= films;
+      images += pics;
+      videos += films;
+    }
+    return (images: images, videos: videos);
+  }
+
+  static ({int tokens, int dropped}) estInput(String wire,
+      List<EstTurnText> history, Map<String, dynamic>? model, bool web,
+      Map<String, dynamic> b) {
+    final tier = model == null ? 'standard' : 'pro';
+    final win = estWindow(history, b);
+    final media = estMedia(wire, win.kept, model, b);
+    final video = _estMap(b['video']);
+    final recall = _estMap(b['recall']);
+    final index = model != null && win.dropped > 0
+        ? math.min(win.dropped, _estInt(recall['indexMax'])) *
+            _estInt(recall['lineChars'])
+        : 0;
+    final tokens = _estInt(_estMap(b['systemTokens'])[tier]) +
+        _estInt(b['scaffoldTokens']) +
+        estTokens(wire.length + win.chars + index, b) +
+        media.images * _estInt(b['imageTokens']) +
+        media.videos *
+            _estInt(video['seconds']) *
+            _estInt(video['tokensPerSecond']) +
+        estLinks(wire, b) * estTokens(_estInt(_estMap(b['links'])['chars']), b) +
+        (web ? _estInt(_estMap(b['webTokens'])[tier]) : 0);
+    return (tokens: tokens, dropped: win.dropped);
+  }
+
+  static double? estPrice(Map<String, dynamic> rates, int inTok, int outTok,
+      int legs, bool cached) {
+    final pin = (rates['inUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    final pout = (rates['outUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    if (pin <= 0 || pout <= 0) return null;
+    final read = (rates['cacheReadUsdPerMTok'] as num?)?.toDouble() ?? 0;
+    final pcr = read > 0 ? read : pin * 0.1;
+    final n = legs < 1 ? 1 : legs;
+    return (inTok * pin +
+            inTok * (n - 1) * (cached ? pcr : pin) +
+            outTok * n * pout +
+            outTok * n * (n - 1) / 2 * pin) /
+        1e6;
+  }
+
+  static ({double low, double high, double max})? estTurn(
+      {required String wire,
+      required List<EstTurnText> history,
+      Map<String, dynamic>? model,
+      bool web = false,
+      int calls = 1,
+      bool agent = false,
+      Map<String, dynamic>? pricing}) {
+    final b = estBudgets(pricing);
+    final cached = model != null && model['cachesLegs'] == true;
+    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
+    final input = estInput(wire, history, model, web, b);
+    final agentBudget = _estMap(b['agent']);
+    int typicalOf(bool reasons, int ceiling) => math.min(
+        ceiling,
+        reasons
+            ? _estInt(b['reasoningOutTokens'])
+            : _estInt(b['typicalOutTokens']));
+    int longOf(bool reasons, int ceiling) {
+      final long = reasons
+          ? _estInt(b['reasoningLongOutTokens'])
+          : _estInt(b['longOutTokens']);
+      return math.min(
+          ceiling, long > 0 ? long : typicalOf(reasons, ceiling));
+    }
+
+    if (model == null) {
+      final usd = (pricing?['standardUsdPerCredit'] as num?)?.toDouble() ?? 0;
+      final routes = [
+        for (final r in (pricing?['standardRoutes'] as List?) ?? const [])
+          if (r is Map && estPrice(_estMap(r), 1, 1, 1, false) != null)
+            _estMap(r),
+      ];
+      if (routes.isEmpty || usd <= 0) return null;
+      final general = routes.where((r) => r['task'] == 'general').toList();
+      final usual = general.isNotEmpty ? general : routes;
+      double priced(Map<String, dynamic> r, int out) =>
+          estPrice(r, input.tokens, out, 1, false)! / usd;
+      final low = math.max(
+          floor,
+          usual
+              .map((r) => priced(
+                  r, typicalOf(r['reasoning'] == true, _estInt(r['maxTokens']))))
+              .reduce(math.min));
+      final high = math.max(
+          low,
+          usual
+              .map((r) => priced(
+                  r, longOf(r['reasoning'] == true, _estInt(r['maxTokens']))))
+              .reduce(math.max));
+      final max = math.max(
+          high,
+          routes
+              .map((r) => priced(r, _estInt(r['maxTokens'])))
+              .reduce(math.max));
+      return (low: low, high: high, max: max);
+    }
+    final usd = (pricing?['usdPerCredit'] as num?)?.toDouble() ?? 0;
+    if (usd <= 0 || estPrice(model, 1, 1, 1, false) == null) return null;
+    final ceiling = _estInt(model['outTokens']) > 0
+        ? _estInt(model['outTokens'])
+        : _estInt(b['typicalOutTokens']);
+    final reasons = model['reasoning'] == true;
+    int legsOf(String key) =>
+        _estInt(agentBudget[key]) > 0 ? _estInt(agentBudget[key]) : 1;
+    final lowLegs = agent ? legsOf('typicalCalls') : calls;
+    final longLegs = agent
+        ? (_estInt(agentBudget['longCalls']) > 0
+            ? _estInt(agentBudget['longCalls'])
+            : lowLegs)
+        : calls;
+    final maxLegs = agent
+        ? legsOf('calls')
+        : calls +
+            (input.dropped > 0 ? _estInt(_estMap(b['recall'])['calls']) : 0);
+    final workIn = input.tokens +
+        (agent
+            ? _estInt(agentBudget['toolTokens']) +
+                _estInt(agentBudget['treeTokens'])
+            : 0);
+    final low = math.max(
+        floor,
+        estPrice(model, workIn, typicalOf(reasons, ceiling), lowLegs, cached)! /
+            usd);
+    final high = math.max(
+        low,
+        estPrice(model, workIn, longOf(reasons, ceiling), longLegs, cached)! /
+            usd);
+    final max = math.max(
+        high,
+        estPrice(
+                model,
+                input.tokens + (agent ? _estInt(agentBudget['inTokens']) : 0),
+                ceiling,
+                maxLegs,
+                cached)! /
+            usd);
+    return (low: low, high: high, max: max);
+  }
+
+  static String estimateLine(CostEstimate e) {
+    final pro = e.tier == 'pro';
+    if (e.unpriced) {
+      return pro
+          ? t('— Pro credits (price unavailable right now)')
+          : t('— standard credits (price unavailable right now)');
+    }
+    if (!e.metered) {
+      if (pro) {
+        final low = creditAmount(e.low, false);
+        final high = creditAmount(e.high, false);
+        return low == high
+            ? t('About {n} Pro credits', {'n': low})
+            : t('About {low}–{high} Pro credits', {'low': low, 'high': high});
+      }
+      return e.low == 1
+          ? t('1 standard credit')
+          : t('{n} standard credits', {'n': figure(e.low.round())});
+    }
+    final low = creditAmount(e.low, true);
+    final high = creditAmount(e.high, true);
+    final max = creditAmount(e.max >= 1 ? e.max.ceilToDouble() : e.max, true);
+    final same = low == high;
+    if (max == high) {
+      if (pro) {
+        return same
+            ? t('About {n} Pro credits', {'n': low})
+            : t('About {low}–{high} Pro credits', {'low': low, 'high': high});
+      }
+      return same
+          ? t('{n} standard credits', {'n': low})
+          : t('About {low}–{high} standard credits', {'low': low, 'high': high});
+    }
+    if (pro) {
+      return same
+          ? t('About {n} Pro credits (up to {max})', {'n': low, 'max': max})
+          : t('About {low}–{high} Pro credits (up to {max})',
+              {'low': low, 'high': high, 'max': max});
+    }
+    return same
+        ? t('About {n} standard credits (up to {max})', {'n': low, 'max': max})
+        : t('About {low}–{high} standard credits (up to {max})',
+            {'low': low, 'high': high, 'max': max});
   }
 
   static bool fromBot(NostrEvent seal, Map<String, dynamic> rumor,
@@ -248,61 +542,75 @@ class ChatEngine {
       rumor['pubkey'] == seal.pubkey &&
       schnorr.verifyEvent(seal);
 
+  static CostEstimate generatorEstimate(Map<String, dynamic> media) {
+    final credits = (media['credits'] as num?)?.toDouble() ?? 0;
+    final max = (media['max'] as num?)?.toDouble() ?? credits;
+    final high = max < credits ? credits : max;
+    return (
+      tier: 'pro',
+      low: credits,
+      high: high,
+      max: high,
+      metered: false,
+      unpriced: false
+    );
+  }
+
   static CostEstimate estimate(String text, Map<String, dynamic>? model,
       {Conversation? conv,
       bool hasRepos = false,
       String wireText = '',
-      int historyChars = 0,
+      List<EstTurnText> history = const [],
+      bool web = false,
       Map<String, dynamic>? pricing}) {
     // A question too long for one wrap travels as several, and each extra one
     // is a credit. Splitting is a transport detail, but the input it carries is
     // real and the published price has never charged for input.
-    final extra =
-        WireLimits.partSurcharge(wireText.isEmpty ? text : wireText);
+    final wire = wireText.isEmpty ? text : wireText;
+    final extra = WireLimits.partSurcharge(wire);
+    final unpriced = pricing?['priceUnavailable'] == true;
     if (model == null) {
-      final wire = wireText.isEmpty ? text : wireText;
-      final inTok = estScaffoldTokens +
-          estTokens(wire.length) +
-          estTokens(historyChars);
-      final std = estStandardCredits(inTok, pricing);
+      final std = unpriced
+          ? null
+          : estTurn(wire: wire, history: history, web: web, pricing: pricing);
       if (std != null) {
         return (
           tier: 'standard',
-          low: std.$1 + extra,
-          high: std.$2 + extra,
-          metered: true
+          low: std.low + extra,
+          high: std.high + extra,
+          max: std.max + extra,
+          metered: true,
+          unpriced: false
         );
       }
       return (
         tier: 'standard',
         low: 1.0 + extra,
         high: 1.0 + extra,
-        metered: false
+        max: 1.0 + extra,
+        metered: false,
+        unpriced: unpriced
       );
     }
     final calls = hasRepos ? 1 : effortCalls(conv);
-    final usdPerCredit =
-        (pricing?['usdPerCredit'] as num?)?.toDouble() ?? 0;
-    final wire = wireText.isEmpty ? text : wireText;
-    final inTok =
-        estScaffoldTokens + estTokens(wire.length) + estTokens(historyChars);
-    final floor = (pricing?['minChargeCredits'] as num?)?.toDouble() ?? 0;
-    final lowMetered =
-        estMeteredCredits(model, inTok, estTypicalOut, calls, usdPerCredit);
-    if (lowMetered != null) {
-      final maxCalls = hasRepos
-          ? ((model['repoMaxCalls'] as num?)?.toInt() ?? 12)
-          : calls;
-      final highMetered =
-          estMeteredCredits(model, inTok, estLongOut, maxCalls, usdPerCredit) ??
-              lowMetered;
-      final low = (lowMetered < floor ? floor : lowMetered) + extra;
-      final scaled = (highMetered < floor ? floor : highMetered) + extra;
+    final pro = unpriced
+        ? null
+        : estTurn(
+            wire: wire,
+            history: history,
+            model: model,
+            web: web,
+            calls: calls,
+            agent: hasRepos,
+            pricing: pricing);
+    if (pro != null) {
       return (
         tier: 'pro',
-        low: low,
-        high: scaled < low ? low : scaled,
-        metered: true
+        low: pro.low + extra,
+        high: pro.high + extra,
+        max: pro.max + extra,
+        metered: true,
+        unpriced: false
       );
     }
     final bump = text.length > 4000 ? 2 : text.length > 1200 ? 1 : 0;
@@ -315,11 +623,14 @@ class ChatEngine {
         hasRepos ? ((model['repoMax'] as num?)?.toInt() ?? chatMax) : chatMax;
     final low = (base * calls + extra).toDouble();
     final scaled = ((max + bump) * calls + extra).toDouble();
+    final high = scaled < low ? low : scaled;
     return (
       tier: 'pro',
       low: low,
-      high: scaled < low ? low : scaled,
-      metered: false
+      high: high,
+      max: high,
+      metered: false,
+      unpriced: unpriced
     );
   }
 
@@ -920,7 +1231,8 @@ class ChatEngine {
           capExceeded: data['capExceeded'] == true,
           pro: data['pro'] == true,
           required: (data['required'] as num?)?.toDouble() ?? 0,
-          team: data['team'] == true);
+          team: data['team'] == true,
+          retryable: data['retryable'] == true);
     }
     final eventJson = data['event'];
     if (eventJson is! Map<String, dynamic>) {

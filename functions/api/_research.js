@@ -368,11 +368,24 @@ export async function runResearch(deps, input) {
   };
   const reportStep = (extraChars) => notesOnly ? null : stepCost(reportMessages(state), reportOut(input && input.model), extraChars);
 
+  const spentError = (err, failedCall) => {
+    const e = err && typeof err === "object" ? err : new Error(String(err));
+    e.usage = { fresh: usage.fresh, read: usage.read, wrote: usage.wrote, out: usage.out };
+    e.modelCalls = Math.max(0, legCalls - (failedCall ? 1 : 0));
+    return e;
+  };
   const call = async (messages, maxTokens) => {
-    if (state.calls >= maxCalls) throw new Error("Research call budget spent.");
+    if (state.calls >= maxCalls) throw spentError(new Error("Research call budget spent."));
     state.calls++;
     legCalls++;
-    const r = await deps.chat(messages, maxTokens);
+    let r;
+    try {
+      r = await deps.chat(messages, maxTokens);
+    } catch (e) {
+      addUsage(usage, e && e.usage);
+      if (e && e.usage) outputTokens += Number(e.usage.out) || 0;
+      throw spentError(e, true);
+    }
     addUsage(usage, r && r.usage);
     outputTokens += (r && r.outputTokens) || 0;
     return String((r && r.text) || "");
@@ -395,7 +408,8 @@ export async function runResearch(deps, input) {
     const lines = cited.map((x) => "- " + x.text + (x.src && x.src.length ? " " + x.src.map((n) => "[" + n + "]").join("") : ""));
     const draft = renumberCitations(lines.join("\n"), state.sources, L.maxSources);
     const head = "**Research paused** after " + state.round + " of up to " + L.maxRounds + " rounds (" + state.pages + " pages read). " +
-      (why === "report" ? "The report is written next." : "It carries on from here.");
+      (why === "failed" ? "The model call for the report failed, so the report is written when this carries on. You were charged only for the steps that finished."
+        : why === "report" ? "The report is written next." : "It carries on from here.");
     return {
       reply: head + (draft.text ? "\n\nFound so far:\n" + draft.text : ""),
       sources: draft.sources.map(publicSource),
@@ -410,7 +424,7 @@ export async function runResearch(deps, input) {
   if (resumed) progress({ kind: "research", stage: "resume", round: state.round, of: L.maxRounds });
 
   if (state.phase === "plan") {
-    if (!fits([stepCost(planMessages(state), L.planTokens), reportStep(SUBS_CHARS)])) throw new Error(RESEARCH_BUDGET_ERROR);
+    if (!fits([stepCost(planMessages(state), L.planTokens), reportStep(SUBS_CHARS)])) throw spentError(new Error(RESEARCH_BUDGET_ERROR));
     progress({ kind: "research", stage: "plan" });
     const planned = parseModelJson(await call(planMessages(state), L.planTokens)) || {};
     state.subs = (Array.isArray(planned.subquestions) ? planned.subquestions : [])
@@ -521,10 +535,16 @@ export async function runResearch(deps, input) {
 
   if (notesOnly) return notesResult();
   if (legCalls > 0 && elapsed() > L.legBudgetMs - L.reportReserveMs) return park("report");
-  if (!fits([reportStep(0)])) throw new Error(RESEARCH_BUDGET_ERROR);
+  if (!fits([reportStep(0)])) throw spentError(new Error(RESEARCH_BUDGET_ERROR));
   progress({ kind: "research", stage: "write", sources: state.sources.length });
-  const written = await call(reportMessages(state), reportOut(input && input.model));
-  if (!written.trim()) throw new Error("The research report came back empty.");
+  let written;
+  try {
+    written = await call(reportMessages(state), reportOut(input && input.model));
+  } catch (e) {
+    if (legCalls > 1) return park("failed");
+    throw e;
+  }
+  if (!written.trim()) throw spentError(new Error("The research report came back empty."));
   const cleaned = stripReferenceList(written);
   const cited = renumberCitations(cleaned, state.sources, L.maxSources);
   state.phase = "done";

@@ -41,6 +41,20 @@ export function capClampCharge(cost, costMilli, maxCost) {
   return { cost: cost, costMilli: costMilli, clamped: false };
 }
 
+export const CAP_OUT_CEILING_DEFAULT = 8192;
+
+export function capNextUsage(messages, tools, maxOut, lastUsage) {
+  let chars = 0;
+  try { chars += JSON.stringify(messages || []).length; } catch (e) { }
+  try { if (tools && tools.length) chars += JSON.stringify(tools).length; } catch (e) { }
+  const input = Math.ceil(chars / 4);
+  const n = function (v) { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+  const last = lastUsage || {};
+  const warm = n(last.read) + n(last.wrote) > 0 ? Math.min(input, n(last.fresh) + n(last.read) + n(last.wrote)) : 0;
+  const cap = Math.floor(n(maxOut));
+  return { fresh: input - warm, read: warm, wrote: 0, out: cap || CAP_OUT_CEILING_DEFAULT };
+}
+
 export function capGuard(limitMilli, priceOf, firstCallMilli, reason) {
   let before = 0;
   let extra = 0;
@@ -48,6 +62,9 @@ export function capGuard(limitMilli, priceOf, firstCallMilli, reason) {
   const spentOf = function (usage) {
     const v = Number(priceOf(usage));
     return Number.isFinite(v) && v > 0 ? v : 0;
+  };
+  const nextOf = function (next) {
+    return next ? Math.max(last, spentOf(next)) : last;
   };
   const seen = function (usage) {
     const spent = spentOf(usage);
@@ -60,13 +77,14 @@ export function capGuard(limitMilli, priceOf, firstCallMilli, reason) {
   return {
     limit: limitMilli,
     reason: reason === "balance" ? "balance" : "cap",
-    room: function (usage, calls) {
+    room: function (usage, calls, next) {
       const spent = seen(usage);
       const n = Math.max(1, Math.floor(Number(calls) || 1));
-      return spent + extra + n * last <= limitMilli;
+      return spent + extra + n * nextOf(next) <= limitMilli;
     },
-    left: function (usage) {
-      return Math.max(0, limitMilli - seen(usage) - extra - last);
+    left: function (usage, next) {
+      const spent = seen(usage);
+      return Math.max(0, limitMilli - spent - extra - nextOf(next));
     },
     spend: function (milli) {
       const v = Number(milli);

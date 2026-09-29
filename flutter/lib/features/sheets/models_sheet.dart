@@ -65,6 +65,23 @@ class ModelPicker {
       ChatEngine.nominalTurnRange(m, catalog)?.$1 ??
       ((m['credits'] as num?)?.toDouble() ?? 0);
 
+  static String? resolutionFor(Map<String, dynamic> m, String? stored) =>
+      AppController.resolutionEntry(m, stored) != null
+          ? stored
+          : AppController.defaultResolution(m);
+
+  static Map<String, dynamic> atResolution(
+      Map<String, dynamic> m, String? res) {
+    final r = AppController.resolutionEntry(m, res);
+    if (r == null || res == AppController.defaultResolution(m)) return m;
+    return {
+      ...m,
+      'credits': r['credits'],
+      'max': r['credits'],
+      if (r['usd'] != null) 'usd': r['usd'],
+    };
+  }
+
   static double _ceiling(Map<String, dynamic> m) =>
       ((m['max'] ?? m['credits']) as num?)?.toDouble() ?? 0;
 
@@ -141,6 +158,7 @@ class ModelPicker {
 
   static String turnLabel(
       Map<String, dynamic> m, Map<String, dynamic>? catalog) {
+    if (m['credits'] == null && m['metered'] == true) return '—';
     final span = ChatEngine.nominalTurnRange(m, catalog);
     if (span == null) return creditsLabel(credits(m), ceiling(m));
     final (low, high) = span;
@@ -423,6 +441,8 @@ class ModelList extends StatefulWidget {
     this.unavailable = const {},
     this.scrollController,
     this.footer = const [],
+    this.resolutionOf,
+    this.onPickResolution,
   });
 
   static const double roomyHeight = 460;
@@ -449,6 +469,9 @@ class ModelList extends StatefulWidget {
   final Map<String, String> unavailable;
   final ScrollController? scrollController;
   final List<Widget> footer;
+  final String? Function(Map<String, dynamic> model)? resolutionOf;
+  final void Function(Map<String, dynamic> model, Map<String, dynamic> group,
+      String resolution)? onPickResolution;
 
   @override
   State<ModelList> createState() => _ModelListState();
@@ -533,6 +556,13 @@ class _ModelListState extends State<ModelList> {
     final desc = m['description'] as String?;
     final rates = ModelPicker.rates(m, widget.catalog);
     final blocked = widget.unavailable[key];
+    final choices = widget.onPickResolution == null
+        ? const <Map<String, dynamic>>[]
+        : AppController.resolutionsOf(m);
+    final res = choices.length > 1
+        ? ModelPicker.resolutionFor(m, widget.resolutionOf?.call(m))
+        : null;
+    final priced = res == null ? m : ModelPicker.atResolution(m, res);
     return ListTile(
       key: ValueKey('model-$key'),
       dense: true,
@@ -554,9 +584,38 @@ class _ModelListState extends State<ModelList> {
                     fontSize: 11, fontWeight: FontWeight.w600)),
           if (desc != null && desc.isNotEmpty)
             Text(desc, maxLines: 2, overflow: TextOverflow.ellipsis),
-          Text(ModelPicker.turnLabel(m, widget.catalog),
+          Text(ModelPicker.turnLabel(priced, widget.catalog),
               style: const TextStyle(
                   fontSize: 12, color: NymbotColors.lightning)),
+          if (res != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final r in choices)
+                    ChoiceChip(
+                      key: ValueKey('res-$key-${r['res']}'),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      label: Text(
+                          t('{res} · {credits}', {
+                            'res': r['res'],
+                            'credits': ModelPicker.creditsLabel(
+                                ModelPicker.credits(r), ModelPicker.credits(r)),
+                          }),
+                          style: const TextStyle(fontSize: 11)),
+                      selected: r['res'] == res,
+                      onSelected: blocked != null
+                          ? null
+                          : (_) => widget.onPickResolution!(
+                              m, group, r['res'] as String),
+                    ),
+                ],
+              ),
+            ),
           if (rates != null)
             Text(rates, style: const TextStyle(fontSize: 11)),
           if (m['edit'] == true)
@@ -760,7 +819,11 @@ class _ModelsSheetState extends State<_ModelsSheet> {
 
   Future<void> _load() async {
     final catalog = await AppScope.read(context).api.models();
-    if (mounted) AppScope.read(context).notePricing(catalog);
+    if (mounted) {
+      final app = AppScope.read(context);
+      app.notePricing(catalog);
+      if (catalog?['models'] is List) app.mentionCatalog ??= catalog;
+    }
     if (!mounted) return;
     setState(() {
       _catalog = catalog;
@@ -769,29 +832,33 @@ class _ModelsSheetState extends State<_ModelsSheet> {
   }
 
   Future<void> _pick(AppController app, Map<String, dynamic> m,
-      Map<String, dynamic> group) async {
+      Map<String, dynamic> group, {String? resolution}) async {
     final credits = ModelPicker.credits(m);
     final key = m['key'] as String;
     final command = m['command'] as String?;
     final slug = ModelPicker.slugOf(m, group);
     final standing = command != null ? app.activeMediaModel : app.activeModel;
-    final pinned = standing != null && standing['key'] == key;
+    final pinned = resolution == null &&
+        standing != null &&
+        standing['key'] == key;
     final messenger = ScaffoldMessenger.of(context);
     if (command != null) {
       final media = pinned
           ? null
-          : AppController.mediaFor(m, slug: slug, catalog: _catalog);
+          : AppController.mediaFor(m,
+              slug: slug, catalog: _catalog, resolution: resolution);
       await app.setMediaModel(media);
+      final name = media == null ? '' : AppController.mediaLabel(media);
       messenger.showSnackBar(SnackBar(
         content: Text(pinned
             ? t('Back to answering in words.')
             : switch (m['kind']) {
                 'video' => t('{name} pinned. Every message now makes a video.',
-                    {'name': m['label']}),
+                    {'name': name}),
                 'speech' => t('{name} pinned. Every message now comes back as a voice clip.',
-                    {'name': m['label']}),
+                    {'name': name}),
                 _ => t('{name} pinned. Every message now makes a picture.',
-                    {'name': m['label']}),
+                    {'name': name}),
               }),
       ));
       if (mounted) Navigator.pop(context);
@@ -834,6 +901,11 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                 selectedKeys: pinned,
                 scrollController: controller,
                 onPick: (m, group) => _pick(app, m, group),
+                resolutionOf: (m) => app.activeMediaModel?['key'] == m['key']
+                    ? app.activeMediaModel!['resolution'] as String?
+                    : null,
+                onPickResolution: (m, group, res) =>
+                    _pick(app, m, group, resolution: res),
                 footer: [
                   const SizedBox(height: 8),
                   Text(

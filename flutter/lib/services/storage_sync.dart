@@ -87,7 +87,8 @@ class StorageSync {
   }) async {
     try {
       final text = SignedBody.text({'action': action, 'pubkey': signer.pubkey, ...extra});
-      final auth = await _auth(signer, action, SignedBody.hash(text));
+      final auth = await _auth(signer, action, SignedBody.hash(text))
+          .timeout(const Duration(seconds: 20));
       final resp = await _client
           .post(
             Uri.parse(NymbotConfig.storageUrl),

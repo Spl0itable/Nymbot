@@ -35,6 +35,9 @@
 //   @Nymbot <question> - Mention-based alias for ?ask
 
 import { ledgerCall } from "./_ledger.js";
+import { btcPriceGet, btcPriceSane, BtcPriceUnavailable } from "./_btcprice.js";
+import { mediaUsd, mediaRate, mediaSeconds, mediaTier as mediaResTier, mediaTiers, transcribeUsd } from "./_mediaprice.js";
+import { audioSeconds } from "./_audiolen.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
 import { translateText } from "./_translate.js";
 import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams,
@@ -116,10 +119,10 @@ import {
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
 import { noteUsage, denied } from "./_usage.js";
 import { liveNotices } from "./_notices.js";
-import { capMaxCost, capMilli, capRefusal, capClampCharge, capGuard, capStoppedReply } from "./_caps.js";
+import { capMaxCost, capMilli, capRefusal, capClampCharge, capGuard, capStoppedReply, capNextUsage } from "./_caps.js";
 import { runResearch, researchEstimate, researchPublicLimits, researchCommand,
   researchWanted, researchStatedMax, researchFloor, RESEARCH_LIMITS, RESEARCH_REPORT_PROMPT } from "./_research.js";
-import { teamParse, teamModeOf, teamEstimate, runTeamResearch, runTeamRepo,
+import { teamParse, teamModeOf, teamEstimate, teamRoomMilli, runTeamResearch, runTeamRepo,
   TEAM_NEEDS_PRO, TEAM_WRONG_TASK } from "./_team.js";
 import { mcpParseServers, mcpParseServer, mcpProbe, mcpPrepare, mcpContextBlock, mcpRedact, runMcpToolLoop, mcpHostBlocked,
   mcpFormatResult, mcpArgsPreview, mcpArgsLength, mcpPauseReply, mcpInert, mcpSpec, mcpArgsTooLong,
@@ -444,6 +447,7 @@ var BOT_PM_MAX_TOKENS = {
 // The free tier.
 var BOT_FREE_DAILY = 10;
 var BOT_FREE_HISTORY_BUDGET = 5000;
+var BOT_FREE_MIN_PART = 200;
 // And what one address gets, however many keys it makes.
 var BOT_FREE_NET_DAILY = BOT_FREE_DAILY;
 
@@ -733,11 +737,50 @@ async function botProGenerators(env) {
 
 /// The picture and video models as picker rows. Priced flat rather than per
 /// token, so `credits` and `max` are the same number.
-function botGeneratorCatalog(gens) {
+function botMediaQuote(kind, model, opts, btcUsd) {
+  var priced = mediaUsd(kind, model, opts || {});
+  var usd = priced.usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN;
+  var out = {
+    providerUsd: priced.usd, usd: usd, seconds: priced.seconds || null,
+    verified: !!priced.rate.verified, milli: null, credits: null
+  };
+  if (btcPriceSane(btcUsd) != null) {
+    out.milli = Math.max(BOT_MIN_CHARGE_MILLI, botMilliForUsd(usd, btcUsd, BOT_PRO_SATS_PER_CREDIT));
+    out.credits = Math.ceil(out.milli / BOT_MILLI_PER_CREDIT);
+  }
+  return out;
+}
+
+function botVideoResolutions(model, btcUsd) {
+  return mediaTiers(model).map(function (t) {
+    var q = botMediaQuote("video", model, { res: t.res }, btcUsd);
+    return { res: t.res, credits: q.credits, milli: q.milli, usd: Math.round(q.usd * 1e4) / 1e4, seconds: q.seconds };
+  });
+}
+
+function botMediaListPrice(kind, model, btcUsd) {
+  var q = botMediaQuote(kind, model, kind === "speech" ? { chars: BOT_TTS_MAX_CHARS } : {}, btcUsd);
+  var dollars = "$" + (Math.ceil(q.usd * 100) / 100).toFixed(2);
+  var tiers = kind === "video" ? botVideoResolutions(model, btcUsd) : [];
+  var what = kind === "video" ? " for " + q.seconds + " seconds" + (tiers.length ? " at " + tiers[tiers.length - 1].res : "")
+    : (kind === "speech" ? " for " + BOT_TTS_MAX_CHARS + " characters" : "");
+  if (tiers.length > 1) {
+    what += "; also " + tiers.slice(0, -1).reverse().map(function (r) {
+      return r.res + " " + (r.credits != null ? r.credits : "$" + (Math.ceil(r.usd * 100) / 100).toFixed(2));
+    }).join(", ") + " with --res";
+  }
+  var head = q.credits != null
+    ? "about " + q.credits + " Pro credit" + (q.credits === 1 ? "" : "s") + ", " + dollars
+    : dollars;
+  return head + what + (q.verified ? "" : ", estimated");
+}
+
+function botGeneratorCatalog(gens, btcUsd) {
   var out = [];
   var add = function (kind, command, table) {
     Object.keys(table).forEach(function (k) {
       var m = table[k];
+      var quote = botMediaQuote(kind === "speech" ? "speech" : kind, m, kind === "speech" ? { chars: BOT_TTS_MAX_CHARS } : {}, btcUsd);
       var slug = String(m.model || "").replace(/^@cf\//, "").split("/")[0].toLowerCase();
       out.push({
         key: kind + ":" + k,
@@ -746,15 +789,22 @@ function botGeneratorCatalog(gens) {
         // and quietly draws with the default generator instead.
         command: command + " --model " + k,
         label: m.label,
-        credits: m.credits,
-        max: m.credits,
+        credits: quote.credits,
+        max: quote.credits,
+        milli: quote.milli,
+        usd: Math.round(quote.usd * 1e4) / 1e4,
+        providerUsd: Math.round(quote.providerUsd * 1e4) / 1e4,
+        seconds: kind === "video" ? quote.seconds : undefined,
+        metered: true,
         description: m.description || "",
         author: m.author || BOT_GEN_AUTHORS[slug] || slug,
         authorSlug: slug,
         vision: false, reasoning: false, tools: false, context: null,
-        hosting: "third-party", priced: m.priced !== false, kind: kind,
+        hosting: "third-party", priced: quote.verified, kind: kind,
         needsImage: !!m.needsImage,
-        edit: !!m.edit
+        edit: !!m.edit,
+        resolution: kind === "video" ? botVideoResolutions(m, btcUsd).slice(-1).map(function (r) { return r.res; })[0] : undefined,
+        resolutions: kind === "video" ? botVideoResolutions(m, btcUsd) : undefined
       });
     });
   };
@@ -764,7 +814,7 @@ function botGeneratorCatalog(gens) {
   out.sort(function (a, b) {
     if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
     if (a.author !== b.author) return a.author < b.author ? -1 : 1;
-    return a.credits - b.credits;
+    return a.usd - b.usd;
   });
   return out;
 }
@@ -787,14 +837,13 @@ function botProVideoModel(key, table) {
   return null;
 }
 
-function botProVideoList(table) {
+function botProVideoList(table, btcUsd) {
   var models = table || BOT_PRO_VIDEO_MODELS;
   var out = [];
   for (var k in models) {
     if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
     var m = models[k];
-    out.push(k + " \u2014 " + m.label + " (" + m.credits + " Pro credits"
-      + (m.priced === false ? ", estimated" : "") + ")"
+    out.push(k + " \u2014 " + m.label + " (" + botMediaListPrice("video", m, btcUsd) + ")"
       + (m.needsImage ? " \u2014 animates a picture you send" : ""));
   }
   return out;
@@ -806,29 +855,28 @@ function botVideoRequestBody(family, prompt, imageUrl) {
   var body = { prompt: p };
   if (family === "veo") {
     body.aspect_ratio = "16:9";
-    body.resolution = "720p";
+    body.duration = BOT_VIDEO_MAX_SECONDS + "s";
+    body.generate_audio = true;
     if (imageUrl) body.image = imageUrl;
     return body;
   }
   if (family === "seedance") {
     body.duration = BOT_VIDEO_MAX_SECONDS;
-    body.resolution = "720p";
     if (imageUrl) body.image = imageUrl;
     return body;
   }
   if (family === "hailuo" || family === "pixverse" || family === "vidu") {
     body.duration = 6;
+    if (family === "pixverse") body.generate_audio = true;
     if (imageUrl) body.image_url = imageUrl;
     return body;
   }
   if (family === "wan") {
-    body.resolution = "720P";
     body.ratio = "adaptive";
     body.duration = 5;
     return body;
   }
   if (family === "hh") {
-    body.resolution = "720P";
     body.duration = 5;
     if (imageUrl) body.img_url = imageUrl;
     return body;
@@ -836,12 +884,10 @@ function botVideoRequestBody(family, prompt, imageUrl) {
   if (family === "grok") {
     body.aspect_ratio = "16:9";
     body.duration = 5;
-    body.resolution = "720p";
     return body;
   }
   if (family === "runway") {
     body.prompt = p.slice(0, 1000);
-    body.ratio = "1280:720";
     body.duration = 5;
     if (imageUrl) body.image_input = imageUrl;
     return body;
@@ -1017,13 +1063,51 @@ function botExtractVideoJob(payload, depth) {
   return null;
 }
 
-var BOT_VIDEO_POLL_TRIES = 20;
+var BOT_VIDEO_POLL_TRIES = 45;
 var BOT_VIDEO_POLL_MS = 4000;
+var BOT_MEDIA_FETCH_TRIES = 3;
+var BOT_MEDIA_RETRY_MS = 1500;
 
-// Waits on a rendering job.
-async function botPollVideoJob(jobUrl) {
+function botBilledError(message) {
+  var e = new Error(message);
+  e.billed = true;
+  return e;
+}
+
+function botMediaPause(ms) {
+  return new Promise(function (r) { setTimeout(r, ms); });
+}
+
+async function botFetchMedia(url) {
+  for (var i = 0; i < BOT_MEDIA_FETCH_TRIES; i++) {
+    if (i) await botMediaPause(BOT_MEDIA_RETRY_MS);
+    try {
+      var res = await fetch(url);
+      if (res.ok) {
+        var got = new Uint8Array(await res.arrayBuffer());
+        if (got.length) return got;
+      }
+    } catch (e) { }
+  }
+  return null;
+}
+
+async function botStoreMedia(env, bytes, contentType, privkey, pubkey, sourceUrl, label) {
+  var lastErr = null;
+  for (var i = 0; i < 2; i++) {
+    if (i) await botMediaPause(BOT_MEDIA_RETRY_MS);
+    try {
+      return await botBlossomUpload(env, bytes, contentType, privkey, pubkey, sourceUrl);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw botBilledError((label || "The media") + " was made, but it could not be stored for delivery: " + String((lastErr && lastErr.message) || lastErr).slice(0, 200));
+}
+
+async function botPollVideoJob(jobUrl, label) {
   for (var i = 0; i < BOT_VIDEO_POLL_TRIES; i++) {
-    await new Promise(function (r) { setTimeout(r, BOT_VIDEO_POLL_MS); });
+    await botMediaPause(BOT_VIDEO_POLL_MS);
     var resp;
     try { resp = await fetch(jobUrl, { headers: { "Accept": "application/json" } }); } catch (e) { continue; }
     if (!resp.ok) continue;
@@ -1036,20 +1120,32 @@ async function botPollVideoJob(jobUrl) {
       throw new Error("The video model reported the render failed.");
     }
   }
-  throw new Error("The video is still rendering after " +
+  var e = botBilledError((label || "The video model") + " accepted the clip, but it was still rendering after " +
     Math.round(BOT_VIDEO_POLL_TRIES * BOT_VIDEO_POLL_MS / 1000) +
-    " seconds. Nothing was charged \u2014 try a shorter clip or a faster model (?video models).");
+    " seconds, so Nymbot stopped waiting. The provider bills a render once it accepts it, so it was charged. A faster model (?video models) finishes well inside that.");
+  e.stillRendering = true;
+  throw e;
 }
 
-async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubkey) {
+async function botVideoPlan(env, prompt, videoModel, imageUrl, res) {
   if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Video generation needs the AI binding and AI_GATEWAY_NAME configured on the worker.");
   }
   var body = botVideoRequestBody(videoModel.family, prompt, imageUrl ? await botMediaDirectUrl(imageUrl) : imageUrl);
-  body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, videoModel.model));
+  var tier = mediaResTier(videoModel, res || "");
+  var tierRate = mediaRate("video", videoModel);
+  if (tier && tierRate.field) body[tierRate.field] = tier.value;
+  var declared = await botDeclaredMediaParams(env, videoModel.model);
+  body = botMediaBodyFromParams(body, declared);
+  var said = body.duration != null || body.duration_seconds != null ? body
+    : { duration: declared && declared.duration && typeof declared.duration === "object" ? declared.duration.default : null };
+  return { body: body, seconds: mediaSeconds(said, mediaRate("video", videoModel, { body: body })) };
+}
+
+async function botGenerateVideo(env, plan, videoModel, privkey, pubkey) {
   var result;
   try {
-    result = await aiRun(env.AI, videoModel.model, body, { gateway: { id: env.AI_GATEWAY_NAME } });
+    result = await aiRun(env.AI, videoModel.model, plan.body, { gateway: { id: env.AI_GATEWAY_NAME } });
   } catch (e) {
     throw new Error(videoModel.label + " failed: " + String((e && e.message) || e).slice(0, 200));
   }
@@ -1061,7 +1157,8 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
     var found = botExtractGeneratedVideo(result, 0);
     if (!found) {
       var job = botExtractVideoJob(result, 0);
-      if (job && job.url) found = await botPollVideoJob(job.url);
+      if (job && job.url) found = await botPollVideoJob(job.url, videoModel.label);
+      else if (job) throw botBilledError(videoModel.label + " accepted the clip but gave no way to collect it. The provider bills a render once it accepts it, so it was charged.");
     }
     if (!found) {
       var snippet = "";
@@ -1071,15 +1168,13 @@ async function botGenerateVideo(env, prompt, videoModel, imageUrl, privkey, pubk
     if (found.b64) {
       bytes = botBase64Decode(found.b64);
     } else {
-      // Provider-hosted URLs expire, so pull the bytes and re-host on Blossom.
-      var res = await fetch(found.url);
-      if (!res.ok) throw new Error(videoModel.label + " video fetch failed: HTTP " + res.status);
-      bytes = new Uint8Array(await res.arrayBuffer());
+      bytes = await botFetchMedia(found.url);
       sourceUrl = found.url;
+      if (!bytes) return found.url + "\n\n_The clip could not be copied to Nymbot's media host, so this is the provider's own link. It expires in a few hours; save the clip._";
     }
   }
-  if (!bytes || !bytes.length) throw new Error("The video model returned no video.");
-  return await botBlossomUpload(env, bytes, botSniffVideoMime(bytes), privkey, pubkey, sourceUrl);
+  if (!bytes || !bytes.length) throw botBilledError(videoModel.label + " accepted the clip but returned no video.");
+  return await botStoreMedia(env, bytes, botSniffVideoMime(bytes), privkey, pubkey, sourceUrl, "The clip");
 }
 
 function botProImageModel(key, table) {
@@ -1111,28 +1206,24 @@ function botProSpeechModel(key, table) {
   return null;
 }
 
-function botProSpeechList(table) {
+function botProSpeechList(table, btcUsd) {
   var models = table || BOT_PRO_SPEECH_MODELS;
   var out = [];
   for (var k in models) {
     if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
     var m = models[k];
-    var c = m.credits || BOT_MEDIA_COSTS.speak.pro;
-    out.push(k + " \u2014 " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s")
-      + (m.priced === false ? ", estimated" : "") + ")");
+    out.push(k + " \u2014 " + m.label + " (" + botMediaListPrice("speech", m, btcUsd) + ")");
   }
   return out;
 }
 
-function botProImageList(table) {
+function botProImageList(table, btcUsd) {
   var models = table || BOT_PRO_IMAGE_MODELS;
   var out = [];
   for (var k in models) {
     if (!Object.prototype.hasOwnProperty.call(models, k)) continue;
     var m = models[k];
-    var c = m.credits || BOT_MEDIA_COSTS.image.pro;
-    out.push(k + " — " + m.label + " (" + c + " Pro credit" + (c === 1 ? "" : "s")
-      + (m.priced === false ? ", estimated" : "") + ")" + mediaEditListLine(m));
+    out.push(k + " — " + m.label + " (" + botMediaListPrice("image", m, btcUsd) + ")" + mediaEditListLine(m));
   }
   return out;
 }
@@ -1229,6 +1320,30 @@ var BOT_TTS_MAX_CHARS = 800;
 var BOT_TRANSCRIBE_MODEL = "@cf/openai/whisper-large-v3-turbo";
 var BOT_TRANSCRIBE_MAX_SECONDS = 120;
 var BOT_TRANSCRIBE_MAX_B64 = 4 * 1024 * 1024;
+var BOT_TRANSCRIBE_GRACE_SECONDS = 3;
+var BOT_TRANSCRIBE_CHARGED = false;
+
+async function botTranscribeCharge(env, pubkey, seconds, charged) {
+  var free = { tier: "free", milli: 0 };
+  if (!(charged === undefined ? BOT_TRANSCRIBE_CHARGED : charged)) return free;
+  var secs = Math.ceil(Math.max(0, Number(seconds) || 0));
+  if (!secs) return free;
+  var rec = await botGetCredits(env, pubkey);
+  var tier = (rec && rec.balance > 0) ? "standard" : null;
+  if (!tier) {
+    var prec = await botGetProCredits(env, pubkey);
+    if (prec && prec.balance > 0) tier = "pro";
+  }
+  if (!tier) return free;
+  var quote = await botBtcPriceOrNull();
+  if (!quote) return free;
+  var milli = botMilliForUsd(transcribeUsd(secs) * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN, quote.usd,
+    tier === "pro" ? BOT_PRO_SATS_PER_CREDIT : BOT_SATS_PER_CREDIT);
+  if (!(milli > 0)) return free;
+  var spent = await ledgerCall(env, { op: "consume-credits", pubkey: pubkey, cost: 0, milli: milli, tier: tier });
+  if (!spent || !spent.ok) return free;
+  return { tier: tier, milli: milli };
+}
 
 // Vision input. Only the routes whose model actually accepts images are listed;
 // sending image blocks to a text-only model is an upstream error, not a
@@ -1613,9 +1728,8 @@ async function botProImageGenerate(env, imageModel, prompt, refs) {
   }
   if (found.b64) return { bytes: botBase64Decode(found.b64), sourceUrl: "" };
   // Provider-hosted URLs expire, so pull the bytes and re-host on Blossom.
-  var res = await fetch(found.url);
-  if (!res.ok) throw new Error(imageModel.label + " image fetch failed: HTTP " + res.status);
-  return { bytes: new Uint8Array(await res.arrayBuffer()), sourceUrl: found.url };
+  var pulled = await botFetchMedia(found.url);
+  return { bytes: pulled, sourceUrl: found.url, linkOnly: !pulled };
 }
 
 async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel, refs) {
@@ -1625,8 +1739,11 @@ async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel, 
   var sourceUrl = "";
   if (tier === "pro" && imageModel) {
     var made = await botProImageGenerate(env, imageModel, prompt, refs);
-    bytes = made.bytes;
-    sourceUrl = made.sourceUrl;
+    if (made.linkOnly) {
+      return made.sourceUrl + "\n\n_The picture could not be copied to Nymbot's media host, so this is the provider's own link. It expires in a few hours; save the picture._";
+    }
+    if (!made.bytes || !made.bytes.length) throw botBilledError(imageModel.label + " accepted the request but returned no image.");
+    return await botStoreMedia(env, made.bytes, botSniffImageMime(made.bytes), privkey, pubkey, made.sourceUrl, "The picture");
   } else {
     var model = BOT_IMAGE_MODELS[tier] || BOT_IMAGE_MODELS.standard;
     var result = await aiRun(ai, model, { prompt: truncateText(String(prompt), 2000) });
@@ -1701,7 +1818,15 @@ function parseBotMediaCommand(message) {
       rest = (rest.slice(0, flag.index) + " " + rest.slice(flag.index + flag[0].length)).trim();
     }
   }
-  return { kind: kind, prompt: rest, modelKey: modelKey };
+  var res = "";
+  if (kind === "video") {
+    var resFlag = /(?:^|\s)(?:--res|--resolution)[\s=]+("[^"]+"|'[^']+'|\S+)/i.exec(rest);
+    if (resFlag) {
+      res = resFlag[1].replace(/^["']|["']$/g, "");
+      rest = (rest.slice(0, resFlag.index) + " " + rest.slice(resFlag.index + resFlag[0].length)).trim();
+    }
+  }
+  return { kind: kind, prompt: rest, modelKey: modelKey, res: res };
 }
 
 // Asking for a picture or for something read aloud, without knowing the
@@ -1768,31 +1893,24 @@ var BOT_PRICE_MARGIN = 1.5;
 // belongs in the charge rather than quietly in the margin.
 var BOT_UNIFIED_BILLING_FEE = 1.05;
 var BOT_MIN_CHARGE_MILLI = 50;
-var BOT_BTC_FALLBACK_USD = 90000;
-var BOT_BTC_TTL_MS = 600000;
 var BOT_MILLI_PER_CREDIT = 1000;
 
-var botBtcUsd = 0;
-var botBtcAt = 0;
+var botPriceEnv = null;
+
+function botBtcPriceBind(env) {
+  if (env) botPriceEnv = env;
+}
+
+async function botBtcQuote() {
+  return await btcPriceGet(botPriceEnv);
+}
 
 async function botBtcPrice() {
-  var now = Date.now();
-  if (botBtcUsd > 0 && now - botBtcAt < BOT_BTC_TTL_MS) return botBtcUsd;
-  try {
-    var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": BOT_BROWSER_AGENT }
-    });
-    if (resp.ok) {
-      var data = await resp.json();
-      var usd = Number(data && data.USD);
-      if (Number.isFinite(usd) && usd > 1000) {
-        botBtcUsd = usd;
-        botBtcAt = now;
-        return usd;
-      }
-    }
-  } catch (e) { }
-  return botBtcUsd > 0 ? botBtcUsd : BOT_BTC_FALLBACK_USD;
+  return (await botBtcQuote()).usd;
+}
+
+async function botBtcPriceOrNull() {
+  try { return await botBtcQuote(); } catch (e) { return null; }
 }
 
 function botMeteredModel(m) {
@@ -1802,10 +1920,11 @@ function botMeteredModel(m) {
   if (!Number.isFinite(pin) || !Number.isFinite(pout) || pin <= 0 || pout <= 0) return null;
   var read = Number(m.cacheReadUsdPerMTok);
   var write = Number(m.cacheWriteUsdPerMTok);
+  var readShare = /^anthropic\//.test(String(m.model || "")) ? 0.1 : 0.5;
   return {
     in: pin,
     out: pout,
-    cacheRead: Number.isFinite(read) && read > 0 ? read : pin * 0.1,
+    cacheRead: Number.isFinite(read) && read > 0 ? read : pin * readShare,
     cacheWrite: Number.isFinite(write) && write > 0 ? write : pin * 1.25
   };
 }
@@ -1824,7 +1943,8 @@ function botUsdForUsage(m, usage) {
 }
 
 function botMilliForUsd(usd, btcUsd, satsPerCredit) {
-  var price = Number(btcUsd) > 0 ? Number(btcUsd) : BOT_BTC_FALLBACK_USD;
+  var price = btcPriceSane(btcUsd);
+  if (price == null) throw new BtcPriceUnavailable();
   var per = Number(satsPerCredit) > 0 ? Number(satsPerCredit) : BOT_PRO_SATS_PER_CREDIT;
   var sats = (Number(usd) || 0) / price * 1e8;
   return Math.ceil(sats / per * BOT_MILLI_PER_CREDIT);
@@ -1870,6 +1990,14 @@ function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, prog
       return tool;
     }
   };
+}
+
+function botCachesLegs(m) {
+  var id = String((m && m.model) || "");
+  var transport = String((m && m.transport) || "");
+  var path = String((m && m.apiPath) || "");
+  if (/^anthropic\//.test(id) || transport === "anthropic" || transport === "anthropic-compat" || path === "messages") return true;
+  return /^(?:openai|google|deepseek|xai)\//.test(id);
 }
 
 function botChargeRate(m, which) {
@@ -1931,8 +2059,136 @@ function botProPerCall(m, repoTask) {
 
 var BOT_RESERVE_IN_TOKENS = 12000;
 var BOT_GIT_RESERVE_IN_TOKENS = 40000;
-var BOT_RESERVE_OUT_TOKENS = 2000;
 var BOT_RESERVE_SAFETY = 1.5;
+var BOT_RESERVE_WEB_RESULTS_TOKENS = 1500;
+var BOT_RESERVE_CHARS_PER_TOKEN = 4;
+var BOT_RESERVE_SCAFFOLD_TOKENS = 600;
+var BOT_RESERVE_PAGE_OVERHEAD_CHARS = 400;
+var BOT_IMAGE_RESERVE_TOKENS = 1600;
+var BOT_VIDEO_TOKENS_PER_SECOND = 290;
+var BOT_VIDEO_RESERVE_SECONDS = 120;
+var BOT_OUT_CEILING_DEFAULT = 8192;
+var BOT_EST_TYPICAL_OUT_TOKENS = 400;
+var BOT_EST_REASONING_OUT_TOKENS = 2000;
+var BOT_EST_LONG_OUT_TOKENS = 1600;
+var BOT_EST_REASONING_LONG_OUT_TOKENS = 4000;
+var BOT_EST_AGENT_CALLS = 2;
+var BOT_EST_AGENT_LONG_CALLS = 4;
+var BOT_RESERVE_TREE_ENTRY_CHARS = 32;
+
+function botWebReserveTokens(pro) {
+  var tier = pro ? PAGE_BUDGETS.pro : PAGE_BUDGETS.standard;
+  return Math.ceil(tier.total / BOT_RESERVE_CHARS_PER_TOKEN) + BOT_RESERVE_WEB_RESULTS_TOKENS;
+}
+
+function botReserveTokens(chars) {
+  return Math.ceil(Math.max(0, Number(chars) || 0) / BOT_RESERVE_CHARS_PER_TOKEN);
+}
+
+function botOutCeiling(m) {
+  var n = Math.floor(Number(m && m.maxTokens) || 0);
+  return n > 0 ? n : BOT_OUT_CEILING_DEFAULT;
+}
+
+function botSystemPromptTokens(proModel, webOn, freeTurn, inApp, followUps) {
+  return botReserveTokens(buildNymbotPmSystemPrompt(proModel || null, webOn === true, freeTurn === true,
+    inApp === true, false, followUps === true).length);
+}
+
+function botWatchesVideo(m) {
+  return !!(m && m.vision && BOT_VIDEO_MODEL_RE.test(String(m.model || "")));
+}
+
+function botTurnInputTokens(o) {
+  var pro = o.proModel || null;
+  var parsed = parseBotPMRequest(o.message || "");
+  var question = parsed.question;
+  var chars = question.length;
+  if (!parsed.freshOnly && parsed.split.quoted && parsed.split.reply) {
+    chars += Math.min(String(parsed.split.quoted).length, BOT_PM_TEXT_MAX);
+  }
+  var userTurns = [];
+  if (!parsed.freshOnly && Array.isArray(o.history) && o.history.length) {
+    var win = buildWindow(o.history, o.historyBudget);
+    win.kept.forEach(function (e) {
+      if (!e || !e.text) return;
+      chars += e.text.length;
+      if (!e.isBot) userTurns.push({ idx: 0, text: e.text });
+    });
+    if (pro && win.dropped.length) chars += recallIndexBlock(win.dropped, true, botReplyVoice(pro, false)).length;
+  }
+  var images = 0;
+  var videos = 0;
+  var canSee = pro ? !!pro.vision : o.free !== true;
+  if (canSee && question) {
+    var shown = botExtractImageUrls(question);
+    var watches = botWatchesVideo(pro);
+    var clips = botExtractVideoUrls(question);
+    var watched = watches ? clips : [];
+    var frames = !watches && clips.length ? Math.min(BOT_VIDEO_FRAME_TIMES.length, BOT_MAX_VISION_IMAGES - shown.length) : 0;
+    var taken = shown.slice();
+    for (var f = 0; f < frames; f++) taken.push("frame:" + f);
+    var past = botHistoryVision(userTurns, taken, watches ? watched : null);
+    images = taken.length + past.reduce(function (n, h) { return n + h.urls.length; }, 0);
+    videos = watched.length + past.reduce(function (n, h) { return n + (h.videos ? h.videos.length : 0); }, 0);
+  }
+  var pages = question ? botExtractPageUrls(question).length : 0;
+  return botSystemPromptTokens(pro, o.web, o.free, o.inApp, o.followUps)
+    + BOT_RESERVE_SCAFFOLD_TOKENS
+    + botReserveTokens(chars)
+    + images * BOT_IMAGE_RESERVE_TOKENS
+    + videos * BOT_VIDEO_RESERVE_SECONDS * BOT_VIDEO_TOKENS_PER_SECOND
+    + pages * botReserveTokens(LINK_READ_CHARS + BOT_RESERVE_PAGE_OVERHEAD_CHARS)
+    + (o.web === true ? botWebReserveTokens(!!pro) : 0);
+}
+
+function botEstimateBudgets() {
+  var pro = { label: "Nymbot Pro", baseCredits: 1 };
+  var sys = function (m) {
+    return Math.max(botSystemPromptTokens(m, false, false, true, true), botSystemPromptTokens(m, true, false, true, true));
+  };
+  return {
+    charsPerToken: BOT_RESERVE_CHARS_PER_TOKEN,
+    systemTokens: { standard: sys(null), pro: sys(pro) },
+    scaffoldTokens: BOT_RESERVE_SCAFFOLD_TOKENS,
+    history: {
+      chars: BOT_HISTORY_CHAR_BUDGET, turns: MAX_CONVERSATION_HISTORY,
+      turnChars: BOT_HISTORY_TURN_MAX, turnMinChars: BOT_HISTORY_TURN_MIN
+    },
+    imageTokens: BOT_IMAGE_RESERVE_TOKENS,
+    maxImages: BOT_MAX_VISION_IMAGES,
+    visionHistoryTurns: BOT_VISION_HISTORY_TURNS,
+    video: { tokensPerSecond: BOT_VIDEO_TOKENS_PER_SECOND, seconds: BOT_VIDEO_RESERVE_SECONDS, max: BOT_MAX_VIDEOS, frames: BOT_VIDEO_FRAME_TIMES.length },
+    links: { pages: LINK_READ_COUNT, chars: LINK_READ_CHARS + BOT_RESERVE_PAGE_OVERHEAD_CHARS },
+    webTokens: { standard: botWebReserveTokens(false), pro: botWebReserveTokens(true) },
+    typicalOutTokens: BOT_EST_TYPICAL_OUT_TOKENS,
+    reasoningOutTokens: BOT_EST_REASONING_OUT_TOKENS,
+    longOutTokens: BOT_EST_LONG_OUT_TOKENS,
+    reasoningLongOutTokens: BOT_EST_REASONING_LONG_OUT_TOKENS,
+    planTokens: BOT_EFFORT_PLAN_TOKENS,
+    agent: {
+      calls: BOT_GIT_MAX_TURNS, typicalCalls: BOT_EST_AGENT_CALLS, longCalls: Math.min(BOT_EST_AGENT_LONG_CALLS, BOT_GIT_MAX_TURNS),
+      inTokens: BOT_GIT_RESERVE_IN_TOKENS,
+      toolTokens: botReserveTokens(JSON.stringify(gitToolDefs(false, [{ repo: "owner/repo" }], { explore: false })).length
+        + gitToolGuide([{ repo: "owner/repo" }], false).length),
+      treeTokens: botReserveTokens(BOT_GIT_MAX_TREE_ENTRIES * BOT_RESERVE_TREE_ENTRY_CHARS)
+    },
+    recall: {
+      calls: BOT_RECALL_ROUNDS, chars: BOT_RECALL_RESULT_CHARS, indexMax: BOT_RECALL_INDEX_MAX,
+      lineChars: Math.ceil(recallIndexBlock(Array.from({ length: BOT_RECALL_INDEX_MAX }, function (x, i) {
+        return { n: i + 1, text: new Array(BOT_RECALL_LINE_CHARS * 2).join("x"), isBot: false };
+      }), true, null).length / BOT_RECALL_INDEX_MAX)
+    },
+    patterns: {
+      image: BOT_MEDIA_IMAGE_URL_RE.source,
+      attachedImage: BOT_ATTACHED_IMAGE_RE.source,
+      video: BOT_MEDIA_VIDEO_URL_RE.source,
+      attachedVideo: BOT_ATTACHED_VIDEO_RE.source,
+      link: BOT_PAGE_URL_RE.source,
+      linkSkip: LINK_SKIP_EXT.source
+    }
+  };
+}
 
 function botMediaModelLabel(env, kind, tier) {
   var id = kind === "speak"
@@ -1955,22 +2211,52 @@ async function botStandardRates(env, modelId) {
   return entry && botMeteredModel(entry) ? entry : null;
 }
 
-function botMeteredReserveMilli(m, legs, repoTask, btcUsd, satsPerCredit, safety) {
+function botMeteredReserveMilli(m, legs, repoTask, btcUsd, satsPerCredit, safety, inTokens) {
   var p = botMeteredModel(m);
   if (!p) return null;
   var calls = Math.max(1, Math.floor(Number(legs) || 1));
-  var inTok = repoTask ? BOT_GIT_RESERVE_IN_TOKENS : BOT_RESERVE_IN_TOKENS;
-  var outTok = Math.min(BOT_RESERVE_OUT_TOKENS, m.maxTokens || BOT_RESERVE_OUT_TOKENS);
-  var usd = calls * (inTok * p.in + outTok * p.out) / 1e6;
-  return botMilliForUsd(
-    usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN * (safety == null ? BOT_RESERVE_SAFETY : safety),
-    btcUsd, satsPerCredit);
+  var sized = Number(inTokens) > 0 ? Number(inTokens) : BOT_RESERVE_IN_TOKENS;
+  var inTok = Math.ceil(((repoTask ? BOT_GIT_RESERVE_IN_TOKENS : 0) + sized) * (safety == null ? BOT_RESERVE_SAFETY : safety));
+  var outTok = botOutCeiling(m);
+  var grown = outTok * calls * (calls - 1) / 2;
+  var usd = (calls * inTok * p.in + grown * p.in + calls * outTok * p.out) / 1e6;
+  return botMilliForUsd(usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN, btcUsd, satsPerCredit);
 }
 
-function botMeteredReserve(m, legs, repoTask, btcUsd, satsPerCredit) {
-  var milli = botMeteredReserveMilli(m, legs, repoTask, btcUsd, satsPerCredit);
+function botMeteredReserve(m, legs, repoTask, btcUsd, satsPerCredit, extraIn) {
+  var milli = botMeteredReserveMilli(m, legs, repoTask, btcUsd, satsPerCredit, null, extraIn);
   if (milli == null) return null;
   return Math.max(1, Math.ceil(milli / BOT_MILLI_PER_CREDIT));
+}
+
+function botProReserve(m, o) {
+  var metered = botMeteredReserve(m, o.legs, o.agentTask, o.btcUsd, BOT_PRO_SATS_PER_CREDIT, o.inTokens);
+  var base = botProMaxCost(m, o.agentTask);
+  var required = (metered != null ? metered : base * o.legs) + o.surcharge;
+  if (metered != null) base = Math.max(1, Math.ceil(metered / o.legs));
+  var firstMilli = botMeteredReserveMilli(m, 1, o.agentTask, o.btcUsd, BOT_PRO_SATS_PER_CREDIT, null, o.inTokens);
+  if (firstMilli == null) firstMilli = botProMaxCost(m, o.agentTask) * BOT_MILLI_PER_CREDIT;
+  var oneLeg = Math.max(1, Math.ceil(firstMilli / BOT_MILLI_PER_CREDIT)) + o.surcharge;
+  var balance = Math.max(0, Number(o.balance) || 0);
+  var full = required;
+  var start = !!(o.heldGuard && o.legs > 1 && balance < full);
+  if (start) required = balance >= oneLeg ? Math.floor(balance) : oneLeg;
+  return { base: base, required: required, firstMilli: firstMilli, full: full, start: start };
+}
+
+function botProShort(m, required, balance, agentTask, repo, start) {
+  var runs = agentTask ? (repo ? "Repo tasks" : "Connector tasks") : m.label + " replies that take several passes";
+  return {
+    noCredits: true,
+    pro: true,
+    balance: balance,
+    required: required,
+    error: start
+      ? runs + " with " + m.label + " need at least " + required + " Pro credits to start: enough for the first model call with everything it carries and the longest reply the model can write. They are charged on the tokens actually used, and stop safely, ready to carry on, before a later step could cost more than your balance. You have " + balance + ". Type ?buy and switch to Pro to top up."
+      : agentTask
+      ? (repo ? "Repo tasks" : "Connector tasks") + " with " + m.label + " reserve up to " + required + " Pro credits but are charged on the tokens actually used, which is usually far less \u2014 the reserve is high because every one of up to " + BOT_GIT_MAX_TURNS + " model calls carries " + (repo ? "the repository trees" : "the connector tools") + " and everything read so far. You have " + balance + ". Type ?buy and switch to Pro to top up."
+      : m.label + " replies reserve " + required + " Pro credits, enough for the longest reply this model can write with everything this message sends it, but are charged on the tokens actually used, in thousandths of a credit \u2014 you have " + balance + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
+  };
 }
 
 async function botSideChargeMilli(env, side) {
@@ -1985,6 +2271,43 @@ async function botSideChargeMilli(env, side) {
     if (milli != null) total += milli;
   }
   return total;
+}
+
+async function botStandardPartsMilli(env, parts, fallbackRates) {
+  var usd = 0;
+  for (var i = 0; i < (parts || []).length; i++) {
+    var part = parts[i];
+    if (!part || !botUsageBilled(part.usage)) continue;
+    var rates = (part.model ? await botStandardRates(env, part.model) : null) || fallbackRates;
+    if (rates) usd += botUsdForUsage(rates, part.usage);
+  }
+  if (!(usd > 0)) return null;
+  return Math.max(BOT_MIN_CHARGE_MILLI, botMilliForUsd(usd * BOT_UNIFIED_BILLING_FEE * BOT_PRICE_MARGIN,
+    await botBtcPrice(), BOT_SATS_PER_CREDIT));
+}
+
+function botFreeSpent(src) {
+  if (!src || typeof src !== "object") return false;
+  if (botUsageBilled(src.usage)) return true;
+  return Array.isArray(src.usageParts) && src.usageParts.some(function (p) {
+    return p && (botUsageBilled(p.usage) || botUsageBilled(p));
+  });
+}
+
+async function botFailedSpendMilli(env, src, proModel, stdRates) {
+  if (!src || typeof src !== "object") return 0;
+  if (!proModel) {
+    if (!Array.isArray(src.usageParts)) return 0;
+    return (await botStandardPartsMilli(env, src.usageParts, stdRates)) || 0;
+  }
+  if (src.teamMilli != null) return Math.max(0, Math.ceil(Number(src.teamMilli) || 0));
+  var milli = 0;
+  if (botUsageBilled(src.usage)) {
+    var metered = botMeteredCharge(proModel, src.usage, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT);
+    milli = metered != null ? metered
+      : botProCost(proModel, src.modelCalls || 1, Number(src.usage.out) || 0, false) * BOT_MILLI_PER_CREDIT;
+  }
+  return milli + await botSideChargeMilli(env, src.sideUsage);
 }
 
 function botProMaxCost(m, repoTask) {
@@ -2244,12 +2567,14 @@ function proNormalizeMessage(resp) {
   return null;
 }
 
-function anthropicizeRequest(messages, maxTokens, tools) {
+function anthropicizeRequest(messages, maxTokens, tools, cacheAt, modelId) {
   var system = "";
   var out = [];
+  var sharedAt = -1;
   for (var i = 0; i < (messages || []).length; i++) {
     var m = messages[i];
     if (!m) continue;
+    if (cacheAt && m === cacheAt && m.role !== "system") sharedAt = out.length;
     if (m.role === "system") {
       system += (system ? "\n\n" : "") + (typeof m.content === "string" ? m.content : "");
       continue;
@@ -2295,10 +2620,14 @@ function anthropicizeRequest(messages, maxTokens, tools) {
       var f = t.function || {};
       return { name: f.name, description: f.description || "", input_schema: f.parameters || { type: "object" } };
     });
-    if (proCacheBreakpoints) {
+    if (proCacheOn(modelId)) {
       proMarkStaticPrefix(req);
       proMarkLastBlock(out);
     }
+  }
+  if (sharedAt >= 0 && proCacheOn(modelId)) {
+    if (!req.tools) proMarkStaticPrefix(req);
+    proMarkBlockAt(out, sharedAt);
   }
   return req;
 }
@@ -2314,17 +2643,21 @@ function proMarkStaticPrefix(req) {
 }
 
 function proMarkLastBlock(out) {
-  var last = out[out.length - 1];
+  proMarkBlockAt(out, out.length - 1);
+}
+
+function proMarkBlockAt(out, at) {
+  var last = out[at];
   if (!last) return;
   if (typeof last.content === "string") {
     last.content = [{ type: "text", text: last.content }];
   }
   if (!Array.isArray(last.content) || !last.content.length) return;
-  var at = last.content.length - 1;
-  var block = last.content[at];
+  var end = last.content.length - 1;
+  var block = last.content[end];
   if (!block || typeof block !== "object") return;
   last.content = last.content.slice();
-  last.content[at] = Object.assign({}, block, { cache_control: { type: "ephemeral" } });
+  last.content[end] = Object.assign({}, block, { cache_control: { type: "ephemeral" } });
 }
 
 function proErrorDetail(data) {
@@ -2343,10 +2676,15 @@ async function proHttpChat(url, headers, body, draft, shape) {
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   if (streaming && res.ok && res.body && /event-stream/i.test(res.headers.get("Content-Type") || "")) {
     var onText = function (t) { draft.push(t); };
-    var streamed = shape === "anthropic"
-      ? await botCollectAnthropicStream(res.body, onText)
-      : await botCollectChatStream(res.body, onText);
-    if (botStreamEmpty(streamed)) throw botStreamEmptyError();
+    var streamed;
+    try {
+      streamed = shape === "anthropic"
+        ? await botCollectAnthropicStream(res.body, onText)
+        : await botCollectChatStream(res.body, onText);
+    } catch (e) {
+      throw proStreamSpent(e, body);
+    }
+    if (botStreamEmpty(streamed)) throw proUsageCarry(botStreamEmptyError(), proCallUsage({ usage: streamed.usage }));
     if (streamed.content) return proCheckedMessage(streamed);
     var message = { role: "assistant", content: streamed.text };
     if (streamed.reasoning) message.reasoning_content = streamed.reasoning;
@@ -2376,6 +2714,22 @@ async function proHttpChat(url, headers, body, draft, shape) {
     throw err;
   }
   return proCheckedMessage(data);
+}
+
+function proStreamSpent(err, body) {
+  var got = err && typeof err === "object" ? err.streamed : null;
+  if (!got) return err;
+  var u = got.usage ? proCallUsage({ usage: got.usage }) : null;
+  var streamedOut = Math.ceil((Number(got.chars) || 0) / 4);
+  if (!u && !streamedOut) return err;
+  u = botUsageAdd(botUsageZero(), u);
+  if (!(u.fresh || u.read || u.wrote)) {
+    var chars = 0;
+    try { chars = JSON.stringify(body || {}).length; } catch (e) { chars = 0; }
+    u.fresh = Math.ceil(chars / 4);
+  }
+  if (u.out < streamedOut) u.out = streamedOut;
+  return proUsageCarry(err, u);
 }
 
 function proAnthropicModelId(catalogId) {
@@ -2408,8 +2762,9 @@ function geminiPart(block, videos) {
     var v = block.video_url && block.video_url.url;
     if (!v) return null;
     var inline = videos && videos[v];
-    if (inline) return { inline_data: { mime_type: botVideoMime(v), data: inline } };
-    return { file_data: { mime_type: botVideoMime(v), file_uri: v } };
+    var clip = { end_offset: BOT_VIDEO_RESERVE_SECONDS + "s" };
+    if (inline) return { inline_data: { mime_type: botVideoMime(v), data: inline }, video_metadata: clip };
+    return { file_data: { mime_type: botVideoMime(v), file_uri: v }, video_metadata: clip };
   }
   return null;
 }
@@ -2457,10 +2812,15 @@ function geminiReply(data) {
     prompt_tokens: Number(um.promptTokenCount) || 0,
     completion_tokens: (Number(um.candidatesTokenCount) || 0) + (Number(um.thoughtsTokenCount) || 0)
   } : undefined;
+  if (usage && Number(um.cachedContentTokenCount) > 0) {
+    usage.prompt_tokens_details = { cached_tokens: Number(um.cachedContentTokenCount) };
+  }
   var blocked = (data.promptFeedback && data.promptFeedback.blockReason) ||
     (GEMINI_BLOCKED_FINISH[cand.finishReason] ? cand.finishReason : "");
   if (!text.trim() && blocked) {
-    return { stop_reason: "refusal", stop_details: { category: String(blocked).toLowerCase() }, content: [] };
+    var refused = { stop_reason: "refusal", stop_details: { category: String(blocked).toLowerCase() }, content: [] };
+    if (usage) refused.usage = usage;
+    return refused;
   }
   var out = { choices: [{ message: { role: "assistant", content: text } }] };
   if (usage) out.usage = usage;
@@ -2498,14 +2858,18 @@ async function proGeminiVideoChat(env, model, messages, maxTokens) {
 
 // One attempt on one transport. Throws on failure so the runner below can
 // decide whether the next transport is worth trying.
-async function proAttempt(env, step, messages, maxTokens, tools, draft) {
-  if (!draft) return proAttemptOnce(env, step, messages, maxTokens, tools, null);
+async function proAttempt(env, step, messages, maxTokens, tools, draft, cacheAt) {
+  if (!draft) return proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt);
   try {
-    return await proAttemptOnce(env, step, messages, maxTokens, tools, draft);
+    return await proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt);
   } catch (e) {
     if (!e || !e.streamEmpty) throw e;
     draft.reset();
-    return proAttemptOnce(env, step, messages, maxTokens, tools, null);
+    try {
+      return proUsageFold(await proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt), e.usage);
+    } catch (again) {
+      throw proUsageCarry(again, e.usage);
+    }
   }
 }
 
@@ -2524,7 +2888,7 @@ function botStreamEmptyError() {
   return err;
 }
 
-async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
+async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt) {
   if (botMessagesHaveVideo(messages)) {
     if (step.kind === "compat" && !(tools && tools.length) && BOT_VIDEO_MODEL_RE.test(String(step.model || "")) &&
         proGeminiNativeUrl(env, step.model)) {
@@ -2541,7 +2905,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
     if (step.apiPath === "responses") {
       boundReq = responsesRequest(messages, maxTokens);
     } else if (step.anthropicBody || /^anthropic\//.test(step.model)) {
-      boundReq = anthropicizeRequest(messages, maxTokens, tools);
+      boundReq = anthropicizeRequest(messages, maxTokens, tools, cacheAt, step.model);
     } else {
       boundReq = { messages: messages };
       if (tools && tools.length) boundReq.tools = tools;
@@ -2557,8 +2921,13 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
     try {
       bound = await aiRun(env.AI, step.model, boundReq, opts);
       if (boundStream && botIsStream(bound)) {
-        var got = await botCollectChatStream(bound, function (t) { draft.push(t); });
-        if (botStreamEmpty(got)) throw botStreamEmptyError();
+        var got;
+        try {
+          got = await botCollectChatStream(bound, function (t) { draft.push(t); });
+        } catch (cut) {
+          throw proStreamSpent(cut, boundReq);
+        }
+        if (botStreamEmpty(got)) throw proUsageCarry(botStreamEmptyError(), proCallUsage({ usage: got.usage }));
         var boundMsg = { role: "assistant", content: got.text };
         if (got.reasoning) boundMsg.reasoning_content = got.reasoning;
         bound = { choices: [{ message: boundMsg }] };
@@ -2566,7 +2935,8 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
       }
     } catch (e) {
       if (e && e.streamEmpty) throw e;
-      throw new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
+      var boundErr = new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
+      throw proUsageCarry(boundErr, e && e.usage);
     }
     return proCheckedMessage(bound);
   }
@@ -2578,7 +2948,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
       nativeHeaders["cf-aig-zdr"] = "false";
       nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
     }
-    var nativeReq = anthropicizeRequest(messages, maxTokens, tools);
+    var nativeReq = anthropicizeRequest(messages, maxTokens, tools, cacheAt, step.model);
     if (canStream) nativeReq.stream = true;
     return proHttpChat(proAnthropicNativeUrl(env),
       nativeHeaders,
@@ -2593,7 +2963,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
   if (step.apiPath === "responses") {
     req = responsesRequest(messages, maxTokens);
   } else if (step.apiPath === "messages") {
-    req = anthropicizeRequest(messages, maxTokens, tools);
+    req = anthropicizeRequest(messages, maxTokens, tools, cacheAt, step.model);
   } else {
     req = { messages: messages };
     if (tools && tools.length) req.tools = tools;
@@ -2621,22 +2991,25 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft) {
   }
   endpoints = proLiveEndpoints(endpoints);
   var lastErr = null;
+  var spent = botUsageZero();
   for (var i = 0; i < endpoints.length; i++) {
     try {
-      return await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
+      return proUsageFold(await proHttpChat(proSwapApiPath(endpoints[i].url, step.apiPath),
         proCompatHeaders(env, endpoints[i].kind, step.model),
         Object.assign({ model: step.model }, req),
-        canStream ? draft : null, step.apiPath === "messages" ? "anthropic" : "chat");
+        canStream ? draft : null, step.apiPath === "messages" ? "anthropic" : "chat"), spent);
     } catch (e) {
       lastErr = e;
       if (e && (e.httpStatus === 401 || e.httpStatus === 403) && endpoints.length > 1) {
         proRouteDownUntil[endpoints[i].url] = Date.now() + PRO_ROUTE_AUTH_COOLDOWN_MS;
       }
-      if (e && e.streamEmpty) throw e;
-      if (!proWorthRetrying(e)) throw e;
+      if (e && e.streamEmpty) throw proUsageCarry(e, spent);
+      if (!proWorthRetrying(e)) throw proUsageCarry(e, spent);
+      botUsageAdd(spent, e && e.usage);
+      if (e && typeof e === "object") e.usage = null;
     }
   }
-  throw lastErr || new Error("Pro model request failed.");
+  throw proUsageCarry(lastErr || new Error("Pro model request failed."), spent);
 }
 
 // Retry the next route only when the failure says "this route can't serve this
@@ -2679,13 +3052,20 @@ var proGateUsable = true;
 var proLocalPace = {};
 var proLocalBudget = {};
 
-var proCacheBreakpoints = true;
+var PRO_CACHE_OFF_MS = 600000;
+var proCacheOffUntil = {};
 var proCacheSeen = null;
 
+function proCacheOn(modelId) {
+  var until = proCacheOffUntil[String(modelId || "")] || 0;
+  return Date.now() >= until;
+}
+
 function proCacheRejected(err) {
-  if (proRateLimited(err)) return false;
-  var status = err && err.httpStatus;
-  return typeof status !== "number" || status === 400 || status === 422;
+  if (!err || err.noRetry || proRateLimited(err)) return false;
+  var status = err.httpStatus;
+  if (status !== 400 && status !== 422) return false;
+  return /cache_control/i.test(String(err.message || ""));
 }
 
 function proPaceGapMs() {
@@ -2805,6 +3185,8 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
     throw new Error("Nymbot Pro is not configured.");
   }
   var errors = [];
+  var wasted = botUsageZero();
+  var cacheAt = watch && watch.cacheAt ? watch.cacheAt : null;
   var provider = paceProviderOf(modelId);
   var estimate = paceEstimateTokens(messages, tools, maxTokens);
   var paceFrom = Date.now();
@@ -2817,7 +3199,7 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
       var callFrom = Date.now();
       try {
         if (draft) draft.reset();
-        var answered = await proAttempt(env, plan[i], messages, maxTokens, tools, draft);
+        var answered = proUsageFold(await proAttempt(env, plan[i], messages, maxTokens, tools, draft, cacheAt), wasted);
         if (clock) clock.since("model", callFrom);
         var spent = paceUsageTokens(answered && answered.usage);
         if (spent > 0) await proGateSettle(env, provider, estimate - spent);
@@ -2825,6 +3207,10 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
       } catch (e) {
         failure = e;
         if (clock) clock.since("model", callFrom);
+      }
+      if (failure && typeof failure === "object" && failure.usage) {
+        botUsageAdd(wasted, failure.usage);
+        failure.usage = null;
       }
       if (proRateLimited(failure)) {
         proLastLimitedAt = Date.now();
@@ -2840,18 +3226,18 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
         held++;
         continue;
       }
-      if (proCacheRejected(failure) && proCacheBreakpoints) {
-        proCacheBreakpoints = false;
+      if (!proWorthRetrying(failure) && !proCacheRejected(failure)) throw proUsageCarry(failure, wasted);
+      if (proCacheRejected(failure) && proCacheOn(plan[i].model)) {
+        proCacheOffUntil[String(plan[i].model || "")] = Date.now() + PRO_CACHE_OFF_MS;
         continue;
       }
       errors.push(plan[i].kind + ": " + String((failure && failure.message) || failure));
-      if (!proWorthRetrying(failure)) throw failure;
       break;
     }
   }
   // Every route rejected it. Name them all - "HTTP 401" alone doesn't say
   // which credential is missing when two transports are in play.
-  throw new Error("Pro model request failed on every route (" + errors.join(" | ").slice(0, 400) + ")");
+  throw proUsageCarry(new Error("Pro model request failed on every route (" + errors.join(" | ").slice(0, 400) + ")"), wasted);
 }
 
 // A provider that declined the request answers 200 with an empty content array
@@ -2869,7 +3255,7 @@ function proRefusalDetail(payload) {
 
 // A reply with no text and no tool calls means we failed to recognize the
 // upstream shape — surface a payload snippet instead of a blank reply so
-// schema mismatches diagnose themselves. Nothing is charged on throw.
+// schema mismatches diagnose themselves.
 function proCheckedMessage(payload) {
   var msg = proNormalizeMessage(payload);
   if (msg && (proMessageText(msg).trim() || (msg.tool_calls && msg.tool_calls.length))) {
@@ -2884,17 +3270,51 @@ function proCheckedMessage(payload) {
     // is useless advice when the user's new message was innocuous.
     var err = new Error("The model declined this request under its provider's usage policy" +
       (refusal.category ? " (" + refusal.category + ")" : "") +
-      ". Something earlier in this conversation may be the trigger, since the whole thread is sent each turn — try ?clear for a fresh thread, rephrasing, or ?model to switch models. You were not charged.");
+      ". Something earlier in this conversation may be the trigger, since the whole thread is sent each turn — try ?clear for a fresh thread, rephrasing, or ?model to switch models.");
     err.noRetry = true;
-    throw err;
+    err.userFacing = true;
+    throw proUsageCarry(err, proCallUsage(payload));
+  }
+  if (msg && proMessageReasoning(msg)) {
+    var thought = new Error("The model spent this reply reasoning and returned no answer text. Try again, or ask for something shorter.");
+    thought.noRetry = true;
+    thought.userFacing = true;
+    throw proUsageCarry(thought, proCallUsage(payload));
   }
   var snippet = "";
   try { snippet = JSON.stringify(payload); } catch (e) { snippet = String(payload); }
-  throw new Error("Pro model returned an empty or unrecognized response: " + String(snippet || "").slice(0, 400));
+  throw proUsageCarry(new Error("Pro model returned an empty or unrecognized response: " + String(snippet || "").slice(0, 400)),
+    proCallUsage(payload));
+}
+
+function proUsageCarry(err, usage) {
+  if (!err || typeof err !== "object" || !botUsageBilled(usage)) return err;
+  err.usage = botUsageAdd(botUsageAdd(botUsageZero(), err.usage), usage);
+  return err;
+}
+
+function proUsageFold(answered, usage) {
+  if (!answered || !botUsageBilled(usage)) return answered;
+  answered.usage = botUsageAdd(botUsageAdd(botUsageZero(), usage), answered.usage);
+  answered.outputTokens = (answered.outputTokens || 0) + (Number(usage.out) || 0);
+  return answered;
 }
 
 // Billable output tokens across response shapes (Anthropic usage.output_tokens,
 // OpenAI usage.completion_tokens, either possibly under a CF result envelope).
+function proUsageNumber(v) {
+  var n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function proUsageCached(u) {
+  var d = u.prompt_tokens_details || u.input_tokens_details;
+  var cached = d && typeof d === "object" ? Number(d.cached_tokens) : NaN;
+  if (Number.isFinite(cached)) return Math.max(0, cached);
+  var hit = Number(u.prompt_cache_hit_tokens);
+  return Number.isFinite(hit) ? Math.max(0, hit) : 0;
+}
+
 function proCacheUsage(resp) {
   if (!resp || typeof resp !== "object") return null;
   if (resp.result && typeof resp.result === "object") return proCacheUsage(resp.result);
@@ -2905,15 +3325,19 @@ function proCacheUsage(resp) {
   var fresh = Number(u.input_tokens != null ? u.input_tokens : u.prompt_tokens);
   var known = [read, wrote, fresh].some(function (n) { return Number.isFinite(n); });
   if (!known) return null;
-  return {
-    read: Number.isFinite(read) ? read : 0,
-    wrote: Number.isFinite(wrote) ? wrote : 0,
-    fresh: Number.isFinite(fresh) ? fresh : 0
-  };
+  read = Number.isFinite(read) ? read : 0;
+  wrote = Number.isFinite(wrote) ? wrote : 0;
+  fresh = Number.isFinite(fresh) ? fresh : 0;
+  if (!read && !wrote) {
+    var cached = Math.min(fresh, proUsageCached(u));
+    fresh -= cached;
+    read = cached;
+  }
+  return { read: read, wrote: wrote, fresh: fresh };
 }
 
 function proReportCacheUsage(payload) {
-  if (!proCacheBreakpoints) return;
+  if (!proCacheOn(payload && payload.model)) return;
   var u = proCacheUsage(payload);
   if (!u) return;
   var working = !!(u.read || u.wrote);
@@ -2945,8 +3369,17 @@ function proUsageOutputTokens(resp) {
   if (resp.result && typeof resp.result === "object") return proUsageOutputTokens(resp.result);
   var u = resp.usage;
   if (!u || typeof u !== "object") return 0;
-  var n = Number(u.output_tokens != null ? u.output_tokens : u.completion_tokens);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  var n = proUsageNumber(u.output_tokens != null ? u.output_tokens : u.completion_tokens);
+  if (u.output_tokens == null && u.completion_tokens != null) {
+    var details = u.completion_tokens_details;
+    var reasoning = details && typeof details === "object" ? proUsageNumber(details.reasoning_tokens) : 0;
+    var total = proUsageNumber(u.total_tokens);
+    var unseen = total - proUsageNumber(u.prompt_tokens) - n
+      - proUsageNumber(u.cache_read_input_tokens) - proUsageNumber(u.cache_creation_input_tokens);
+    if (unseen > 0) n += unseen;
+    else if (reasoning > n) n += reasoning;
+  }
+  return Math.floor(n);
 }
 
 function proMessageText(msg) {
@@ -3022,6 +3455,11 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
 
   var watch = opts && opts.watch ? opts.watch : null;
   var clock = watch && watch.clock ? watch.clock : null;
+  var cacheAt = effort >= 2 ? messages[messages.length - 1] : null;
+  if (cacheAt) {
+    if (watch) watch.cacheAt = cacheAt;
+    else watch = { cacheAt: cacheAt };
+  }
   if (effort >= 2) {
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
@@ -3029,7 +3467,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     var planFrom = Date.now();
     var planned = await proGatewayChat(env, proModel,
       convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
-      BOT_EFFORT_PLAN_TOKENS, null, clock ? { clock: clock } : null);
+      BOT_EFFORT_PLAN_TOKENS, null, { clock: clock, cacheAt: cacheAt });
     if (clock) clock.since("plan", planFrom);
     outputTokens += planned.outputTokens || 0;
     botUsageAdd(usage, planned.usage);
@@ -3041,7 +3479,12 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     }
   }
 
-  var core = await answer(convo, calls, of);
+  var core;
+  try {
+    core = await answer(convo, calls, of);
+  } catch (e) {
+    throw proUsageCarry(e, usage);
+  }
   calls += core.modelCalls || 1;
   outputTokens += core.outputTokens || 0;
   botUsageAdd(usage, core.usage);
@@ -3058,17 +3501,26 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     progress({ kind: "effort", stage: "checking" });
     var drafted = botTakeFollowUps(reply).text || reply;
     var checkFrom = Date.now();
-    var revised = await proGatewayChat(env, proModel,
-      convo.concat([
-        { role: "assistant", content: drafted },
-        { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
-      ]), proModel.maxTokens, null, watch);
+    var revised = null;
+    try {
+      revised = await proGatewayChat(env, proModel,
+        convo.concat([
+          { role: "assistant", content: drafted },
+          { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
+        ]), proModel.maxTokens, null, watch);
+    } catch (e) {
+      botUsageAdd(usage, e && e.usage);
+      if (e && e.usage) outputTokens += Number(e.usage.out) || 0;
+      if (watch && watch.draft) watch.draft.reset();
+    }
     if (clock) clock.since("check", checkFrom);
-    outputTokens += revised.outputTokens || 0;
-    botUsageAdd(usage, revised.usage);
-    var better = proMessageWithThinking(revised.msg);
-    // A revision that came back empty is a failed pass, not a better answer.
-    if (better && better.trim()) reply = botCarryFollowUps(reply, better);
+    if (revised) {
+      outputTokens += revised.outputTokens || 0;
+      botUsageAdd(usage, revised.usage);
+      var better = proMessageWithThinking(revised.msg);
+      // A revision that came back empty is a failed pass, not a better answer.
+      if (better && better.trim()) reply = botCarryFollowUps(reply, better);
+    }
   }
 
   return { reply: reply, modelCalls: calls, outputTokens: outputTokens, usage: usage,
@@ -3099,10 +3551,15 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
     var lastTurn = calls >= budget;
     progress({ kind: "model", call: priorCalls + calls, of: of,
       model: proModel.label || proModel.model || "" });
-    var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
-      lastTurn ? null : recallToolDefs(), opts && opts.watch
-        ? (lastTurn ? opts.watch : { clock: opts.watch.clock })
-        : null);
+    var r;
+    try {
+      r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
+        lastTurn ? null : recallToolDefs(), opts && opts.watch
+          ? (lastTurn ? opts.watch : { clock: opts.watch.clock, cacheAt: opts.watch.cacheAt })
+          : null);
+    } catch (e) {
+      throw proUsageCarry(e, usage);
+    }
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
     botUsageAdd(usage, r.usage);
@@ -4343,6 +4800,7 @@ async function gitRunExplore(env, all, records, args, state, progress) {
       }
     }
   } catch (e) {
+    botUsageAdd(state.usage, e && e.usage);
     return "Error: the explorer could not run (" + String((e && e.message) || e).slice(0, 200) + "). Read the files directly instead.";
   }
   return "Error: the explorer found nothing.";
@@ -4460,8 +4918,10 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   var budget = Math.max(1, Math.floor(Number(opts.maxCalls) || BOT_GIT_MAX_TURNS));
   var wantedMore = false;
   var sofar = "";
+  var lastUsage = null;
   while (true) {
-    if (calls > 0 && opts.capGuard && !opts.capGuard.room(usage, 1)) {
+    if (calls > 0 && opts.capGuard && !opts.capGuard.room(usage, 1,
+      capNextUsage(gitCompactConvo(convo), calls + 1 >= budget ? null : tools, botOutCeiling(proModel), lastUsage))) {
       return await finish({
         reply: capStoppedReply(sofar, opts.capGuard.reason),
         modelCalls: calls,
@@ -4481,7 +4941,24 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     try {
       r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
     } catch (e) {
-      if (!proRateLimited(e) || (calls < 2 && !priorCalls)) throw e;
+      if (calls < 2 && !priorCalls) {
+        if (botUsageBilled(explorer.usage) && explorer.model && e && typeof e === "object") {
+          e.sideUsage = [{ model: explorer.model.model, usage: explorer.usage }];
+        }
+        throw e;
+      }
+      botUsageAdd(usage, e && e.usage);
+      if (e && e.usage) outputTokens += Number(e.usage.out) || 0;
+      if (!proRateLimited(e)) {
+        return await finish({
+          reply: gitFailedReply(sofar),
+          modelCalls: calls - 1,
+          outputTokens: outputTokens,
+          usage: usage,
+          truncated: true,
+          convo: gitParkable(convo)
+        });
+      }
       var hint = Number(e && e.retryAfterMs);
       return await finish({
         reply: gitStalledReply(all),
@@ -4495,6 +4972,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       });
     }
     var msg = r.msg;
+    lastUsage = r.usage;
     outputTokens += r.outputTokens || 0;
     botUsageAdd(usage, r.usage);
     var thought = proMessageReasoning(msg);
@@ -4761,6 +5239,7 @@ async function runPmConnectors(context, proModel, messages, ghConfig, runOpts) {
       : (typeof runOpts.mcpApprove === "string" ? runOpts.mcpApprove : ""),
     decline: typeof runOpts.runDecline === "string" ? runOpts.runDecline : "",
     capGuard: runOpts.capGuard || null,
+    outCeiling: botOutCeiling(proModel),
     stalledReply: ghConfig ? gitStalledReply(ghConfig) : null,
     deps: {
       proGatewayChat: proGatewayChat, proRateLimited: proRateLimited,
@@ -4810,6 +5289,13 @@ function gitParkable(convo) {
     out = out.slice(0, out.length - 1);
   }
   return out;
+}
+
+var BOT_RUN_FAILED_NOTE = "I stopped here because the model call for the next step failed. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
+
+function gitFailedReply(sofar) {
+  var text = String(sofar || "").trim();
+  return text ? text + "\n\n_" + BOT_RUN_FAILED_NOTE + "_" : BOT_RUN_FAILED_NOTE;
 }
 
 function gitStalledReply(all) {
@@ -5420,31 +5906,41 @@ function botStreamError(obj) {
   return err;
 }
 
+function botStreamCut(err, chars, usage) {
+  if (!err || typeof err !== "object") err = new Error("Pro model request failed: " + String(err));
+  err.streamed = { chars: chars, usage: usage && typeof usage === "object" && Object.keys(usage).length ? usage : null };
+  return err;
+}
+
 async function botCollectChatStream(body, onText) {
   var text = "";
   var reasoning = "";
   var usage = null;
   var failure = null;
-  await botReadSse(body, function (obj) {
-    if (failure) return;
-    failure = botStreamError(obj);
-    if (failure) return;
-    if (obj.usage && typeof obj.usage === "object") usage = obj.usage;
-    var piece = "";
-    var choice = Array.isArray(obj.choices) ? obj.choices[0] : null;
-    var delta = choice && (choice.delta || choice.message);
-    if (delta && typeof delta.content === "string") piece = delta.content;
-    else if (typeof obj.response === "string") piece = obj.response;
-    if (delta) {
-      var r = delta.reasoning_content != null ? delta.reasoning_content : delta.reasoning;
-      if (typeof r === "string") reasoning += r;
-    }
-    if (piece) {
-      text += piece;
-      if (onText) onText(text);
-    }
-  });
-  if (failure) throw failure;
+  try {
+    await botReadSse(body, function (obj) {
+      if (failure) return;
+      failure = botStreamError(obj);
+      if (failure) return;
+      if (obj.usage && typeof obj.usage === "object") usage = obj.usage;
+      var piece = "";
+      var choice = Array.isArray(obj.choices) ? obj.choices[0] : null;
+      var delta = choice && (choice.delta || choice.message);
+      if (delta && typeof delta.content === "string") piece = delta.content;
+      else if (typeof obj.response === "string") piece = obj.response;
+      if (delta) {
+        var r = delta.reasoning_content != null ? delta.reasoning_content : delta.reasoning;
+        if (typeof r === "string") reasoning += r;
+      }
+      if (piece) {
+        text += piece;
+        if (onText) onText(text);
+      }
+    });
+  } catch (e) {
+    throw botStreamCut(e, text.length + reasoning.length, usage);
+  }
+  if (failure) throw botStreamCut(failure, text.length + reasoning.length, usage);
   return { text: text, reasoning: reasoning, usage: usage };
 }
 
@@ -5455,7 +5951,7 @@ async function botCollectAnthropicStream(body, onText) {
   var stop = null;
   var model = "";
   var failure = null;
-  await botReadSse(body, function (obj, event) {
+  var reading = botReadSse(body, function (obj, event) {
     if (failure) return;
     var type = obj.type || event;
     if (type === "error") { failure = botStreamError(obj) || new Error("Pro model request failed."); return; }
@@ -5478,7 +5974,12 @@ async function botCollectAnthropicStream(body, onText) {
       if (obj.usage) Object.assign(usage, obj.usage);
     }
   });
-  if (failure) throw failure;
+  try {
+    await reading;
+  } catch (e) {
+    throw botStreamCut(e, text.length + thinking.length, usage);
+  }
+  if (failure) throw botStreamCut(failure, text.length + thinking.length, usage);
   var content = [];
   if (thinking) content.push({ type: "thinking", thinking: thinking });
   content.push({ type: "text", text: text });
@@ -5798,14 +6299,18 @@ function botResearchTooLow(floorMilli) {
   };
 }
 
-function botResearchShort(proModel, required, balance) {
+function botResearchShort(proModel, required, balance, start) {
   return {
     noCredits: true, pro: true, research: true,
     balance: balance,
     required: required,
-    error: "Deep research with " + proModel.label + " can use up to " + required +
-      " Pro credits and is charged on the tokens it actually uses, usually far less. You have " +
-      balance + ", so nothing was run or charged. Type ?buy and switch to Pro to top up."
+    error: start
+      ? "Deep research with " + proModel.label + " needs at least " + required +
+        " Pro credits to start: enough to plan it and write the report. With less than its full budget it searches less and fits the report inside your balance. You have " +
+        balance + ", so nothing was run or charged. Type ?buy and switch to Pro to top up."
+      : "Deep research with " + proModel.label + " can use up to " + required +
+        " Pro credits and is charged on the tokens it actually uses, usually far less. You have " +
+        balance + ", so nothing was run or charged. Type ?buy and switch to Pro to top up."
   };
 }
 
@@ -6256,11 +6761,42 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
 
   var messages = [{ role: "system", content: buildNymbotPmSystemPrompt(proModel || null, runOpts.web === true, runOpts.free === true, runOpts.inApp === true, runOpts.webDenied === true, runOpts.followUps === true) }];
 
+  var freeBudget = runOpts.free === true && runOpts.historyBudget > 0 ? runOpts.historyBudget : 0;
+  var freeLeft = freeBudget;
+  if (freeBudget) {
+    if (question.length > freeBudget) {
+      question = truncateText(question, freeBudget) + "\n[\u2026 the rest of this message was cut: a free reply reads up to " + freeBudget + " characters]";
+    }
+    freeLeft = Math.max(0, freeBudget - question.length);
+    if (split && split.quoted) {
+      split = Object.assign({}, split, { quoted: freeLeft >= BOT_FREE_MIN_PART ? truncateText(String(split.quoted), freeLeft) : "" });
+      freeLeft = Math.max(0, freeLeft - split.quoted.length);
+    }
+  }
+  var pmClock = runOpts.clock || null;
+  var pmLinkFrom = Date.now();
+  var pmLinkUrls = botExtractPageUrls(question).length;
+  var pmLinkChars = freeBudget ? (freeLeft >= BOT_FREE_MIN_PART && pmLinkUrls ? Math.floor(freeLeft / pmLinkUrls) : 0) : LINK_READ_CHARS;
+  var pmLinkRead = (pmLinkChars > 0 ? botReadLinkedPages(question, runOpts.progress, pmLinkChars) : Promise.resolve({ pages: [], failed: [] })).then(function (got) {
+    if (pmClock) pmClock.since("pages", pmLinkFrom);
+    return got;
+  }, function () {
+    if (pmClock) pmClock.since("pages", pmLinkFrom);
+    return null;
+  });
+  var historyBudget = runOpts.historyBudget;
+  if (freeBudget) {
+    var freeLinks = await pmLinkRead;
+    var freeLinkChars = 0;
+    ((freeLinks && freeLinks.pages) || []).forEach(function (pg) { freeLinkChars += String(pg.text || "").length; });
+    historyBudget = Math.max(1, freeLeft - freeLinkChars);
+  }
+
   var dropped = [];
   var keptTurns = [];
   var historyUserTurns = [];
   if (!freshOnly && Array.isArray(history) && history.length > 0) {
-    var window = buildWindow(history, runOpts.historyBudget);
+    var window = buildWindow(history, historyBudget);
     dropped = window.dropped;
     keptTurns = window.kept;
     for (var i = 0; i < window.kept.length; i++) {
@@ -6290,15 +6826,6 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var pmSearchAttempted = false;
   var pmSearchedQuery = question;
   var pmChangelogCtx = "";
-  var pmClock = runOpts.clock || null;
-  var pmLinkFrom = Date.now();
-  var pmLinkRead = botReadLinkedPages(question, runOpts.progress).then(function (got) {
-    if (pmClock) pmClock.since("pages", pmLinkFrom);
-    return got;
-  }, function () {
-    if (pmClock) pmClock.since("pages", pmLinkFrom);
-    return null;
-  });
   var pmSearchFrom = Date.now();
   try {
     if (needsChangelogContext(question)) {
@@ -6313,7 +6840,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       if (runOpts.web === true && needsWebSearch(question, pmResolved)) {
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
-        pmSearchResults = await webSearch(pmSearchedQuery, null, context.env);
+        pmSearchResults = await webSearch(pmSearchedQuery, null, context.env, { pro: !!proModel });
         if (pmClock) pmClock.since("search", pmSearchFrom);
         // Only a search that actually reached a source counts as one having
         // happened. A search nothing answered is our plumbing failing, and a
@@ -6527,25 +7054,35 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var reply = "";
   var usage = botUsageZero();
   var billedModel = pmModel;
+  var usageParts = [];
+  var spentOn = function (model, u) {
+    if (!botUsageBilled(u)) return;
+    botUsageAdd(usage, u);
+    usageParts.push({ model: model, usage: u });
+  };
   var stdDraft = runOpts.draft || null;
   var stdFrom = Date.now();
   try {
     var primary = null;
     if (stdDraft) {
+      var streamReq = { messages: messages, max_tokens: maxOut, stream: true };
       try {
-        primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut, stream: true });
+        primary = await aiRun(ai, pmModel, streamReq);
         if (botIsStream(primary)) {
           var got = await botCollectChatStream(primary, function (t) { stdDraft.push(t); });
+          if (!got.text) spentOn(pmModel, proCallUsage({ usage: got.usage }));
           primary = got.text ? { response: got.text } : null;
           if (primary && got.usage) primary.usage = got.usage;
         }
       } catch (e) {
+        var cut = proStreamSpent(e, streamReq);
+        spentOn(pmModel, cut && cut.usage);
         primary = null;
         stdDraft.reset();
       }
     }
     if (!primary) primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
-    botUsageAdd(usage, proCallUsage(primary));
+    spentOn(pmModel, proCallUsage(primary));
     reply = primary && primary.response ? sanitizeBotResponse(primary.response, true) : "";
   } catch (e) { }
   if (pmClock) pmClock.since("model", stdFrom);
@@ -6575,16 +7112,33 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         messages: seesToo[fallbacks[f]] ? messages : textOnly,
         max_tokens: BOT_PM_MAX_TOKENS.general
       });
-      botUsageAdd(usage, proCallUsage(fb));
+      spentOn(fallbacks[f], proCallUsage(fb));
       reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
       if (botTakeFollowUps(reply).text.trim()) billedModel = fallbacks[f];
     } catch (e) { }
     if (pmClock) pmClock.since("model", fbFrom);
   }
   return { reply: reply, taskType: taskType, sources: pmCitations,
-    usage: usage, billedModel: billedModel };
+    usage: usage, usageParts: usageParts, billedModel: billedModel };
 }
+function botPriceRefusal(e) {
+  return new Response(JSON.stringify({ error: e.message, retryable: true, priceUnavailable: true }), {
+    status: 503,
+    headers: { "Content-Type": "application/json", "Retry-After": "60", ...CLIENT_CORS_HEADERS }
+  });
+}
+
 async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
+  try {
+    return await handleBotPMActionPriced(context, body, botPrivkey, botPubkey);
+  } catch (e) {
+    if (!(e instanceof BtcPriceUnavailable)) throw e;
+    await botReleaseStrandedTurn(context);
+    return botPriceRefusal(e);
+  }
+}
+
+async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   if (body && body.action === "pm" && botKeepTurnAlive(context)) {
     var kept = handleBotPMAction(context, body, botPrivkey, botPubkey);
     try {
@@ -6593,6 +7147,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     return kept;
   }
   var env = context.env;
+  botBtcPriceBind(env);
   var json = function (obj, status) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
@@ -6635,7 +7190,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "models") {
     var cat = await botProCatalog(env);
-    var researchBtc = await botBtcPrice();
+    var priceQuote = await botBtcPriceOrNull();
+    var researchBtc = priceQuote ? priceQuote.usd : null;
     var order = ["anthropic", "openai", "google", "xai", "moonshotai", "minimax", "alibaba", "deepseek", "meta", "mistralai"];
     // Providers in a curated order, then newest model first inside each one.
     var byNewest = catalogSortKeys(cat.models);
@@ -6673,6 +7229,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         inUsdPerMTok: botChargeRate(m, "in"),
         outUsdPerMTok: botChargeRate(m, "out"),
         cacheReadUsdPerMTok: botChargeRate(m, "cacheRead"),
+        cachesLegs: botCachesLegs(m),
         repoCredits: m.baseCredits * BOT_GIT_CALL_MULTIPLIER,
         repoMax: (m.max != null ? m.max - m.baseCredits : (m.outTokensPerCredit
           ? Math.ceil((m.maxTokens || 8192) / m.outTokensPerCredit)
@@ -6682,21 +7239,23 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         author: m.author || "",
         authorSlug: slugOf(m),
         vision: !!m.vision,
+        video: botWatchesVideo(m),
         reasoning: !!m.reasoning,
+        outTokens: botOutCeiling(m),
         tools: !!m.tools,
         context: m.context || null,
         // "cloudflare-hosted" vs "third-party" — the picker badges the former,
         // since those are the ones that never depend on an upstream key.
         hosting: m.hosting || "",
         priced: m.priced !== false,
-        research: (function (e) { return { low: e.low, high: e.high, max: e.max }; })(botResearchEstimate(m, researchBtc))
+        research: researchBtc ? (function (e) { return { low: e.low, high: e.high, max: e.max }; })(botResearchEstimate(m, researchBtc)) : null
       };
     });
     list.forEach(function (m) { m.kind = "chat"; });
     // The picture and video generators, so the picker can price them too. They
     // are not chat models — picking one writes the command rather than pinning
     // it — which is why they carry a kind and a command.
-    list = list.concat(botGeneratorCatalog(await botProGenerators(env)));
+    list = list.concat(botGeneratorCatalog(await botProGenerators(env), researchBtc));
     var groups = [];
     list.forEach(function (m) {
       var last = groups[groups.length - 1];
@@ -6704,7 +7263,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       else groups.push({ author: m.author || m.authorSlug || "Other", authorSlug: m.authorSlug, kind: m.kind, keys: [m.key] });
     });
     var unpriced = list.filter(function (m) { return !m.priced; }).length;
-    var btcUsd = await botBtcPrice();
+    var btcUsd = researchBtc;
     var routes = [];
     var taskNames = Object.keys(BOT_PM_MODELS);
     for (var ti = 0; ti < taskNames.length; ti++) {
@@ -6715,7 +7274,9 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         inUsdPerMTok: botChargeRate(rates, "in"),
         outUsdPerMTok: botChargeRate(rates, "out"),
         cacheReadUsdPerMTok: botChargeRate(rates, "cacheRead"),
-        maxTokens: BOT_PM_MAX_TOKENS[taskNames[ti]] || BOT_PM_MAX_TOKENS.general
+        cachesLegs: botCachesLegs(rates),
+        maxTokens: BOT_PM_MAX_TOKENS[taskNames[ti]] || BOT_PM_MAX_TOKENS.general,
+        reasoning: !!rates.reasoning || taskNames[ti] === "reasoning"
       });
     }
     return json({
@@ -6723,10 +7284,15 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT,
       standardRoutes: routes,
       research: researchPublicLimits(),
-      usdPerCredit: Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
-      standardUsdPerCredit: Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6,
-      btcUsd: Math.round(btcUsd),
+      usdPerCredit: btcUsd ? Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
+      standardUsdPerCredit: btcUsd ? Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
+      btcUsd: btcUsd ? Math.round(btcUsd) : null,
+      btcPriceAt: priceQuote ? priceQuote.at : null,
+      btcPriceAgeSec: priceQuote ? Math.round(priceQuote.ageMs / 1000) : null,
+      btcPriceSources: priceQuote ? priceQuote.sources : [],
+      priceUnavailable: !priceQuote,
       minChargeCredits: BOT_MIN_CHARGE_MILLI / BOT_MILLI_PER_CREDIT,
+      estimate: botEstimateBudgets(),
       metered: true,
       satsPerCreditTier: { standard: BOT_SATS_PER_CREDIT, pro: BOT_PRO_SATS_PER_CREDIT },
       bulkBonus: BOT_BULK_BONUS.slice().reverse().map(function (b) {
@@ -6957,6 +7523,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     var audioBytes;
     try { audioBytes = botBase64Decode(audioRaw); } catch (e) { audioBytes = null; }
     if (!audioBytes || audioBytes.length < 256) return json({ error: "No audio was sent." }, 400);
+    var clipLength = audioSeconds(audioBytes);
+    if (clipLength.seconds > BOT_TRANSCRIBE_MAX_SECONDS + BOT_TRANSCRIBE_GRACE_SECONDS) {
+      return json({ error: "That clip is too long — dictation takes up to " +
+        BOT_TRANSCRIBE_MAX_SECONDS + " seconds at a time.", seconds: Math.ceil(clipLength.seconds) }, 413);
+    }
     var said = "";
     try {
       var heard = await aiRun(env.AI, BOT_TRANSCRIBE_MODEL, { audio: audioRaw });
@@ -6965,9 +7536,10 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     } catch (e) {
       return json({ error: botFailText("Transcription failed: the speech service could not process that clip. Please try again.", "transcribe", e) }, 502);
     }
-    noteUsage(context, { pubkey: userPubkey, kind: "transcribe", tier: "standard", model: BOT_TRANSCRIBE_MODEL,
-      calls: 1, ms: Date.now() - transcribeT0 });
-    return json({ text: said });
+    var heardCharge = await botTranscribeCharge(env, userPubkey, clipLength.seconds);
+    noteUsage(context, { pubkey: userPubkey, kind: "transcribe", tier: heardCharge.tier, model: BOT_TRANSCRIBE_MODEL,
+      calls: 1, costMilli: heardCharge.milli, ms: Date.now() - transcribeT0 });
+    return json({ text: said, seconds: Math.ceil(clipLength.seconds), costMilli: heardCharge.milli, tier: heardCharge.tier });
   }
 
   // Putting a repo run back. The device kept the checkpoint the run reported —
@@ -7399,28 +7971,26 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
     }
     var agentTask = !!ghConfig || !!mcpConfig;
     if (proModel) {
-      // Reserve the per-message worst case (base + max-length output, times
-      // max calls for repo tasks); only the actual usage-based cost is spent.
-      var proBase = botProMaxCost(proModel, agentTask);
-      // A repo task loops; otherwise the effort level says how many passes the
-      // user asked and agreed to pay for.
       var effortWanted = agentTask ? 1 : botEffortLevel(body.effort);
       var proLegs = agentTask ? BOT_GIT_MAX_TURNS : effortWanted;
-      var proMetered = botMeteredReserve(proModel, proLegs, agentTask,
-        await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT);
       var proSurcharge = botPartSurcharge(botPartsCount(body));
-      var proRequired = (proMetered != null ? proMetered : proBase * proLegs) + proSurcharge;
-      if (proMetered != null) proBase = Math.max(1, Math.ceil(proMetered / proLegs));
-      var proHeldGuard = proMetered != null && !researchAsked && !teamAsked;
-      if (proHeldGuard && proLegs > 1 && (proRecord.balance || 0) < proRequired) {
-        var proOneLeg = botMeteredReserve(proModel, 1, agentTask, await botBtcPrice(), BOT_PRO_SATS_PER_CREDIT) + proSurcharge;
-        if ((proRecord.balance || 0) >= proOneLeg) proRequired = Math.floor(proRecord.balance || 0);
-      }
+      var proHeldGuard = botMeteredModel(proModel) != null && !researchAsked && !teamAsked;
+      var capBtc = await botBtcPrice();
+      var proReserveOf = function (inTokens) {
+        return botProReserve(proModel, {
+          legs: proLegs, agentTask: agentTask, btcUsd: capBtc, inTokens: inTokens,
+          surcharge: proSurcharge, balance: proRecord.balance || 0, heldGuard: proHeldGuard
+        });
+      };
+      var proSized = proReserveOf(botTurnInputTokens({
+        proModel: proModel, message: "", web: body.web === true,
+        inApp: isStandaloneNymbot(context.request, env), followUps: body.followUps === true
+      }));
+      var proBase = proSized.base;
+      var proRequired = proSized.required;
+      var capFirst = proSized.firstMilli;
+      var capSurcharge = proSurcharge * BOT_MILLI_PER_CREDIT;
       if (proHeldGuard || maxCost != null) {
-        var capBtc = await botBtcPrice();
-        var capSurcharge = proSurcharge * BOT_MILLI_PER_CREDIT;
-        var capFirst = botMeteredReserveMilli(proModel, 1, agentTask, capBtc, BOT_PRO_SATS_PER_CREDIT);
-        if (capFirst == null) capFirst = botProMaxCost(proModel, agentTask) * BOT_MILLI_PER_CREDIT;
         if (maxCost != null) {
           var capNo = capRefusal(capFirst + capSurcharge, maxCost, true);
           if (capNo && !teamAsked) return json(capNo);
@@ -7436,32 +8006,20 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           }, capFirst, capped ? "cap" : "balance");
         };
       }
-      // Looking back past the window is one more model call on top. Room for it
-      // is held only when the balance can spare it, so a chat that was never
-      // going to look anything up is not refused for room it would not use.
-      var recallAffordable = !agentTask && !researchAsked
-        && (proRecord.balance || 0) >= proRequired + proBase * BOT_RECALL_ROUNDS
-        && (maxCost == null || (proRequired + proBase * BOT_RECALL_ROUNDS) <= maxCost);
-      if (recallAffordable) proRequired += proBase * BOT_RECALL_ROUNDS;
-      if (!researchAsked && (proRecord.balance || 0) < proRequired) {
-        return json({
-          noCredits: true,
-          pro: true,
-          balance: proRecord.balance || 0,
-          required: proRequired,
-          error: agentTask
-            ? (ghConfig ? "Repo tasks" : "Connector tasks") + " with " + proModel.label + " reserve up to " + proRequired + " Pro credits but are charged on the tokens actually used, which is usually far less \u2014 the reserve is high because every one of up to " + BOT_GIT_MAX_TURNS + " model calls carries " + (ghConfig ? "the repository trees" : "the connector tools") + " and everything read so far. You have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up."
-            : proModel.label + " replies reserve " + proRequired + " Pro credits but are charged on the tokens actually used, in thousandths of a credit \u2014 you have " + (proRecord.balance || 0) + ". Type ?buy and switch to Pro to top up, or ?model off for standard replies."
-        });
+      var recallAffordable = false;
+      if (!researchAsked && !teamAsked && (proRecord.balance || 0) < proRequired) {
+        return json(botProShort(proModel, proRequired, proRecord.balance || 0, agentTask, !!ghConfig, proSized.start));
       }
       if (researchAsked && !body.resume && !teamAsked) {
         var researchUpFront = botResearchEstimate(proModel, await botBtcPrice());
         var researchUpFrontMax = researchStatedMax(body.research)
           ? Math.min(researchUpFront.max, Math.ceil(researchStatedMax(body.research)))
           : researchUpFront.max;
-        var researchNeed = researchUpFrontMax + botPartSurcharge(botPartsCount(body));
+        var researchNeed = Math.min(researchUpFrontMax,
+          Math.max(1, Math.ceil(botResearchFloorMilli(proModel, await botBtcPrice()) / BOT_MILLI_PER_CREDIT)))
+          + botPartSurcharge(botPartsCount(body));
         if ((proRecord.balance || 0) < researchNeed) {
-          return json(botResearchShort(proModel, researchNeed, proRecord.balance || 0));
+          return json(botResearchShort(proModel, researchNeed, proRecord.balance || 0, true));
         }
       }
     }
@@ -7871,25 +8429,27 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var gens = await botProGenerators(env);
       // ?image models — a free listing, so it returns before any charge.
       if (media.list) {
+        var listQuote = await botBtcPriceOrNull();
+        var listBtc = listQuote ? listQuote.usd : null;
         var listText;
         if (media.kind === "speak") {
           listText = mediaTier === "pro"
             ? "Voices \u2014 use ?speak --model <name> <text to read aloud>:\n\u2022 "
-              + botProSpeechList(gens.speech).join("\n\u2022 ")
+              + botProSpeechList(gens.speech, listBtc).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_SPEECH_MODELS[BOT_PRO_SPEECH_DEFAULT].label + "."
             : "Picking a voice needs a Pro model selected (?model <name>). Standard ?speak uses the built-in voice for "
               + BOT_MEDIA_COSTS.speak.standard + " credits.";
         } else if (media.kind === "video") {
           listText = mediaTier === "pro"
             ? "Video models — use ?video --model <name> <description>:\n\u2022 "
-              + botProVideoList(gens.video).join("\n\u2022 ")
+              + botProVideoList(gens.video, listBtc).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_VIDEO_MODELS[BOT_PRO_VIDEO_DEFAULT].label
               + ". Send a picture in the same message to animate it instead of starting from nothing."
             : "?video needs Nymbot Pro — every video model is provider-hosted, so there is no standard-tier generator. Select one with ?model first.";
         } else {
           listText = mediaTier === "pro"
             ? "Frontier image models \u2014 use ?image --model <name> <description>:\n\u2022 "
-              + botProImageList(gens.image).join("\n\u2022 ")
+              + botProImageList(gens.image, listBtc).join("\n\u2022 ")
               + "\nDefault: " + BOT_PRO_IMAGE_MODELS[BOT_PRO_IMAGE_DEFAULT].label + "."
               + " Send a picture with ?image to edit it: say how to change it, and it costs the same as drawing one."
             : "Frontier image models need a Pro model selected (?model <name>). Standard ?image uses the built-in generator for "
@@ -7953,6 +8513,11 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         if (!proVideo) {
           return await turnFail({ error: "Unknown video model '" + media.modelKey + "'. Type ?video models to see them." }, 400);
         }
+        if (media.res && mediaTiers(proVideo).length && !mediaResTier(proVideo, media.res)) {
+          return await turnFail({ error: proVideo.label + " does not offer " + media.res + ". It offers " +
+            mediaTiers(proVideo).map(function (t) { return t.res; }).join(", ") +
+            ", and uses the highest when --res is left out." }, 400);
+        }
         if (proVideo.needsImage && !botExtractImageUrls(message).length) {
           return await turnFail({ error: proVideo.label + " animates a picture rather than starting from nothing \u2014 send one in the same message, or pick a text-to-video model (?video models)." }, 400);
         }
@@ -7969,14 +8534,35 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           return await turnFail({ error: "Unknown voice '" + media.modelKey + "'. Type ?speak models to see them." }, 400);
         }
       }
-      var mediaCost = proVideo ? proVideo.credits
-        : (media.kind === "image" && proImage && proImage.credits
-          ? proImage.credits
-          : (proSpeech && proSpeech.credits
-            ? proSpeech.credits
-            : BOT_MEDIA_COSTS[media.kind][mediaTier]));
+      var mediaMilli = null;
+      var mediaPlan = null;
+      var mediaPriceModel = mediaTier !== "pro" ? null
+        : (proVideo || (media.kind === "image" ? proImage
+          : (media.kind === "speak" ? (proSpeech || BOT_PRO_SPEECH_MODELS[BOT_PRO_SPEECH_DEFAULT]) : null)));
+      if (mediaPriceModel) {
+        var mediaQuote = await botBtcPriceOrNull();
+        if (!mediaQuote) {
+          return await turnFail({ error: new BtcPriceUnavailable().message, retryable: true, priceUnavailable: true }, 503);
+        }
+        var mediaOpts = {};
+        if (media.kind === "video") {
+          var refImages = botExtractImageUrls(message);
+          try {
+            mediaPlan = await botVideoPlan(env, media.prompt, proVideo, refImages.length ? refImages[0] : "", media.res);
+          } catch (e) {
+            return await turnFail({ error: botFailText("Nymbot error: the media could not be generated, and nothing was charged. Please try again.", "media", e) }, 500);
+          }
+          mediaOpts = { body: mediaPlan.body, seconds: mediaPlan.seconds };
+        } else if (media.kind === "image") {
+          mediaOpts = { refs: editRefs.length };
+        } else {
+          mediaOpts = { chars: truncateText(String(media.prompt), BOT_TTS_MAX_CHARS).length };
+        }
+        mediaMilli = botMediaQuote(media.kind === "speak" ? "speech" : media.kind, mediaPriceModel, mediaOpts, mediaQuote.usd).milli;
+      }
+      var mediaCost = mediaMilli != null ? Math.ceil(mediaMilli / BOT_MILLI_PER_CREDIT) : BOT_MEDIA_COSTS[media.kind][mediaTier];
       var mediaRecord = proModel ? proRecord : record;
-      var mediaCap = capRefusal(mediaCost * BOT_MILLI_PER_CREDIT, maxCost, !!proModel);
+      var mediaCap = capRefusal(mediaMilli != null ? mediaMilli : mediaCost * BOT_MILLI_PER_CREDIT, maxCost, !!proModel);
       if (mediaCap) return await turnFail(mediaCap);
       if ((mediaRecord.balance || 0) < mediaCost) {
         return await turnFail({
@@ -7984,7 +8570,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           pro: !!proModel,
           balance: mediaRecord.balance || 0,
           required: mediaCost,
-          error: "?" + media.kind + " costs " + mediaCost + (proModel ? " Pro" : "") +
+          error: "?" + media.kind + " costs " + (mediaMilli != null ? "up to " : "") + mediaCost + (proModel ? " Pro" : "") +
             " credit" + (mediaCost === 1 ? "" : "s") + " and you have " +
             (mediaRecord.balance || 0) + ". Type ?buy for more."
         });
@@ -8009,21 +8595,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       var mediaUrl;
       try {
         if (media.kind === "video") {
-          // A picture in the same message turns text-to-video into image-to-video
-          // wherever the chosen model takes a reference.
-          var refImages = botExtractImageUrls(message);
-          mediaUrl = await botGenerateVideo(env, media.prompt, proVideo,
-            refImages.length ? refImages[0] : "", botPrivkey, botPubkey);
+          mediaUrl = await botGenerateVideo(env, mediaPlan, proVideo, botPrivkey, botPubkey);
         } else if (media.kind === "image") {
           mediaUrl = await botGenerateImage(env, media.prompt, mediaTier, botPrivkey, botPubkey, proImage, editRefs);
         } else {
           mediaUrl = await botGenerateSpeech(env, media.prompt, mediaTier, botPrivkey, botPubkey, proSpeech);
         }
       } catch (e) {
-        // Nothing is charged when generation or upload fails.
-        return await turnFail({ error: botFailText("Nymbot error: the media could not be generated, and nothing was charged. Please try again.", "media", e) }, 500);
+        if (!(e && e.billed)) {
+          return await turnFail({ error: botFailText("Nymbot error: the media could not be generated, and nothing was charged. Please try again.", "media", e) }, 500);
+        }
+        mediaUrl = String(e.message || "The provider accepted the request but nothing came back to deliver. It was charged, since the provider bills it.");
       }
-      var mediaSpend = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
+      var mediaSpend = await ledgerCall(env, mediaMilli != null
+        ? { op: "consume-credits", pubkey: userPubkey, cost: 0, milli: mediaMilli, ts: Date.now(), tier: mediaTier, hold: holdId || undefined }
+        : { op: "consume-credits", pubkey: userPubkey, cost: mediaCost, ts: Date.now(), tier: mediaTier, hold: holdId || undefined });
       holdId = null;
       if (mediaSpend && mediaSpend._noLedger) {
         mediaRecord.balance -= mediaCost;
@@ -8062,9 +8648,12 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
         balance: mediaRecord.balance,
-        balanceCredits: mediaRecord.balance,
-        cost: mediaCost,
-        costCredits: mediaCost,
+        balanceCredits: mediaSpend && mediaSpend.ok && mediaMilli != null
+          ? botCreditFigure(mediaRecord.balance, -(Number(mediaSpend.dust) || 0))
+          : mediaRecord.balance,
+        cost: mediaMilli != null ? (mediaSpend && mediaSpend.ok ? Number(mediaSpend.charged) || 0 : mediaCost) : mediaCost,
+        costCredits: mediaMilli != null ? Math.round(mediaMilli) / BOT_MILLI_PER_CREDIT : mediaCost,
+        costMilli: mediaMilli != null ? mediaMilli : mediaCost * BOT_MILLI_PER_CREDIT,
         taskType: media.kind,
         media: media.kind,
         pro: !!proModel,
@@ -8078,7 +8667,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       // rather than paying for another one.
       noteUsage(context, {
         pubkey: userPubkey, kind: "media", tier: mediaTier, task: media.kind, model: mediaBody.modelLabel,
-        calls: 1, costMilli: mediaCost * BOT_MILLI_PER_CREDIT, ms: Date.now() - usageT0,
+        calls: 1, costMilli: mediaMilli != null ? mediaMilli : mediaCost * BOT_MILLI_PER_CREDIT, ms: Date.now() - usageT0,
         stages: clock.stages()
       });
       return await turnDone(mediaBody);
@@ -8111,21 +8700,36 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         + botPartSurcharge(askedIds.length);
     var stdRates = null;
     var stdRequired = cost;
+    var stdEstimate = null;
     if (!proModel && !freeTurn) {
       stdRates = await botStandardRates(env, BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general);
       if (stdRates) {
-        var stdReserve = botMeteredReserve(stdRates, 1, false,
-          await botBtcPrice(), BOT_SATS_PER_CREDIT);
-        if (stdReserve != null) {
-          stdRequired = Math.max(cost, stdReserve + botPartSurcharge(askedIds.length));
+        var stdIn = botTurnInputTokens({
+          proModel: null, message: message, history: history, web: body.web === true,
+          inApp: isStandaloneNymbot(context.request, env), followUps: wantsFollowUps
+        });
+        var stdOut = BOT_PM_MAX_TOKENS[taskType] || BOT_PM_MAX_TOKENS.general;
+        var stdPriced = [stdRates];
+        var stdSeesMedia = !BOT_PM_VISION_ROUTES[taskType] && [parsed.question].concat(history.map(function (h) {
+          return h && !h.isBot ? h.text : "";
+        })).some(function (t) { return botExtractImageUrls(t).length || botExtractVideoUrls(t).length; });
+        if (stdSeesMedia) {
+          var stdVision = await botStandardRates(env, BOT_PM_VISION_MODEL);
+          if (stdVision) stdPriced.push(stdVision);
+        }
+        var stdBtc = await botBtcPrice();
+        stdPriced.forEach(function (rates) {
+          var milli = botMeteredReserveMilli(Object.assign({}, rates, { maxTokens: stdOut }), 1, false,
+            stdBtc, BOT_SATS_PER_CREDIT, null, stdIn);
+          if (milli != null && (stdEstimate == null || milli > stdEstimate)) stdEstimate = milli;
+        });
+        if (stdEstimate != null) {
+          stdRequired = Math.max(cost, Math.max(1, Math.ceil(stdEstimate / BOT_MILLI_PER_CREDIT)) + botPartSurcharge(askedIds.length));
         }
       }
     }
 
     if (!proModel && !freeTurn && maxCost != null) {
-      var stdEstimate = stdRates
-        ? botMeteredReserveMilli(stdRates, 1, false, await botBtcPrice(), BOT_SATS_PER_CREDIT, 1)
-        : null;
       var stdCap = capRefusal(stdEstimate != null
         ? stdEstimate + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT
         : cost * BOT_MILLI_PER_CREDIT, maxCost, false);
@@ -8172,6 +8776,52 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         obj.resumable = true;
       }
       return await turnFail(obj, status);
+    };
+    var turnFailSpent = async function (src, obj, status) {
+      if (freeTurn && botFreeSpent(src)) freeReturned = true;
+      var spentMilli = 0;
+      if (!freeTurn) {
+        try { spentMilli = await botFailedSpendMilli(env, src, proModel, stdRates); } catch (priceErr) { spentMilli = 0; }
+      }
+      if (spentMilli > 0 && maxCost != null) spentMilli = Math.min(spentMilli, capMilli(maxCost));
+      var chargedMilli = 0;
+      if (spentMilli > 0) {
+        var failTier = proModel ? "pro" : "standard";
+        var failCap = (proModel ? proRequired : stdRequired) * BOT_MILLI_PER_CREDIT;
+        var took = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: 0, ts: Date.now(),
+          tier: failTier, milli: spentMilli, hold: holdId || undefined });
+        holdId = null;
+        if (took && !took.ok && !took._noLedger && spentMilli > failCap) {
+          spentMilli = failCap;
+          took = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: 0, tier: failTier, milli: spentMilli });
+        }
+        if (took && took._noLedger) {
+          var failRecord = proModel ? proRecord : record;
+          var failCost = Math.max(0, Math.min(Math.round(spentMilli / BOT_MILLI_PER_CREDIT), failRecord.balance || 0));
+          if (failCost > 0) {
+            failRecord.balance -= failCost;
+            failRecord.totalUsed = (failRecord.totalUsed || 0) + failCost;
+            if (proModel) await botPutProCredits(env, userPubkey, failRecord);
+            else await botPutCredits(env, userPubkey, failRecord);
+            chargedMilli = failCost * BOT_MILLI_PER_CREDIT;
+            obj.balance = failRecord.balance;
+          }
+        } else if (took && took.ok) {
+          chargedMilli = spentMilli;
+          obj.balance = took.balance;
+        }
+      }
+      if (chargedMilli > 0) {
+        obj.charged = true;
+        obj.costCredits = Math.round(chargedMilli) / BOT_MILLI_PER_CREDIT;
+        obj.error = (obj.error ? obj.error + " " : "") + "You were charged " + obj.costCredits +
+          (proModel ? " Pro credits" : " credits") + " for the model work the provider billed before this stopped.";
+        if (resumeState && resumeState.team) resumeState.team.chargedMilli = teamPrior + chargedMilli;
+        else if (resumeState && resumeState.research) resumeState.research.chargedMilli = researchPrior + chargedMilli;
+      } else if (obj.error && !/charged/i.test(obj.error)) {
+        obj.error += " You were not charged.";
+      }
+      return await turnFailResumable(obj, status);
     };
 
     var researchResumed = !!(resumeState && resumeState.research);
@@ -8223,16 +8873,28 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         return teamResumed ? await turnFailResumable(teamCap, 402) : await turnFail(teamCap, 402);
       }
       proRequired = Math.max(1, Math.ceil(teamLeft / BOT_MILLI_PER_CREDIT)) + teamSurcharge;
-      if ((proRecord.balance || 0) < proRequired) {
-        var teamShort = {
-          noCredits: true, pro: true, team: true,
-          balance: proRecord.balance || 0,
-          required: proRequired,
-          error: "Team mode with " + teamEst.workers + " workers on " + (teamWorkerModel.label || teamWorkerKey) +
-            " can use up to " + proRequired + " Pro credits and is charged on the tokens it actually uses, usually far less. You have " +
-            (proRecord.balance || 0) + ", so nothing was run or charged. Type ?buy and switch to Pro to top up."
-        };
-        return teamResumed ? await turnFailResumable(teamShort, 402) : await turnFail(teamShort, 402);
+      var teamLegMilli = null;
+      var teamBalance = proRecord.balance || 0;
+      if (teamBalance < proRequired) {
+        var teamOverLeft = Math.max(0, teamEst.overseerMaxMilli - (teamResumed ? Math.max(0, Number(teamState.overseer && teamState.overseer.milli) || 0) : 0));
+        var teamRoom = teamRoomMilli(teamResumed ? teamState : { workers: teamWorkers }, teamEst.overseerMaxMilli, teamEst.workerMaxMilli);
+        var teamStartMilli = teamOverLeft > 0 && teamRoom > 0
+          ? Math.ceil(teamEst.firstMilli * teamRoom / teamOverLeft) : teamLeft;
+        var teamStart = Math.min(proRequired, Math.max(1, Math.ceil(teamStartMilli / BOT_MILLI_PER_CREDIT)) + teamSurcharge);
+        if (teamBalance < teamStart) {
+          var teamShort = {
+            noCredits: true, pro: true, team: true,
+            balance: teamBalance,
+            required: teamStart,
+            error: "Team mode with " + teamEst.workers + " workers on " + (teamWorkerModel.label || teamWorkerKey) +
+              " needs at least " + teamStart + " Pro credits to start, so the lead's share covers its first step, and can use up to " +
+              proRequired + " Pro credits in all. It is charged on the tokens it actually uses, and stops safely, ready to carry on, before a step could cost more than your balance. You have " +
+              teamBalance + ", so nothing was run or charged. Type ?buy and switch to Pro to top up."
+          };
+          return teamResumed ? await turnFailResumable(teamShort, 402) : await turnFail(teamShort, 402);
+        }
+        proRequired = Math.floor(teamBalance);
+        teamLegMilli = Math.max(0, (proRequired - teamSurcharge) * BOT_MILLI_PER_CREDIT);
       }
       teamRun = {
         mode: teamMode,
@@ -8241,7 +8903,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         workerModel: teamWorkerModel,
         price: teamPrice,
         leadTools: teamLeadTools,
-        limits: { overseerMilli: teamEst.overseerMaxMilli, workerMilli: teamEst.workerMaxMilli }
+        limits: { overseerMilli: teamEst.overseerMaxMilli, workerMilli: teamEst.workerMaxMilli, legMilli: teamLegMilli }
       };
       if (teamMode === "research") {
         ghConfig = null;
@@ -8282,15 +8944,46 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         spent: botResearchSpent(proModel, researchBtc),
         limitMilli: Math.max(0, researchCeiling - researchPrior)
       };
+      var researchSurcharge = botPartSurcharge(askedIds.length);
       proRequired = Math.max(1, Math.ceil(Math.max(0, researchCeiling - researchPrior) / BOT_MILLI_PER_CREDIT))
-        + botPartSurcharge(askedIds.length);
+        + researchSurcharge;
       var researchCap = capRefusal(Math.max(0, researchCeiling - researchPrior), maxCost, true);
       if (researchCap) return researchResumed ? await turnFailResumable(researchCap, 402) : await turnFail(researchCap);
-      if ((proRecord.balance || 0) < proRequired) {
-        var researchShort = botResearchShort(proModel, proRequired, proRecord.balance || 0);
-        return researchResumed ? await turnFailResumable(researchShort, 402) : await turnFail(researchShort);
+      var researchBalance = proRecord.balance || 0;
+      if (researchBalance < proRequired) {
+        var researchStart = Math.min(proRequired, Math.max(1, Math.ceil(Math.min(Math.max(0, researchCeiling - researchPrior),
+          botResearchFloorMilli(proModel, researchBtc)) / BOT_MILLI_PER_CREDIT)) + researchSurcharge);
+        if (researchBalance < researchStart) {
+          var researchShort = botResearchShort(proModel, researchStart, researchBalance, true);
+          return researchResumed ? await turnFailResumable(researchShort, 402) : await turnFail(researchShort);
+        }
+        proRequired = Math.floor(researchBalance);
+        researchBudget.limitMilli = Math.min(researchBudget.limitMilli,
+          Math.max(0, (proRequired - researchSurcharge) * BOT_MILLI_PER_CREDIT));
       }
       ghConfig = null;
+    }
+
+    if (proModel && !teamRun && !researchBudget) {
+      proSized = proReserveOf(botTurnInputTokens({
+        proModel: proModel, message: message, history: history, web: body.web === true,
+        inApp: isStandaloneNymbot(context.request, env), followUps: wantsFollowUps
+      }));
+      proBase = proSized.base;
+      proRequired = proSized.required;
+      capFirst = proSized.firstMilli;
+      if (maxCost != null) {
+        var capSized = capRefusal(capFirst + capSurcharge, maxCost, true);
+        if (capSized) return await turnFailResumable(capSized);
+      }
+      var proDropped = !parsed.freshOnly && history.length > 0 && buildWindow(history, 0).dropped.length > 0;
+      recallAffordable = proDropped && !agentTask
+        && (proRecord.balance || 0) >= proRequired + proBase * BOT_RECALL_ROUNDS
+        && (maxCost == null || (proRequired + proBase * BOT_RECALL_ROUNDS) <= maxCost);
+      if (recallAffordable) proRequired += proBase * BOT_RECALL_ROUNDS;
+      if ((proRecord.balance || 0) < proRequired) {
+        return await turnFailResumable(botProShort(proModel, proRequired, proRecord.balance || 0, agentTask, !!ghConfig, proSized.start));
+      }
     }
 
     if (!freeTurn) {
@@ -8362,24 +9055,25 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
         clock: clock
       });
     } catch (e) {
-      return await turnFailResumable({ error: botFailText("Nymbot error: something went wrong while answering. Please try again.", "chat", e) }, 500);
+      return await turnFailSpent(e, { error: botFailText("Nymbot error: something went wrong while answering. Please try again.", "chat", e) }, 500);
     }
     if (draft) await draft.close();
     var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
     var reply = taken.text;
-    if (!reply) return await turnFailResumable({ error: "Nymbot returned an empty response" }, 500);
+    if (!reply) return await turnFailSpent(chatResult, { error: "Nymbot returned an empty response." }, 500);
     var costMilli = 0;
+    var heldCapMilli = null;
     if (!proModel && !freeTurn && stdRates && botUsageBilled(chatResult.usage)) {
       var stdBilled = chatResult.billedModel
         && chatResult.billedModel !== (BOT_PM_MODELS[taskType] || BOT_PM_MODELS.general)
         ? (await botStandardRates(env, chatResult.billedModel)) || stdRates
         : stdRates;
-      var stdMetered = botMeteredCharge(stdBilled, chatResult.usage,
-        await botBtcPrice(), BOT_SATS_PER_CREDIT);
+      var stdMetered = Array.isArray(chatResult.usageParts)
+        ? await botStandardPartsMilli(env, chatResult.usageParts, stdBilled)
+        : botMeteredCharge(stdBilled, chatResult.usage, await botBtcPrice(), BOT_SATS_PER_CREDIT);
       if (stdMetered != null) {
-        costMilli = Math.min(
-          stdMetered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
-          stdRequired * BOT_MILLI_PER_CREDIT);
+        costMilli = stdMetered + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT;
+        heldCapMilli = stdRequired * BOT_MILLI_PER_CREDIT;
         cost = 0;
       }
     }
@@ -8397,9 +9091,8 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
           proCapMilli);
         cost = 0;
       } else if (metered != null) {
-        costMilli = Math.min(
-          metered + sideMilli + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT,
-          proCapMilli);
+        costMilli = metered + sideMilli + botPartSurcharge(askedIds.length) * BOT_MILLI_PER_CREDIT;
+        heldCapMilli = proCapMilli;
         cost = 0;
       } else {
         cost = landed <= 0 ? 0 : Math.min(
@@ -8427,7 +9120,21 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
       ? { ok: true, balance: 0 }
       : await clock.time("charge", ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, ts: Date.now(), tier: spendTier, milli: costMilli, hold: holdId || undefined }));
     holdId = null;
+    if (consumed && !consumed.ok && !consumed._noLedger && heldCapMilli != null && costMilli > heldCapMilli) {
+      var payableMilli = Math.min(costMilli, Math.floor(Math.max(0, Number(consumed.balance) || 0)) * BOT_MILLI_PER_CREDIT);
+      if (payableMilli > heldCapMilli) {
+        costMilli = payableMilli;
+        consumed = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, tier: spendTier, milli: costMilli });
+      }
+      if (!consumed || (!consumed.ok && !consumed._noLedger)) {
+        costMilli = heldCapMilli;
+        consumed = await ledgerCall(env, { op: "consume-credits", pubkey: userPubkey, cost: cost, tier: spendTier, milli: costMilli });
+      }
+    }
     if (consumed && consumed._noLedger) {
+      if (heldCapMilli != null && costMilli > heldCapMilli) {
+        costMilli = Math.max(heldCapMilli, Math.min(costMilli, Math.max(0, spendRecord.balance || 0) * BOT_MILLI_PER_CREDIT));
+      }
       if (costMilli > 0) {
         cost = Math.max(cost, maxCost != null
           ? Math.floor(costMilli / BOT_MILLI_PER_CREDIT)
@@ -8643,6 +9350,7 @@ function canonicalizeBotText(text, alias) {
 // HTTP POST handler
 async function onRequest(context) {
   const { request } = context;
+  botBtcPriceBind(context.env);
 
   // Handle CORS preflight
   if (request.method === "OPTIONS") {
@@ -8703,6 +9411,7 @@ async function onRequest(context) {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
       await botReleaseStrandedTurn(context);
+      if (e instanceof BtcPriceUnavailable) return botPriceRefusal(e);
       console.error("bot PM action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
@@ -10633,7 +11342,7 @@ async function runSearchSources(sources) {
   return collected;
 }
 
-async function webSearch(query, geohash, env) {
+async function webSearch(query, geohash, env, opts) {
   // Weather questions: hit a dedicated live weather source first.
   if (/\b(weather|forecast|temperature)\b/i.test(query)) {
     var weatherResults = await searchWeather(query, geohash).catch(function (e) {
@@ -10707,7 +11416,7 @@ async function webSearch(query, geohash, env) {
   // Which engines contributed, so the reply can say when it rests on just one
   merged.sources = used;
   merged.reachable = reachable;
-  return merged.length ? await attachPageContent(merged) : merged;
+  return merged.length ? await attachPageContent(merged, { query: query, pro: !!(opts && opts.pro) }) : merged;
 }
 
 // A pronoun with no antecedent in the message itself
@@ -10789,9 +11498,17 @@ function resultMatchesQuery(line, terms) {
   return terms.length < 3 ? hits >= 1 : hits >= 2;
 }
 
-var PAGE_FETCH_COUNT = 2;
 var PAGE_FETCH_CHARS = 2000;
-var PAGE_FETCH_DEADLINE = 5000;
+var PAGE_READ_CHARS = 200000;
+var PAGE_READ_MAX_PARTS = 4000;
+var PAGE_BUDGETS = {
+  standard: { pages: 2, perPage: 4000, total: 8000, deadline: 5000 },
+  pro: { pages: 4, perPage: 10000, total: 30000, deadline: 7000 }
+};
+var PAGE_LEAD_CHARS = 700;
+var PAGE_UNIT_CHARS = 600;
+var PAGE_GAP = "[\u2026]";
+var PAGE_TAIL_SECTIONS = /^(?:references|notes|citations|footnotes|sources|bibliography|external links|see also|further reading|works cited|notes and references|references and notes)$/i;
 
 // The URL a result line ends with
 function resultUrl(line) {
@@ -10820,15 +11537,227 @@ function extractReadableText(html, limit) {
   return truncateText(text, limit || PAGE_FETCH_CHARS);
 }
 
+function pageArticleBody(html) {
+  var src = String(html || "");
+  var marks = [/\bid=["']mw-content-text["']/i, /<article\b/i, /<main\b/i, /\brole=["']main["']/i];
+  for (var i = 0; i < marks.length; i++) {
+    var m = marks[i].exec(src);
+    if (m && src.length - m.index > 1000) {
+      var at = src.lastIndexOf("<", m.index);
+      return src.slice(at >= 0 ? at : m.index);
+    }
+  }
+  return src;
+}
+
+function pageCleanText(text) {
+  return stripHtmlEntities(String(text || ""))
+    .replace(/&#(\d+);/g, function (m0, n) { var c = Number(n); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : " "; })
+    .replace(/&#x([0-9a-f]+);/gi, function (m0, h) { var c = parseInt(h, 16); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : " "; })
+    .replace(/\[(?:\d{1,3}|[a-z]|edit|citation needed|note \d+|nb \d+)\]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractReadableParts(html, maxChars, maxParts) {
+  var body = pageArticleBody(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<(nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<sup\b[^>]*\breference\b[^>]*>[\s\S]*?<\/sup>/gi, " ");
+  var cap = maxChars || PAGE_READ_CHARS;
+  var partCap = maxParts || PAGE_READ_MAX_PARTS;
+  var parts = [];
+  var seen = {};
+  var used = 0;
+  var skipLevel = 0;
+  var re = /<(p|li|h[1-4]|td|th|dt|dd)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  var m;
+  while ((m = re.exec(body)) !== null && parts.length < partCap && used < cap) {
+    var piece = pageCleanText(m[2]);
+    var level = /^h[1-4]$/i.test(m[1]) ? Number(m[1].charAt(1)) : 0;
+    if (level) {
+      if (skipLevel && level <= skipLevel) skipLevel = 0;
+      if (!skipLevel && PAGE_TAIL_SECTIONS.test(piece)) { skipLevel = level; continue; }
+    }
+    if (skipLevel) continue;
+    if (piece.length < 2 || seen[piece]) continue;
+    seen[piece] = true;
+    if (used + piece.length > cap) piece = piece.slice(0, cap - used);
+    parts.push({ text: piece, heading: level });
+    used += piece.length + 1;
+  }
+  if (parts.length) return parts;
+  var flat = pageCleanText(body).slice(0, cap);
+  return flat ? [{ text: flat, heading: 0 }] : [];
+}
+
+function plainTextParts(raw, maxChars) {
+  var cap = maxChars || PAGE_READ_CHARS;
+  var blocks = String(raw || "").replace(/\r/g, "").slice(0, cap).split(/\n\s*\n/);
+  var parts = [];
+  for (var i = 0; i < blocks.length; i++) {
+    var text = blocks[i].replace(/\s+/g, " ").trim();
+    if (text) parts.push({ text: text, heading: 0 });
+  }
+  return parts;
+}
+
+function pageStem(word) {
+  var w = String(word || "").toLowerCase().replace(/['\u2019]s$/, "");
+  if (w.length > 5 && /ies$/.test(w)) return w.slice(0, -3) + "y";
+  if (w.length > 5 && /ing$/.test(w)) return w.slice(0, -3);
+  if (w.length > 4 && /ed$/.test(w)) return w.slice(0, -2);
+  if (w.length > 4 && /[sxz]es$|ches$|shes$/.test(w)) return w.slice(0, -2);
+  if (w.length > 3 && /s$/.test(w) && !/ss$/.test(w)) return w.slice(0, -1);
+  return w;
+}
+
+function pageQueryTerms(query, snippet) {
+  var out = [];
+  var seen = {};
+  function add(word, weight, asked) {
+    var stem = pageStem(word);
+    if (stem.length < 3) return;
+    if (seen[stem] != null) {
+      var had = out[seen[stem]];
+      if (weight > had.weight) had.weight = weight;
+      if (asked) had.asked = true;
+      return;
+    }
+    seen[stem] = out.length;
+    out.push({ stem: stem, weight: weight, asked: !!asked });
+  }
+  var asked = searchTerms(String(query || "").replace(/https?:\/\/\S+/g, " "));
+  for (var i = 0; i < asked.length; i++) add(asked[i], /^[A-Z]/.test(asked[i]) ? 4 : 3, true);
+  var hinted = searchTerms(String(snippet || "").replace(/https?:\/\/\S+/g, " "));
+  for (var j = 0; j < hinted.length && j < 30; j++) add(hinted[j], 1, false);
+  return out;
+}
+
+function pageTokens(text) {
+  return queryTokens(String(text || "").replace(/[-\u2013\u2014\/]/g, " ")).map(function (w) { return w.toLowerCase(); });
+}
+
+function pageTermHit(tokens, stem) {
+  for (var i = 0; i < tokens.length; i++) {
+    var t = tokens[i];
+    if (stem.length >= 4 ? t.indexOf(stem) === 0 : pageStem(t) === stem) return true;
+  }
+  return false;
+}
+
+function pageUnits(parts) {
+  var units = [];
+  var section = -1;
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (p.heading) {
+      section = units.length;
+      units.push({ part: i, text: p.text, heading: p.heading, section: -1 });
+      continue;
+    }
+    if (p.text.length <= PAGE_UNIT_CHARS) {
+      units.push({ part: i, text: p.text, heading: 0, section: section });
+      continue;
+    }
+    var sentences = p.text.match(/[^.!?]+(?:[.!?]+["'\u201d)\]]*\s*|$)/g) || [p.text];
+    var cur = "";
+    for (var s = 0; s < sentences.length; s++) {
+      var sentence = sentences[s];
+      while (sentence.length > PAGE_UNIT_CHARS * 2) {
+        if (cur.trim()) units.push({ part: i, text: cur.trim(), heading: 0, section: section });
+        cur = "";
+        units.push({ part: i, text: sentence.slice(0, PAGE_UNIT_CHARS).trim(), heading: 0, section: section });
+        sentence = sentence.slice(PAGE_UNIT_CHARS);
+      }
+      if (cur && cur.length + sentence.length > PAGE_UNIT_CHARS) {
+        units.push({ part: i, text: cur.trim(), heading: 0, section: section });
+        cur = "";
+      }
+      cur += sentence;
+    }
+    if (cur.trim()) units.push({ part: i, text: cur.trim(), heading: 0, section: section });
+  }
+  return units;
+}
+
+function selectPageText(parts, query, snippet, budget) {
+  var list = Array.isArray(parts) ? parts.filter(function (p) { return p && p.text; }) : [];
+  var whole = list.map(function (p) { return p.text; }).join("\n");
+  if (whole.length <= budget) return whole;
+  var units = pageUnits(list);
+  var terms = pageQueryTerms(query, snippet);
+  var tokens = units.map(function (u) { return u.heading ? [] : pageTokens(u.text); });
+  var hits = units.map(function () { return []; });
+  for (var t = 0; t < terms.length; t++) {
+    var df = 0;
+    for (var u = 0; u < units.length; u++) {
+      if (tokens[u].length && pageTermHit(tokens[u], terms[t].stem)) { hits[u].push(t); df++; }
+    }
+    terms[t].idf = df ? Math.log(1 + units.length / df) : 0;
+  }
+  var scores = units.map(function (unit, i) {
+    var score = 0;
+    var asked = 0;
+    for (var h = 0; h < hits[i].length; h++) {
+      var term = terms[hits[i][h]];
+      score += term.weight * term.idf;
+      if (term.asked) asked++;
+    }
+    return asked > 1 ? score * (1 + 0.3 * (asked - 1)) : score;
+  });
+  var keep = {};
+  var used = 0;
+  function take(i) {
+    if (i < 0 || i >= units.length) return false;
+    if (keep[i]) return true;
+    var cost = units[i].text.length + PAGE_GAP.length + 2;
+    if (used + cost > budget) return false;
+    keep[i] = true;
+    used += cost;
+    return true;
+  }
+  var leadCap = Math.min(PAGE_LEAD_CHARS, Math.floor(budget / 5));
+  var lead = 0;
+  for (var l = 0; l < units.length && lead < leadCap; l++) {
+    if (units[l].heading || units[l].text.length < 60) continue;
+    if (lead && lead + units[l].text.length > leadCap * 1.5) break;
+    if (!take(l)) break;
+    lead += units[l].text.length;
+  }
+  var ranked = [];
+  for (var r = 0; r < units.length; r++) if (!units[r].heading && scores[r] > 0) ranked.push(r);
+  ranked.sort(function (a, b) { return scores[b] - scores[a] || a - b; });
+  for (var k = 0; k < ranked.length; k++) {
+    if (take(ranked[k]) && units[ranked[k]].section >= 0) take(units[ranked[k]].section);
+  }
+  for (var n = 0; n < ranked.length; n++) {
+    var at = ranked[n];
+    if (units[at - 1] && !units[at - 1].heading) take(at - 1);
+    if (units[at + 1] && !units[at + 1].heading) take(at + 1);
+  }
+  for (var f = 0; f < units.length; f++) {
+    if (!units[f].heading) take(f);
+  }
+  var out = "";
+  var prev = -1;
+  for (var i = 0; i < units.length; i++) {
+    if (!keep[i]) continue;
+    if (prev === -1 ? i > 0 : i !== prev + 1) out += (out ? "\n" : "") + PAGE_GAP + "\n";
+    else if (prev !== -1) out += units[prev].part === units[i].part ? " " : "\n";
+    out += units[i].text;
+    prev = i;
+  }
+  if (prev !== -1 && prev < units.length - 1) out += "\n" + PAGE_GAP;
+  return out;
+}
+
 // The page title, which is what names a link in the reply.
 function extractPageTitle(html) {
   var m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(String(html || ""));
   return m ? truncateText(stripHtmlEntities(m[1]).replace(/\s+/g, " ").trim(), 160) : "";
-}
-
-async function fetchResultPage(url, limit) {
-  var page = await fetchPageDocument(url, limit);
-  return page.text;
 }
 
 var PAGE_FETCH_MAX_BYTES = 2 * 1024 * 1024;
@@ -10862,7 +11791,7 @@ async function botReadTextCapped(resp, maxBytes) {
 }
 
 // One page, as text plus its title.
-async function fetchPageDocument(url, limit) {
+async function fetchPageDocument(url, limit, opts) {
   var controller = new AbortController();
   var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
   try {
@@ -10889,7 +11818,17 @@ async function fetchPageDocument(url, limit) {
     }
     var raw = await botReadTextCapped(resp, PAGE_FETCH_MAX_BYTES);
     clearTimeout(timer);
-    if (/text\/html|application\/xhtml/.test(type) || /<\s*html/i.test(raw.slice(0, 400))) {
+    var html = /text\/html|application\/xhtml/.test(type) || /<\s*html/i.test(raw.slice(0, 400));
+    if (opts && opts.parts) {
+      var parts = html ? extractReadableParts(raw, limit) : plainTextParts(raw, limit);
+      return {
+        url: url,
+        title: html ? extractPageTitle(raw) : "",
+        text: parts.map(function (p) { return p.text; }).join("\n"),
+        parts: parts
+      };
+    }
+    if (html) {
       return { url: url, title: extractPageTitle(raw), text: extractReadableText(raw, limit) };
     }
     return {
@@ -10913,9 +11852,11 @@ var LINK_READ_DEADLINE = 9000;
 var LINK_SKIP_EXT = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg|ico|mp4|webm|mov|mkv|avi|mp3|wav|ogg|flac|m4a|zip|gz|tar|7z|rar|exe|dmg|apk|woff2?|ttf)(?:\?|#|$)/i;
 
 // The links in a message, in the order they were written.
+var BOT_PAGE_URL_RE = /https?:\/\/[^\s<>"'`\]\)]+/g;
+
 function botExtractPageUrls(text) {
   var out = [];
-  var m = String(text || "").match(/https?:\/\/[^\s<>"'`\]\)]+/g);
+  var m = String(text || "").match(BOT_PAGE_URL_RE);
   if (!m) return out;
   for (var i = 0; i < m.length && out.length < LINK_READ_COUNT; i++) {
     var url = m[i].replace(/[.,;:!?]+$/, "");
@@ -10936,16 +11877,18 @@ function isPrivateHostUrl(raw) {
 }
 
 // Reads the pages a message links to.
-async function botReadLinkedPages(question, progress) {
+async function botReadLinkedPages(question, progress, perPage) {
+  var pageChars = perPage > 0 ? Math.min(LINK_READ_CHARS, perPage) : LINK_READ_CHARS;
   var urls = botExtractPageUrls(question);
   if (!urls.length) return { pages: [], failed: [] };
   var pages = [];
   var failed = [];
   var reads = urls.map(function (url) {
     if (progress) progress({ kind: "page", url: truncateText(url, 120) });
-    return fetchPageDocument(url, LINK_READ_CHARS).then(function (page) {
-      if (page && page.text && page.text.length > 80) pages.push(page);
-      else failed.push(url);
+    return fetchPageDocument(url, PAGE_READ_CHARS, { parts: true }).then(function (page) {
+      if (page && page.text && page.text.length > 80) {
+        pages.push({ url: page.url, title: page.title, text: selectPageText(page.parts, question, "", pageChars) });
+      } else failed.push(url);
     }, function () { failed.push(url); });
   });
   var deadline;
@@ -10978,8 +11921,10 @@ function linkedPagesBlock(read) {
     out += "This is the readable text of the pages the user linked, retrieved by Nymchat a moment " +
       "ago. You CAN read links: never tell the user you are unable to open a URL when its text is " +
       "above. It is extracted text, so layout, images and anything the page loads with JavaScript " +
-      "are missing — answer from what is there and say plainly when the page does not cover " +
-      "something rather than filling the gap.\n";
+      "are missing. A long page is cut down to its opening and the passages that best match the " +
+      "question, in page order, and " + PAGE_GAP + " marks text that was left out. Answer from what " +
+      "is there and say plainly when the text you have does not cover something rather than " +
+      "filling the gap.\n";
   }
   if (read.failed.length) {
     out += "These links could not be read (they refused the request, timed out, or are not pages): " +
@@ -10991,31 +11936,50 @@ function linkedPagesBlock(read) {
 // A snippet is a headline. Asked three times for the full spec list, the bot
 // repeated the same one line because the headline was all it ever had — so read
 // the top pages. A link that will not load is dropped rather than cited.
-async function attachPageContent(results) {
+async function attachPageContent(results, opts) {
+  var tier = opts && opts.pro ? PAGE_BUDGETS.pro : PAGE_BUDGETS.standard;
+  var query = (opts && opts.query) || "";
+  var picks = [];
   var urls = [];
-  for (var i = 0; i < results.length && urls.length < PAGE_FETCH_COUNT; i++) {
+  for (var i = 0; i < results.length && picks.length < tier.pages; i++) {
     var url = resultUrl(results[i]);
-    if (url && urls.indexOf(url) === -1) urls.push(url);
+    if (!url || urls.indexOf(url) !== -1 || isPrivateHostUrl(url) || LINK_SKIP_EXT.test(url)) continue;
+    urls.push(url);
+    picks.push({ url: url, snippet: String(results[i]).replace(/\s*\[https?:\/\/[^\]]+\]\s*$/, "") });
   }
-  if (!urls.length) return results;
-  var pages = [];
+  if (!picks.length) return results;
+  var docs = picks.map(function () { return null; });
   var dead = {};
-  var reads = urls.map(function (url) {
-    return fetchResultPage(url).then(function (text) {
-      if (text && text.length > 120) pages.push({ url: url, text: text });
+  var reads = picks.map(function (pick, k) {
+    return fetchPageDocument(pick.url, PAGE_READ_CHARS, { parts: true }).then(function (doc) {
+      docs[k] = doc;
     }, function (e) {
       console.warn("nymbot page read failed — " + ((e && e.message) || e));
-      if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[url] = true;
+      if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[pick.url] = true;
     });
   });
   var deadline;
   await Promise.race([
     Promise.all(reads),
-    new Promise(function (resolve) { deadline = setTimeout(resolve, PAGE_FETCH_DEADLINE); })
+    new Promise(function (resolve) { deadline = setTimeout(resolve, tier.deadline); })
   ]);
   clearTimeout(deadline);
+  var landed = docs.slice();
+  var usable = landed.filter(function (doc) { return doc && doc.text && doc.text.length > 120; }).length;
+  var left = tier.total;
+  var pages = [];
+  for (var d = 0; d < landed.length; d++) {
+    var doc = landed[d];
+    if (!doc || !doc.text || doc.text.length <= 120) continue;
+    var share = Math.min(tier.perPage, Math.floor(left / Math.max(1, usable)));
+    usable--;
+    var text = selectPageText(doc.parts, query, picks[d].snippet, share);
+    left = Math.max(0, left - text.length);
+    pages.push({ url: picks[d].url, title: doc.title || "", text: text });
+  }
   var kept = results.filter(function (line) { return !dead[resultUrl(line)]; });
   kept.sources = results.sources;
+  kept.reachable = results.reachable;
   kept.pages = pages;
   return kept;
 }
@@ -11026,13 +11990,17 @@ function searchPageBlock(results) {
   if (!pages.length) return "";
   var out = "--- PAGE CONTENT (read from the results just now) ---\n";
   for (var i = 0; i < pages.length; i++) {
-    out += botUntrusted("WEB PAGE " + pages[i].url, "[" + pages[i].url + "]\n" + pages[i].text);
+    out += botUntrusted("WEB PAGE " + pages[i].url, "[" + pages[i].url + "]" +
+      (pages[i].title ? " " + pages[i].title : "") + "\n" + pages[i].text);
   }
   out += "--- END PAGE CONTENT ---\n";
   out += BOT_UNTRUSTED_WEB_NOTE;
-  out += "This is the actual text of those pages, not a summary. When the user asks for detail " +
-    "— a full spec list, figures, names, dates — take it from here and lay it out in full rather " +
-    "than repeating the one-line snippet. Do not claim a detail the page does not contain.\n";
+  out += "These are selected excerpts of those pages, not a summary: the opening of each page and " +
+    "the passages that best match the question, in page order, with " + PAGE_GAP + " marking text " +
+    "that was left out. When the user asks for detail — a full spec list, figures, names, dates — " +
+    "take it from here and lay it out in full rather than repeating the one-line snippet. If the " +
+    "excerpts do not cover something, say the pages you read do not mention it rather than " +
+    "claiming a snippet or page was cut off, and do not claim a detail the excerpts do not contain.\n";
   return out;
 }
 
@@ -11905,13 +12873,8 @@ function handleUnits(args) {
 // Bitcoin Price Command
 async function handleBtc() {
   try {
-    var resp = await fetch("https://mempool.space/api/v1/prices", {
-      headers: { "User-Agent": BOT_BROWSER_AGENT }
-    });
-    if (!resp.ok) throw new Error("API error");
-    var data = await resp.json();
-    var usd = data.USD;
-    if (!usd) throw new Error("No price data");
+    var quote = await botBtcQuote();
+    var usd = quote.usd;
     var formatted = usd.toLocaleString("en-US", { maximumFractionDigits: 0 });
     // Also fetch block height for extra context
     var blockResp = await fetch("https://mempool.space/api/blocks/tip/height", {
@@ -11923,6 +12886,7 @@ async function handleBtc() {
     // Sats per dollar
     var satsPerDollar = Math.round(100000000 / usd);
     lines.push("\u26A1 " + satsPerDollar.toLocaleString("en-US") + " sats/$1");
+    if (quote.sources.length) lines.push("Median of " + quote.sources.join(", ") + (quote.ageMs >= 60000 ? ", " + Math.round(quote.ageMs / 60000) + " min ago" : ""));
     return lines.join("\n");
   } catch (e) {
     return "\u20BF Unable to fetch Bitcoin price right now. Try again later.";
@@ -12492,6 +13456,7 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 
 export {
   botMediaDirectUrl,
+  botTranscribeCharge,
   onRequest,
   handleBotPMAction,
   botProCatalog,
@@ -12509,6 +13474,8 @@ export {
   botInlineVisionImages,
   runProGitChat,
   runProEffort,
+  proGatewayChat,
+  proCallUsage,
   botReleaseStrandedTurn,
   botTurnKey,
   botTurnMsgKey,
@@ -12534,6 +13501,11 @@ export {
   mcpGitAdapter,
   fetchPageDocument,
   isPrivateHostUrl,
+  webSearch,
+  attachPageContent,
+  searchPageBlock,
+  botReadLinkedPages,
+  linkedPagesBlock,
   gitConfigRefused,
   botFreeNetId
 };

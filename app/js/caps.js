@@ -99,7 +99,7 @@
         },
 
         estimate(ui, text, conv, opts) {
-            const media = ui.mediaModel(conv);
+            const media = ui.mediaPriced(ui.mediaModel(conv));
             const model = (conv && conv.proModel) || ui.settings.proModel;
             if (media && String(text || '').trim() && !/^[?!]/.test(String(text).trim())
                 && Number(media.credits) > 0) {
@@ -113,7 +113,7 @@
             const lim = this.limits(conv);
             const spent = this.spent(conv, pricing);
             const pro = !!est && est.tier === 'pro';
-            const high = est ? this.satsFor(est.high, pro, pricing) : 0;
+            const high = est ? this.satsFor(est.max != null ? est.max : est.high, pro, pricing) : 0;
             const out = {
                 limits: lim, spent, high, pro,
                 room: lim.total == null ? null : Math.max(0, lim.total - spent),
@@ -173,7 +173,7 @@
 
         askBody(check, est) {
             const pro = check.pro;
-            const credits = est ? est.high : 0;
+            const credits = est ? (est.max != null ? est.max : est.high) : 0;
             const estimate = t('{sats} sats ({n} {tier} credits)', {
                 sats: num(Math.ceil(check.high)),
                 n: window.amount ? window.amount(credits, 2) : String(credits),

@@ -2480,31 +2480,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  withCapRoom(app, estimate.tier == 'pro'
-                      ? (creditAmount(estimate.low, estimate.metered) ==
-                              creditAmount(estimate.high, estimate.metered)
-                          ? t('About {n} Pro credits', {
-                              'n': creditAmount(estimate.low, estimate.metered)
-                            })
-                          : t('About {low}–{high} Pro credits', {
-                              'low':
-                                  creditAmount(estimate.low, estimate.metered),
-                              'high':
-                                  creditAmount(estimate.high, estimate.metered)
-                            }))
-                      : estimate.metered
-                          ? (creditAmount(estimate.low, true) ==
-                                  creditAmount(estimate.high, true)
-                              ? t('{n} standard credits',
-                                  {'n': creditAmount(estimate.low, true)})
-                              : t('About {low}–{high} standard credits', {
-                                  'low': creditAmount(estimate.low, true),
-                                  'high': creditAmount(estimate.high, true)
-                                }))
-                          : (estimate.low == 1
-                              ? t('1 standard credit')
-                              : t('{n} standard credits',
-                                  {'n': figure(estimate.low.round())}))),
+                  withCapRoom(app, ChatEngine.estimateLine(estimate)),
                   style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
                 ),
               )
@@ -2714,6 +2690,19 @@ class _ChatDrawerState extends State<_ChatDrawer> {
       if (!mounted) return;
       setState(() => _artifactCount = artifactIndex(AppScope.read(context)).length);
     });
+  }
+
+  Future<void> _refresh() async {
+    final round = await AppScope.read(context).refreshSync();
+    if (!mounted || round.isOk) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        content: Text(round.state == 'skipped'
+            ? t('Sync is off, so there is nothing to bring in.')
+            : t('Could not sync just now. Try again in a moment.')),
+        duration: const Duration(seconds: 3),
+      ));
   }
 
   Future<void> _openArtifactLibrary() async {
@@ -3073,7 +3062,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 children: [
                   ...head,
                   Expanded(
-                    child: rows.isEmpty ? empty : _FadedChatList(children: rows),
+                    child: _FadedChatList(
+                      onRefresh: _refresh,
+                      children: rows.isEmpty ? [empty] : rows,
+                    ),
                   ),
                   ...toggle,
                   if (menu.isNotEmpty)
@@ -3093,20 +3085,24 @@ class _ChatDrawerState extends State<_ChatDrawer> {
                 ],
               );
             }
-            return CustomScrollView(
-              key: const ValueKey('drawer-scroll'),
-              slivers: [
-                SliverList(
-                  delegate: SliverChildListDelegate([
-                    ...head,
-                    if (rows.isEmpty) empty,
-                    ...rows,
-                    ...toggle,
-                    ...menu,
-                    ...profile,
-                  ]),
-                ),
-              ],
+            return RefreshIndicator.adaptive(
+              onRefresh: _refresh,
+              child: CustomScrollView(
+                key: const ValueKey('drawer-scroll'),
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  SliverList(
+                    delegate: SliverChildListDelegate([
+                      ...head,
+                      if (rows.isEmpty) empty,
+                      ...rows,
+                      ...toggle,
+                      ...menu,
+                      ...profile,
+                    ]),
+                  ),
+                ],
+              ),
             );
           },
         ),
@@ -3116,9 +3112,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
 }
 
 class _FadedChatList extends StatefulWidget {
-  const _FadedChatList({required this.children});
+  const _FadedChatList({required this.children, required this.onRefresh});
 
   final List<Widget> children;
+  final Future<void> Function() onRefresh;
 
   @override
   State<_FadedChatList> createState() => _FadedChatListState();
@@ -3166,11 +3163,15 @@ class _FadedChatListState extends State<_FadedChatList> {
       },
       child: Stack(
         children: [
-          ListView(
-            key: const ValueKey('drawer-chat-list'),
-            controller: _scroll,
-            padding: const EdgeInsets.only(bottom: _fade),
-            children: widget.children,
+          RefreshIndicator.adaptive(
+            onRefresh: widget.onRefresh,
+            child: ListView(
+              key: const ValueKey('drawer-chat-list'),
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: _fade),
+              children: widget.children,
+            ),
           ),
           Positioned(
             left: 0,

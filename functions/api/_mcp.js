@@ -1,4 +1,4 @@
-import { capStoppedReply } from "./_caps.js";
+import { capStoppedReply, capNextUsage } from "./_caps.js";
 
 export var MCP_MAX_SERVERS = 3;
 export var MCP_MAX_TOOLS = 40;
@@ -607,6 +607,8 @@ export function mcpPauseReply(pending) {
     ". Allow it below and I will carry on from exactly here; deny it and nothing runs.";
 }
 
+var MCP_FAILED_NOTE = "I stopped here because the model call for the next step failed. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
+
 export async function runMcpToolLoop(ctx) {
   var d = ctx.deps;
   var progress = typeof ctx.progress === "function" ? ctx.progress : function () { };
@@ -721,8 +723,10 @@ export async function runMcpToolLoop(ctx) {
     if (early) return paused(early, "");
   }
 
+  var lastUsage = null;
   while (true) {
-    if (calls > 0 && guard && !guard.room(usage, 1)) {
+    if (calls > 0 && guard && !guard.room(usage, 1,
+      capNextUsage(convo, calls + 1 >= budget ? null : tools, ctx.outCeiling || ctx.proModel.maxTokens, lastUsage))) {
       return done({ reply: capStoppedReply(sofar), truncated: true, capStopped: true, convo: convo });
     }
     calls++;
@@ -733,11 +737,18 @@ export async function runMcpToolLoop(ctx) {
     try {
       r = await d.proGatewayChat(ctx.env, ctx.proModel, convo, ctx.proModel.maxTokens, lastTurn ? null : tools);
     } catch (e) {
-      if (!d.proRateLimited(e) || (calls < 2 && !priorCalls)) throw e;
+      if (calls < 2 && !priorCalls) throw e;
       calls--;
+      d.botUsageAdd(usage, e && e.usage);
+      if (e && e.usage) outputTokens += Number(e.usage.out) || 0;
+      if (!d.proRateLimited(e)) {
+        var note = MCP_FAILED_NOTE;
+        return done({ reply: String(sofar || "").trim() ? String(sofar).trim() + "\n\n_" + note + "_" : note, truncated: true, convo: convo });
+      }
       return done({ reply: ctx.stalledReply || "I had to stop part-way through this one; the AI gateway is busy. Ask me to carry on in a minute.", truncated: true, convo: convo });
     }
     var msg = r.msg;
+    lastUsage = r.usage;
     outputTokens += r.outputTokens || 0;
     d.botUsageAdd(usage, r.usage);
     var thought = d.proMessageReasoning(msg);

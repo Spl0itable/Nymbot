@@ -3363,24 +3363,14 @@
                 hint.textContent = PicEdit.hint();
             } else if (media && text.trim() && !/^[?!@]/.test(text.trim())) {
                 hint.textContent = t('{name} · {price}', {
-                    name: media.label,
-                    price: this.modelPrice(media)
+                    name: this.mediaLabel(media),
+                    price: this.modelPrice(this.mediaPriced(media))
                 });
             } else if (Chat.repoNeedsPro(this.conv, this.settings)) {
                 hint.textContent = t('Only a Pro model can read a repository — pick one with ?model, or this chat answers without it.');
             } else if (this.settings.showTokenEstimate && text.trim() && !/^\?/.test(text.trim())) {
                 const est = Chat.estimateCredits(text, this.settings, this.conv, opts, this.models);
-                hint.textContent = est.tier === 'pro'
-                    ? (creditAmount(est.low) === creditAmount(est.high)
-                        ? t('About {n} Pro credits', { n: creditAmount(est.low) })
-                        : t('About {low}–{high} Pro credits', { low: creditAmount(est.low), high: creditAmount(est.high) }))
-                    : (est.metered
-                        ? (creditAmount(est.low) === creditAmount(est.high)
-                            ? t('{n} standard credits', { n: creditAmount(est.low) })
-                            : t('About {low}–{high} standard credits', { low: creditAmount(est.low), high: creditAmount(est.high) }))
-                        : (est.low === 1
-                            ? t('1 standard credit')
-                            : t('{n} standard credits', { n: num(est.low) })));
+                hint.textContent = Chat.estimateLine(est, creditAmount);
             } else {
                 hint.textContent = '';
             }
@@ -3664,7 +3654,7 @@
             const modelChip = $('chipModel');
             modelChip.classList.toggle('is-active', !!shown);
             modelChip.querySelector('.chip-label').textContent = shown
-                ? shown.label
+                ? (shown === media ? this.mediaLabel(media) : shown.label)
                 : t('Auto-routed');
             if (!this._modelChipIcon) this._modelChipIcon = modelChip.firstElementChild.cloneNode(true);
             modelChip.replaceChild(
@@ -3961,15 +3951,74 @@
             return (scope && scope.mediaModel) || this.settings.mediaModel || null;
         },
 
-        mediaFor(m, slug) {
+        mediaFor(m, slug, res) {
+            const pick = this.resolutionFor(m, res);
+            const credits = pick && pick.entry.credits != null ? pick.entry.credits : m.credits;
             const media = {
                 key: m.key, label: m.label, kind: m.kind || 'image',
-                credits: m.credits, max: m.max,
+                credits, max: pick ? credits : m.max,
                 command: this.generatorCommand(m.command),
                 slug: m.authorSlug || slug || null
             };
+            if (pick) {
+                media.resolution = pick.top.res;
+                if (!pick.isDefault) {
+                    media.res = pick.entry.res;
+                    media.command += ' --res ' + media.res;
+                }
+            }
             if (this.mediaNeedsPro(media)) media.proKey = this.cheapestChatKey();
             return media;
+        },
+
+        videoResolutions(m) {
+            if (!m || (m.kind || 'chat') !== 'video' || !Array.isArray(m.resolutions)) return [];
+            return m.resolutions.filter(r => r && r.res);
+        },
+
+        resolutionFor(m, res) {
+            const list = this.videoResolutions(m);
+            if (!list.length) return null;
+            const top = list.find(r => r.res === m.resolution) || list[list.length - 1];
+            const want = String(res || '').toLowerCase();
+            const hit = want ? list.find(r => String(r.res).toLowerCase() === want) : null;
+            return { entry: hit || top, top, isDefault: !hit || hit === top };
+        },
+
+        pinnedResolution(media) {
+            if (!media || media.kind !== 'video') return null;
+            const row = this.models && this.models.models
+                ? this.models.models.find(m => m.key === media.key)
+                : null;
+            const pick = row ? this.resolutionFor(row, media.res) : null;
+            if (pick) {
+                return {
+                    res: pick.entry.res,
+                    credits: pick.entry.credits != null ? pick.entry.credits : media.credits,
+                    isDefault: pick.isDefault
+                };
+            }
+            if (media.res) return { res: media.res, credits: media.credits, isDefault: false };
+            return media.resolution ? { res: media.resolution, credits: media.credits, isDefault: true } : null;
+        },
+
+        mediaPriced(media) {
+            const pick = this.pinnedResolution(media);
+            if (!pick) return media;
+            const base = String(media.command || '').replace(/\s+--res(?:olution)?(?:=|\s+)\S+/gi, '');
+            const priced = Object.assign({}, media, {
+                credits: pick.credits,
+                max: pick.credits,
+                command: pick.isDefault ? base : base + ' --res ' + pick.res
+            });
+            if (pick.isDefault) delete priced.res;
+            else priced.res = pick.res;
+            return priced;
+        },
+
+        mediaLabel(media) {
+            const pick = this.pinnedResolution(media);
+            return pick ? t('{name} · {res}', { name: media.label, res: pick.res }) : media.label;
         },
 
         mediaNeedsPro(media) {
@@ -4027,8 +4076,8 @@
         },
 
         withMediaModel(text, conv) {
-            const media = this.mediaModel(conv);
-            const command = media && media.command;
+            const media = this.mediaPriced(this.mediaModel(conv));
+            let command = media && media.command;
             if (!command) return text;
             const verb = (/^\?(\w+)/.exec(command) || [])[1] || '';
             const head = /^\?(\w+)\s*([\s\S]*)$/.exec(text);
@@ -4037,6 +4086,9 @@
             if (head[1].toLowerCase() !== verb.toLowerCase()) return text;
             if (!rest || /^models?$/i.test(rest)) return text;
             if (/(?:^|\s)(?:--model|-m)[\s=]/.test(rest)) return text;
+            if (/(?:^|\s)--res(?:olution)?(?:[\s=]|$)/i.test(rest)) {
+                command = command.replace(/\s+--res(?:olution)?(?:=|\s+)\S+/gi, '');
+            }
             return command + ' ' + rest;
         },
 
@@ -4160,6 +4212,7 @@
         },
 
         modelPrice(m) {
+            if (m && m.credits == null && m.metered === true) return '—';
             const turn = this.modelTurnCredits(m);
             if (turn != null) {
                 const low = creditAmount(turn.low);
@@ -4225,13 +4278,39 @@
                     const row = el('button', 'model-row' + (pinned ? ' is-active' : ''));
                     row.type = 'button';
                     const blocked = !!(taken && taken.key === m.key);
+                    const sizes = picking ? [] : this.videoResolutions(m);
+                    const held = sizes.length && pinned ? this.pinnedResolution(media) : null;
+                    const chosen = sizes.length ? this.resolutionFor(m, held && held.res) : null;
+                    const priced = chosen
+                        ? Object.assign({}, m, { credits: chosen.entry.credits, max: chosen.entry.credits })
+                        : m;
                     if (blocked) row.disabled = true;
                     // Who makes it, on the left, so the list scans by maker.
                     row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
                     const name = el('span', 'model-name');
                     name.appendChild(el('span', 'model-title', m.label));
                     if (m.description) name.appendChild(el('span', 'model-desc', m.description));
-                    name.appendChild(el('span', 'model-cost', this.modelPrice(m)));
+                    name.appendChild(el('span', 'model-cost', this.modelPrice(priced)));
+                    if (sizes.length > 1 && !blocked) {
+                        const picks = el('span', 'model-res');
+                        for (const size of sizes) {
+                            const on = size === chosen.entry;
+                            const chip = el('span', 'model-res-chip' + (on ? ' is-active' : ''));
+                            chip.dataset.res = size.res;
+                            chip.setAttribute('role', 'button');
+                            chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+                            chip.title = t('Make videos at {res}', { res: size.res });
+                            chip.appendChild(el('span', 'model-res-name', size.res));
+                            chip.appendChild(el('span', 'model-res-cost',
+                                this.modelPrice({ credits: size.credits != null ? size.credits : m.credits })));
+                            chip.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                pinGenerator(size.res);
+                            });
+                            picks.appendChild(chip);
+                        }
+                        name.appendChild(picks);
+                    }
                     if (m.edit) name.appendChild(el('span', 'model-edit', m.needsImage ? t('Edits a picture you send') : t('Can also edit a picture you send')));
                     const rates = this.modelRates(m);
                     if (rates) name.appendChild(el('span', 'model-rates', rates));
@@ -4250,6 +4329,21 @@
                         this.renderModels();
                     });
                     row.appendChild(star);
+                    const pinGenerator = (res) => {
+                        const off = res == null && pinned;
+                        const media = off ? null : this.mediaFor(m, group.authorSlug, res);
+                        this.setMediaModel(media, forChat);
+                        this.closeModals();
+                        const label = media ? this.mediaLabel(media) : m.label;
+                        this.toast(off
+                            ? t('Back to answering in words.')
+                            : (m.kind === 'video'
+                                ? t('{name} pinned. Every message now makes a video.', { name: label })
+                                : (m.kind === 'speech'
+                                    ? t('{name} pinned. Every message now comes back as a voice clip.', { name: label })
+                                    : t('{name} pinned. Every message now makes a picture.', { name: label }))));
+                        $('input').focus();
+                    };
                     row.addEventListener('click', () => {
                         if (blocked) return;
                         if (picking) {
@@ -4259,18 +4353,7 @@
                             return;
                         }
                         if (m.command) {
-                            const off = pinned;
-                            const media = off ? null : this.mediaFor(m, group.authorSlug);
-                            this.setMediaModel(media, forChat);
-                            this.closeModals();
-                            this.toast(off
-                                ? t('Back to answering in words.')
-                                : (m.kind === 'video'
-                                    ? t('{name} pinned. Every message now makes a video.', { name: m.label })
-                                    : (m.kind === 'speech'
-                                        ? t('{name} pinned. Every message now comes back as a voice clip.', { name: m.label })
-                                        : t('{name} pinned. Every message now makes a picture.', { name: m.label }))));
-                            $('input').focus();
+                            pinGenerator(pinned ? null : (chosen ? chosen.entry.res : null));
                             return;
                         }
                         this.setModel({
@@ -7320,7 +7403,7 @@
                 const estA = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: a, mediaModel: null }), {}, this.models);
                 const estB = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: b, mediaModel: null }), {}, this.models);
                 const low = Math.max(price, (Number(estA.low) || 0) + (Number(estB.low) || 0));
-                const high = Math.max(price, (Number(estA.high) || 0) + (Number(estB.high) || 0));
+                const high = Math.max(price, (Number(estA.max) || Number(estA.high) || 0) + (Number(estB.max) || Number(estB.high) || 0));
                 const gate = await Caps.gate(this, this.conv, { tier: 'pro', low, high });
                 if (!gate.go) return;
                 const room = gate.waived ? null : Caps.maxCost(this.conv, true, this.models);

@@ -75,6 +75,25 @@ class AccountSync {
   Future<SyncRound>? _running;
   bool _again = false;
 
+  int _gen = 0;
+  Completer<SyncRound>? _done;
+  Completer<SyncRound>? _applied;
+  Future<void>? _applying;
+
+  static const Duration stepTimeout = Duration(seconds: 20);
+
+  Duration stallLimit = const Duration(seconds: 60);
+
+  final Stopwatch _sinceBeat = Stopwatch();
+
+  void _beat() => _sinceBeat
+    ..reset()
+    ..start();
+
+  Duration pushBudget = const Duration(seconds: 45);
+
+  bool _live(int gen) => gen == _gen;
+
   final Map<String, String> _hashes = {};
 
   final Map<String, String> _names = {};
@@ -183,7 +202,7 @@ class AccountSync {
     final self = signer.pubkey;
     final String inner;
     try {
-      inner = await signer.nip44Encrypt(self, plaintext);
+      inner = await signer.nip44Encrypt(self, plaintext).timeout(stepTimeout);
     } catch (_) {
       return null;
     }
@@ -245,11 +264,11 @@ class AccountSync {
           lastErr = e;
           continue;
         }
-        return signer.nip44Decrypt(self, inner);
+        return signer.nip44Decrypt(self, inner).timeout(stepTimeout);
       }
       throw lastErr ?? StateError('the post-quantum layer did not open');
     }
-    return signer.nip44Decrypt(self, blob);
+    return signer.nip44Decrypt(self, blob).timeout(stepTimeout);
   }
 
   static int _stamp(Object? record) {
@@ -891,10 +910,18 @@ class AccountSync {
         }));
   }
 
-  Future<({Map<String, dynamic> out, Map<String, String> pulled, int unreadable})>
-      _decode(Map categories) async {
+  Future<
+      ({
+        Map<String, dynamic> out,
+        Map<String, String> pulled,
+        Map<String, String> hashes,
+        Map<String, String> names,
+        int unreadable
+      })> _decode(Map categories) async {
     final out = <String, dynamic>{};
     final pulled = <String, String>{};
+    final hashes = <String, String>{};
+    final names = <String, String>{};
     var unreadable = 0;
     for (final row in categories.entries) {
       final entry = row.value;
@@ -905,6 +932,9 @@ class AccountSync {
       Object? payload;
       try {
         payload = jsonDecode(await _open(blob));
+        _beat();
+      } on TimeoutException {
+        rethrow;
       } catch (_) {
         unreadable++;
         continue;
@@ -917,22 +947,47 @@ class AccountSync {
       pulled[name] = _sha256Hex(blob);
       if (row.key == categoryFor(name)) {
         final plain = jsonEncode({'__cat': name, 'v': out[name]});
-        _hashes[row.key as String] = _sha256Hex(
+        hashes[row.key as String] = _sha256Hex(
             '${_identity.pubkey}|${blobMode(blob)}|$plain');
-        _names[row.key as String] = name;
+        names[row.key as String] = name;
       }
     }
-    return (out: out, pulled: pulled, unreadable: unreadable);
+    return (
+      out: out,
+      pulled: pulled,
+      hashes: hashes,
+      names: names,
+      unreadable: unreadable
+    );
   }
 
-  Future<Map<String, dynamic>?> pull({bool full = false}) async {
+  Future<Map<String, dynamic>?> pull({bool full = false}) => _pull(full: full);
+
+  Future<Map<String, dynamic>?> _pull({bool full = false, int? gen}) async {
+    bool stale() => gen != null && !_live(gen);
     _load();
     final data = await _storage.settingsGet(_identity.signer,
         since: full ? null : since());
+    if (stale()) return null;
+    _beat();
     final categories = data == null ? null : data['categories'];
     if (categories is! Map) return null;
     final isFull = data!['full'] != false;
-    final read = await _decode(categories);
+    final ({
+      Map<String, dynamic> out,
+      Map<String, String> pulled,
+      Map<String, String> hashes,
+      Map<String, String> names,
+      int unreadable
+    }) read;
+    try {
+      read = await _decode(categories);
+    } on TimeoutException {
+      return null;
+    }
+    if (stale()) return null;
+    _hashes.addAll(read.hashes);
+    _names.addAll(read.names);
     if (isFull) blocked = read.unreadable > 0 && read.out.isEmpty;
     _lastPullFull = isFull;
     _pulledBlobs = read.pulled;
@@ -955,13 +1010,19 @@ class AccountSync {
     return read.out;
   }
 
-  Future<bool> _fetch(List<String> categories) async {
+  Future<bool> _fetch(List<String> categories, int gen) async {
     for (var i = 0; i < categories.length; i += 10) {
       final data = await _storage.settingsGet(_identity.signer,
           only: categories.sublist(i, math.min(i + 10, categories.length)));
+      if (!_live(gen)) return false;
+      _beat();
       final rows = data == null ? null : data['categories'];
       if (rows is! Map) return false;
-      _remote.addAll((await _decode(rows)).out);
+      final read = await _decode(rows);
+      if (!_live(gen)) return false;
+      _hashes.addAll(read.hashes);
+      _names.addAll(read.names);
+      _remote.addAll(read.out);
     }
     return true;
   }
@@ -971,7 +1032,10 @@ class AccountSync {
   static bool _tooLong(String dTag, Object? value) =>
       utf8.encode(jsonEncode({'__cat': dTag, 'v': value})).length > sealMaxBytes;
 
-  Future<bool> push(String dTag, Object? value) async {
+  Future<bool> push(String dTag, Object? value) => _push(dTag, value);
+
+  Future<bool> _push(String dTag, Object? value, {int? gen}) async {
+    bool stale() => gen != null && !_live(gen);
     if (blocked) return false;
     _load();
     final plain = jsonEncode({'__cat': dTag, 'v': value});
@@ -979,10 +1043,10 @@ class AccountSync {
     final hash = _sha256Hex('${_identity.pubkey}|${_hybrid ? 'pq' : 'c'}|$plain');
     if (_hashes[category] == hash) return true;
     final blob = await _seal(plain);
-    if (blob == null) return false;
+    if (blob == null || stale()) return false;
     final ok = await _storage.settingsSet(_identity.signer,
         category: category, blob: blob, contentHash: hash);
-    if (!ok) return false;
+    if (!ok || stale()) return false;
     _hashes[category] = hash;
     _names[category] = dTag;
     _remember(_sha256Hex(blob), plain);
@@ -997,18 +1061,92 @@ class AccountSync {
       _again = true;
       return going;
     }
-    final completer = Completer<SyncRound>();
-    _running = completer.future;
-    unawaited(_round().then(completer.complete, onError: (_, __) {
-      completer.complete(const SyncRound.failed());
-    }));
-    return completer.future;
+    return _start().done;
   }
 
-  Future<SyncRound> _round() async {
-    var touched = <String>[];
+  Future<SyncRound> kick() {
+    if (!enabled) return Future.value(const SyncRound.skipped());
+    return _restart().done;
+  }
+
+  Future<SyncRound> refresh() {
+    if (!enabled) return Future.value(const SyncRound.skipped());
+    return _restart().applied;
+  }
+
+  ({Future<SyncRound> done, Future<SyncRound> applied}) _restart() {
+    _timer?.cancel();
+    _timer = null;
+    final done = _done;
+    final applied = _applied;
+    _abandon();
+    final next = _start();
+    if (done != null && !done.isCompleted) done.complete(next.done);
+    if (applied != null && !applied.isCompleted) applied.complete(next.applied);
+    return next;
+  }
+
+  void _abandon() {
+    _gen++;
+    _running = null;
+    _again = false;
+    _done = null;
+    _applied = null;
+  }
+
+  ({Future<SyncRound> done, Future<SyncRound> applied}) _start() {
+    final gen = ++_gen;
+    final done = Completer<SyncRound>();
+    final applied = Completer<SyncRound>();
+    _done = done;
+    _applied = applied;
+    _running = done.future;
+    void finish(SyncRound round) {
+      if (!applied.isCompleted) applied.complete(round);
+      if (!done.isCompleted) done.complete(round);
+    }
+
+    _beat();
+    final every = stallLimit ~/ 4;
+    final watchdog = Timer.periodic(every, (timer) {
+      if (!_live(gen)) {
+        timer.cancel();
+        return;
+      }
+      if (_sinceBeat.elapsed <= stallLimit) return;
+      timer.cancel();
+      final again = _again;
+      _abandon();
+      finish(const SyncRound.failed());
+      if (again) touch(const Duration(milliseconds: 600));
+    });
+    unawaited(_round(gen, applied).then(finish,
+        onError: (_, __) => finish(const SyncRound.failed())).whenComplete(watchdog.cancel));
+    return (done: done.future, applied: applied.future);
+  }
+
+  Future<List<String>?> _applyAlone(Map<String, dynamic> remote, int gen) async {
+    while (_applying != null) {
+      await _applying;
+    }
+    if (!_live(gen)) return null;
+    final gate = Completer<void>();
+    _applying = gate.future;
     try {
-      final remote = await pull();
+      return await apply(remote);
+    } finally {
+      _applying = null;
+      gate.complete();
+    }
+  }
+
+  Future<SyncRound> _round(int gen, Completer<SyncRound> applied) async {
+    const stale = SyncRound.stale();
+    var touched = <String>[];
+    final clockStarted = Stopwatch()..start();
+    try {
+      final remote = await _pull(gen: gen);
+      if (!_live(gen)) return stale;
       if (remote == null) return const SyncRound.offline();
       if (_lastPullFull) {
         _remote = remote;
@@ -1016,11 +1154,20 @@ class AccountSync {
       } else {
         _remote = {..._remote, ...remote};
       }
-      touched = await apply(remote);
+      final merged = await _applyAlone(remote, gen);
+      if (merged == null || !_live(gen)) return stale;
+      touched = merged;
+      _beat();
       _appliedBlobs.addAll(_pulledBlobs);
       _unchanged = {};
       if (blocked) return const SyncRound.blocked();
       await _commit();
+      if (!_live(gen)) return stale;
+      if (touched.isNotEmpty) {
+        final watcher = onChange;
+        if (watcher != null) watcher(touched);
+      }
+      if (!applied.isCompleted) applied.complete(SyncRound.ok(touched));
 
       final known = {...remote.keys, ..._names.values};
       void emptied(Map<String, dynamic> into) {
@@ -1033,6 +1180,7 @@ class AccountSync {
 
       var local = await snapshot();
       final bare = await snapshot(bare: true);
+      if (!_live(gen)) return stale;
       emptied(local);
       emptied(bare);
       final skip = <String>{};
@@ -1048,7 +1196,7 @@ class AccountSync {
           }
         }
         if (wanted.isNotEmpty) {
-          if (await _fetch(wanted)) {
+          if (await _fetch(wanted, gen)) {
             local = await snapshot();
             emptied(local);
           } else {
@@ -1056,33 +1204,41 @@ class AccountSync {
               if (wanted.contains(categoryFor(key))) skip.add(key);
             }
           }
+          if (!_live(gen)) return stale;
         }
       }
       try {
         for (final entry in local.entries) {
           if (skip.contains(entry.key)) continue;
           await _breathe();
-          if (await push(entry.key, entry.value) ||
-              _tooLong(entry.key, entry.value)) {
+          if (!_live(gen)) return stale;
+          if (clockStarted.elapsed > pushBudget) {
+            _again = true;
+            break;
+          }
+          final sent = await _push(entry.key, entry.value, gen: gen);
+          if (!_live(gen)) return stale;
+          _beat();
+          if (sent || _tooLong(entry.key, entry.value)) {
             _prints[categoryFor(entry.key)] = _print(bare[entry.key]);
           }
         }
       } finally {
-        await _saveHashes();
+        if (_live(gen)) await _saveHashes();
       }
       lastAt = DateTime.now();
     } catch (_) {
-      return const SyncRound.failed();
+      return _live(gen) ? const SyncRound.failed() : stale;
     } finally {
-      _running = null;
-      if (_again) {
-        _again = false;
-        touch(const Duration(milliseconds: 600));
+      if (_live(gen)) {
+        _running = null;
+        _done = null;
+        _applied = null;
+        if (_again) {
+          _again = false;
+          touch(const Duration(milliseconds: 600));
+        }
       }
-    }
-    if (touched.isNotEmpty) {
-      final watcher = onChange;
-      if (watcher != null) watcher(touched);
     }
     return SyncRound.ok(touched);
   }
@@ -1117,6 +1273,12 @@ class AccountSync {
   }
 
   void forget() {
+    final done = _done;
+    final applied = _applied;
+    _abandon();
+    const stale = SyncRound.stale();
+    if (applied != null && !applied.isCompleted) applied.complete(stale);
+    if (done != null && !done.isCompleted) done.complete(stale);
     _hashes.clear();
     _names.clear();
     _prints.clear();
@@ -1141,6 +1303,7 @@ class SyncRound {
   const SyncRound.offline() : this._('offline');
   const SyncRound.blocked() : this._('blocked');
   const SyncRound.failed() : this._('failed');
+  const SyncRound.stale() : this._('stale');
   const SyncRound.ok(List<String> touched) : this._('ok', touched);
 
   final String state;

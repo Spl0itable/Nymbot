@@ -167,9 +167,14 @@
             : t('{n} s', { n: s });
     }
 
+    function billedSec(image, timeoutSec) {
+        const setup = Math.max(0, Math.ceil(Number(image && image.setupSec) || 0));
+        return Math.max(10, Math.ceil((Math.max(1, Number(timeoutSec) || 0) + setup) / 10) * 10);
+    }
+
     function priceFor(image, timeoutSec) {
         const perMinute = Number(image && image.creditsPerMinute) || 0;
-        const minutes = Math.ceil(Math.max(1, Number(timeoutSec) || 0) / 10) * 10 / 60;
+        const minutes = billedSec(image, timeoutSec) / 60;
         const milli = Math.ceil(perMinute * 1000 * minutes + 0.5 * minutes - 1e-9);
         return Math.max(1, milli) / 1000;
     }
@@ -842,7 +847,7 @@
     window.NymbotServerRun = {
         LANGS, IMAGE_FOR, shellImage, canRun,
         load, available, decorate, refresh, open, go,
-        priceFor, timesFor, refreshChip, handlers,
+        priceFor, billedSec, timesFor, refreshChip, handlers,
         pendingFrom, pendingCard, resume, summaryNode, totalCost, carry,
         get info() { return info; },
         set info(v) { info = v; }

@@ -47,7 +47,11 @@ class NymbotToolbar extends StatelessWidget {
     final chips = <_ChipSpec>[
       _ChipSpec(
         glyph: 'auto-routed',
-        label: shown == null ? t('Auto-routed') : shown['label'] as String,
+        label: shown == null
+            ? t('Auto-routed')
+            : media != null
+                ? AppController.mediaLabel(media)
+                : shown['label'] as String,
         active: shown != null,
         brand: shown == null ? null : shown['slug'] as String?,
         onTap: () => showModelsSheet(context),

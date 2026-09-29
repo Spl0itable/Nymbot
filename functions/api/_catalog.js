@@ -415,6 +415,10 @@ export async function catalogGenerators(env, opts) {
       family: patch.family || catalogGeneratorFamily(kind, r.id),
       credits: Number.isFinite(credits) && credits > 0 ? Math.ceil(credits) : null,
       priced: !!(priced && credits > 0),
+      usd: {
+        perImage: Number(r.price_per_image_usd) > 0 ? Number(r.price_per_image_usd) : null,
+        perSecond: Number(r.price_per_second_usd) > 0 ? Number(r.price_per_second_usd) : null
+      },
       needsImage: r.task_slug === "image-to-video" || r.task_slug === "image-to-image",
       edit: r.task_slug === "image-to-image" || patch.edit === true,
       taskSlug: r.task_slug || "",

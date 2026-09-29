@@ -3,7 +3,7 @@ import { noteUsage } from "./_usage.js";
 import {
   RUNNER_IMAGES, RUNNER_OUTPUT_BYTES, RUNNER_MIN_TIMEOUT_SEC, runnerMaxMilli, runnerChargeMilli, runnerCredits,
   runnerBuildRequest, runnerImageOpen, runnerMaxTimeout, runnerBase64, runnerSafePath, runnerBilledMs,
-  runnerUsdPerSecond, callRunner
+  runnerUsdPerSecond, callRunner, RUNNER_BILL_STEP_MS
 } from "./_runner.js";
 import { tarEntries, gitGunzip, gitStageFiles, gitUnifiedDiff, gitNeedsReview, gitTextHash, gitPathInScope,
   gitDirInScope } from "./_gitrun.js";
@@ -113,6 +113,14 @@ export async function serverRunSettle(env, run, o) {
   run.stop();
   var ev = o.last || null;
   var startFail = !ev || (ev.type === "error" && ev.stage === "start");
+  if (startFail && ev && !ev.synthetic && Number(ev.elapsedMs) >= RUNNER_BILL_STEP_MS) {
+    var setupMs = runnerBilledMs(Number(ev.elapsedMs));
+    ev = Object.assign({}, ev, {
+      billedMs: setupMs,
+      usd: Math.round(setupMs / 1000 * runnerUsdPerSecond(o.image) * 1e9) / 1e9
+    });
+    startFail = false;
+  }
   var milli = 0;
   if (!startFail) {
     milli = runnerChargeMilli(o.image, ev.billedMs, ev.usd, o.btcUsd, {
@@ -175,9 +183,10 @@ function lostEvent(image, startedAt) {
 export async function serverRunDrive(env, request, onEvent) {
   var last = null;
   var startedAt = null;
+  var asked = Date.now();
   try {
     for await (var ev of callRunner(env, request)) {
-      if (ev.type === "start" && startedAt == null) startedAt = Date.now();
+      if (ev.type === "start" && startedAt == null) startedAt = asked;
       if (ev.type === "exit" || ev.type === "error") last = ev;
       onEvent(ev);
       if (last) break;
@@ -185,7 +194,8 @@ export async function serverRunDrive(env, request, onEvent) {
   } catch (e) {
     last = null;
   }
-  return last || lostEvent(request.image, startedAt);
+  var done = last || lostEvent(request.image, startedAt);
+  return Object.assign({}, done, { elapsedMs: Date.now() - asked });
 }
 
 export function serverRunStream(o) {

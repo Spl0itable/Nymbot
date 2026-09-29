@@ -146,6 +146,10 @@ export function teamEstimate(mode, workers, overseerModel, workerModel, price, o
   var overMax = partMilli(pricer, overseerModel, b.overseer);
   var workMax = partMilli(pricer, workerModel, b.worker);
   var maxMilli = overMax + b.workers * workMax;
+  var firstMilli = pricer(overseerModel, {
+    fresh: Math.ceil(b.overseer.in / b.overseer.calls), read: 0, wrote: 0,
+    out: Math.ceil(b.overseer.out / b.overseer.calls)
+  }, 1, Math.ceil(b.overseer.out / b.overseer.calls));
   var typical = partMilli(pricer, overseerModel, b.overseer, T.typicalShare, T.typicalCalls) +
     b.workers * partMilli(pricer, workerModel, b.worker, T.typicalShare, T.typicalCalls);
   typical = Math.min(typical, maxMilli);
@@ -155,6 +159,7 @@ export function teamEstimate(mode, workers, overseerModel, workerModel, price, o
     overseerMaxMilli: overMax,
     workerMaxMilli: workMax,
     maxMilli: maxMilli,
+    firstMilli: Math.min(firstMilli, overMax),
     typicalMilli: typical,
     leadTools: !!b.leadTools,
     maxCredits: Math.ceil(maxMilli / 1000),
@@ -244,7 +249,7 @@ function stepFor(messages, tools, maxTokens) {
   return { in: TEAM_LIMITS.promptOverheadTokens + tokensFor(chars), out: Math.max(0, Number(maxTokens) || 0) };
 }
 
-export var TEAM_BUDGET_ERROR = "The lead model's share of the Team budget is too small for its next step. Nothing was charged.";
+export var TEAM_BUDGET_ERROR = "The lead model's share of the Team budget is too small for its next step.";
 
 function teamScaffold(deps, input, state) {
   var pricer = priceWith(deps.price);
@@ -254,9 +259,13 @@ function teamScaffold(deps, input, state) {
   var limits = input.limits || {};
   var overMax = Math.max(0, Number(limits.overseerMilli) || 0);
   var workMax = Math.max(0, Number(limits.workerMilli) || 0);
+  var room = teamRoomMilli(state, overMax, workMax);
+  var leg = limits.legMilli == null ? NaN : Number(limits.legMilli);
+  var share = Number.isFinite(leg) && leg >= 0 && room > 0 && leg < room ? leg / room : 1;
+  var shared = function (left) { return share < 1 ? Math.floor(left * share) : left; };
   var overseer = {
     model: input.overseerModel,
-    limit: Math.max(0, overMax - (Number(state.overseer.milli) || 0)),
+    limit: shared(Math.max(0, overMax - (Number(state.overseer.milli) || 0))),
     usage: usageZero(), calls: 0, out: 0
   };
   var roles = Object.create(null);
@@ -264,7 +273,7 @@ function teamScaffold(deps, input, state) {
     if (!roles[ln.lane]) {
       roles[ln.lane] = {
         model: input.workerModel,
-        limit: Math.max(0, workMax - (Number(ln.milli) || 0)),
+        limit: shared(Math.max(0, workMax - (Number(ln.milli) || 0))),
         usage: usageZero(), calls: 0, out: 0, touched: false, failed: false
       };
     }
@@ -291,15 +300,31 @@ function teamScaffold(deps, input, state) {
     var step = stepFor(messages, tools, maxTokens);
     if (!fits(role, attempt, step)) return null;
     attempt.calls++;
-    var r = await deps.chat(role.model, messages, maxTokens, tools || null);
+    var r;
+    try {
+      r = await deps.chat(role.model, messages, maxTokens, tools || null);
+    } catch (e) {
+      attempt.calls--;
+      if (e && typeof e === "object") {
+        usageAdd(attempt.usage, e.usage);
+        if (e.usage) attempt.out += Number(e.usage.out) || 0;
+        e.usage = null;
+        e.teamModelCall = true;
+      }
+      throw e;
+    }
     usageAdd(attempt.usage, r && r.usage);
     attempt.out += (r && r.outputTokens) || 0;
     return r || { text: "", msg: null };
   };
   var overseerCall = async function (messages, maxTokens, tools) {
     var attempt = freshAttempt();
-    var r = await chatAs(overseer, attempt, messages, maxTokens, tools);
-    commit(overseer, attempt);
+    var r;
+    try {
+      r = await chatAs(overseer, attempt, messages, maxTokens, tools);
+    } finally {
+      commit(overseer, attempt);
+    }
     if (!r) throw new Error(TEAM_BUDGET_ERROR);
     state.overseer.steps = (Number(state.overseer.steps) || 0) + 1;
     return r;
@@ -320,7 +345,7 @@ function teamScaffold(deps, input, state) {
     var workers = state.lanes.map(function (ln) {
       var role = roles[ln.lane];
       var milli = 0;
-      if (role && role.touched && !role.failed) {
+      if (role && role.touched) {
         milli = pricer(role.model, role.usage, role.calls, role.out);
         usageAdd(usage, role.usage);
         calls += role.calls;
@@ -349,10 +374,26 @@ function teamScaffold(deps, input, state) {
       outputTokens: outTok
     };
   };
+  var billed = function () {
+    var used = function (u) { return !!(u && (u.fresh || u.read || u.wrote || u.out)); };
+    return used(overseer.usage) || Object.keys(roles).some(function (k) { return used(roles[k].usage); });
+  };
   return {
+    billed: billed, squeezed: share < 1,
     overseer: overseer, roleOf: roleOf, fits: fits, commit: commit, chatAs: chatAs, spentOf: spentOf,
     overseerCall: overseerCall, lanePush: lanePush, shouldPark: shouldPark, settle: settle, now: now
   };
+}
+
+export function teamRoomMilli(state, overMax, workMax) {
+  var st = state || {};
+  var over = Math.max(0, (Number(overMax) || 0) - (Number(st.overseer && st.overseer.milli) || 0));
+  var lanes = Array.isArray(st.lanes) ? st.lanes : [];
+  var work = 0;
+  for (var i = 0; i < Math.max(lanes.length, workerCount(st.workers)); i++) {
+    work += Math.max(0, (Number(workMax) || 0) - (Number(lanes[i] && lanes[i].milli) || 0));
+  }
+  return over + work;
 }
 
 function freshTeamState(mode, input) {
@@ -585,6 +626,52 @@ function seedQueries(raw, fallback) {
 }
 
 export async function runTeamResearch(deps, input) {
+  var box = {};
+  try {
+    return await teamResearchLeg(deps, input, box);
+  } catch (e) {
+    return teamLegFailed(e, box);
+  }
+}
+
+export async function runTeamRepo(deps, input) {
+  var box = {};
+  try {
+    return await teamRepoLeg(deps, input, box);
+  } catch (e) {
+    return teamLegFailed(e, box);
+  }
+}
+
+var TEAM_FAILED_NOTE = "The team stopped here because a model call failed. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
+
+export var TEAM_BALANCE_NOTE = "The team stopped here because the next step could have cost more than your balance had room for. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
+
+function teamLegFailed(e, box) {
+  var kit = box.kit;
+  if (!kit) throw e;
+  var billed = kit.billed();
+  if (billed && box.park && e && e.teamModelCall) {
+    var out = box.park();
+    out.reply = TEAM_FAILED_NOTE;
+    return out;
+  }
+  if (billed && box.park && kit.squeezed && e && e.message === TEAM_BUDGET_ERROR) {
+    var stopped = box.park();
+    stopped.reply = TEAM_BALANCE_NOTE;
+    return stopped;
+  }
+  if (e && typeof e === "object") {
+    var fin = kit.settle(box.sequential());
+    e.teamMilli = fin.charge.totalMilli;
+    e.team = fin.team;
+    e.usage = fin.usage;
+    e.modelCalls = fin.modelCalls;
+  }
+  throw e;
+}
+
+async function teamResearchLeg(deps, input, box) {
   var T = TEAM_LIMITS;
   var state = input.state ? input.state : freshTeamState("research", input);
   var kit = teamScaffold(deps, input, state);
@@ -601,6 +688,9 @@ export async function runTeamResearch(deps, input) {
     return out;
   };
 
+  box.kit = kit;
+  box.park = park;
+  box.sequential = function () { return sequential; };
   var rig = leadRig(deps, input, state, kit, {});
   var hold = function (held) {
     var out = kit.settle(sequential);
@@ -653,32 +743,42 @@ export async function runTeamResearch(deps, input) {
         limits.maxRounds = (Number(base.round) || 0) + 1;
       }
       kit.lanePush(ln.lane, extra ? "rework" : "start", (extra ? "Another round: " : "Researching: ") + ln.q);
-      var out = await runResearch({
-        chat: async function (messages, maxTokens) {
-          var r = await deps.chat(input.workerModel, messages, maxTokens, null);
-          return { text: (r && r.text) || "", usage: r && r.usage, outputTokens: (r && r.outputTokens) || 0 };
-        },
-        search: deps.search,
-        fetchPage: deps.fetchPage,
-        progress: function (s) {
-          var step = researchStep(ln.lane, s);
-          if (step) kit.lanePush(step.lane, step.stage, step.text);
-        },
-        spent: function (u, calls, outTok) {
-          return priceWith(deps.price)(input.workerModel, usageSum(role.usage, u), role.calls + calls, role.out + outTok);
-        },
-        now: kit.now
-      }, {
-        question: ln.q,
-        history: "",
-        model: input.workerModel,
-        limits: limits,
-        maxCalls: T.researchWorkerCalls,
-        notesOnly: true,
-        queries: base ? null : ln.queries,
-        state: base,
-        limitMilli: role.limit
-      });
+      var out;
+      try {
+        out = await runResearch({
+          chat: async function (messages, maxTokens) {
+            var r = await deps.chat(input.workerModel, messages, maxTokens, null);
+            return { text: (r && r.text) || "", usage: r && r.usage, outputTokens: (r && r.outputTokens) || 0 };
+          },
+          search: deps.search,
+          fetchPage: deps.fetchPage,
+          progress: function (s) {
+            var step = researchStep(ln.lane, s);
+            if (step) kit.lanePush(step.lane, step.stage, step.text);
+          },
+          spent: function (u, calls, outTok) {
+            return priceWith(deps.price)(input.workerModel, usageSum(role.usage, u), role.calls + calls, role.out + outTok);
+          },
+          now: kit.now
+        }, {
+          question: ln.q,
+          history: "",
+          model: input.workerModel,
+          limits: limits,
+          maxCalls: T.researchWorkerCalls,
+          notesOnly: true,
+          queries: base ? null : ln.queries,
+          state: base,
+          limitMilli: role.limit
+        });
+      } catch (e) {
+        var lost = e && typeof e === "object" && e.usage ? e.usage : null;
+        if (lost && (lost.fresh || lost.read || lost.wrote || lost.out || e.modelCalls > 0)) {
+          kit.commit(role, { usage: lost, calls: Number(e.modelCalls) || 0, out: Number(lost.out) || 0 });
+          e.usage = null;
+        }
+        throw e;
+      }
       return out;
     };
   };
@@ -714,7 +814,7 @@ export async function runTeamResearch(deps, input) {
       }
     });
     if (!state.lanes.some(function (ln) { return ln.status === "done"; })) {
-      throw new Error("Every researcher in the team failed (" + (state.lanes[0] && state.lanes[0].error || "no answer") + "). Nothing was charged.");
+      throw new Error("Every researcher in the team failed (" + (state.lanes[0] && state.lanes[0].error || "no answer") + ").");
     }
     state.phase = "reconcile";
   }
@@ -859,7 +959,7 @@ function planBlock(state) {
   }).join("\n");
 }
 
-export async function runTeamRepo(deps, input) {
+async function teamRepoLeg(deps, input, box) {
   var T = TEAM_LIMITS;
   var state = input.state ? input.state : freshTeamState("repo", input);
   if (!input.state) state.base = input.messages || [];
@@ -889,6 +989,9 @@ export async function runTeamRepo(deps, input) {
     try { return JSON.parse((tc.function && tc.function.arguments) || "{}") || {}; } catch (e) { return {}; }
   };
 
+  box.kit = kit;
+  box.park = park;
+  box.sequential = function () { return sequential; };
   var rig = leadRig(deps, input, state, kit, readNames);
   var leadBase = function () {
     var base = state.base.slice();
@@ -928,7 +1031,7 @@ export async function runTeamRepo(deps, input) {
     var plan = parseModelJson(planRun.r.text);
     if (!plan || !Array.isArray(plan.subtasks)) plan = null;
     var lanes = plan ? teamPlanRepo(plan, state.workers, input.repos) : [];
-    if (!lanes.length) throw new Error("The lead model could not split this task into parts for the team. Nothing was charged.");
+    if (!lanes.length) throw new Error("The lead model could not split this task into parts for the team.");
     state.lanes = lanes;
     state.commitMessage = clip(plan.commit_message || "", 200);
     state.phase = "work";
@@ -986,6 +1089,7 @@ export async function runTeamRepo(deps, input) {
           }
         }
       } catch (e) {
+        kit.commit(role, attempt);
         if (saved && typeof deps.restore === "function") deps.restore(scope, saved);
         throw e;
       }
@@ -1019,7 +1123,7 @@ export async function runTeamRepo(deps, input) {
       }
     });
     if (!state.lanes.some(function (ln) { return ln.status !== "failed"; })) {
-      throw new Error("Every worker in the team failed (" + (state.lanes[0] && state.lanes[0].error || "no answer") + "). Nothing was committed or charged.");
+      throw new Error("Every worker in the team failed (" + (state.lanes[0] && state.lanes[0].error || "no answer") + "). Nothing was committed.");
     }
     state.phase = "review";
   }

@@ -40,6 +40,14 @@
         offline: true
     });
 
+    const priceUnavailableText = () =>
+        t('Nymbot could not check the bitcoin price just now, so nothing was sent or charged. Try again in a minute.');
+
+    function priced(data) {
+        if (!data || data.priceUnavailable !== true) return data;
+        return Object.assign({}, data, { error: priceUnavailableText(), retryable: true });
+    }
+
     function hex(bytes) {
         return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     }
@@ -119,7 +127,7 @@
                     return { status: resp.status, response: resp, data: null };
                 }
                 const data = await resp.json().catch(() => ({}));
-                return { status: resp.status, response: null, data: data || {} };
+                return { status: resp.status, response: null, data: priced(data || {}) };
             } catch (e) {
                 const aborted = !!(e && e.name === 'AbortError');
                 return { status: 0, response: null, aborted, data: aborted ? { error: t('Stopped.') } : unreachable() };
@@ -143,7 +151,7 @@
                         signal: controller.signal
                     });
                     const data = await resp.json().catch(() => ({}));
-                    return { status: resp.status, data: data || {} };
+                    return { status: resp.status, data: priced(data || {}) };
                 } catch (e) {
                     return { status: 0, data: e.name === 'AbortError' ? { error: t('timed out') } : unreachable() };
                 } finally {
@@ -154,6 +162,7 @@
         },
 
         busy(status, data) {
+            if (data && data.priceUnavailable === true) return false;
             if (BUSY_STATUS.has(status)) return true;
             const text = data && (data.error || data.message);
             return typeof text === 'string' && BUSY_TEXT.test(text);
@@ -228,7 +237,7 @@
                     body: JSON.stringify(Object.assign({ action: 'team-estimate' }, body || {}))
                 });
                 const data = await resp.json().catch(() => ({}));
-                return { status: resp.status, data: data || {} };
+                return { status: resp.status, data: priced(data || {}) };
             } catch (_) {
                 return { status: 0, data: unreachable() };
             }
@@ -281,6 +290,7 @@
     };
 
     Api.signedText = signedText;
+    Api.priced = priced;
     Api.withAuth = withAuth;
     Api.sha256Hex = sha256Hex;
 

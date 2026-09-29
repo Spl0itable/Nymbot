@@ -7,6 +7,7 @@ import '../config.dart';
 import '../core/crypto/keys.dart';
 import '../models/nostr_event.dart';
 import '../models/notice.dart';
+import '../features/i18n/i18n.dart';
 import 'nostr/event_signer.dart';
 import 'server_runs.dart';
 import 'signed_body.dart';
@@ -50,9 +51,18 @@ class NymbotApi {
       caseSensitive: false);
 
   static bool busy(int status, Map<String, dynamic> data) {
+    if (data['priceUnavailable'] == true) return false;
     if (_busyStatus.contains(status)) return true;
     final text = data['error'] ?? data['message'];
     return text is String && _busyText.hasMatch(text);
+  }
+
+  static String priceUnavailableText() => t(
+      'Nymbot could not check the bitcoin price just now, so nothing was sent or charged. Try again in a minute.');
+
+  static Map<String, dynamic> priced(Map<String, dynamic> data) {
+    if (data['priceUnavailable'] != true) return data;
+    return {...data, 'error': priceUnavailableText(), 'retryable': true};
   }
 
   Future<void> _gate = Future<void>.value();
@@ -175,7 +185,8 @@ class NymbotApi {
       final decoded = jsonDecode(resp.body);
       return (
         status: resp.statusCode,
-        data: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{}
+        data: priced(
+            decoded is Map<String, dynamic> ? decoded : <String, dynamic>{})
       );
     } on TimeoutException {
       return (status: 0, data: {'error': 'timed out'});
@@ -256,7 +267,8 @@ class NymbotApi {
       }
       return (
         status: resp.statusCode,
-        data: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{}
+        data: priced(
+            decoded is Map<String, dynamic> ? decoded : <String, dynamic>{})
       );
     } catch (_) {
       return (status: 0, data: <String, dynamic>{'error': 'network error'});
@@ -308,7 +320,7 @@ class NymbotApi {
       }
       return ServerRunResponse(
         status: resp.statusCode == 200 ? 502 : resp.statusCode,
-        error: decoded is Map<String, dynamic> ? decoded : {'error': 'The request failed.'},
+        error: decoded is Map<String, dynamic> ? priced(decoded) : {'error': 'The request failed.'},
       );
     } on TimeoutException {
       return const ServerRunResponse(status: 0, error: {'error': 'timed out'});
@@ -391,7 +403,8 @@ class NymbotApi {
       final decoded = jsonDecode(resp.body);
       return (
         status: resp.statusCode,
-        data: decoded is Map<String, dynamic> ? decoded : <String, dynamic>{}
+        data: priced(
+            decoded is Map<String, dynamic> ? decoded : <String, dynamic>{})
       );
     } on TimeoutException {
       return (status: 0, data: {'error': 'timed out'});

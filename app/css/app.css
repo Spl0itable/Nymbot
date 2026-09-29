@@ -2406,6 +2406,12 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .model-rates { display: block; font-size: 0.72rem; color: var(--text-faint); overflow-wrap: anywhere; }
 .model-star { border: 0; background: transparent; cursor: pointer; color: var(--text-faint); padding: 0 0.2rem; display: inline-flex; align-items: flex-start; flex: 0 0 auto; }
 .model-star.is-on { color: var(--lightning); }
+.model-res { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.25rem; }
+.model-res-chip { display: inline-flex; align-items: baseline; gap: 0.3rem; max-width: 100%; padding: 0.15rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text-dim); font-size: 0.72rem; cursor: pointer; overflow-wrap: anywhere; }
+.model-res-chip:hover { border-color: var(--line-strong); color: var(--text); }
+.model-res-chip.is-active { border-color: var(--primary); color: var(--primary); }
+.model-res-name { font-weight: 600; }
+.model-res-cost { color: var(--lightning); }
 
 .repo-list, .persona-list, .prompt-list, .pinned-list, .search-list { display: grid; gap: 0.35rem; margin: 0.6rem 0; max-height: 38vh; overflow-y: auto; }
 

@@ -415,78 +415,196 @@
         return Math.max(0, parts - 1);
     }
 
-    const EST_SCAFFOLD_TOKENS = 900;
-    const EST_TYPICAL_OUT = 400;
-    const EST_LONG_OUT = 1600;
-
-    function estTokens(chars) {
-        return Math.ceil(Math.max(0, Number(chars) || 0) / 4);
+    function estBudgets(pricing) {
+        return (pricing && pricing.estimate) || {};
     }
 
-    function estHistoryChars(conv) {
-        const msgs = (conv && conv.messages) || [];
-        let n = 0;
-        for (let i = msgs.length - 1; i >= 0 && n < 160000; i--) {
-            n += String((msgs[i] && msgs[i].text) || '').length;
+    function estTokens(chars, b) {
+        const per = Number(b && b.charsPerToken) > 0 ? Number(b.charsPerToken) : 4;
+        return Math.ceil(Math.max(0, Number(chars) || 0) / per);
+    }
+
+    function estMessages(conv) {
+        if (conv && Array.isArray(conv.messages)) return conv.messages;
+        if (!conv || !conv.id || !Store || typeof Store.messages !== 'function') return [];
+        const list = Store.messages(conv.id);
+        return Array.isArray(list) ? list : [];
+    }
+
+    function estHistory(conv) {
+        return estMessages(conv).filter(function (m) {
+            return m && (m.role === 'self' || m.role === 'bot');
+        }).map(function (m) {
+            return { bot: m.role === 'bot', text: String((m.content != null ? m.content : m.text) || '') };
+        }).filter(function (h) { return h.text; });
+    }
+
+    function estWindow(history, b) {
+        const h = b.history;
+        if (!h) return { chars: history.reduce(function (n, x) { return n + x.text.length; }, 0), kept: history, dropped: 0 };
+        const recent = history.slice(-h.turns);
+        let budget = h.chars;
+        let chars = 0;
+        const kept = [];
+        for (let i = recent.length - 1; i >= 0; i--) {
+            if (budget < h.turnMinChars) break;
+            const len = Math.min(recent[i].text.length, h.turnChars, budget);
+            budget -= len;
+            chars += len;
+            kept.unshift(recent[i]);
         }
-        return n;
+        return { chars: chars, kept: kept, dropped: history.length - kept.length };
     }
 
-    function estMeteredCredits(model, inTok, outTok, calls, usdPerCredit) {
-        const pin = Number(model.inUsdPerMTok);
-        const pout = Number(model.outUsdPerMTok);
-        if (!(pin > 0) || !(pout > 0) || !(usdPerCredit > 0)) return null;
-        const pcr = Number(model.cacheReadUsdPerMTok) > 0
-            ? Number(model.cacheReadUsdPerMTok) : pin * 0.1;
-        const legs = Math.max(1, calls);
-        const usd = (inTok * pin + inTok * (legs - 1) * pcr + outTok * legs * pout) / 1e6;
-        return usd / usdPerCredit;
+    function estPattern(b, name) {
+        const src = b.patterns && b.patterns[name];
+        return src ? new RegExp(src, 'gi') : null;
     }
 
-    function estStandardCredits(conv, text, options, pricing) {
-        const routes = (pricing && pricing.standardRoutes) || [];
-        const usd = Number(pricing && pricing.standardUsdPerCredit) || 0;
-        if (!routes.length || !(usd > 0)) return null;
-        const wire = wireTextFor(conv || {}, text || '', options || {});
-        const inTok = EST_SCAFFOLD_TOKENS + estTokens(wire.length)
-            + estTokens(estHistoryChars(conv));
-        const floor = Number(pricing && pricing.minChargeCredits) || 0;
-        const priced = routes.map(function (r) {
-            const one = estMeteredCredits(r, inTok, EST_TYPICAL_OUT, 1, usd);
-            const long = estMeteredCredits(r, inTok, Math.min(EST_LONG_OUT, r.maxTokens || EST_LONG_OUT), 1, usd);
-            return { one: one, long: long };
-        }).filter(function (r) { return r.one != null; });
-        if (!priced.length) return null;
-        const low = Math.max(floor, Math.min.apply(null, priced.map(function (r) { return r.one; })));
-        const high = Math.max(low, Math.max.apply(null, priced.map(function (r) { return r.long; })));
-        return { low: low, high: high };
+    function estUrls(text, b, bare, attached, max) {
+        const out = [];
+        const add = function (u) { if (u && out.indexOf(u) === -1 && out.length < max) out.push(u); };
+        const tagged = estPattern(b, attached);
+        let m;
+        while (tagged && (m = tagged.exec(text)) !== null) add(m[1]);
+        const plain = estPattern(b, bare);
+        while (plain && (m = plain.exec(text)) !== null) add(m[0]);
+        return out;
+    }
+
+    function estLinks(text, b) {
+        const all = estPattern(b, 'link');
+        const skip = b.patterns && b.patterns.linkSkip ? new RegExp(b.patterns.linkSkip, 'i') : null;
+        const max = (b.links && b.links.pages) || 0;
+        const out = [];
+        let m;
+        while (all && out.length < max && (m = all.exec(text)) !== null) {
+            const url = m[0].replace(/[.,;:!?]+$/, '');
+            if (skip && skip.test(url)) continue;
+            if (out.indexOf(url) === -1) out.push(url);
+        }
+        return out.length;
+    }
+
+    function estMedia(wire, kept, model, b) {
+        const canSee = model ? !!model.vision : true;
+        if (!canSee) return { images: 0, videos: 0 };
+        const maxImages = b.maxImages || 0;
+        const video = b.video || {};
+        const shown = estUrls(wire, b, 'image', 'attachedImage', maxImages).length;
+        const clips = estUrls(wire, b, 'video', 'attachedVideo', video.max || 0).length;
+        const watches = !!(model && model.video);
+        const frames = !watches && clips ? Math.min(video.frames || 0, maxImages - shown) : 0;
+        let room = maxImages - shown - frames;
+        let videoRoom = watches ? (video.max || 0) - clips : 0;
+        let images = shown + frames;
+        let videos = watches ? clips : 0;
+        const asked = kept.filter(function (h) { return !h.bot; }).slice(-(b.visionHistoryTurns || 0)).reverse();
+        for (let i = 0; i < asked.length && (room > 0 || videoRoom > 0); i++) {
+            const pics = Math.min(room, estUrls(asked[i].text, b, 'image', 'attachedImage', maxImages).length);
+            const films = Math.min(videoRoom, watches ? estUrls(asked[i].text, b, 'video', 'attachedVideo', video.max || 0).length : 0);
+            room -= pics;
+            videoRoom -= films;
+            images += pics;
+            videos += films;
+        }
+        return { images: images, videos: videos };
+    }
+
+    function estInput(wire, history, model, web, b) {
+        const tier = model ? 'pro' : 'standard';
+        const win = estWindow(history, b);
+        const media = estMedia(wire, win.kept, model, b);
+        const video = b.video || {};
+        const links = b.links || {};
+        const recall = b.recall || {};
+        const index = model && win.dropped
+            ? Math.min(win.dropped, recall.indexMax || 0) * (recall.lineChars || 0) : 0;
+        return {
+            tokens: ((b.systemTokens && b.systemTokens[tier]) || 0) + (b.scaffoldTokens || 0)
+                + estTokens(wire.length + win.chars + index, b)
+                + media.images * (b.imageTokens || 0)
+                + media.videos * (video.seconds || 0) * (video.tokensPerSecond || 0)
+                + estLinks(wire, b) * estTokens(links.chars || 0, b)
+                + (web ? ((b.webTokens && b.webTokens[tier]) || 0) : 0),
+            dropped: win.dropped
+        };
+    }
+
+    function estPrice(rates, inTok, outTok, legs, cached) {
+        const pin = Number(rates.inUsdPerMTok);
+        const pout = Number(rates.outUsdPerMTok);
+        if (!(pin > 0) || !(pout > 0)) return null;
+        const pcr = Number(rates.cacheReadUsdPerMTok) > 0 ? Number(rates.cacheReadUsdPerMTok) : pin * 0.1;
+        const n = Math.max(1, legs);
+        return (inTok * pin + inTok * (n - 1) * (cached ? pcr : pin)
+            + outTok * n * pout + outTok * n * (n - 1) / 2 * pin) / 1e6;
+    }
+
+    function estTurn(opts) {
+        const pricing = opts.pricing || {};
+        const b = estBudgets(pricing);
+        const model = opts.model || null;
+        const cached = !!(model && model.cachesLegs === true);
+        const floor = Number(pricing.minChargeCredits) || 0;
+        const input = estInput(opts.wire, opts.history, model, opts.web, b);
+        const agent = b.agent || {};
+        const typicalOf = function (reasons, ceiling) {
+            return Math.min(ceiling, reasons ? (b.reasoningOutTokens || 0) : (b.typicalOutTokens || 0));
+        };
+        const longOf = function (reasons, ceiling) {
+            const long = reasons ? (b.reasoningLongOutTokens || 0) : (b.longOutTokens || 0);
+            return Math.min(ceiling, long > 0 ? long : typicalOf(reasons, ceiling));
+        };
+        if (!model) {
+            const usd = Number(pricing.standardUsdPerCredit) || 0;
+            const routes = (pricing.standardRoutes || []).filter(function (r) { return estPrice(r, 1, 1, 1, false) != null; });
+            if (!routes.length || !(usd > 0)) return null;
+            const general = routes.filter(function (r) { return r.task === 'general'; });
+            const usual = general.length ? general : routes;
+            const priced = function (r, out) { return estPrice(r, input.tokens, out, 1, false) / usd; };
+            const low = Math.max(floor, Math.min.apply(null, usual.map(function (r) { return priced(r, typicalOf(r.reasoning === true, r.maxTokens || 0)); })));
+            const high = Math.max(low, Math.max.apply(null, usual.map(function (r) { return priced(r, longOf(r.reasoning === true, r.maxTokens || 0)); })));
+            const max = Math.max(high, Math.max.apply(null, routes.map(function (r) { return priced(r, r.maxTokens || 0); })));
+            return { low: low, high: high, max: max };
+        }
+        const usd = Number(pricing.usdPerCredit) || 0;
+        if (!(usd > 0) || estPrice(model, 1, 1, 1, false) == null) return null;
+        const ceiling = Number(model.outTokens) > 0 ? Number(model.outTokens) : (b.typicalOutTokens || 0);
+        const reasons = model.reasoning === true;
+        const lowLegs = opts.agent ? (agent.typicalCalls || 1) : opts.calls;
+        const longLegs = opts.agent ? (agent.longCalls || lowLegs) : opts.calls;
+        const maxLegs = opts.agent ? (agent.calls || 1)
+            : opts.calls + (input.dropped ? ((b.recall && b.recall.calls) || 0) : 0);
+        const workIn = input.tokens + (opts.agent ? (agent.toolTokens || 0) + (agent.treeTokens || 0) : 0);
+        const low = Math.max(floor, estPrice(model, workIn, typicalOf(reasons, ceiling), lowLegs, cached) / usd);
+        const high = Math.max(low, estPrice(model, workIn, longOf(reasons, ceiling), longLegs, cached) / usd);
+        const max = Math.max(high, estPrice(model, input.tokens + (opts.agent ? (agent.inTokens || 0) : 0), ceiling, maxLegs, cached) / usd);
+        return { low: low, high: high, max: max };
     }
 
     function estimateCredits(text, settings, conv, options, pricing) {
         const extra = partSurcharge(conv, text, options);
         const model = (conv && conv.proModel) || settings.proModel;
+        const wire = wireTextFor(conv || {}, text || '', options || {});
+        const web = !!((settings && settings.webSearch) || (options && options.web));
+        const history = estHistory(conv);
+        const unpriced = !!(pricing && pricing.priceUnavailable === true);
         if (!model) {
-            const std = estStandardCredits(conv, text, options, pricing);
+            const std = unpriced ? null : estTurn({ wire: wire, history: history, model: null, web: web, pricing: pricing });
             if (std) {
-                return { tier: 'standard', low: std.low + extra, high: std.high + extra,
+                return { tier: 'standard', low: std.low + extra, high: std.high + extra, max: std.max + extra,
                     parts: extra + 1, metered: true };
             }
-            return { tier: 'standard', low: 1 + extra, high: 1 + extra, parts: extra + 1 };
+            return { tier: 'standard', low: 1 + extra, high: 1 + extra, max: 1 + extra, parts: extra + 1, unpriced: unpriced };
         }
         const repoTask = reposFor(conv || {}).length > 0 || connectorsFor(conv || {}).length > 0;
         const calls = repoTask ? 1 : effortCalls(conv);
-        const usdPerCredit = Number(pricing && pricing.usdPerCredit) || 0;
-        const wire = wireTextFor(conv || {}, text || '', options || {});
-        const inTok = EST_SCAFFOLD_TOKENS + estTokens(wire.length)
-            + estTokens(estHistoryChars(conv));
-        const floor = Number(pricing && pricing.minChargeCredits) || 0;
-        const lowMetered = estMeteredCredits(model, inTok, EST_TYPICAL_OUT, calls, usdPerCredit);
-        if (lowMetered != null) {
-            const maxCalls = repoTask ? (model.repoMaxCalls || 12) : calls;
-            const highMetered = estMeteredCredits(model, inTok, EST_LONG_OUT, maxCalls, usdPerCredit);
-            const low = Math.max(floor, lowMetered) + extra;
-            const high = Math.max(low, Math.max(floor, highMetered) + extra);
-            return { tier: 'pro', low, high, calls, parts: extra + 1, repoTask, metered: true };
+        const pro = unpriced ? null : estTurn({ wire: wire, history: history, model: model, web: web, pricing: pricing,
+            calls: calls, agent: repoTask });
+        if (pro) {
+            return { tier: 'pro', low: pro.low + extra, high: pro.high + extra, max: pro.max + extra,
+                calls, parts: extra + 1, repoTask, metered: true };
         }
         const size = String(text || '').length;
         const bump = size > 4000 ? 2 : size > 1200 ? 1 : 0;
@@ -494,7 +612,42 @@
         const worst = (repoTask ? model.repoMax : model.max) || model.max || base;
         const low = base * calls + extra;
         const high = Math.max(low, (worst + bump) * calls + extra);
-        return { tier: 'pro', low, high, calls, parts: extra + 1, repoTask };
+        return { tier: 'pro', low, high, max: high, calls, parts: extra + 1, repoTask, unpriced: unpriced };
+    }
+
+    function estimateLine(est, amount) {
+        const fmt = amount || function (v) { return String(v); };
+        const pro = est.tier === 'pro';
+        if (est.unpriced) {
+            return pro ? t('— Pro credits (price unavailable right now)') : t('— standard credits (price unavailable right now)');
+        }
+        if (!est.metered) {
+            if (pro) {
+                return fmt(est.low) === fmt(est.high)
+                    ? t('About {n} Pro credits', { n: fmt(est.low) })
+                    : t('About {low}–{high} Pro credits', { low: fmt(est.low), high: fmt(est.high) });
+            }
+            return est.low === 1 ? t('1 standard credit') : t('{n} standard credits', { n: fmt(est.low) });
+        }
+        const top = Number(est.max) || 0;
+        const low = fmt(est.low);
+        const high = fmt(est.high);
+        const max = fmt(top >= 1 ? Math.ceil(top) : top);
+        const same = low === high;
+        if (max === high) {
+            if (pro) {
+                return same ? t('About {n} Pro credits', { n: low }) : t('About {low}–{high} Pro credits', { low, high });
+            }
+            return same ? t('{n} standard credits', { n: low }) : t('About {low}–{high} standard credits', { low, high });
+        }
+        if (pro) {
+            return same
+                ? t('About {n} Pro credits (up to {max})', { n: low, max })
+                : t('About {low}–{high} Pro credits (up to {max})', { low, high, max });
+        }
+        return same
+            ? t('About {n} standard credits (up to {max})', { n: low, max })
+            : t('About {low}–{high} standard credits (up to {max})', { low, high, max });
     }
 
     const Chat = {
@@ -725,6 +878,8 @@
                     err.resumeToken = data.resumeToken;
                     err.resumable = true;
                 }
+                if (data && data.retryable) err.retryable = true;
+                if (data && data.priceUnavailable) err.priceUnavailable = true;
                 throw err;
             }
             if (!data.event) throw new Error(t('Nymbot sent no reply.'));
@@ -923,6 +1078,8 @@
         },
 
         estimateCredits,
+        estimateLine,
+        estTurn,
         effortOf,
         effortCalls,
         EFFORT,

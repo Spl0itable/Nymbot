@@ -158,7 +158,7 @@ function marginOf(opts) {
 export function runnerMaxMilli(image, timeoutSec, btcUsd, opts) {
   if (!hasImage(image)) return 0;
   const toMilli = converter(opts);
-  const usd = runnerBilledMs(Number(timeoutSec) * 1000) / 1000 * runnerUsdPerSecond(image);
+  const usd = runnerBilledMs(Number(timeoutSec) * 1000 + RUNNER_DEADLINE_SLACK_MS) / 1000 * runnerUsdPerSecond(image);
   return Math.max(1, Math.ceil(Number(toMilli(usd * marginOf(opts), btcUsd)) || 0));
 }
 
@@ -453,7 +453,8 @@ export function runnerInfo(env, btcUsd, opts) {
       label: spec.label,
       instanceType: spec.instanceType,
       maxTimeoutSec: runnerMaxTimeout(settings, name),
-      creditsPerMinute: Math.round(milli) / 1000
+      creditsPerMinute: Math.round(milli) / 1000,
+      setupSec: RUNNER_DEADLINE_SLACK_MS / 1000
     });
   }
   return { available: runnerAvailable(env, settings), margin, images };
