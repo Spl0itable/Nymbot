@@ -49,7 +49,7 @@ either with the same key and your credits and Nymbot conversation follow you.
 
 ### Everywhere
 
-- Web app you can install, plus Android and iOS ([apps](https://nymbot.ai/docs/apps/)).
+- Web app you can install, plus Android and iOS ([apps](https://nymbot.ai/docs/apps/)). The Android APK can be downloaded directly from [download.nostrservices.com](https://download.nostrservices.com/apk/nymbot/app-release.apk).
 - Settings and chats sync across devices, encrypted to your key.
 - Same key and same balance in [Nymchat](https://nymchat.app).
 - Back up your key with a passkey, or with a PIN through Apple or Google.
