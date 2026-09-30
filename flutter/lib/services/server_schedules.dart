@@ -72,6 +72,9 @@ class ServerSchedules {
 
   static String savedNotify() => t('Saved. The server will notify you when it is due.');
 
+  static String anonText() => t(
+      "Server schedules aren't available in anonymous chats; this one runs on this device.");
+
   static String noPush() => t(
       'Notifications are off for this app, so the server cannot tell you when it is due. Allow notifications first.');
 

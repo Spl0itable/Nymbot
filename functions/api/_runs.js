@@ -19,6 +19,7 @@ var RUN_DDL = [
   "CREATE TABLE IF NOT EXISTS botpm_turns (pubkey TEXT NOT NULL, asked TEXT NOT NULL, thread TEXT NOT NULL DEFAULT '', " +
   "ids TEXT NOT NULL DEFAULT '[]', at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pubkey, asked))",
   "CREATE INDEX IF NOT EXISTS botpm_turns_at ON botpm_turns (pubkey, at)",
+  "CREATE INDEX IF NOT EXISTS botpm_turns_thread ON botpm_turns (thread)",
   "CREATE TABLE IF NOT EXISTS botpm_runs (pubkey TEXT NOT NULL, asked TEXT NOT NULL, thread TEXT NOT NULL DEFAULT '', " +
   "kind TEXT NOT NULL DEFAULT 'chat', label TEXT NOT NULL DEFAULT '', progress TEXT NOT NULL DEFAULT '', " +
   "state TEXT NOT NULL DEFAULT 'running', cancel INTEGER NOT NULL DEFAULT 0, resume TEXT, " +
@@ -289,6 +290,17 @@ export async function runTurnsThread(db, pk, thread, limit) {
       .bind(pk, thread || "", thread || "\u0000", limit || 200).all();
     return (rs && rs.results) || [];
   }, []);
+}
+
+export async function runThreadHolders(db, pk, thread) {
+  if (!thread) return { mine: false, other: false };
+  return withTables(db, async function () {
+    var mine = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE pubkey = ? AND (thread = ? OR asked = ?) LIMIT 1")
+      .bind(pk, thread, thread).first();
+    var other = await db.prepare("SELECT 1 AS x FROM botpm_turns WHERE thread = ? AND pubkey != ? LIMIT 1")
+      .bind(thread, pk).first();
+    return { mine: !!mine, other: !!other };
+  }, { mine: false, other: false });
 }
 
 export async function runTurnsCopy(db, pk, rows) {

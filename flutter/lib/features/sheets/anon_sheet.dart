@@ -131,6 +131,18 @@ class _AnonSheetState extends State<_AnonSheet> {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
+                [
+                  t("Push notifications for anonymous chats are off; you'll be notified while the app is open."),
+                  t('Saved memories, server schedules and background runs stay out of anonymous chats.'),
+                  t('A repository you use in one still sends its access token with each request, never stored, and that token can tell the forge and Nymbot which account it belongs to.'),
+                ].join(' '),
+                key: const ValueKey('anon-limits'),
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
                 (app.current?.anon ?? false)
                     ? t('This chat travels under the throwaway key.')
                     : t('This chat uses your own key. The switch below applies '

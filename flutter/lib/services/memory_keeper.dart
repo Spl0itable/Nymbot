@@ -45,7 +45,7 @@ class MemoryKeeper {
   static List<MemoryProposal> propose(String text, Conversation? conv) {
     final body = text.trim();
     if (body.isEmpty || body.length > 2000) return const [];
-    if (conv != null && conv.ephemeral) return const [];
+    if (conv != null && (conv.ephemeral || conv.anon)) return const [];
     final out = <MemoryProposal>[];
     for (final line in body.split(RegExp(r'[\n.!?]+'))) {
       final sentence = line.trim();
@@ -66,7 +66,7 @@ class MemoryKeeper {
 
   /// Global entries plus this workspace's; a ghost chat sees none.
   static List<Memory> forConv(List<Memory> all, Conversation? conv) {
-    if (conv == null || conv.ephemeral) return const [];
+    if (conv == null || conv.ephemeral || conv.anon) return const [];
     return all
         .where((m) => m.scope == null || m.scope == conv.workspaceId)
         .toList();

@@ -120,6 +120,26 @@
                     question names your employer.</li>
                 <li><code>?gift</code> and <code>?transfer</code> stay on your real nym: a gift is made
                     from its balance and a redeemed gift lands on it, never on the throwaway key.</li>
+                <li><strong>A repository token names its account.</strong> A repository you use in an
+                    anonymous chat sends its access token with each request, as in any chat, and it is
+                    never stored &mdash; but the forge, and Nymbot while it holds the request, can tell
+                    which account that token belongs to.</li>
+            </ul>
+            <p>Some features would otherwise tie the throwaway key back to your nym, so an anonymous chat
+                goes without them:</p>
+            <ul>
+                <li><strong>Push notifications for anonymous chats are off.</strong> You are notified while
+                    the app is open; nothing registers a push token or subscription for the chat.</li>
+                <li><strong>Server schedules and background runs are not available.</strong> A scheduled
+                    prompt that answers in an anonymous chat runs only on your device.</li>
+                <li><strong>Saved memories are not sent</strong>, and nothing is proposed for memory from
+                    an anonymous chat.</li>
+                <li><strong>Your Settings defaults stay home.</strong> The request carries only the chat's
+                    own permissions, and a request limit only when you choose <strong>Start
+                    anyway</strong> for that message.</li>
+                <li><strong>Each key asks for itself.</strong> Checks for replies, Nymbot branch cleanup and
+                    the list of running requests go one key per request, spaced by a random wait, and an
+                    anonymous chat's runs are only asked about while that chat is open.</li>
             </ul>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Careful</span>

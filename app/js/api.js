@@ -215,6 +215,20 @@
             }
         },
 
+        JITTER_MS: 2000,
+
+        jitterMs(max) {
+            const cap = Math.min(Number(max != null ? max : this.JITTER_MS) || 0, Number(this.JITTER_MS) || 0);
+            if (!(cap > 0)) return 0;
+            const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
+            return Math.floor(cap * (0.25 + 0.75 * r));
+        },
+
+        jitter(max) {
+            const ms = this.jitterMs(max);
+            return ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
+        },
+
         runLimit: () => RUN_LIMIT,
         RUN_LIMIT,
         RUN_CEILING,

@@ -844,6 +844,7 @@
                     </div>
                 </div>
                 <label class="check"><input type="checkbox" id="scheduleHere"> Send it into this chat rather than a new one</label>
+                <p class="hint" id="scheduleAnonNote" hidden></p>
                 <fieldset class="schedule-server" id="scheduleServerField" hidden>
                     <legend>While the app is closed</legend>
                     <label class="check"><input type="radio" name="scheduleServer" value="notify"> Notify me instead of running</label>
@@ -1644,6 +1645,7 @@
                 pubkey is talking to it. Turn this on and every message, and every reply, travels under a
                 throwaway key generated on this device. Credits move across as blind vouchers Nymbot signs
                 without seeing, so its own records cannot link the two.</p>
+            <p class="hint" id="anonLimits"></p>
             <label class="check"><input type="checkbox" id="anonToggle"> Route new chats through a throwaway key</label>
             <p class="hint" id="anonOffHint">Turn it on to fund the throwaway key, by hand or automatically.</p>
             <div id="anonFunding">

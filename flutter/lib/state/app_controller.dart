@@ -9,6 +9,7 @@ import '../config.dart';
 import '../core/crypto/bech32_codec.dart';
 import '../core/crypto/keys.dart';
 import '../core/crypto/schnorr.dart' as schnorr;
+import '../core/utils/jitter.dart';
 import '../features/i18n/i18n.dart';
 import '../models/artifact.dart';
 import '../models/bot.dart';
@@ -222,11 +223,8 @@ class AppController extends ChangeNotifier {
   Future<Map<String, dynamic>?> _registerReplyNotify(
       String id, Map<String, dynamic> body) async {
     final conv = _conversationById(id);
-    if (conv == null) return null;
-    final signer = conv.anon
-        ? await anon.signer(pk: conv.anonPk)
-        : identity.signer;
-    final res = await api.call('notify-turn', signer,
+    if (conv == null || conv.anon) return null;
+    final res = await api.call('notify-turn', identity.signer,
         extra: body, timeout: const Duration(seconds: 10));
     return res.status == 0 ? null : res.data;
   }
@@ -1278,7 +1276,8 @@ class AppController extends ChangeNotifier {
   /// Polls the turn's progress until it ends, never delaying the send.
   void _watchTurn(ChatTurn turn, String eventId) {
     _askReplyNotifyOnce();
-    replyNotify.pendingTurn(turn.conv.id, eventId, run: turn.key);
+    replyNotify.pendingTurn(turn.conv.id, eventId,
+        run: turn.key, anon: turn.conv.anon);
     final showSteps = settings.showProgress ||
         turn.research != null ||
         turn.team != null;
@@ -2123,17 +2122,21 @@ class AppController extends ChangeNotifier {
     if (failure != null) throw failure;
   }
 
+  Future<String?> _ownerOf(Conversation conv) async =>
+      conv.anon ? (await anon.identityFor(conv.anonPk))['pk'] as String? : null;
+
   Future<int> rememberBranches(
       Conversation conv, Map<String, dynamic> mark) async {
     final jobs = jobsOf(mark);
     if (jobs.isEmpty) return 0;
     final scoped = reposOf(conv);
+    final owner = await _ownerOf(conv);
     var n = 0;
     for (final job in jobs) {
       final repo = scoped.where((r) => r.repo == job['repo']).firstOrNull;
       final sha = job['sha'];
       if (repo == null || sha is! String || sha.isEmpty) continue;
-      repo.nymBranches = rememberBranch(repo.nymBranches, job);
+      repo.nymBranches = rememberBranch(repo.nymBranches, {...job, 'owner': owner});
       n++;
     }
     if (n > 0) await store.saveRepos(repos);
@@ -2141,7 +2144,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<bool> rememberBranchStep(Map<String, dynamic> step,
-      {Conversation? conv}) async {
+      {Conversation? conv, String? owner}) async {
     final found = branchStepsOf([step]);
     if (found.isEmpty) return false;
     final b = found.single;
@@ -2152,11 +2155,13 @@ class AppController extends ChangeNotifier {
     final had =
         repo.nymBranches.where((r) => r['branch'] == b['branch']).firstOrNull;
     if (had != null && had['sha'] == b['sha']) return false;
+    final by = conv != null ? await _ownerOf(conv) : owner;
     repo.nymBranches = rememberBranch(repo.nymBranches, {
       'branch': b['branch'],
       'base': '${b['base']}'.isNotEmpty ? b['base'] : (had?['base'] ?? ''),
       'sha': b['sha'],
       'pull': had?['pull'],
+      'owner': by,
     }, now: (had?['at'] as num?)?.toInt());
     await store.saveRepos(repos);
     return true;
@@ -2248,8 +2253,8 @@ class AppController extends ChangeNotifier {
       case 'update':
         final sha = data['sha'] is String ? data['sha'] as String : job['sha'];
         await _patchJob(m, branch, {'conflict': false, 'sha': sha});
-        repo.nymBranches =
-            rememberBranch(repo.nymBranches, {...job, 'sha': sha});
+        repo.nymBranches = rememberBranch(
+            repo.nymBranches, {...job, 'sha': sha, 'owner': await _ownerOf(conv)});
         await store.saveRepos(repos);
         return data['upToDate'] == true
             ? t('{branch} already has everything from {base}.',
@@ -2264,43 +2269,76 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<String> cleanupRepoBranches(GitRepo repo) async {
+  static String? _branchOwner(Map<String, dynamic> r) {
+    final v = r['owner'];
+    return v is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(v) ? v : null;
+  }
+
+  Future<String> cleanupRepoBranches(GitRepo repo,
+      {bool any = true, String? owner}) async {
     if (!repo.allowWrites || repo.token.isEmpty || repo.nymBranches.isEmpty) {
       return t('No Nymbot branches were ready to clean up.');
     }
-    try {
-      final data =
-          await chat.cleanupBranches(repo: repo, signer: identity.signer);
-      final done = [
-        ...(data['deleted'] as List? ?? const []),
-        ...(data['gone'] as List? ?? const []),
-      ];
-      if (done.isNotEmpty) {
-        repo.nymBranches = forgetBranches(repo.nymBranches, done);
-        await store.saveRepos(repos);
-        notifyListeners();
-      }
-      return done.isEmpty
-          ? t('No Nymbot branches were ready to clean up.')
-          : t('Cleaned up {n} Nymbot branches.', {'n': done.length});
-    } catch (e) {
-      return e is ChatFailure ? e.message : t('The forge could not be reached.');
+    final groups = <String?, List<Map<String, dynamic>>>{};
+    for (final r in repo.nymBranches) {
+      final by = _branchOwner(r);
+      if (!any && by != owner) continue;
+      (groups[by] ??= []).add(r);
     }
+    var done = 0;
+    var landed = 0;
+    String? failure;
+    var sent = 0;
+    for (final entry in groups.entries) {
+      final id = entry.key == null ? null : anon.heldFor(entry.key);
+      if (entry.key != null && id == null) continue;
+      if (sent++ > 0) await Jitter.wait();
+      try {
+        final data = await chat.cleanupBranches(
+            repo: repo,
+            branches: entry.value,
+            signer: id == null ? identity.signer : anon.signerOf(id));
+        final gone = [
+          ...(data['deleted'] as List? ?? const []),
+          ...(data['gone'] as List? ?? const []),
+        ];
+        landed++;
+        if (gone.isNotEmpty) {
+          done += gone.length;
+          repo.nymBranches = forgetBranches(repo.nymBranches, gone);
+          await store.saveRepos(repos);
+          notifyListeners();
+        }
+      } catch (e) {
+        failure ??= e is ChatFailure ? e.message : t('The forge could not be reached.');
+      }
+    }
+    if (failure != null && landed == 0) return failure;
+    return done == 0
+        ? t('No Nymbot branches were ready to clean up.')
+        : t('Cleaned up {n} Nymbot branches.', {'n': done});
   }
 
   final Map<String, int> _cleanedAt = {};
 
   void cleanupSoon(Conversation conv) {
-    if (conv.anon) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    for (final repo in reposOf(conv)) {
-      if (!repo.allowWrites || repo.nymBranches.isEmpty) continue;
-      if (now - (_cleanedAt[repo.id] ?? 0) < branchCleanupEvery.inMilliseconds) {
-        continue;
+    unawaited(() async {
+      final owner = await _ownerOf(conv);
+      if (conv.anon && owner == null) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      for (final repo in reposOf(conv)) {
+        if (!repo.allowWrites ||
+            !repo.nymBranches.any((r) => _branchOwner(r) == owner)) {
+          continue;
+        }
+        final key = '${repo.id}:${owner ?? ''}';
+        if (now - (_cleanedAt[key] ?? 0) < branchCleanupEvery.inMilliseconds) {
+          continue;
+        }
+        _cleanedAt[key] = now;
+        await cleanupRepoBranches(repo, any: false, owner: owner);
       }
-      _cleanedAt[repo.id] = now;
-      unawaited(cleanupRepoBranches(repo));
-    }
+    }());
   }
 
   Future<void> discardStaged(ChatMessage m) async {
@@ -3351,9 +3389,10 @@ class AppController extends ChangeNotifier {
 
   Map<String, String> policyOf(Conversation? conv) {
     final own = conv?.policy ?? const <String, String>{};
+    final alone = conv?.anon ?? false;
     return {
-      'readOnlyTools': own['readOnlyTools'] ?? settings.readOnlyTools,
-      'serverRuns': own['serverRuns'] ?? settings.serverRunPolicy,
+      'readOnlyTools': own['readOnlyTools'] ?? (alone ? 'ask' : settings.readOnlyTools),
+      'serverRuns': own['serverRuns'] ?? (alone ? 'ask' : settings.serverRunPolicy),
     };
   }
 
@@ -3385,7 +3424,7 @@ class AppController extends ChangeNotifier {
   }
 
   Map<String, dynamic> _runExtras(Conversation conv, {String? kind}) => {
-        if (settings.maxRuns > 0) 'maxRuns': settings.maxRuns,
+        if (settings.maxRuns > 0 && !conv.anon) 'maxRuns': settings.maxRuns,
         'policy': policyOf(conv),
         if (kind != null) 'runKind': kind,
       };
@@ -4147,8 +4186,8 @@ class AppController extends ChangeNotifier {
         gaveUp = true;
         break;
       }
-      await Future<void>.delayed(
-          claimBackoff[math.min(i++, claimBackoff.length - 1)]);
+      final step = claimBackoff[math.min(i++, claimBackoff.length - 1)];
+      await Future<void>.delayed(step + Jitter.next(step ~/ 4));
       if (turn.stopped || _gone) return;
       try {
         final got = await chat.claim(prepared,
@@ -4230,7 +4269,12 @@ class AppController extends ChangeNotifier {
       turns[turn.key] = turn;
       turn.phase = 'claiming';
       turn.status = t('Still working on that one…');
-      unawaited(_claimLoop(turn));
+      final wait = Jitter.next();
+      unawaited(() async {
+        if (wait > Duration.zero) await Future<void>.delayed(wait);
+        if (turn.stopped || _gone) return;
+        await _claimLoop(turn);
+      }());
     }
     notifyListeners();
   }
@@ -4796,6 +4840,13 @@ class AppController extends ChangeNotifier {
     }
     if (!settings.serverSchedules) return '';
     final conv = s.convId == null ? null : _conversationById(s.convId!);
+    if (conv != null && conv.anon) {
+      final had = s.serverSha != null;
+      _unserve(s);
+      await saveSchedule(s);
+      if (had) await api.scheduleDelete(identity.signer, s.id);
+      return ServerSchedules.anonText();
+    }
     final run = mode == 'run';
     final model = run ? '${modelOf(conv)?['key'] ?? ''}' : '';
     if (run) {
@@ -4928,6 +4979,7 @@ class AppController extends ChangeNotifier {
   Future<void> _fileScheduled(
       Schedule s, String eventId, Map<String, dynamic> data) async {
     var conv = s.convId == null ? null : _conversationById(s.convId!);
+    if (conv != null && conv.anon) conv = null;
     if (conv == null) {
       conv = Conversation(
         id: bytesToHex(randomBytes(8)),
@@ -4998,16 +5050,39 @@ class AppController extends ChangeNotifier {
     if (!signedIn && identity.pubkey.isEmpty) return;
     final res = await api.liveRuns(identity.signer);
     final list = res.data['runs'];
+    final open = current;
+    final ask = open != null && open.anon && open.rootId.isNotEmpty ? open : null;
+    List? theirs;
+    if (ask != null) {
+      await Jitter.wait();
+      final got = await api.liveRuns(await _signerOf(ask), thread: ask.rootId);
+      final raw = got.data['runs'];
+      if (got.status == 200 && raw is List) {
+        theirs = [
+          for (final r in raw)
+            if (r is Map && r['thread'] == ask.rootId) r,
+        ];
+      }
+    }
     if (res.status != 200 || list is! List) return;
     _runsRaw = {
       for (final r in list)
         if (r is Map && r['replyTo'] is String) r['replyTo'] as String: r,
     };
-    final runs = list.map(remoteRunOf).whereType<RemoteRun>().toList();
-    for (final r in runs) {
+    final mine = list.map(remoteRunOf).whereType<RemoteRun>().toList();
+    final others = (theirs ?? const []).map(remoteRunOf).whereType<RemoteRun>().toList();
+    for (final r in mine) {
       for (final b in r.branches) {
         await rememberBranchStep(b);
       }
+    }
+    for (final r in others) {
+      for (final b in r.branches) {
+        await rememberBranchStep(b, conv: ask);
+      }
+    }
+    final runs = [...mine, ...others];
+    for (final r in runs) {
       for (final t in turns.values) {
         if (t.runId == r.replyTo) {
           if (r.progress.isNotEmpty) t.progress = r.progress;
@@ -5099,22 +5174,34 @@ class AppController extends ChangeNotifier {
     if (_flushing) return;
     _flushing = true;
     try {
+      final groups = <String, List<Conversation>>{};
       for (final conv in [...conversations]) {
-        for (final m in pendingIn(conv)) {
-          final held = _offlineHeld.remove(m.id);
-          final list = _messagesOf(conv);
-          if (held != null && held.prepared != null) {
-            _parked.remove(held.prepared!.eventId);
-            final next = [for (final x in list) x.id == m.id ? x.copyWith(sent: true) : x];
-            if (conv.id == current?.id) messages = next;
-            await store.saveMessages(conv.id, next);
-            await _redeliver(held);
-          } else {
-            await _dropMessage(conv, m);
-            await send(m.content,
-                target: conv, withAttachments: m.attachments, withQuote: m.quote);
+        if (pendingIn(conv).isEmpty) continue;
+        final key = conv.anon
+            ? '${(await anon.identityFor(conv.anonPk))['pk']}'
+            : '';
+        (groups[key] ??= []).add(conv);
+      }
+      var group = 0;
+      for (final convs in groups.values) {
+        if (group++ > 0) await Jitter.wait();
+        for (final conv in convs) {
+          for (final m in pendingIn(conv)) {
+            final held = _offlineHeld.remove(m.id);
+            final list = _messagesOf(conv);
+            if (held != null && held.prepared != null) {
+              _parked.remove(held.prepared!.eventId);
+              final next = [for (final x in list) x.id == m.id ? x.copyWith(sent: true) : x];
+              if (conv.id == current?.id) messages = next;
+              await store.saveMessages(conv.id, next);
+              await _redeliver(held);
+            } else {
+              await _dropMessage(conv, m);
+              await send(m.content,
+                  target: conv, withAttachments: m.attachments, withQuote: m.quote);
+            }
+            if (api.offline) return;
           }
-          if (api.offline) return;
         }
       }
       if (conversations.every((c) => pendingIn(c).isEmpty)) {

@@ -113,19 +113,42 @@
         if (!Identity || !Identity.pubkey) return remote;
         if (polling) return polling;
         polling = (async () => {
+            let mine = null;
             try {
                 const res = await Api().liveRuns(null, {});
                 if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
-                    remote = res.data.runs.map(clean).filter(Boolean).slice(0, 20);
-                    for (const r of remote) {
+                    mine = res.data.runs.map(clean).filter(Boolean).slice(0, 20);
+                    for (const r of mine) {
                         for (const b of r.branches) {
-                            try { Chat().rememberBranchStep(b, null); } catch (_) { }
+                            try { Chat().rememberBranchStep(b, null, null); } catch (_) { }
                         }
                     }
                 } else if (res.status && res.status !== 429) {
-                    remote = [];
+                    mine = [];
                 }
             } catch (_) { }
+            const open = ui.conv && ui.conv.anon && HEX.test(String(ui.conv.rootId || '')) ? ui.conv : null;
+            const signer = open ? signerFor(open) : null;
+            let theirs = null;
+            if (signer) {
+                try {
+                    await Api().jitter();
+                    const res = await Api().liveRuns(open.rootId, { signer });
+                    if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
+                        theirs = res.data.runs.map(clean).filter(r => r && r.thread === open.rootId).slice(0, 20);
+                        for (const r of theirs) {
+                            for (const b of r.branches) {
+                                try { Chat().rememberBranchStep(b, open); } catch (_) { }
+                            }
+                        }
+                    }
+                } catch (_) { }
+            }
+            const kept = remote.filter(r => r.anon);
+            const nym = mine != null ? mine : remote.filter(r => !r.anon);
+            const anon = theirs != null ? theirs.map(r => Object.assign(r, { anon: true }))
+                : kept.filter(r => signer && r.thread === open.rootId);
+            remote = nym.concat(anon);
             render(ui);
             return remote;
         })();

@@ -902,10 +902,10 @@ class ChatEngine {
   Future<Map<String, dynamic>> cleanupBranches({
     required GitRepo repo,
     required EventSigner signer,
+    List<Map<String, dynamic>>? branches,
   }) async {
-    final list = repo.nymBranches.length > 20
-        ? repo.nymBranches.sublist(repo.nymBranches.length - 20)
-        : repo.nymBranches;
+    final all = branches ?? repo.nymBranches;
+    final list = all.length > 20 ? all.sublist(all.length - 20) : all;
     final res = await api.call('git-branch', signer, extra: {
       'git': repo.toPayload(defaultWhenDone: defaultWhenDone),
       'op': 'cleanup',
@@ -1276,7 +1276,6 @@ class ChatEngine {
       'fresh': freshTurn,
       'followUps': true,
       'draft': true,
-      if (anonymous) 'anon': true,
       if (handed.isNotEmpty) 'history': [for (final w in handed) w.toJson()],
       // Every part in order; the last is `eventId`.
       if (partIds.length > 1) 'parts': partIds,

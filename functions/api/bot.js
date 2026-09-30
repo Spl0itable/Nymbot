@@ -111,7 +111,7 @@ import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseRep
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
 import { l402RefundToken, l402RefundPeek, l402RefundRedeem } from "./_l402refund.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runBatched, runRepoLockKey, runLockTake, runLockBeat, runLockDrop,
-  runTurnsRecent, runTurnsThread, runTurnsCopy, runTurnAdd, runSummaryGet, runSummaryPut, runWrapsPrune, runResultPut, runResultGet, runResultDrop, runGet, runByResume, runCountLive, runStart, runContinue,
+  runTurnsRecent, runTurnsThread, runThreadHolders, runTurnsCopy, runTurnAdd, runSummaryGet, runSummaryPut, runWrapsPrune, runResultPut, runResultGet, runResultDrop, runGet, runByResume, runCountLive, runStart, runContinue,
   runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runForget, runSweep,
   RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS, RUN_STEER_CHARS, RUN_ROW_KEEP_MS, RUN_RESULT_KEEP_MS } from "./_runs.js";
 import { apnsSendReply } from "./_apns.js";
@@ -8146,8 +8146,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       var listed = await runListRecent(env.DB_BOT, ctlPk, Date.now(), 20);
       var listNow = Date.now();
       var wantThread = typeof body.thread === "string" ? body.thread : null;
+      var withNymchat = body.all === true;
       return json({ runs: listed.filter(function (r) {
         if (wantThread != null && r.thread !== wantThread) return false;
+        if (!withNymchat && String(r.thread || "").indexOf("nymchat:") === 0) return false;
         return !(r.state === "running" && Number(r.beat_at) <= listNow - RUN_LIVE_MS) && !r.cancel;
       }).map(function (r) {
         var got = botRunUnpack(runCipher, r.progress);
@@ -8157,7 +8159,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           branches: got.branches.length ? got.branches : undefined,
           background: got.bg ? true : undefined, until: got.bg || undefined,
           legs: got.legs.length ? got.legs : undefined,
-          state: r.state, startedAt: Number(r.started_at) || 0, updatedAt: Number(r.beat_at) || 0
+          state: r.state, startedAt: Number(r.started_at) || 0, updatedAt: Number(r.beat_at) || 0,
+          app: String(r.thread || "").indexOf("nymchat:") === 0 ? "nymchat" : undefined
         };
       }) });
     }
@@ -8165,8 +8168,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (!ctlAsked) return json({ error: "Missing the id of the message that started the request." }, 400);
     if (body.action === "pm-cancel") {
       botRunLocalEntry(ctlPk, ctlAsked).cancel = true;
+      var cancelRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
       var cancelState = await runCancelFlag(env.DB_BOT, ctlPk, ctlAsked, Date.now());
-      await bgDriver(env, ctlPk, { drive: "run-cancel", runId: ctlAsked });
+      if (cancelRow && botRunUnpack(runCipher, cancelRow.progress).bg) {
+        await bgDriver(env, ctlPk, { drive: "run-cancel", runId: ctlAsked });
+      }
       return json({ ok: true, state: cancelState || "pending" });
     }
     var steerText = typeof body.text === "string" ? body.text.trim() : "";
@@ -10030,7 +10036,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           researchCeiling - chatResult.resumeState.research.chargedMilli) / BOT_MILLI_PER_CREDIT));
       }
       var bgWanted = !chatResult.pendingTool && (leg && leg.bg ? true
-        : !!(bgAsk && !freeTurn && body.anon !== true && bgDriverReady(env) && (bgAsk.maxCredits != null || researchRun || teamRun)));
+        : !!(bgAsk && !freeTurn && bgDriverReady(env) && (bgAsk.maxCredits != null || researchRun || teamRun)));
       if (bgWanted) {
         var bgSpent = (costMilli > 0 ? costMilli : cost * BOT_MILLI_PER_CREDIT) + runMilli;
         var bgNextReserve = researchNext || (proModel ? proRequired : stdRequired);
@@ -10311,9 +10317,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var sIds = await bgSchedIds(sId, firedAt);
     var sBody = { action: "pm", pubkey: sPk, eventId: sIds.eventId, fresh: true, maxCost: Number(sealed.maxCreditsPerRun) };
     if (sealed.tier === "pro" && sealed.model) sBody.proModel = sealed.model;
+    var sThread = sealed.thread || null;
+    if (sThread) {
+      var sHeld = await runThreadHolders(env.DB_BOT, sPk, sThread);
+      if (sHeld.other && !sHeld.mine) sThread = null;
+    }
     var sLegRun = {
       sched: { id: sId, firedAt: firedAt }, message: String(sealed.prompt || ""), msgId: sIds.msgId,
-      threadRoot: sealed.thread || null, remember: true, keepAt: sNow + BG_KEEP_AFTER_MS - RUN_RESULT_KEEP_MS
+      threadRoot: sThread, remember: true, keepAt: sNow + BG_KEEP_AFTER_MS - RUN_RESULT_KEEP_MS
     };
     var sOut = await botLegResult(await botRunLeg(sBody, sLegRun));
     var sObj = sOut.obj;
@@ -10371,6 +10382,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var sc = sParsed.sched;
     if ((await sha256Hex(body.schedule.payload)) !== sc.sha256) {
       return json({ error: "The schedule does not match the hash it was signed with." }, 400);
+    }
+    if (sc.mode === "run" && sc.thread) {
+      var sOwners = await runThreadHolders(env.DB_BOT, aPk, sc.thread);
+      if (sOwners.other && !sOwners.mine) {
+        return json({ error: "That chat's thread belongs to another key, so a server schedule can't run in it." }, 403);
+      }
     }
     if (sc.mode === "run" && sc.tier === "pro") {
       var sPick = botProPick(await botProCatalog(env), sc.model);

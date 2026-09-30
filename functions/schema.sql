@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS botpm_turns (
   PRIMARY KEY (pubkey, asked)
 );
 CREATE INDEX IF NOT EXISTS botpm_turns_at ON botpm_turns (pubkey, at);
+CREATE INDEX IF NOT EXISTS botpm_turns_thread ON botpm_turns (thread);
 
 CREATE TABLE IF NOT EXISTS botpm_runs (
   pubkey TEXT NOT NULL,

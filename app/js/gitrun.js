@@ -130,12 +130,17 @@
             .map(x => Object.assign({ repo: x.repo }, x.job));
     }
 
+    function ownerOf(v) {
+        return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : null;
+    }
+
     function remember(list, job, now) {
         const out = (Array.isArray(list) ? list : []).filter(r => r && r.branch !== job.branch);
         out.push({
             branch: job.branch, base: job.base || '', sha: job.sha || '',
             pull: job.pull && job.pull.number ? { number: job.pull.number, url: job.pull.url || '' } : null,
-            at: now || Date.now()
+            at: now || Date.now(),
+            owner: ownerOf(job.owner)
         });
         return out.slice(-BRANCH_RECORDS_MAX);
     }
@@ -215,6 +220,7 @@
         isJobBranch,
         branchSteps,
         jobsOf,
+        ownerOf,
         remember,
         forget,
         branchState,

@@ -163,6 +163,10 @@ List<Map<String, dynamic>> rememberBranch(
           ? {'number': pull['number'], 'url': pull['url'] ?? ''}
           : null,
       'at': now ?? DateTime.now().millisecondsSinceEpoch,
+      'owner': job['owner'] is String &&
+              RegExp(r'^[0-9a-f]{64}$').hasMatch(job['owner'] as String)
+          ? job['owner']
+          : null,
     });
   return out.length > branchRecordsMax
       ? out.sublist(out.length - branchRecordsMax)

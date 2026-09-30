@@ -701,7 +701,7 @@
             let prepared = opts.replay && opts.replay.extra ? opts.replay : null;
             if (!prepared) prepared = await this.prepare(conv, text, settings, opts, { anon, payer, repos, ghost });
             const extra = Object.assign({}, prepared.extra);
-            const runs = validRuns(opts.maxRuns != null ? opts.maxRuns : settings && settings.maxRuns);
+            const runs = validRuns(opts.maxRuns != null ? opts.maxRuns : (anon ? null : settings && settings.maxRuns));
             if (runs) extra.maxRuns = runs;
             else delete extra.maxRuns;
             const replay = { extra: Object.assign({}, extra), msgId: prepared.msgId, isFresh: prepared.isFresh, partWraps: prepared.partWraps };
@@ -876,8 +876,7 @@
                 extra.wraps = partWraps;
             }
             if (opts.resume) extra.resume = opts.resume;
-            if (anon) extra.anon = true;
-            else if (opts.background && typeof opts.background === 'object') extra.background = opts.background;
+            if (!anon && opts.background && typeof opts.background === 'object') extra.background = opts.background;
             if (Number(opts.maxCost) > 0) extra.maxCost = Number(opts.maxCost);
             const proTurn = !!(model || (media && media.proKey));
             const connectors = window.NymbotConnectors && !conv.anon && proTurn && (!opts.research || opts.team)
@@ -910,7 +909,7 @@
                 if (opts.research) extra.research = opts.research;
                 if (opts.team) extra.team = opts.team;
             }
-            extra.policy = policyFor(conv, settings);
+            extra.policy = policyFor(conv, anon ? null : settings);
             if (opts.forkOf && typeof opts.forkOf === 'object' && HEX64.test(String(opts.forkOf.before || ''))) {
                 extra.forkOf = { thread: String(opts.forkOf.thread || ''), before: String(opts.forkOf.before) };
             }
@@ -927,7 +926,8 @@
             let resent = false;
             while (!(controller && controller.signal.aborted) && Date.now() - began < CLAIM_MS) {
                 const base = waits[Math.min(step, waits.length - 1)];
-                const wait = step < waits.length ? base : Math.min(60000, base * Math.pow(2, step - waits.length + 1));
+                const wait = (step < waits.length ? base : Math.min(60000, base * Math.pow(2, step - waits.length + 1)))
+                    + Api.jitterMs(Math.round(base / 4));
                 step++;
                 await pause(wait, controller ? controller.signal : null);
                 if (controller && controller.signal.aborted) break;
@@ -1161,22 +1161,30 @@
             return data;
         },
 
+        ownerOf(conv) {
+            if (!conv || !conv.anon) return null;
+            const id = Anon.forConv(conv);
+            return id ? id.pk : null;
+        },
+
         rememberBranches(conv, mark) {
             const GitRun = window.NymbotGitRun;
             const jobs = GitRun.jobsOf(mark);
             if (!jobs.length) return 0;
             const repos = reposFor(conv);
+            const owner = this.ownerOf(conv);
             let n = 0;
             for (const job of jobs) {
                 const repo = repos.find(r => r.repo === job.repo);
                 if (!repo || !job.sha) continue;
-                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(repo.nymBranches, job) });
+                const fresh = Store.repo(repo.id) || repo;
+                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, job, { owner })) });
                 n++;
             }
             return n;
         },
 
-        rememberBranchStep(step, conv) {
+        rememberBranchStep(step, conv, owner) {
             const GitRun = window.NymbotGitRun;
             if (!step || !GitRun.isJobBranch(step.branch) || !/^[0-9a-f]{40,64}$/i.test(String(step.sha || ''))) return false;
             const pool = conv ? reposFor(conv) : Store.repos();
@@ -1185,10 +1193,11 @@
             const fresh = Store.repo(repo.id) || repo;
             const had = (fresh.nymBranches || []).find(r => r.branch === step.branch);
             if (had && had.sha === step.sha) return false;
+            const by = conv ? this.ownerOf(conv) : (owner !== undefined ? GitRun.ownerOf(owner) : (had ? GitRun.ownerOf(had.owner) : null));
             Store.updateRepo(repo.id, {
                 nymBranches: GitRun.remember(fresh.nymBranches, {
                     branch: step.branch, base: step.base || (had && had.base) || '', sha: step.sha,
-                    pull: had ? had.pull : null
+                    pull: had ? had.pull : null, owner: by
                 }, had ? had.at : undefined)
             });
             return true;
@@ -1223,7 +1232,7 @@
             if (op === 'delete') {
                 Store.updateRepo(repo.id, { nymBranches: GitRun.forget(fresh.nymBranches, [job.branch]) });
             } else if (out.sha && op === 'update') {
-                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, job, { sha: out.sha, pull: out.pull || job.pull })) });
+                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, job, { sha: out.sha, pull: out.pull || job.pull, owner: this.ownerOf(conv) })) });
             } else if (out.pull) {
                 const had = (fresh.nymBranches || []).find(r => r.branch === job.branch);
                 if (had) Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, had, { pull: out.pull })) });
@@ -1233,28 +1242,55 @@
 
         async cleanupBranches(repo, opts) {
             const options = opts || {};
-            const list = (repo && Array.isArray(repo.nymBranches)) ? repo.nymBranches.slice(-20) : [];
-            if (!repo || !repo.allowWrites || !repo.token || !list.length) return { deleted: [], gone: [], kept: [] };
-            const { status, data } = await Api.call('git-branch', {
-                git: repoPayload(repo),
-                op: 'cleanup',
-                branches: list.map(r => ({ branch: r.branch, sha: r.sha, base: r.base, pull: r.pull, at: r.at }))
-            }, { signer: options.signer || null });
-            if (status >= 400 || !data || data.error) throw new Error((data && data.error) || t('The forge could not be reached.'));
-            const done = (data.deleted || []).concat(data.gone || []);
-            const fresh = Store.repo(repo.id) || repo;
-            if (done.length) Store.updateRepo(repo.id, { nymBranches: window.NymbotGitRun.forget(fresh.nymBranches, done) });
-            return data;
+            const GitRun = window.NymbotGitRun;
+            const out = { deleted: [], gone: [], kept: [] };
+            const all = (repo && Array.isArray(repo.nymBranches)) ? repo.nymBranches : [];
+            if (!repo || !repo.allowWrites || !repo.token || !all.length) return out;
+            const groups = new Map();
+            for (const r of all) {
+                const owner = GitRun.ownerOf(r && r.owner);
+                if ('owner' in options && owner !== options.owner) continue;
+                if (!groups.has(owner)) groups.set(owner, []);
+                groups.get(owner).push(r);
+            }
+            let first = null;
+            let sent = 0;
+            let landed = 0;
+            for (const [owner, rows] of groups) {
+                const id = owner ? Anon.identity(owner) : null;
+                if (owner && !id) continue;
+                if (sent++) await Api.jitter();
+                const list = rows.slice(-20);
+                const { status, data } = await Api.call('git-branch', {
+                    git: repoPayload(repo),
+                    op: 'cleanup',
+                    branches: list.map(r => ({ branch: r.branch, sha: r.sha, base: r.base, pull: r.pull, at: r.at }))
+                }, { signer: id ? Anon.signer(id) : null });
+                if (status >= 400 || !data || data.error) {
+                    if (!first) first = new Error((data && data.error) || t('The forge could not be reached.'));
+                    continue;
+                }
+                landed++;
+                for (const k of ['deleted', 'gone', 'kept']) out[k] = out[k].concat(Array.isArray(data[k]) ? data[k] : []);
+                const done = (data.deleted || []).concat(data.gone || []);
+                const fresh = Store.repo(repo.id) || repo;
+                if (done.length) Store.updateRepo(repo.id, { nymBranches: GitRun.forget(fresh.nymBranches, done) });
+            }
+            if (first && !landed) throw first;
+            return out;
         },
 
         cleanupSoon(conv) {
             const now = Date.now();
+            const owner = this.ownerOf(conv);
+            if (conv.anon && !owner) return;
             this._cleaned = this._cleaned || {};
             for (const repo of reposFor(conv)) {
-                if (!repo.allowWrites || conv.anon || !(repo.nymBranches || []).length) continue;
-                if (now - (this._cleaned[repo.id] || 0) < CLEANUP_EVERY_MS) continue;
-                this._cleaned[repo.id] = now;
-                this.cleanupBranches(repo).catch(() => { });
+                if (!repo.allowWrites || !(repo.nymBranches || []).some(r => window.NymbotGitRun.ownerOf(r && r.owner) === owner)) continue;
+                const key = repo.id + ':' + (owner || '');
+                if (now - (this._cleaned[key] || 0) < CLEANUP_EVERY_MS) continue;
+                this._cleaned[key] = now;
+                this.cleanupBranches(repo, { owner }).catch(() => { });
             }
         },
 

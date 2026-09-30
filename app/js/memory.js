@@ -27,7 +27,7 @@
         propose(text, conv) {
             const body = String(text || '').trim();
             if (!body || body.length > 2000) return [];
-            if (conv && conv.ephemeral) return [];
+            if (conv && (conv.ephemeral || conv.anon)) return [];
             const scope = (conv && conv.workspaceId) || null;
             const out = [];
             for (const line of body.split(/[\n.!?]+/)) {
@@ -47,7 +47,7 @@
 
         /// A ghost chat sees no memory.
         forConv(conv) {
-            if (!conv || conv.ephemeral) return [];
+            if (!conv || conv.ephemeral || conv.anon) return [];
             const scope = conv.workspaceId || null;
             return Store.memories().filter(m => !m.scope || m.scope === scope);
         },

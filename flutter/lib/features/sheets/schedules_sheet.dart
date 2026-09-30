@@ -127,8 +127,9 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
     entry.serverCap = _cap;
     await app.saveSchedule(entry);
     var said = '';
+    final alone = _here && (app.current?.anon ?? false);
     if (app.settings.serverSchedules && (_mode != null || entry.server != null)) {
-      var mode = _mode;
+      var mode = alone ? null : _mode;
       if (mode == 'run' && mounted && !await _confirmRun(_cap)) mode = entry.server;
       said = await app.saveServerSchedule(entry, mode);
     }
@@ -404,7 +405,17 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                   style: const TextStyle(fontSize: 13)),
               onChanged: (v) => setState(() => _here = v),
             ),
-            if (app.settings.serverSchedules) _serverChoices(context),
+            if (app.settings.serverSchedules &&
+                _here &&
+                (app.current?.anon ?? false))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(ServerSchedules.anonText(),
+                    key: const ValueKey('schedule-anon-note'),
+                    style: const TextStyle(fontSize: 12)),
+              )
+            else if (app.settings.serverSchedules)
+              _serverChoices(context),
             if (_status.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),

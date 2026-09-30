@@ -136,6 +136,11 @@
                 on your phone from your computer. A reply that takes longer than the connection lasts is not
                 lost: the app keeps checking for it and shows it in its place, and trying again never charges
                 twice for the same message.</p>
+            <p>Requests in <a href="/docs/anonymous/">anonymous chats</a> are left out of
+                <strong>Running now</strong> and Tasks on your other devices: each one runs under its chat's
+                throwaway key, and asking about them with your nym would link the two. The device you are
+                on asks about the anonymous chat you have open, with that chat's own key, in a request of
+                its own.</p>
             <p>Messages written while you are offline stay in the chat marked <strong>Waiting for
                 connection</strong>, where you can edit or delete them, and are sent in order, each as its own
                 request, as soon as you are back online.</p>
@@ -189,6 +194,9 @@
                     in a row turn a schedule off and tell you.</li>
                 <li>Deleting the schedule, turning the option off, clearing your history or wiping the app
                     deletes the server copy at once.</li>
+                <li>Server schedules aren't available in <a href="/docs/anonymous/">anonymous chats</a>: a
+                    schedule that answers in one runs on your device, and the server refuses to run a
+                    schedule in a thread another key holds.</li>
             </ul>
 
             <h2 id="memory">What carries between chats</h2>
@@ -212,7 +220,9 @@
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Ghost chats</span>
                 <p>A <a href="/docs/chats/#ghost-mode">ghost chat</a> neither reads memory nor adds to it. It
-                    is not part of a record, and memory is a record.</p>
+                    is not part of a record, and memory is a record. Neither does an
+                    <a href="/docs/anonymous/">anonymous chat</a>: facts about you would tie its throwaway key
+                    to your nym.</p>
             </div>
 
             <h2 id="recall">Reading back what fell out</h2>

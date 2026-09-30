@@ -334,13 +334,19 @@
                 nextAt: entry.nextAt,
                 prompt: String(entry.prompt || '').slice(0, PROMPT_MAX),
                 title: String(entry.title || '').slice(0, TITLE_MAX),
-                thread: conv && HEX.test(String(conv.rootId || '')) ? conv.rootId : '',
+                thread: conv && !conv.anon && HEX.test(String(conv.rootId || '')) ? conv.rootId : '',
                 model: model && model.key ? String(model.key) : '',
                 tier: model && model.key ? 'pro' : 'standard'
             });
         },
 
+        anonText() {
+            return t('Server schedules aren\'t available in anonymous chats; this one runs on this device.');
+        },
+
         async put(ui, entry, mode, cap) {
+            const target = entry && entry.convId ? Store().conversation(entry.convId) : null;
+            if (target && target.anon) return { error: this.anonText() };
             if (mode === 'run') {
                 const { model } = this.modelFor(ui, entry);
                 const bal = ui.balance || {};
@@ -496,11 +502,12 @@
             const link = Chat().linkOf(rumor, null);
             const entry = Store().schedule(id);
             const S = Store();
-            let conv = thread ? S.conversations().find(c => c.rootId === thread) : null;
+            let conv = thread ? S.conversations().find(c => c.rootId === thread && !c.anon) : null;
             if (!conv && entry && entry.convId) conv = S.conversation(entry.convId);
+            if (conv && conv.anon) conv = null;
             if (!conv) {
-                const patch = { title: (entry && entry.title) || t('Scheduled prompt') };
-                if (thread) patch.rootId = thread;
+                const patch = { title: (entry && entry.title) || t('Scheduled prompt'), anon: false };
+                if (thread && !S.conversations().some(c => c.rootId === thread)) patch.rootId = thread;
                 conv = ui.newConversation(patch);
             }
             const when = firedAt || (Number(rumor.created_at) * 1000) || Date.now();

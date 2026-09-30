@@ -82,9 +82,9 @@
             this._attached = true;
             this.shareStateText();
             document.addEventListener('visibilitychange', () => {
-                if (this.hidden()) this.registerAll();
+                if (this.hidden()) this.registerAll().catch(() => { });
             });
-            window.addEventListener('pagehide', () => this.registerAll());
+            window.addEventListener('pagehide', () => { this.registerAll().catch(() => { }); });
             navigator.serviceWorker.addEventListener('message', (e) => {
                 const d = e.data || {};
                 if (d.type === 'open-chat' && CHAT_RE.test(d.chat || '')) {
@@ -127,7 +127,7 @@
                 return;
             }
             try { localStorage.setItem(ASKED_KEY, '1'); } catch (_) { }
-            this.ask().then((ok) => { if (ok && this.hidden()) this.registerAll(); });
+            this.ask().then((ok) => { if (ok && this.hidden()) return this.registerAll(); }).catch(() => { });
         },
 
         viewingChat(id) {
@@ -138,10 +138,11 @@
             if (!this.supported() || !convId || !eventId) return;
             const key = (info && info.key) || convId;
             const asked = info && ASKED_RE.test(info.asked || '') ? info.asked : null;
-            this.pending.set(key, { convId, eventId, signer: signer || null, asked });
+            const anon = !!(signer || (info && info.anon));
+            this.pending.set(key, { convId, eventId, signer: signer || null, asked, anon });
             clearTimeout(this.timers.get(key));
             this.timers.delete(key);
-            if (!this.allowed() || !this.pushSupported()) return;
+            if (anon || !this.allowed() || !this.pushSupported()) return;
             if (this.hidden()) {
                 this.register(key);
                 return;
@@ -228,15 +229,24 @@
             return { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } };
         },
 
-        registerAll() {
+        async registerAll() {
             if (!this.allowed() || !this.pushSupported()) return;
-            for (const key of this.pending.keys()) this.register(key);
+            if (this._registering) return this._registering;
+            this._registering = (async () => {
+                let sent = 0;
+                for (const [key, p] of [...this.pending.entries()]) {
+                    if (!p || p.anon || this.registered.has(p.eventId) || p.registering) continue;
+                    if (sent++) await API.jitter();
+                    await this.register(key);
+                }
+            })();
+            try { await this._registering; } finally { this._registering = null; }
         },
 
         async register(key) {
             const p = this.pending.get(key);
             const convId = p ? (p.convId || key) : '';
-            if (!p || !CHAT_RE.test(convId) || this.registered.has(p.eventId) || p.registering) return;
+            if (!p || p.anon || !CHAT_RE.test(convId) || this.registered.has(p.eventId) || p.registering) return;
             if (!this.allowed() || !this.pushSupported()) return;
             p.registering = true;
             let res = null;
@@ -249,7 +259,7 @@
                     subscription,
                     chat: convId,
                     text: t('Your reply is ready').slice(0, 80)
-                }, { signer: p.signer || undefined, timeout: 10000 });
+                }, { timeout: 10000 });
             } catch (_) {
                 res = null;
             } finally {

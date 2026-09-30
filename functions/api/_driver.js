@@ -188,7 +188,7 @@ export class NymRunDriver {
     if (!pk) return this.reply({ error: "bad pubkey" }, 400);
     const known = this.metaGet("pubkey");
     if (known && known !== pk) return this.reply({ error: "wrong object" }, 400);
-    if (!known) this.metaSet("pubkey", pk);
+    if (!known && (op === "run-put" || op === "sched-put")) this.metaSet("pubkey", pk);
     switch (op) {
       case "run-put": return this.reply(await this.runPut(body));
       case "run-cancel": return this.reply(await this.runCancel(body));

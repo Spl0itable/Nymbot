@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/utils/jitter.dart';
 import '../features/i18n/i18n.dart';
 
 class ReplyNotifyChannel {
@@ -163,6 +164,7 @@ class ReplyNotify with WidgetsBindingObserver {
 
   final Map<String, String> pending = {};
   final Map<String, String> _chatOf = {};
+  final Set<String> _local = {};
   final Set<String> registered = {};
   final Set<String> _answered = {};
   final Map<String, Timer> _timers = {};
@@ -247,11 +249,16 @@ class ReplyNotify with WidgetsBindingObserver {
 
   String _convOf(String key) => _chatOf[key] ?? key;
 
-  void pendingTurn(String conv, String eventId, {String? run}) {
+  void pendingTurn(String conv, String eventId, {String? run, bool anon = false}) {
     if (!supported) return;
     final key = run ?? conv;
     pending[key] = eventId;
     _chatOf[key] = conv;
+    if (anon) {
+      _local.add(key);
+    } else {
+      _local.remove(key);
+    }
     _timers.remove(key)?.cancel();
     if (!enabled()) return;
     if (background) {
@@ -262,7 +269,7 @@ class ReplyNotify with WidgetsBindingObserver {
       }
       return;
     }
-    if (_ios) {
+    if (_ios && !anon) {
       _timers[key] = Timer(proactiveAfter, () {
         _timers.remove(key);
         if (pending[key] == eventId && enabled()) {
@@ -283,6 +290,7 @@ class ReplyNotify with WidgetsBindingObserver {
     _timers.remove(key)?.cancel();
     final eventId = pending.remove(key);
     _chatOf.remove(key);
+    _local.remove(key);
     final handled = eventId != null &&
         (registered.remove(eventId) | _answered.remove(eventId));
     if (eventId != null &&
@@ -412,14 +420,17 @@ class ReplyNotify with WidgetsBindingObserver {
   Future<void> _registerAll() async {
     final work = [
       for (final e in pending.entries)
-        if (!registered.contains(e.value))
+        if (!registered.contains(e.value) && !_local.contains(e.key))
           (conv: _convOf(e.key), eventId: e.value, key: e.key),
     ];
     if (work.isEmpty) return;
     final task = await channel.beginBackground();
     try {
-      await Future.wait(
-          [for (final w in work) _register(w.conv, w.eventId, key: w.key)]);
+      var sent = 0;
+      for (final w in work) {
+        if (sent++ > 0) await Jitter.wait();
+        await _register(w.conv, w.eventId, key: w.key);
+      }
     } finally {
       if (task != null && task > 0) await channel.endBackground(task);
     }
@@ -427,6 +438,7 @@ class ReplyNotify with WidgetsBindingObserver {
 
   Future<void> _register(String conv, String eventId, {String? key}) async {
     if (!_ios || !enabled() || registered.contains(eventId)) return;
+    if (_local.contains(key ?? conv)) return;
     if (!_chatId.hasMatch(conv)) return;
     final token = await channel.token();
     if (token == null || token.isEmpty) return;

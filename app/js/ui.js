@@ -1617,7 +1617,8 @@
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
             turn.eventId = eventId;
-            Notify.watch(turn.convId, eventId, signer, { key: turn.id, asked: turn.runId });
+            const watched = Store.conversation(turn.convId);
+            Notify.watch(turn.convId, eventId, signer, { key: turn.id, asked: turn.runId, anon: !!(watched && watched.anon) });
             turn.steps = (turn.steps || []).filter(s => s && s.local);
             let after = 0;
             let draftAfter = 0;
@@ -2356,19 +2357,30 @@
             if (navigator.onLine === false || this._flushing) return;
             this._flushing = true;
             try {
+                const groups = new Map();
                 for (const conv of Store.conversations()) {
-                    for (const m of Store.messages(conv.id)) {
-                        if (m.role !== 'self' || m.pending !== 'offline') continue;
-                        if (navigator.onLine === false) return;
-                        const target = Store.conversation(conv.id);
-                        if (!target) break;
-                        const opts = Object.assign(this.carriedFrom(m.attachments, m.quote), {
-                            reuse: m, unattended: !!m.unattended, bare: !!m.bare
-                        });
-                        await new Promise((resolve) => {
-                            opts.onStarted = resolve;
-                            Promise.resolve(this.send(m.content, target, opts)).catch(() => { }).then(resolve);
-                        });
+                    if (!Store.messages(conv.id).some(m => m.role === 'self' && m.pending === 'offline')) continue;
+                    const key = this.keyOf(conv);
+                    if (!groups.has(key)) groups.set(key, []);
+                    groups.get(key).push(conv.id);
+                }
+                let group = 0;
+                for (const ids of groups.values()) {
+                    if (group++) await Api.jitter();
+                    for (const id of ids) {
+                        for (const m of Store.messages(id)) {
+                            if (m.role !== 'self' || m.pending !== 'offline') continue;
+                            if (navigator.onLine === false) return;
+                            const target = Store.conversation(id);
+                            if (!target) break;
+                            const opts = Object.assign(this.carriedFrom(m.attachments, m.quote), {
+                                reuse: m, unattended: !!m.unattended, bare: !!m.bare
+                            });
+                            await new Promise((resolve) => {
+                                opts.onStarted = resolve;
+                                Promise.resolve(this.send(m.content, target, opts)).catch(() => { }).then(resolve);
+                            });
+                        }
                     }
                 }
             } finally {
@@ -3200,6 +3212,12 @@
             if (kept.length !== list.length) Store.write('runs_inflight', kept);
         },
 
+        keyOf(conv) {
+            if (!conv || !conv.anon) return '';
+            const id = Anon.forConv(conv);
+            return id ? id.pk : 'anon';
+        },
+
         resumeClaims() {
             const now = Date.now();
             for (const rec of this.inflight()) {
@@ -3214,7 +3232,10 @@
                     this.clearInflight(rec.id);
                     continue;
                 }
-                this.claimRun(conv, m, rec.eventId);
+                Api.jitter().then(() => {
+                    if (![...this.turns.values()].some(x => x.asked === rec.id)) return this.claimRun(conv, m, rec.eventId);
+                    return null;
+                }).catch(() => { });
             }
         },
 
@@ -7357,17 +7378,29 @@
             return picked && (picked.value === 'run' || picked.value === 'notify') ? picked.value : '';
         },
 
+        scheduleAnon() {
+            return !!($('scheduleHere').checked && this.conv && this.conv.anon);
+        },
+
         renderScheduleServer(mode, cap) {
             const field = $('scheduleServerField');
             const on = !!(Background && Background.schedulesOn(this));
-            field.hidden = !on;
+            const anon = on && this.scheduleAnon();
+            field.hidden = !on || anon;
+            const note = $('scheduleAnonNote');
+            note.hidden = !anon;
+            note.textContent = anon ? t('Server schedules aren\'t available in anonymous chats; this one runs on this device.') : '';
             if (mode !== undefined) {
                 for (const r of field.querySelectorAll('input[name="scheduleServer"]')) r.checked = r.value === (mode || '');
+            }
+            if (anon) {
+                for (const r of field.querySelectorAll('input[name="scheduleServer"]')) r.checked = r.value === '';
             }
             if (cap !== undefined) $('scheduleServerCap').value = String(cap || 5);
             if (!field.dataset.wired) {
                 field.dataset.wired = '1';
                 field.addEventListener('change', () => this.renderScheduleServer());
+                $('scheduleHere').addEventListener('change', () => this.renderScheduleServer());
             }
             const run = this.scheduleServerMode() === 'run';
             $('scheduleRunFields').hidden = !run;
@@ -7538,7 +7571,7 @@
                 return;
             }
             const serverOn = !!(Background && Background.schedulesOn(this));
-            const mode = serverOn ? this.scheduleServerMode() : '';
+            const mode = serverOn && !this.scheduleAnon() ? this.scheduleServerMode() : '';
             const cap = Number($('scheduleServerCap').value) || 5;
             if (mode === 'run') {
                 const yes = await this.ask({
@@ -8766,6 +8799,14 @@
         },
 
         syncAnonFields() {
+            const limits = $('anonLimits');
+            if (limits) {
+                limits.textContent = [
+                    t('Push notifications for anonymous chats are off; you\'ll be notified while the app is open.'),
+                    t('Saved memories, server schedules and background runs stay out of anonymous chats.'),
+                    t('A repository you use in one still sends its access token with each request, never stored, and that token can tell the forge and Nymbot which account it belongs to.')
+                ].join(' ');
+            }
             const on = Anon.enabled();
             const auto = !!this.settings.anonAutoTop;
             $('anonFunding').hidden = !on;
