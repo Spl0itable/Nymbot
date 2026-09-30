@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../config.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart';
@@ -14,6 +16,7 @@ import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
+import 'background_jobs.dart';
 import 'connectors.dart';
 import 'doc_library.dart';
 import 'memory_keeper.dart';
@@ -40,7 +43,12 @@ class ChatFailure implements Exception {
       this.capExceeded = false,
       this.required = 0,
       this.team = false,
-      this.retryable = false});
+      this.retryable = false,
+      this.pending = false,
+      this.lost = false,
+      this.offline = false,
+      this.runCap,
+      this.checkpoint});
 
   final String message;
   final bool noCredits;
@@ -57,6 +65,11 @@ class ChatFailure implements Exception {
   final double required;
   final bool team;
   final bool retryable;
+  final bool pending;
+  final bool lost;
+  final bool offline;
+  final Map<String, dynamic>? runCap;
+  final Map<String, dynamic>? checkpoint;
 
   @override
   String toString() => message;
@@ -114,13 +127,56 @@ typedef CostEstimate = ({
 
 typedef EstTurnText = ({bool bot, String text});
 
+class PreparedTurn {
+  PreparedTurn({
+    required this.conv,
+    required this.signer,
+    required this.extra,
+    required this.wrap,
+    this.partWraps = const [],
+    required this.msgId,
+    this.anonPk,
+    this.ghost = false,
+    this.fresh = false,
+    this.repos = const [],
+  });
+
+  final Conversation conv;
+  final EventSigner signer;
+  final Map<String, dynamic> extra;
+  final NostrEvent wrap;
+  final List<NostrEvent> partWraps;
+  final String msgId;
+  final String? anonPk;
+  final bool ghost;
+  final bool fresh;
+  final List<String> repos;
+
+  String? replyTo;
+  String? askedId;
+  bool stopped = false;
+  ({String runId, int until})? background;
+  List<Map<String, dynamic>> plan = const [];
+
+  String get eventId => wrap.id;
+
+  String get runId => replyTo ?? msgId;
+}
+
 class TurnControl {
   TurnControl({this.onStatus});
 
   void Function(String? status)? onStatus;
   bool cancelled = false;
 
-  void cancel() => cancelled = true;
+  final Completer<void> _abort = Completer<void>();
+
+  Future<void> get abort => _abort.future;
+
+  void cancel() {
+    cancelled = true;
+    if (!_abort.isCompleted) _abort.complete();
+  }
 
   void say(String? status) => onStatus?.call(status);
 }
@@ -142,6 +198,7 @@ class ChatEngine {
   final PqAnnounce pq;
   final NymbotApi api;
   final AnonMode anon;
+  String defaultWhenDone = '';
 
   static const heldMax = 8;
   static const heldSend = 4;
@@ -650,6 +707,15 @@ class ChatEngine {
 
   static const reconnects = 2;
 
+  @visibleForTesting
+  static int pendingRetries = 5;
+
+  @visibleForTesting
+  static Duration pendingWait = const Duration(seconds: 3);
+
+  @visibleForTesting
+  static Duration reconnectWait = const Duration(seconds: 2);
+
   static const busyWaits = [
     Duration(seconds: 4),
     Duration(seconds: 9),
@@ -810,6 +876,52 @@ class ChatEngine {
     if (data['error'] != null) {
       throw ChatFailure(data['error'] as String);
     }
+    return data;
+  }
+
+  Future<Map<String, dynamic>> branchOp({
+    required GitRepo repo,
+    required String op,
+    required Map<String, dynamic> job,
+    required EventSigner signer,
+  }) async {
+    final pull = job['pull'];
+    final res = await api.call('git-branch', signer, extra: {
+      'git': repo.toPayload(defaultWhenDone: defaultWhenDone),
+      'op': op,
+      'branch': job['branch'],
+      'base': job['base'] ?? '',
+      'sha': job['sha'] ?? '',
+      'pull': pull is Map && pull['number'] != null
+          ? {'number': pull['number']}
+          : null,
+    });
+    return res.data;
+  }
+
+  Future<Map<String, dynamic>> cleanupBranches({
+    required GitRepo repo,
+    required EventSigner signer,
+  }) async {
+    final list = repo.nymBranches.length > 20
+        ? repo.nymBranches.sublist(repo.nymBranches.length - 20)
+        : repo.nymBranches;
+    final res = await api.call('git-branch', signer, extra: {
+      'git': repo.toPayload(defaultWhenDone: defaultWhenDone),
+      'op': 'cleanup',
+      'branches': [
+        for (final r in list)
+          {
+            'branch': r['branch'],
+            'sha': r['sha'],
+            'base': r['base'],
+            'pull': r['pull'],
+            'at': r['at'],
+          },
+      ],
+    });
+    final data = res.data;
+    if (data['error'] != null) throw ChatFailure(data['error'] as String);
     return data;
   }
 
@@ -999,10 +1111,75 @@ class ChatEngine {
     Map<String, dynamic>? team,
     required void Function(List<String> ids) onThreadIds,
     TurnControl? control,
+    String? msgId,
+    Map<String, dynamic> runExtras = const {},
+    void Function(PreparedTurn prepared)? onPrepared,
+    Future<void Function()> Function()? slot,
+  }) async {
+    final turn = control ?? TurnControl();
+    final prepared = await prepare(
+      conv: conv,
+      text: text,
+      proModel: proModel,
+      repos: repos,
+      connectors: connectors,
+      mcpApprove: mcpApprove,
+      mcpDecline: mcpDecline,
+      serverRuns: serverRuns,
+      runApprove: runApprove,
+      runDecline: runDecline,
+      persona: persona,
+      workspace: workspace,
+      bot: bot,
+      memories: memories,
+      resume: resume,
+      maxCost: maxCost,
+      onTurn: onTurn,
+      onStep: onStep,
+      attachments: attachments,
+      quote: quote,
+      webSearch: webSearch,
+      fresh: fresh,
+      research: research,
+      team: team,
+      msgId: msgId,
+      runExtras: runExtras,
+    );
+    if (onPrepared != null) onPrepared(prepared);
+    return deliver(prepared,
+        timeout: timeout, control: turn, slot: slot, onThreadIds: onThreadIds);
+  }
+
+  Future<PreparedTurn> prepare({
+    required Conversation conv,
+    required String text,
+    Map<String, dynamic>? proModel,
+    List<GitRepo> repos = const [],
+    List<McpConnector> connectors = const [],
+    String? mcpApprove,
+    String? mcpDecline,
+    bool serverRuns = false,
+    String? runApprove,
+    String? runDecline,
+    Persona? persona,
+    Workspace? workspace,
+    Bot? bot,
+    List<Memory> memories = const [],
+    String? resume,
+    double? maxCost,
+    void Function(String eventId)? onTurn,
+    void Function(Map<String, dynamic> step)? onStep,
+    List<Attachment> attachments = const [],
+    String? quote,
+    bool webSearch = false,
+    bool fresh = false,
+    Object? research,
+    Map<String, dynamic>? team,
+    String? msgId,
+    Map<String, dynamic> runExtras = const {},
   }) async {
     final rootId = conv.rootId;
     final anonymous = conv.anon;
-    final turn = control ?? TurnControl();
     if (pq.botKey == null) {
       try {
         await pq.resolveBot();
@@ -1039,7 +1216,7 @@ class ChatEngine {
     if (bodies.length > WireLimits.partsMax) {
       throw ChatFailure(WireLimits.overLimitMessage(wireText));
     }
-    final msgId = _sharedId();
+    final xId = msgId ?? _sharedId();
 
     // A ghost chat publishes only the wrap to the bot, no archive copy or reply re-publish.
     final ghost = conv.ephemeral;
@@ -1059,7 +1236,7 @@ class ChatEngine {
         kind: 14,
         tags: [
           ['p', botPubkey],
-          ['x', msgId],
+          ['x', xId],
           ['ms', '${DateTime.now().millisecondsSinceEpoch}'],
           if (bodies.length > 1) ['part', '${i + 1}', '${bodies.length}'],
           ['nymthread', rootId],
@@ -1099,6 +1276,7 @@ class ChatEngine {
       'fresh': freshTurn,
       'followUps': true,
       'draft': true,
+      if (anonymous) 'anon': true,
       if (handed.isNotEmpty) 'history': [for (final w in handed) w.toJson()],
       // Every part in order; the last is `eventId`.
       if (partIds.length > 1) 'parts': partIds,
@@ -1121,9 +1299,12 @@ class ChatEngine {
           connectors.isEmpty &&
           effortOf(conv) != 'normal')
         'effort': effortOf(conv),
-      if (proModel != null && repos.isNotEmpty) 'git': repos.first.toPayload(),
       if (proModel != null && repos.isNotEmpty)
-        'repos': repos.map((r) => r.toPayload()).toList(),
+        'git': repos.first.toPayload(defaultWhenDone: defaultWhenDone),
+      if (proModel != null && repos.isNotEmpty)
+        'repos': repos
+            .map((r) => r.toPayload(defaultWhenDone: defaultWhenDone))
+            .toList(),
       if (proModel != null && research != null) 'research': research,
       if (proModel != null && team != null) 'team': team,
       if (connectors.isNotEmpty)
@@ -1133,46 +1314,195 @@ class ChatEngine {
       if (proModel != null && repos.isNotEmpty && serverRuns) 'serverRuns': true,
       if (runApprove != null && runApprove.isNotEmpty) 'runApprove': runApprove,
       if (runDecline != null && runDecline.isNotEmpty) 'runDecline': runDecline,
+      ...runExtras,
     };
+    return PreparedTurn(
+      conv: conv,
+      signer: signer,
+      extra: extra,
+      wrap: wrap,
+      partWraps: partWraps,
+      msgId: xId,
+      anonPk: anonId?['pk'] as String?,
+      ghost: ghost,
+      fresh: freshTurn,
+      repos: repos.map((r) => r.repo).toList(),
+    );
+  }
 
+  Future<TurnResult> deliver(
+    PreparedTurn prepared, {
+    Duration? timeout,
+    TurnControl? control,
+    Future<void Function()> Function()? slot,
+    required void Function(List<String> ids) onThreadIds,
+  }) async {
+    final turn = control ?? TurnControl();
     // `pending` means an earlier attempt is still generating; the same event id collects it without paying twice.
     ApiResult res;
     var held = 0;
     var waited = 0;
     var lost = 0;
-    while (true) {
-      if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
-      res = await api.call('pm', signer,
-          extra: extra, timeout: timeout ?? NymbotConfig.pmTimeout);
-      if (res.status == 0 && lost++ < reconnects) {
-        await _wait(const Duration(seconds: 2), turn);
-        continue;
+    if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+    final release = slot == null ? null : await slot();
+    try {
+      while (true) {
+        if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+        res = await api.call('pm', prepared.signer,
+            extra: prepared.extra,
+            timeout: timeout ?? NymbotConfig.pmTimeout,
+            abort: turn.abort);
+        if (res.status == -1 || turn.cancelled) {
+          throw ChatFailure(t('Stopped.'), cancelled: true);
+        }
+        if (res.status == 0 && lost++ < reconnects) {
+          await _wait(reconnectWait, turn);
+          continue;
+        }
+        if (res.data['pending'] == true && held++ < pendingRetries) {
+          turn.say(t('Still working on that one…'));
+          await _wait(pendingWait, turn);
+          continue;
+        }
+        final failed = res.status >= 400 || res.data['error'] != null;
+        if (failed &&
+            res.data['runCap'] != true &&
+            res.data['noCredits'] != true &&
+            waited < busyWaits.length &&
+            NymbotApi.busy(res.status, res.data)) {
+          final wait = busyWaits[waited++];
+          turn.say(t(
+              'Too many requests just now — waiting {n} seconds rather than asking again straight away.',
+              {'n': wait.inSeconds}));
+          await _wait(wait, turn);
+          continue;
+        }
+        break;
       }
-      if (res.data['pending'] == true && held++ < 5) {
-        turn.say(t('Still working on that one…'));
-        await _wait(const Duration(seconds: 3), turn);
-        continue;
-      }
-      final failed = res.status >= 400 || res.data['error'] != null;
-      if (failed &&
-          res.data['noCredits'] != true &&
-          waited < busyWaits.length &&
-          NymbotApi.busy(res.status, res.data)) {
-        final wait = busyWaits[waited++];
-        turn.say(t(
-            'Too many requests just now — waiting {n} seconds rather than asking again straight away.',
-            {'n': wait.inSeconds}));
-        await _wait(wait, turn);
-        continue;
-      }
-      break;
+    } finally {
+      if (release != null) release();
     }
     if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
-    final data = res.data;
+    if (res.status == 0) {
+      throw ChatFailure(t('Still working on that one…'),
+          lost: true, offline: res.data['timedOut'] != true);
+    }
+    return finish(prepared, res.status, res.data, onThreadIds: onThreadIds);
+  }
+
+  Future<({TurnResult? result, bool pending, bool unknown})> claim(
+    PreparedTurn prepared, {
+    required void Function(List<String> ids) onThreadIds,
+  }) async {
+    final res = await api.claimRun(prepared.signer, prepared.eventId);
+    if (res.status == 202 || res.data['pending'] == true) {
+      return (result: null, pending: true, unknown: false);
+    }
+    if (res.status == 404 && res.data['unknown'] == true) {
+      return (result: null, pending: false, unknown: true);
+    }
+    if (res.status != 200) {
+      return (result: null, pending: res.status == 0, unknown: res.status != 0);
+    }
+    final result =
+        await finish(prepared, res.status, res.data, onThreadIds: onThreadIds);
+    return (result: result, pending: false, unknown: false);
+  }
+
+  Future<TurnResult> openLeg(
+    Conversation conv,
+    String legId,
+    int status,
+    Map<String, dynamic> data, {
+    required void Function(List<String> ids) onThreadIds,
+    void Function(Map<String, dynamic>? rumor)? onRumor,
+  }) {
+    final prepared = PreparedTurn(
+      conv: conv,
+      signer: identity.signer,
+      extra: const {},
+      wrap: NostrEvent(
+          id: legId, pubkey: identity.pubkey, createdAt: 0, kind: 1059),
+      msgId: legId,
+      ghost: true,
+    );
+    return finish(prepared, status, data,
+        onThreadIds: (ids) => onThreadIds([
+              for (final id in ids)
+                if (id != legId) id
+            ]),
+        onRumor: onRumor);
+  }
+
+  static ({String? replyTo, String? askedId}) linkOf(
+      Map<String, dynamic>? rumor, Map<String, dynamic> data) {
+    final tags = rumor?['tags'];
+    if (tags is List) {
+      for (final tag in tags) {
+        if (tag is List &&
+            tag.length > 1 &&
+            tag[0] == 'nymreply' &&
+            tag[1] is String &&
+            (tag[1] as String).isNotEmpty) {
+          return (
+            replyTo: tag[1] as String,
+            askedId: tag.length > 2 && tag[2] is String ? tag[2] as String : null
+          );
+        }
+      }
+    }
+    return (
+      replyTo: data['replyTo'] is String ? data['replyTo'] as String : null,
+      askedId: data['askedId'] is String ? data['askedId'] as String : null,
+    );
+  }
+
+  static List<Map<String, dynamic>> planOf(Object? raw) {
+    if (raw is! List) return const [];
+    const states = {'planned', 'doing', 'done', 'skipped'};
+    final out = <Map<String, dynamic>>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final text = '${item['text'] ?? ''}'.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.isEmpty) continue;
+      out.add({
+        'text': text.length > 120 ? text.substring(0, 120) : text,
+        'state': states.contains(item['state']) ? item['state'] : 'planned',
+      });
+      if (out.length == 20) break;
+    }
+    return out;
+  }
+
+  Future<TurnResult> finish(
+    PreparedTurn prepared,
+    int status,
+    Map<String, dynamic> data, {
+    required void Function(List<String> ids) onThreadIds,
+    void Function(Map<String, dynamic>? rumor)? onRumor,
+  }) async {
+    final wrap = prepared.wrap;
+    final conv = prepared.conv;
+    final ghost = prepared.ghost;
+    final signer = prepared.signer;
+    final early = linkOf(null, data);
+    prepared.replyTo ??= early.replyTo;
+    prepared.askedId ??= early.askedId;
+    if (data['plan'] is List) prepared.plan = planOf(data['plan']);
 
     if (data['pending'] == true) {
-      throw ChatFailure((data['message'] as String?) ??
-          'Nymbot is still working on that message — its reply will arrive shortly.');
+      throw ChatFailure(
+          (data['message'] as String?) ??
+              'Nymbot is still working on that message — its reply will arrive shortly.',
+          pending: true);
+    }
+    if (data['runCap'] == true) {
+      throw ChatFailure(
+          (data['error'] as String?) ??
+              t('3 requests are already running. Wait for one to finish.'),
+          runCap: data,
+          noCredits: data['free'] == true && data['noCredits'] == true,
+          balance: (data['balance'] as num?)?.toDouble() ?? 0);
     }
     if (data['noCredits'] == true) {
       throw ChatFailure(
@@ -1189,7 +1519,7 @@ class ChatEngine {
         required: (data['required'] as num?)?.toDouble() ?? 0,
       );
     }
-    if (res.status >= 400 || data['error'] != null) {
+    if (status >= 400 || data['error'] != null) {
       throw ChatFailure((data['error'] as String?) ?? 'The request failed.',
           resumeToken: data['resumable'] == true
               ? data['resumeToken'] as String?
@@ -1198,7 +1528,10 @@ class ChatEngine {
           pro: data['pro'] == true,
           required: (data['required'] as num?)?.toDouble() ?? 0,
           team: data['team'] == true,
-          retryable: data['retryable'] == true);
+          retryable: data['retryable'] == true,
+          checkpoint: data['checkpoint'] is Map<String, dynamic>
+              ? data['checkpoint'] as Map<String, dynamic>
+              : null);
     }
     final eventJson = data['event'];
     if (eventJson is! Map<String, dynamic>) {
@@ -1219,8 +1552,8 @@ class ChatEngine {
       }
     }
 
-    final opened = anonId != null
-        ? await anon.open(replyEvent, pk: anonId['pk'] as String)
+    final opened = prepared.anonPk != null
+        ? await anon.open(replyEvent, pk: prepared.anonPk!)
         : await giftwrap.unwrapWith(
             replyEvent, signer, identity.kemCandidates());
     if (opened == null) {
@@ -1229,11 +1562,17 @@ class ChatEngine {
     if (!fromBot(opened.seal, opened.rumor, bot: botPubkey)) {
       throw ChatFailure(t('A reply arrived that Nymbot did not sign, so it was not shown.'));
     }
+    if (onRumor != null) onRumor(opened.rumor);
+    final link = linkOf(opened.rumor, data);
+    if (link.replyTo != null) prepared.replyTo = link.replyTo;
+    if (link.askedId != null) prepared.askedId = link.askedId;
+    prepared.stopped = data['stopped'] == true;
+    prepared.background = BackgroundJobs.handover(data['background']);
 
     // A '!' question stays out of the conversation context on both sides, though the chat shows it.
-    if (!freshTurn) {
+    if (!prepared.fresh) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
-      holdWraps(conv.id, [...partWraps, if (selfEvent != null) selfEvent]);
+      holdWraps(conv.id, [...prepared.partWraps, if (selfEvent != null) selfEvent]);
     }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');
@@ -1248,7 +1587,7 @@ class ChatEngine {
       modelCalls: (data['modelCalls'] as num?)?.toInt() ?? 1,
       lowBalance: data['lowBalance'] == true,
       free: FreeAllowance.fromJson(data['free']),
-      repos: repos.map((r) => r.repo).toList(),
+      repos: prepared.repos,
       sources: (data['sources'] as List?)?.whereType<Map<String, dynamic>>().toList() ??
           const <Map<String, dynamic>>[],
       followUps: ChatMessage.followUpsOf(data['followUps']),
@@ -1294,6 +1633,7 @@ class ChatEngine {
     int after = 0,
     int draftAfter = 0,
     void Function(String text, int seq)? onDraft,
+    void Function(List<Map<String, dynamic>> plan)? onPlan,
   }) async {
     try {
       final res = await api.call(
@@ -1306,6 +1646,9 @@ class ChatEngine {
       if (onDraft != null && draft is Map && draft['text'] is String) {
         final seq = (draft['seq'] as num?)?.toInt() ?? 0;
         if (seq > 0) onDraft(draft['text'] as String, seq);
+      }
+      if (onPlan != null && res.data['plan'] is List) {
+        onPlan(planOf(res.data['plan']));
       }
       final steps = (res.data['steps'] as List?) ?? const [];
       return steps.whereType<Map<String, dynamic>>().toList();

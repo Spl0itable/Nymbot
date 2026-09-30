@@ -105,17 +105,91 @@
                 that message. That was the only behavior once, and it is still there when you want it
                 &mdash; but it is no longer what happens by default, because nothing about it could be
                 undone.</p>
+            <p>The branch also starts from Nymbot's own record of the conversation up to the message you
+                changed, so the model has the same context it had the first time.</p>
             <p><strong>Branch from here</strong> under a reply does the same thing without changing
                 anything: a copy of the chat up to that point, to take somewhere else.</p>
 
-            <h2 id="queue">Typing while it is still writing</h2>
-            <p>You do not have to wait. Anything typed while a reply is being written waits its turn: it is
-                shown above the composer in the order it was typed, and goes as soon as the current one is
-                done. Take one back out while it waits, or press <strong>Stop</strong> and nothing behind it
-                is sent either.</p>
-            <p>Commands are the exception. They cost nothing and happen instantly, so <code>?balance</code>
-                or <code>?model</code> run right away rather than queuing behind a repo task that has
-                another eight minutes to go.</p>
+            <h2 id="parallel">Several requests at once</h2>
+            <p>You do not have to wait for a reply before asking the next thing. Every message you send
+                starts its own run straight away, in the same chat or in another one, and nothing waits in a
+                queue. Each reply, each continuation, each approval card and any error lands directly under
+                the message that asked for it, so answers that finish out of order still read in order.</p>
+            <p>While a request runs, a card under it shows what it is doing and, for longer work, its plan.
+                The card has its own <strong>Stop</strong>, which cancels that request on the server as well as
+                on your device, so it stops at its next step and only what it used is charged; the chat then
+                shows <strong>Stopped.</strong> under the question. The <strong>Stop</strong> in the composer
+                stops every request in the chat at once. <strong>Add instructions</strong> on the card passes a
+                note to the request while it works: it is picked up at the next step and does not change what
+                the request may spend. If the request has already finished, the app offers to send your note as
+                a new message instead. A new message in the same chat also knows what is still running, so
+                &ldquo;for that research, also cover pricing&rdquo; is passed on to it.</p>
+            <p>Up to 3 requests run at once across all your chats. Change that under <strong>Requests at
+                once</strong> in Settings, up to 10; every running request holds its own credits until it
+                finishes. A request past the limit waits under its message, marked <strong>Waiting for a free
+                slot</strong>, and goes when one finishes. If the server turns one away because too many are
+                running on your account, the message says so and offers <strong>Start anyway</strong>,
+                <strong>Always allow up to</strong> one more, or <strong>Wait</strong>. The free daily replies
+                run one at a time; credits lift that.</p>
+            <p><strong>Running now</strong>, in the menu, lists every request still running on any of your
+                devices, with the chat it belongs to, so you can open, stop or add instructions to one started
+                on your phone from your computer. A reply that takes longer than the connection lasts is not
+                lost: the app keeps checking for it and shows it in its place, and trying again never charges
+                twice for the same message.</p>
+            <p>Messages written while you are offline stay in the chat marked <strong>Waiting for
+                connection</strong>, where you can edit or delete them, and are sent in order, each as its own
+                request, as soon as you are back online.</p>
+            <p>Commands cost nothing and happen instantly, so <code>?balance</code> or <code>?model</code>
+                run right away and never start a request.</p>
+
+            <h2 id="background">Letting a task carry on without the app</h2>
+            <p>A long task, such as work in a repository, deep research or a team of models, runs in steps. By
+                default your device sends each next step, so the task only moves while the app is open. If you
+                turn on <strong>Carry on in the background</strong> in Settings (off until you choose it), a
+                task that runs out of room is handed to the server instead, which sends the next steps itself
+                while your app is closed and tells you once when it is done, needs your approval, pauses or
+                fails.</p>
+            <ul>
+                <li>It only applies to paid requests, never to the free daily replies or to
+                    <a href="/docs/anonymous/">anonymous chats</a>.</li>
+                <li>It is bounded: at most 40 steps, at most 6 hours, and no more than the credits you allowed
+                    for carrying tasks on. Each step holds its own credits and is charged on what it used. If
+                    your balance runs out or a limit is reached, the task pauses with everything so far saved,
+                    and you can carry it on from the app.</li>
+                <li><strong>Stop</strong> and <strong>Add instructions</strong> work exactly as for a request
+                    running on your device, from any of your devices.</li>
+                <li>A step that needs your approval pauses the task and notifies you; your standing
+                    permissions decide what may run unattended.</li>
+                <li>Each step's reply is published to the relays encrypted to you and kept for 24 hours after
+                    the task's 6-hour window, so any of your devices picks it up when it opens.</li>
+            </ul>
+            <p>What it changes is set out in <a href="/docs/encryption/#what-the-server-sees">what the server
+                sees</a>: to send the next step, the server keeps the task's saved state and the settings that
+                step needs, including repository and connector tokens, sealed with a key only it holds, and
+                deletes them when the task ends and always within 6 hours.</p>
+
+            <h2 id="schedules">Scheduled prompts</h2>
+            <p>A scheduled prompt asks Nymbot something at a set time, once or every hour, day or week. Normally
+                schedules live on your device and fire while the app is open. You can also let a schedule run
+                on the server, so it fires while the app is closed. That is opt-in twice: once in Settings, and
+                once for each schedule.</p>
+            <ul>
+                <li><strong>Notify me instead of running</strong>, offered first, is the most private choice:
+                    the server keeps only the due time and where to send the notification, and the app runs the
+                    prompt when you open it.</li>
+                <li><strong>Run on the server</strong> keeps a copy of the prompt, its title, when it repeats,
+                    which chat it answers in, the model and the credit limits, sealed with a key only the
+                    server holds. The server can read the prompt when it runs it, the same as any message you
+                    send. It never keeps your chat history, repositories, connectors or memories for it, and
+                    each run starts without the chat's history.</li>
+                <li>Each run is paid from your balance, never from the free daily replies, and is capped per
+                    run, per day and by a daily credit limit across all your schedules (50 unless you set
+                    another). At most 10 schedules can run on the server, at most once an hour each.</li>
+                <li>The permission lasts up to 90 days; saving the schedule again renews it. Three failed runs
+                    in a row turn a schedule off and tell you.</li>
+                <li>Deleting the schedule, turning the option off, clearing your history or wiping the app
+                    deletes the server copy at once.</li>
+            </ul>
 
             <h2 id="memory">What carries between chats</h2>
             <p>Inside one chat, the model sees the chat. Between chats, what carries is memory: standing
@@ -194,7 +268,7 @@
                 for each question &mdash; see <a href="/docs/documents/">PDFs and long documents</a>.</p>
 
             <h2 id="watching">Watching a reply as it is written</h2>
-            <p>While a reply is generating, Nymbot reports what it is doing underneath the spinner:
+            <p>While a reply is generating, Nymbot reports what it is doing on the card under your message:
                 which model it routed to, what it searched the web for, which files it is reading in
                 a <a href="/docs/git/">connected repository</a>, which model call it is on, and the
                 model's own reasoning as each call returns.</p>
@@ -222,8 +296,8 @@
                 one and it is sent exactly as it reads, as a plain message, with nothing pinned, attached or
                 quoted riding along. To change it first, long-press it, or right-click or Shift+click it on a
                 computer, and it goes into the composer instead.</p>
-            <p>The chips stay until you send something, a new reply starts or a message is queued, and they
-                come back when you reopen the chat.</p>
+            <p>The chips stay under the latest reply until you send something, even while other requests are
+                still running, and they come back when you reopen the chat.</p>
             <p>A reply that used the web lists its sources under it. One or two are shown as cards. More than
                 that are folded into a single row of site icons with a count: tap the row to open the numbered
                 cards, and tap it again to fold them away. The icons are fetched through the Nymbot worker,
@@ -261,6 +335,9 @@
                 <li>A <a href="/docs/identity/#panic">device wipe</a> takes everything at once &mdash; every
                     conversation, your key, and any credits sitting on a
                     <a href="/docs/anonymous/">throwaway key</a>.</li>
+                <li>Clearing your history or wiping the app also deletes every
+                    <a href="#schedules">server schedule</a> and any <a href="#background">background task</a>
+                    still waiting to carry on.</li>
             </ul>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Careful</span>

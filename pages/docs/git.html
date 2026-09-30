@@ -112,18 +112,63 @@
             <p><code>?git writes on</code> adds the ability to commit files, create branches and open pull
                 or merge requests. Off by default, and worth leaving off until you want it.</p>
             <p>With writes on, ask for a change and you get a branch and a pull request to review rather
-                than a patch pasted into chat. Nothing is pushed to your default branch unless that is the
-                branch you connected and you asked for it.</p>
+                than a patch pasted into chat: each task works on <a href="#task-branches">a branch of its
+                own</a>. Nothing is pushed to your default branch unless you turn that off, that is the
+                branch you connected, and you asked for it.</p>
             <p>A run's edits go in as one commit per repository, at the end of the run or when the model
                 decides a piece of work is done. If you would rather see them first, turn on <strong>Ask
                 before committing</strong> for that repository. The run then holds its changes back, the
                 reply shows them as a diff, and <strong>Apply</strong> commits them while
                 <strong>Discard</strong> throws them away. Applying costs nothing.</p>
 
+            <h2 id="task-branches">A branch for each task</h2>
+            <p>With <strong>Each task gets its own branch</strong> on, which it is for every repository
+                unless you turn it off, a task that writes commits to a branch of its own, named
+                <code>nymbot/</code> and a short id. Nymbot makes it from the head of the working branch
+                when the task makes its first commit, so a task that only reads makes no branch at all.
+                The working branch itself is not touched, which is why several tasks can write to the same
+                repository at once instead of waiting their turn.</p>
+            <p>When the task is done, Nymbot does what <strong>When done</strong> says. <strong>Open a pull
+                request</strong> is the default; <strong>Offer a merge</strong> leaves a Merge button on the
+                reply; <strong>Leave the branch</strong> does nothing more. The default is set in Settings,
+                under <strong>When a task&rsquo;s branch is done</strong>, and each repository can choose
+                differently in its own form. If the forge has no API for pull requests Nymbot can use, or
+                it refuses one, the branch is left as it is and the reply says so.</p>
+            <p>The reply shows the branch with <strong>Open PR</strong>, <strong>Merge</strong> and
+                <strong>Delete</strong>, and the Tasks pane lists it with the task. While the task is still running,
+                its card, the Tasks pane and the list of what is running name the branch as soon as it
+                exists, on every device signed in to the account. A task that is stopped or fails part-way
+                still hands its branch back, so it can be merged, deleted or cleaned up like any other. A merge is a merge commit
+                through the forge&rsquo;s own pull request, pinned to the commit Nymbot recorded, so new
+                commits pushed there in the meantime are never merged unseen. Nothing is ever force-pushed.
+                If the branch conflicts with the working branch, the reply offers <strong>Open the PR to
+                resolve</strong> or <strong>Ask Nymbot to update the branch</strong>, which merges the
+                working branch into it with a merge commit rather than rebasing. GitHub and Gitea or
+                Forgejo can do that; GitLab has no API for it, so there you resolve it in the merge
+                request.</p>
+            <p>Changes to CI and workflow files still wait for your review, exactly as they do without a
+                branch of their own.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Cleaning up</span>
+                <p>Your device remembers the <code>nymbot/</code> branches this account made. The next task
+                    on that repository, or <strong>Clean up Nymbot branches</strong> in the repository list,
+                    deletes the ones whose pull request is merged or closed, or that are seven days old with
+                    nothing left to merge. A branch is only deleted if it still ends at the commit Nymbot
+                    recorded, so one somebody has pushed to since is left alone, and no other branch is ever
+                    touched. It runs from your device with the token it already sends; the server keeps no
+                    token to do it later.</p>
+            </div>
+            <p>Turn the option off to commit straight to the working branch. A task then has the
+                repository to itself, and a second one on the same branch only reads it until the first
+                has finished. Older versions of the app work that way too.</p>
+
             <h2 id="undo">Undoing what a run changed</h2>
             <p>A reply that wrote to your repository says what it touched: the repository, the branch, and
                 every file. <strong>Undo these changes</strong> puts them back &mdash; each of those paths is
-                read at the commit the branch stood on before the run and committed as it was.</p>
+                read at the commit the branch stood on before the run and committed as it was. A task
+                that worked on <a href="#task-branches">a branch of its own</a> left the working branch
+                alone, so there is nothing there to put back: <strong>Delete</strong> removes its branch
+                instead.</p>
             <p>That is a revert, not a rewrite. Nothing is erased and no history is rewritten: what Nymbot
                 did stays in the log, it is simply no longer the state of the branch. Anyone who pulled in
                 between keeps a checkout that still works.</p>
@@ -162,6 +207,12 @@
                 <p>The default is to stop and tell you. Nothing continues, and nothing is spent beyond
                     the reply you asked for, unless you have set a budget.</p>
             </div>
+            <p>Normally your device sends each leg, so a task only carries on while the app is open. With
+                <a href="/docs/chats/#background">background runs</a> turned on, the server sends the next
+                legs itself while the app is closed, within the same budget, at most 40 legs and 6 hours,
+                and tells you once when the task is done. To do that it keeps the repository token sealed
+                with a key only it holds while the task is working, and deletes it when the task ends and
+                always within 6 hours. A background task writes to its own branch like any other task.</p>
 
             <h2 id="token-safety">About that token</h2>
             <div class="docs-note is-warning">
@@ -169,7 +220,9 @@
                 <p>The access token is kept on your devices and syncs between them inside your end-to-end
                     encrypted settings, so the server holds only a sealed copy it cannot read. It is wiped by a
                     <a href="/docs/identity/#panic">device wipe</a>, travels to the Nymbot worker with each
-                    request, and is never stored readable server-side or published to relays. Scope it to the one
+                    request, and is never stored readable server-side or published to relays. The only time
+                    the server keeps it is sealed, while a <a href="/docs/chats/#background">background run</a>
+                    you turned on is working, for at most 6 hours. Scope it to the one
                     repository you mean to use, and revoke it at your provider when you are done.</p>
             </div>
             <p>Because it syncs, a chat that uses the repository works on every device you sign in on

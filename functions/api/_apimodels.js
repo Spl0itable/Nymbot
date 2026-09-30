@@ -8,9 +8,11 @@ import { transcribeUsd } from "./_mediaprice.js";
 import { ApiError, apiBad, apiJson, apiRound } from "./_apihttp.js";
 
 export const API_AUTO_ID = "nymbot/auto";
+export const API_MODEL_NAME_MAX = 200;
+export const API_MODEL_SUFFIX_MAX = 4;
 export const API_MODEL_TYPES = ["chat", "image", "video", "audio", "embedding"];
-const AUTO_NAMES = { "nymbot/auto": 1, "auto": 1, "nymbot-auto": 1, "nymbot": 1 };
-const NOOP_SUFFIXES = { nitro: 1, floor: 1, exacto: 1, extended: 1 };
+const AUTO_NAMES = Object.assign(Object.create(null), { "nymbot/auto": 1, "auto": 1, "nymbot-auto": 1, "nymbot": 1 });
+const NOOP_SUFFIXES = Object.assign(Object.create(null), { nitro: 1, floor: 1, exacto: 1, extended: 1 });
 const FEE_MARGIN = 1.05 * 1.5;
 const CHAT_SAMPLING = ["temperature", "top_p", "stop", "seed", "presence_penalty", "frequency_penalty", "response_format"];
 const ANTHROPIC_SAMPLING = ["temperature", "top_p", "stop"];
@@ -57,12 +59,20 @@ export function apiSupportedParams(m) {
   return out;
 }
 
+const idMaps = new WeakMap();
+
 function findByModelId(cat, name) {
-  const want = String(name || "").toLowerCase();
-  for (const k of Object.keys(cat.models)) {
-    if (String(cat.models[k].model || "").toLowerCase() === want) return { key: k, model: cat.models[k] };
+  let map = idMaps.get(cat.models);
+  if (!map) {
+    map = new Map();
+    for (const k of Object.keys(cat.models)) {
+      const id = String(cat.models[k].model || "").toLowerCase();
+      if (!map.has(id)) map.set(id, k);
+    }
+    idMaps.set(cat.models, map);
   }
-  return null;
+  const k = map.get(String(name || "").toLowerCase());
+  return k === undefined ? null : { key: k, model: cat.models[k] };
 }
 
 async function pickOne(cat, name) {
@@ -75,8 +85,10 @@ export async function apiResolveModel(env, raw, opts) {
   const name = typeof raw === "string" ? raw.trim() : "";
   const param = (opts && opts.param) || "model";
   if (!name) throw apiBad("`" + param + "` is required.", param, "missing_required_parameter");
-  const cat = await botProCatalog(env);
+  if (name.length > API_MODEL_NAME_MAX) throw apiBad("`" + param + "` is longer than " + API_MODEL_NAME_MAX + " characters.", param, "invalid_value");
   const parts = name.split(":");
+  if (parts.length > API_MODEL_SUFFIX_MAX + 1) throw apiBad("`" + param + "` has more than " + API_MODEL_SUFFIX_MAX + " suffixes.", param, "invalid_value");
+  const cat = await botProCatalog(env);
   let hit = null;
   let suffixes = [];
   for (let n = parts.length; n >= 1 && !hit; n--) {

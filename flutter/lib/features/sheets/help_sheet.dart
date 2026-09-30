@@ -143,13 +143,32 @@ List<HelpTopic> helpTopics() => [
             'behalf is not an undo.'),
       ),
       HelpTopic(
+        t('A branch for each task'),
+        t('With "Each task gets its own branch" on, a repository task commits '
+            'to a new branch named nymbot/ and a short id, made from the '
+            'working branch when it first commits, so several tasks on one '
+            'repository run side by side and nothing lands on the working '
+            'branch without you. When it finishes it opens a pull request, '
+            'offers a merge or leaves the branch, as you choose under When '
+            'done in Settings or for each repository. The reply shows the '
+            'branch with Open PR, Merge and Delete. A merge is a merge commit, '
+            'and nothing is ever force-pushed. If it conflicts, open the pull '
+            'request to resolve it or ask Nymbot to update the branch. Changes '
+            'to CI and workflow files still wait for your review. Clean up '
+            'Nymbot branches deletes the ones this account recorded whose pull '
+            'request is merged or closed, or that are a week old with nothing '
+            'left to merge, and never one that has moved since. Turn the option '
+            'off to commit straight to the working branch, one task at a time.'),
+      ),
+      HelpTopic(
         t('Long tasks, and carrying them on'),
-        t('A repo task runs the model in a loop — reading, searching, writing — '
+        '${t('A repo task runs the model in a loop — reading, searching, writing — '
             'and that loop has an allowance. When it runs out with work left, '
             'Nymbot stops and says so. Set a continuation budget in Settings '
             'and it buys another allowance instead, one leg at a time, each leg '
             'saying what it cost, until the budget is spent or the task is done. '
-            'Stop cancels the rest.'),
+            'Stop cancels the rest.')}\n\n'
+            '${t('Turn on "Keep long tasks going on the server while the app is closed" and, once a task runs out of room, Nymbot\'s server carries it on by itself for up to 6 hours, within the same budget, and notifies you when it finishes. It keeps the task\'s progress and settings, including repository and connector tokens, sealed with a key the server holds, and deletes them when the task ends. Stop and Add instructions still work. Never for anonymous chats or the free allowance.')}',
       ),
       HelpTopic(
         t('Asking a question differently'),
@@ -182,14 +201,20 @@ List<HelpTopic> helpTopics() => [
         t('With a Pro model pinned, the Team chip appears when Research is on or a repository is connected. Tap it to pick how many workers run (2 to 4) and which model they run on, and it shows the most the turn can cost and what it usually costs. The model you pinned leads: it splits the task, the workers run at the same time, and the lead checks and combines their work. While it runs you see one lane for the lead and one for each worker, and the reply lists what each part cost. The lead can also use this chat\'s connectors and server runs; the workers cannot. Every connector call and server run the lead wants waits for you to allow it, even a tool you always allow elsewhere, and the team carries on from there.'),
       ),
       HelpTopic(
-        t('Typing while it is still writing'),
-        t('You do not have to wait for a reply to land before saying the next '
-            'thing. Anything typed mid-reply waits its turn, shown above the '
-            'composer in the order it was typed, and goes as soon as the '
-            'current one is done. Take one back out while it waits, or press '
-            'Stop and nothing behind it is sent either. Commands are the '
-            'exception: they are free and instant, so they run straight away '
-            'rather than queueing.'),
+        t('Running several requests at once'),
+        t('You do not have to wait for a reply before sending the next '
+            'message: each message starts its own request straight away, and '
+            'its reply appears right under it, even when a later one finishes '
+            'first. Up to 3 requests run at once across your chats (Settings, '
+            'Requests at once, allows up to 10); a message beyond that waits '
+            'for a free slot and starts by itself. Each running request has its '
+            'own Stop and Add instructions, and the Stop beside Send stops '
+            'every reply in the chat. Stop really cancels: Nymbot stops at its '
+            'next step and charges only what was used. Requests running on your '
+            'other devices show in Tasks and in Running now, where they can be '
+            'stopped too. A message written without a connection waits in the '
+            'chat, marked Waiting for connection, and goes when you are back '
+            'online.'),
       ),
       HelpTopic(
         t('Watching it work'),
@@ -202,9 +227,7 @@ List<HelpTopic> helpTopics() => [
       ),
       HelpTopic(
         t('Scheduled prompts'),
-        t('A prompt Nymbot sends for you: once, hourly, daily or weekly. There '
-            'is no server doing it — a run happens while the app is open, and a '
-            'run that came due while it was shut fires once when you come back.'),
+        t('A prompt Nymbot sends for you: once, hourly, daily or weekly. By default it runs while the app is open, and a run that came due while it was shut fires once when you come back. Turn on server schedules in Settings and each schedule can instead notify you when it is due (the server keeps only the time), or run on Nymbot\'s server while the app is closed (the server keeps the prompt, sealed, and spends up to the cap you set per run). Turning the switch off, deleting a schedule or wiping the app deletes the server copy at once.'),
       ),
       HelpTopic(
         t('Anonymous mode'),

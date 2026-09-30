@@ -575,6 +575,7 @@ export function gitIsCiPath(raw) {
 }
 
 export function gitNeedsReview(cfg, branch, path) {
+  if (gitJobOn(cfg) && gitSameBranch(branch, cfg.resolvedBranch || cfg.branch)) return gitIsCiPath(path);
   var def = cfg && (cfg.defaultBranch || (!cfg.branch ? cfg.resolvedBranch : null));
   if (def && gitSameBranch(branch, def)) return true;
   return gitIsCiPath(path);
@@ -1198,4 +1199,296 @@ export async function gitCiStatus(cfg, call, ref) {
     return "CI for '" + ref + "': " + (j.state || "unknown") + "\n" + lines.slice(0, 40).join("\n");
   }
   return "This provider does not report CI status.";
+}
+
+export var GIT_JOB_PREFIX = "nymbot/";
+export var GIT_WHEN_DONE_OPTIONS = ["pr", "merge", "leave"];
+export var GIT_WHEN_DONE_DEFAULT = "pr";
+export var GIT_CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export var GIT_CLEANUP_MAX = 20;
+
+export function gitWhenDone(raw) {
+  var v = str(raw).trim().toLowerCase();
+  return GIT_WHEN_DONE_OPTIONS.indexOf(v) !== -1 ? v : GIT_WHEN_DONE_DEFAULT;
+}
+
+export function gitJobBranchName(jobId) {
+  var id = str(jobId).toLowerCase().replace(/[^0-9a-f]/g, "").slice(0, 12);
+  return id.length >= 8 ? GIT_JOB_PREFIX + id : null;
+}
+
+export function gitIsJobBranch(name) {
+  return /^nymbot\/[0-9a-f]{8,64}$/.test(str(name));
+}
+
+export function gitJobOn(cfg) {
+  return !!(cfg && cfg.allowWrites && cfg.jobBranches && gitJobBranchName(cfg.jobId));
+}
+
+function gitProj(cfg) { return "/projects/" + encodeURIComponent(cfg.repo); }
+
+function gitOwnerOf(cfg) { return str(cfg.repo).split("/")[0]; }
+
+export async function gitBranchHead(cfg, call, branch) {
+  var r;
+  var j;
+  if (cfg.provider === "github") {
+    r = await call("/repos/" + cfg.repo + "/git/ref/heads/" + gitSeg(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    return j && j.object && j.object.sha ? j.object.sha : null;
+  }
+  if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/repository/branches/" + encodeURIComponent(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    return j && j.commit && j.commit.id ? j.commit.id : null;
+  }
+  if (cfg.provider === "gitea") {
+    r = await call("/repos/" + cfg.repo + "/branches/" + gitSeg(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    return j && j.commit && j.commit.id ? j.commit.id : null;
+  }
+  return null;
+}
+
+export async function gitBranchCreate(cfg, call, name, from) {
+  if (!gitRefValid(name) || !gitRefValid(from)) return { ok: false, error: "invalid branch name" };
+  var r;
+  if (cfg.provider === "github") {
+    var sha = await gitBranchHead(cfg, call, from);
+    if (!sha) return { ok: false, error: "could not resolve '" + from + "'" };
+    r = await call("/repos/" + cfg.repo + "/git/refs", { method: "POST", body: { ref: "refs/heads/" + name, sha: sha } });
+    if (r.ok) return { ok: true, sha: sha, existed: false };
+    if (r.status === 422) return { ok: true, sha: await gitBranchHead(cfg, call, name), existed: true };
+    return { ok: false, error: "HTTP " + r.status + " creating '" + name + "'" };
+  }
+  if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/repository/branches?branch=" + encodeURIComponent(name) + "&ref=" + encodeURIComponent(from), { method: "POST" });
+    var gj = r.ok ? gitJsonOf(r) : null;
+    if (r.ok) return { ok: true, sha: gj && gj.commit ? gj.commit.id : null, existed: false };
+    if (r.status === 400 && /exist/i.test(str(r.text))) return { ok: true, sha: await gitBranchHead(cfg, call, name), existed: true };
+    return { ok: false, error: "HTTP " + r.status + " creating '" + name + "'" };
+  }
+  if (cfg.provider === "gitea") {
+    r = await call("/repos/" + cfg.repo + "/branches", { method: "POST", body: { new_branch_name: name, old_branch_name: from } });
+    var ej = r.ok ? gitJsonOf(r) : null;
+    if (r.ok) return { ok: true, sha: ej && ej.commit ? ej.commit.id : null, existed: false };
+    if (r.status === 409) return { ok: true, sha: await gitBranchHead(cfg, call, name), existed: true };
+    return { ok: false, error: "HTTP " + r.status + " creating '" + name + "'" };
+  }
+  return { ok: false, unsupported: true, error: "this forge cannot create branches" };
+}
+
+function gitPullState(provider, j) {
+  if (!j || typeof j !== "object") return null;
+  if (provider === "gitlab") {
+    var gs = j.state === "merged" ? "merged" : (j.state === "closed" ? "closed" : "open");
+    return { number: j.iid, url: str(j.web_url), state: gs, sha: j.sha || null };
+  }
+  var merged = !!(j.merged || j.merged_at);
+  return {
+    number: j.number,
+    url: str(j.html_url),
+    state: merged ? "merged" : (j.state === "closed" ? "closed" : "open"),
+    sha: j.head && j.head.sha ? j.head.sha : null
+  };
+}
+
+export async function gitPullFind(cfg, call, head, number) {
+  var r;
+  var j;
+  var n = Number(number) > 0 ? Math.floor(Number(number)) : 0;
+  if (cfg.provider === "github") {
+    r = n ? await call("/repos/" + cfg.repo + "/pulls/" + n)
+      : await call("/repos/" + cfg.repo + "/pulls?state=all&per_page=5&head=" + encodeURIComponent(gitOwnerOf(cfg) + ":" + head));
+    j = r.ok ? gitJsonOf(r) : null;
+    if (Array.isArray(j)) j = j[0] || null;
+    return j && (!j.head || j.head.ref === head) ? gitPullState("github", j) : null;
+  }
+  if (cfg.provider === "gitlab") {
+    r = n ? await call(gitProj(cfg) + "/merge_requests/" + n)
+      : await call(gitProj(cfg) + "/merge_requests?state=all&per_page=5&source_branch=" + encodeURIComponent(head));
+    j = r.ok ? gitJsonOf(r) : null;
+    if (Array.isArray(j)) j = j[0] || null;
+    return j && (!j.source_branch || j.source_branch === head) ? gitPullState("gitlab", j) : null;
+  }
+  if (cfg.provider === "gitea") {
+    if (n) {
+      r = await call("/repos/" + cfg.repo + "/pulls/" + n);
+      j = r.ok ? gitJsonOf(r) : null;
+      return j && (!j.head || j.head.ref === head) ? gitPullState("gitea", j) : null;
+    }
+    r = await call("/repos/" + cfg.repo + "/pulls?state=all&limit=50");
+    j = r.ok ? gitJsonOf(r) : null;
+    var hit = (Array.isArray(j) ? j : []).filter(function (p) { return p && p.head && p.head.ref === head; })[0];
+    return hit ? gitPullState("gitea", hit) : null;
+  }
+  return null;
+}
+
+export async function gitPullOpen(cfg, call, opts) {
+  var o = opts || {};
+  var title = str(o.title).trim().slice(0, 200) || ("Nymbot: " + str(o.head));
+  var body = str(o.body).slice(0, 4000);
+  var r;
+  if (cfg.provider === "github" || cfg.provider === "gitea") {
+    r = await call("/repos/" + cfg.repo + "/pulls", { method: "POST", body: { title: title, head: o.head, base: o.base, body: body } });
+  } else if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/merge_requests", {
+      method: "POST", body: { source_branch: o.head, target_branch: o.base, title: title, description: body }
+    });
+  } else {
+    return { ok: false, unsupported: true, error: "this forge has no pull request API" };
+  }
+  if (r.ok) {
+    var made = gitPullState(cfg.provider, gitJsonOf(r));
+    if (made && made.number) return { ok: true, number: made.number, url: made.url, existed: false };
+  }
+  if (r.status === 409 || r.status === 422) {
+    var found = await gitPullFind(cfg, call, o.head, 0);
+    if (found && found.state === "open") return { ok: true, number: found.number, url: found.url, existed: true };
+  }
+  return { ok: false, status: r.status, error: "HTTP " + r.status + " opening the pull request" };
+}
+
+export async function gitPullMerge(cfg, call, opts) {
+  var o = opts || {};
+  var n = Math.floor(Number(o.number) || 0);
+  if (!n) return { ok: false, error: "no pull request to merge" };
+  var sha = /^[0-9a-f]{40,64}$/i.test(str(o.sha)) ? str(o.sha) : null;
+  var r;
+  var j;
+  if (cfg.provider === "github") {
+    var gb = { merge_method: "merge" };
+    if (sha) gb.sha = sha;
+    r = await call("/repos/" + cfg.repo + "/pulls/" + n + "/merge", { method: "PUT", body: gb });
+    j = gitJsonOf(r);
+    if (r.ok && !(j && j.merged === false)) return { ok: true, merged: true, sha: (j && j.sha) || null };
+    if (r.status === 409) return { ok: false, moved: true, error: "the branch moved since it was checked" };
+    if (r.ok || r.status === 405 || r.status === 422) return { ok: false, conflict: true, error: "it cannot be merged automatically" };
+    return { ok: false, error: "HTTP " + r.status + " merging" };
+  }
+  if (cfg.provider === "gitlab") {
+    var lb = { squash: false, should_remove_source_branch: false };
+    if (sha) lb.sha = sha;
+    r = await call(gitProj(cfg) + "/merge_requests/" + n + "/merge", { method: "PUT", body: lb });
+    j = gitJsonOf(r);
+    if (r.ok) return { ok: true, merged: true, sha: (j && j.merge_commit_sha) || null };
+    if (r.status === 409) return { ok: false, moved: true, error: "the branch moved since it was checked" };
+    if (r.status === 405 || r.status === 406 || r.status === 422) return { ok: false, conflict: true, error: "it cannot be merged automatically" };
+    return { ok: false, error: "HTTP " + r.status + " merging" };
+  }
+  if (cfg.provider === "gitea") {
+    var eb = { Do: "merge", delete_branch_after_merge: false };
+    if (o.title) eb.MergeTitleField = str(o.title).slice(0, 200);
+    if (sha) eb.head_commit_id = sha;
+    r = await call("/repos/" + cfg.repo + "/pulls/" + n + "/merge", { method: "POST", body: eb });
+    if (r.ok) return { ok: true, merged: true, sha: null };
+    if (r.status === 405 || r.status === 409) return { ok: false, conflict: true, error: "it cannot be merged automatically" };
+    return { ok: false, error: "HTTP " + r.status + " merging" };
+  }
+  return { ok: false, unsupported: true, error: "this forge has no merge API" };
+}
+
+export async function gitBranchUpdate(cfg, call, opts) {
+  var o = opts || {};
+  var r;
+  var j;
+  if (cfg.provider === "github") {
+    r = await call("/repos/" + cfg.repo + "/merges", {
+      method: "POST", body: { base: o.branch, head: o.base, commit_message: "Merge " + o.base + " into " + o.branch }
+    });
+    if (r.status === 204) return { ok: true, upToDate: true, sha: await gitBranchHead(cfg, call, o.branch) };
+    j = gitJsonOf(r);
+    if (r.ok) return { ok: true, sha: (j && j.sha) || null };
+    if (r.status === 409) return { ok: false, conflict: true, error: "the changes conflict" };
+    return { ok: false, error: "HTTP " + r.status + " updating the branch" };
+  }
+  if (cfg.provider === "gitea") {
+    var n = Math.floor(Number(o.number) || 0);
+    if (!n) {
+      var found = await gitPullFind(cfg, call, o.branch, 0);
+      n = found && found.state === "open" ? found.number : 0;
+    }
+    if (!n) return { ok: false, unsupported: true, error: "open a pull request first" };
+    r = await call("/repos/" + cfg.repo + "/pulls/" + n + "/update?style=merge", { method: "POST" });
+    if (r.ok) return { ok: true, sha: await gitBranchHead(cfg, call, o.branch) };
+    if (r.status === 409) return { ok: false, conflict: true, error: "the changes conflict" };
+    return { ok: false, error: "HTTP " + r.status + " updating the branch" };
+  }
+  return { ok: false, unsupported: true, error: "this forge has no API to merge into a branch without rebasing" };
+}
+
+export async function gitBranchAhead(cfg, call, base, branch) {
+  var r;
+  var j;
+  if (cfg.provider === "github") {
+    r = await call("/repos/" + cfg.repo + "/compare/" + gitSeg(base) + "..." + gitSeg(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    return j && typeof j.ahead_by === "number" ? j.ahead_by : null;
+  }
+  if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/repository/compare?straight=false&from=" + encodeURIComponent(base) + "&to=" + encodeURIComponent(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    return j && Array.isArray(j.commits) ? j.commits.length : null;
+  }
+  if (cfg.provider === "gitea") {
+    r = await call("/repos/" + cfg.repo + "/compare/" + gitSeg(base) + "..." + gitSeg(branch));
+    j = r.ok ? gitJsonOf(r) : null;
+    if (j && typeof j.total_commits === "number") return j.total_commits;
+    return j && Array.isArray(j.commits) ? j.commits.length : null;
+  }
+  return null;
+}
+
+export async function gitBranchDelete(cfg, call, branch, expectSha) {
+  if (!gitIsJobBranch(branch)) return { ok: false, refused: true, error: "only Nymbot's own branches can be deleted here" };
+  if (!/^[0-9a-f]{40,64}$/i.test(str(expectSha))) return { ok: false, refused: true, error: "no recorded commit to check against" };
+  var head = await gitBranchHead(cfg, call, branch);
+  if (!head) return { ok: true, gone: true };
+  if (head.toLowerCase() !== str(expectSha).toLowerCase()) {
+    return { ok: false, moved: true, sha: head, error: "the branch has moved since Nymbot recorded it" };
+  }
+  var r;
+  if (cfg.provider === "github") r = await call("/repos/" + cfg.repo + "/git/refs/heads/" + gitSeg(branch), { method: "DELETE" });
+  else if (cfg.provider === "gitlab") r = await call(gitProj(cfg) + "/repository/branches/" + encodeURIComponent(branch), { method: "DELETE" });
+  else if (cfg.provider === "gitea") r = await call("/repos/" + cfg.repo + "/branches/" + gitSeg(branch), { method: "DELETE" });
+  else return { ok: false, unsupported: true, error: "this forge cannot delete branches" };
+  if (r.ok || r.status === 404) return { ok: true, gone: r.status === 404 };
+  return { ok: false, error: "HTTP " + r.status + " deleting the branch" };
+}
+
+export async function gitBranchCleanup(cfg, call, list, now) {
+  var at = Number(now) || Date.now();
+  var out = { deleted: [], gone: [], kept: [] };
+  var items = Array.isArray(list) ? list.slice(0, GIT_CLEANUP_MAX) : [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i] && typeof items[i] === "object" ? items[i] : {};
+    var name = str(it.branch);
+    var why = await gitCleanupOne(cfg, call, it, name, at);
+    if (why === "deleted") out.deleted.push(name);
+    else if (why === "gone") out.gone.push(name);
+    else out.kept.push({ branch: name.slice(0, 120), reason: why });
+  }
+  return out;
+}
+
+async function gitCleanupOne(cfg, call, it, name, at) {
+  if (!gitIsJobBranch(name)) return "not-nymbot";
+  if (!/^[0-9a-f]{40,64}$/i.test(str(it.sha))) return "no-sha";
+  var head = await gitBranchHead(cfg, call, name);
+  if (!head) return "gone";
+  if (head.toLowerCase() !== str(it.sha).toLowerCase()) return "moved";
+  var pull = await gitPullFind(cfg, call, name, it.pull && it.pull.number);
+  var finished = pull && (pull.state === "merged" || pull.state === "closed");
+  if (!finished) {
+    if (pull && pull.state === "open") return "open";
+    if (!(Number(it.at) > 0 && at - Number(it.at) >= GIT_CLEANUP_AGE_MS)) return "recent";
+    var base = gitRefValid(it.base) ? str(it.base) : (gitRefValid(cfg.branch) ? cfg.branch : "");
+    if (!base) return "no-base";
+    var ahead = await gitBranchAhead(cfg, call, base, name);
+    if (ahead !== 0) return ahead == null ? "unknown" : "ahead";
+  }
+  var del = await gitBranchDelete(cfg, call, name, it.sha);
+  if (del.ok) return del.gone ? "gone" : "deleted";
+  return del.moved ? "moved" : "failed";
 }

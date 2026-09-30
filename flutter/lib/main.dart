@@ -7,6 +7,7 @@ import 'config.dart';
 import 'core/crypto/native_schnorr.dart';
 import 'features/i18n/i18n.dart';
 import 'features/unlock_screen.dart';
+import 'services/background_check.dart';
 import 'state/app_controller.dart';
 import 'state/store.dart';
 
@@ -33,4 +34,13 @@ Future<void> main() async {
   }
   final controller = await AppController.boot(store: store);
   runApp(NymbotApp(controller: controller));
+}
+
+@pragma('vm:entry-point')
+Future<void> nymbotCheck() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = _NymbotHttpOverrides();
+  await NativeSchnorr.ensureLoaded();
+  await BackgroundCheck.run();
+  await BackgroundCheck.done();
 }

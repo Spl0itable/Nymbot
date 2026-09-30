@@ -58,16 +58,41 @@ class StorageSync {
           },
           timeout: const Duration(seconds: 20));
 
+  Future<Map<String, dynamic>?> settingsSetRaw(
+          EventSigner signer, Map<String, dynamic> body) =>
+      _call('settings-set', signer,
+          extra: body, timeout: const Duration(seconds: 20));
+
   Future<bool> settingsSet(
     EventSigner signer, {
     required String category,
     required String blob,
     required String contentHash,
   }) async {
-    final resp = await _call('settings-set', signer,
-        extra: {'category': category, 'blob': blob, 'contentHash': contentHash},
-        timeout: const Duration(seconds: 20));
+    final resp = await settingsSetRaw(signer,
+        {'category': category, 'blob': blob, 'contentHash': contentHash});
     return resp != null && resp['error'] == null;
+  }
+
+  Future<({bool ok, bool conflict, String? current})> settingsPut(
+    EventSigner signer, {
+    required String category,
+    required String blob,
+    required String contentHash,
+    required String baseHash,
+  }) async {
+    final resp = await settingsSetRaw(signer, {
+      'category': category,
+      'blob': blob,
+      'contentHash': contentHash,
+      'baseHash': baseHash,
+    });
+    if (resp == null) return (ok: false, conflict: false, current: null);
+    if (resp['conflict'] == true) {
+      final now = resp['contentHash'];
+      return (ok: false, conflict: true, current: now is String ? now : '');
+    }
+    return (ok: resp['error'] == null, conflict: false, current: null);
   }
 
   Future<Map<String, dynamic>?> _call(

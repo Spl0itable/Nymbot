@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,42 +12,437 @@ import '../i18n/i18n.dart';
 import '../nym_glyph.dart';
 import '../purchase_policy.dart';
 import '../secret_guard.dart';
+import 'models_sheet.dart';
 import 'sheet.dart';
 
 Future<void> showApiSheet(BuildContext context) =>
     showNymSheet<void>(context, (_) => const _ApiSheet());
 
-const _snippetNames = ['curl', 'python', 'js'];
+const _snippetNames = ['curl', 'python', 'js', 'anthropic'];
 
-String apiSnippet(String kind) => switch (kind) {
-      'python' => 'import os\n'
-          'from openai import OpenAI\n'
-          '\n'
-          'client = OpenAI(\n'
-          '    base_url="$kApiBaseUrl",\n'
-          '    api_key=os.environ["NYMBOT_API_KEY"],\n'
-          ')\n'
-          'reply = client.chat.completions.create(\n'
-          '    model="nymbot/auto",\n'
-          '    messages=[{"role": "user", "content": "Hello"}],\n'
-          ')\n'
-          'print(reply.choices[0].message.content)',
-      'js' => "import OpenAI from 'openai';\n"
-          '\n'
-          'const client = new OpenAI({\n'
-          "  baseURL: '$kApiBaseUrl',\n"
-          '  apiKey: process.env.NYMBOT_API_KEY,\n'
-          '});\n'
-          'const reply = await client.chat.completions.create({\n'
-          "  model: 'nymbot/auto',\n"
-          "  messages: [{ role: 'user', content: 'Hello' }],\n"
-          '});\n'
-          'console.log(reply.choices[0].message.content);',
-      _ => 'curl $kApiBaseUrl/chat/completions \\\n'
-          '  -H "Authorization: Bearer \$NYMBOT_API_KEY" \\\n'
-          '  -H "Content-Type: application/json" \\\n'
-          '  -d \'{"model": "nymbot/auto", "messages": [{"role": "user", "content": "Hello"}]}\'',
+const _apiKinds = [
+  'chat',
+  'image',
+  'video',
+  'speech',
+  'transcription',
+  'embedding',
+];
+
+const _docAnchors = {
+  'chat': 'api-chat/#chat-completions',
+  'anthropic': 'api-chat/#messages',
+  'image': 'api-media/#images',
+  'video': 'api-media/#video',
+  'speech': 'api-media/#speech',
+  'transcription': 'api-media/#transcription',
+  'embedding': 'api-media/#embeddings',
+};
+
+const _imageUrl = 'https://example.com/photo.jpg';
+const _curlKey = r'$NYMBOT_API_KEY';
+const _pyKey = 'os.environ["NYMBOT_API_KEY"]';
+const _jsKey = 'process.env.NYMBOT_API_KEY';
+
+String apiModelKind(Map<String, dynamic>? m) {
+  if (m == null) return 'chat';
+  final type = m['type'];
+  if (type == 'audio') {
+    return m['audio_type'] == 'transcription' ? 'transcription' : 'speech';
+  }
+  return type is String && _apiKinds.contains(type) ? type : 'chat';
+}
+
+final _claudeId = RegExp(r'^(anthropic/|claude)', caseSensitive: false);
+
+bool apiIsClaude(Map<String, dynamic>? m) =>
+    apiModelKind(m) == 'chat' && _claudeId.hasMatch('${m?['id'] ?? ''}');
+
+List<String> apiTabsFor(Map<String, dynamic>? m) => apiIsClaude(m)
+    ? const ['curl', 'python', 'js', 'anthropic']
+    : const ['curl', 'python', 'js'];
+
+String _voiceFor(Map<String, dynamic> m) {
+  final id = '${m['id'] ?? ''}';
+  if (id.contains('aura-2')) return 'luna';
+  if (id.contains('melotts')) return 'en';
+  return 'alloy';
+}
+
+Map<String, dynamic> _capsOf(Map<String, dynamic> m) =>
+    m['capabilities'] is Map
+        ? Map<String, dynamic>.from(m['capabilities'] as Map)
+        : const {};
+
+int _secondsFor(Map<String, dynamic> m) {
+  final raw = _capsOf(m)['max_duration_seconds'];
+  final n = raw is num ? raw : (raw is String ? num.tryParse(raw) : null);
+  return n != null && n == n.roundToDouble() && n > 0 && n <= 60
+      ? n.toInt()
+      : 5;
+}
+
+bool _needsImage(Map<String, dynamic> m) =>
+    _capsOf(m)['requires_image_url'] == true;
+
+String _q(Object? v) => jsonEncode('${v ?? ''}');
+
+List<String> _openaiPy() => [
+      'import os',
+      'from openai import OpenAI',
+      '',
+      'client = OpenAI(base_url="$kApiBaseUrl", api_key=$_pyKey)',
+    ];
+
+List<String> _openaiJs([List<String> head = const []]) => [
+      ...head,
+      'import OpenAI from "openai";',
+      '',
+      'const client = new OpenAI({ baseURL: "$kApiBaseUrl", apiKey: $_jsKey });',
+    ];
+
+List<String> _curlJson(String path, String body, [String? tail]) => [
+      'curl $kApiBaseUrl$path \\',
+      '  -H "Authorization: Bearer $_curlKey" \\',
+      '  -H "Content-Type: application/json" \\',
+      "  -d '$body'${tail != null ? ' \\' : ''}",
+      if (tail != null) tail,
+    ];
+
+List<String> _chatLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  return switch (tab) {
+    'python' => [
+        ..._openaiPy(),
+        'reply = client.chat.completions.create(',
+        '    model=$model,',
+        '    messages=[{"role": "user", "content": "Hello"}],',
+        ')',
+        'print(reply.choices[0].message.content)',
+      ],
+    'js' => [
+        ..._openaiJs(),
+        'const reply = await client.chat.completions.create({',
+        '  model: $model,',
+        '  messages: [{ role: "user", content: "Hello" }],',
+        '});',
+        'console.log(reply.choices[0].message.content);',
+      ],
+    'anthropic' => [
+        'import os',
+        'import anthropic',
+        '',
+        'client = anthropic.Anthropic(base_url="$kApiAnthropicBaseUrl", api_key=$_pyKey)',
+        'message = client.messages.create(',
+        '    model=$model,',
+        '    max_tokens=1024,',
+        '    messages=[{"role": "user", "content": "Hello"}],',
+        ')',
+        'print(message.content[0].text)',
+      ],
+    _ => _curlJson('/chat/completions',
+        '{"model": $model, "messages": [{"role": "user", "content": "Hello"}]}'),
+  };
+}
+
+List<String> _imageLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  final edit = _needsImage(m);
+  return switch (tab) {
+    'python' => [
+        ..._openaiPy(),
+        'image = client.images.generate(',
+        '    model=$model,',
+        '    prompt="A lighthouse at dusk",',
+        '    size="1024x1024",',
+        if (edit) '    extra_body={"image_url": "$_imageUrl"},',
+        ')',
+        'print(image.data[0].url)',
+      ],
+    'js' => [
+        ..._openaiJs(),
+        'const image = await client.images.generate({',
+        '  model: $model,',
+        '  prompt: "A lighthouse at dusk",',
+        '  size: "1024x1024",',
+        if (edit) '  image_url: "$_imageUrl",',
+        '});',
+        'console.log(image.data[0].url);',
+      ],
+    _ => _curlJson('/images/generations',
+        '{"model": $model, "prompt": "A lighthouse at dusk", "size": "1024x1024"${edit ? ', "image_url": "$_imageUrl"' : ''}}'),
+  };
+}
+
+List<String> _videoLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  final seconds = _secondsFor(m);
+  final still = _needsImage(m);
+  return switch (tab) {
+    'python' => [
+        'import os',
+        'import time',
+        'import requests',
+        '',
+        'headers = {"Authorization": "Bearer " + $_pyKey}',
+        'job = requests.post(',
+        '    "$kApiBaseUrl/videos",',
+        '    headers=headers,',
+        '    json={"model": $model, "prompt": "Waves rolling onto a beach at sunrise", "duration": $seconds${still ? ', "image_url": "$_imageUrl"' : ''}},',
+        ').json()',
+        'while job.get("status") == "in_progress":',
+        '    time.sleep(8)',
+        '    job = requests.get("$kApiBaseUrl/videos/" + job["id"], headers=headers).json()',
+        'print(job["data"]["url"] if job.get("status") == "completed" else job.get("error"))',
+      ],
+    'js' => [
+        'const headers = { "Authorization": "Bearer " + $_jsKey, "Content-Type": "application/json" };',
+        'let job = await (await fetch("$kApiBaseUrl/videos", {',
+        '  method: "POST",',
+        '  headers,',
+        '  body: JSON.stringify({ model: $model, prompt: "Waves rolling onto a beach at sunrise", duration: $seconds${still ? ', image_url: "$_imageUrl"' : ''} }),',
+        '})).json();',
+        'while (job.status === "in_progress") {',
+        '  await new Promise((r) => setTimeout(r, 8000));',
+        '  job = await (await fetch("$kApiBaseUrl/videos/" + job.id, { headers })).json();',
+        '}',
+        'console.log(job.status === "completed" ? job.data.url : job.error);',
+      ],
+    _ => [
+        ..._curlJson('/videos',
+            '{"model": $model, "prompt": "Waves rolling onto a beach at sunrise", "duration": $seconds${still ? ', "image_url": "$_imageUrl"' : ''}}'),
+        '',
+        'curl $kApiBaseUrl/videos/VIDEO_ID \\',
+        '  -H "Authorization: Bearer $_curlKey"',
+      ],
+  };
+}
+
+List<String> _speechLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  final voice = _q(_voiceFor(m));
+  return switch (tab) {
+    'python' => [
+        ..._openaiPy(),
+        'audio = client.audio.speech.create(',
+        '    model=$model,',
+        '    voice=$voice,',
+        '    input="Hello from Nymbot",',
+        ')',
+        'audio.write_to_file("speech.mp3")',
+      ],
+    'js' => [
+        ..._openaiJs(['import { writeFile } from "node:fs/promises";']),
+        'const audio = await client.audio.speech.create({',
+        '  model: $model,',
+        '  voice: $voice,',
+        '  input: "Hello from Nymbot",',
+        '});',
+        'await writeFile("speech.mp3", Buffer.from(await audio.arrayBuffer()));',
+      ],
+    _ => _curlJson('/audio/speech',
+        '{"model": $model, "input": "Hello from Nymbot", "voice": $voice}',
+        '  --output speech.mp3'),
+  };
+}
+
+List<String> _transcriptionLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  return switch (tab) {
+    'python' => [
+        ..._openaiPy(),
+        'transcript = client.audio.transcriptions.create(model=$model, file=open("audio.mp3", "rb"))',
+        'print(transcript.text)',
+      ],
+    'js' => [
+        ..._openaiJs(['import fs from "node:fs";']),
+        'const transcript = await client.audio.transcriptions.create({',
+        '  model: $model,',
+        '  file: fs.createReadStream("audio.mp3"),',
+        '});',
+        'console.log(transcript.text);',
+      ],
+    _ => [
+        'curl $kApiBaseUrl/audio/transcriptions \\',
+        '  -H "Authorization: Bearer $_curlKey" \\',
+        '  -F file=@audio.mp3 \\',
+        '  -F model=${m['id'] ?? ''}',
+      ],
+  };
+}
+
+List<String> _embeddingLines(String tab, Map<String, dynamic> m) {
+  final model = _q(m['id']);
+  return switch (tab) {
+    'python' => [
+        ..._openaiPy(),
+        'result = client.embeddings.create(model=$model, input="Hello")',
+        'print(len(result.data[0].embedding))',
+      ],
+    'js' => [
+        ..._openaiJs(),
+        'const result = await client.embeddings.create({ model: $model, input: "Hello" });',
+        'console.log(result.data[0].embedding.length);',
+      ],
+    _ => _curlJson('/embeddings', '{"model": $model, "input": "Hello"}'),
+  };
+}
+
+String apiSnippet(String tab, [Map<String, dynamic>? model]) {
+  final m = model ?? kApiAutoModel;
+  final shown = apiTabsFor(m).contains(tab) ? tab : 'curl';
+  final lines = switch (apiModelKind(m)) {
+    'image' => _imageLines(shown, m),
+    'video' => _videoLines(shown, m),
+    'speech' => _speechLines(shown, m),
+    'transcription' => _transcriptionLines(shown, m),
+    'embedding' => _embeddingLines(shown, m),
+    _ => _chatLines(shown, m),
+  };
+  return lines.join('\n');
+}
+
+String apiDocsFor(String tab, Map<String, dynamic>? m) {
+  final kind = apiModelKind(m);
+  return kApiDocsRoot +
+      (kind == 'chat' && tab == 'anthropic'
+          ? _docAnchors['anthropic']!
+          : _docAnchors[kind]!);
+}
+
+String _jsNumber(double n) =>
+    n == n.truncateToDouble() && n.abs() < 1e21 ? '${n.toInt()}' : '$n';
+
+String? apiUsd(Object? v) {
+  final n = v is num
+      ? v.toDouble()
+      : (v is String && v.trim().isNotEmpty ? double.tryParse(v) : null);
+  if (n == null || !n.isFinite) return null;
+  return '\$${_jsNumber(double.parse(n.toStringAsPrecision(3)))}';
+}
+
+String? _amountOf(Map<String, dynamic> p, String field) {
+  final dollars = apiUsd(p[field]);
+  if (dollars != null) return dollars;
+  final raw = p['sats_$field'];
+  final sats = raw is num ? raw : (raw is String ? num.tryParse(raw) : null);
+  return sats != null && sats.isFinite ? t('{n} sats', {'n': figure(sats)}) : null;
+}
+
+String apiPriceLine(Map<String, dynamic>? m) {
+  if (m != null && m['id'] == kApiAutoModel['id']) {
+    return t('Priced per reply by the model it picks.');
+  }
+  final p = m?['pricing'] is Map
+      ? Map<String, dynamic>.from(m!['pricing'] as Map)
+      : <String, dynamic>{};
+  final kind = apiModelKind(m);
+  if (kind == 'chat') {
+    if (p['type'] == 'per_request') {
+      final each = _amountOf(p, 'usd_per_request');
+      return each == null ? '' : t('{price} per request.', {'price': each});
+    }
+    final inn = _amountOf(p, 'input_per_1M_tokens');
+    final out = _amountOf(p, 'output_per_1M_tokens');
+    return inn != null && out != null
+        ? t('{in} in, {out} out per 1M tokens.', {'in': inn, 'out': out})
+        : '';
+  }
+  final field = switch (kind) {
+    'image' => 'per_generation',
+    'video' => 'per_second',
+    'speech' => 'per_1k_chars',
+    'transcription' => 'per_minute',
+    _ => 'input_per_1M_tokens',
+  };
+  final price = _amountOf(p, field);
+  if (price == null) return '';
+  return switch (kind) {
+    'image' => t('{price} per image.', {'price': price}),
+    'video' => t('{price} per second.', {'price': price}),
+    'speech' => t('{price} per 1k characters.', {'price': price}),
+    'transcription' => t('{price} per minute.', {'price': price}),
+    _ => t('{price} per 1M tokens.', {'price': price}),
+  };
+}
+
+String apiBalanceLine(Map<String, dynamic>? m) => m?['balance'] == 'pro'
+    ? t('Spends the Pro balance.')
+    : t('Spends the standard balance.');
+
+String apiModelHint(Map<String, dynamic>? m, {bool failed = false}) => [
+      apiPriceLine(m),
+      apiBalanceLine(m),
+      if (failed) t('Other models could not be loaded.'),
+    ].where((s) => s.isNotEmpty).join(' ');
+
+List<Map<String, dynamic>> apiModelRows(ApiReply reply) {
+  final raw = reply.ok ? reply.json['data'] : null;
+  if (raw is! List) return const [];
+  final rows = [
+    for (final m in raw)
+      if (m is Map && m['id'] is String && (m['id'] as String).isNotEmpty)
+        Map<String, dynamic>.from(m),
+  ];
+  if (rows.isEmpty) return const [];
+  return rows.any((m) => m['id'] == kApiAutoModel['id'])
+      ? rows
+      : [kApiAutoModel, ...rows];
+}
+
+String? _makerSlug(Map<String, dynamic> m) {
+  if (m['id'] == kApiAutoModel['id']) return null;
+  final id = '${m['id'] ?? ''}';
+  if (id.contains('/') && !id.startsWith('@')) {
+    return id.split('/').first.toLowerCase();
+  }
+  final owner = '${m['owned_by'] ?? ''}'
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-|-$'), '');
+  return owner.isEmpty ? null : owner;
+}
+
+Map<String, dynamic> _pickerEntry(Map<String, dynamic> m) {
+  final kind = apiModelKind(m);
+  return {
+    'key': '$kind:${m['id']}',
+    'id': m['id'],
+    'label': '${m['name'] ?? m['id']}',
+    'description': m['description'] is String ? m['description'] : '',
+    'author': '${m['owned_by'] ?? ''}',
+    'authorSlug': _makerSlug(m),
+    'kind': kind,
+    'source': m,
+  };
+}
+
+String _groupWord(String kind) => switch (kind) {
+      'chat' => t('Chat'),
+      'image' => t('Image'),
+      'video' => t('Video'),
+      'speech' => t('Speech'),
+      'transcription' => t('Transcription'),
+      _ => t('Embeddings'),
     };
+
+Map<String, dynamic> _pickerCatalog(List<Map<String, dynamic>> models) {
+  final entries = models.map(_pickerEntry).toList();
+  return {
+    'models': entries,
+    'groups': [
+      for (final kind in _apiKinds)
+        if (entries.any((e) => e['kind'] == kind))
+          {
+            'author': _groupWord(kind),
+            'keys': [
+              for (final e in entries)
+                if (e['kind'] == kind) e['key'] as String,
+            ],
+          },
+    ],
+  };
+}
 
 String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -133,10 +529,14 @@ class _ApiSheetState extends State<_ApiSheet> {
   final _topupThreshold = TextEditingController(text: '5000');
   final _topupAmount = TextEditingController(text: '10000');
   String _snippet = 'curl';
+  Map<String, dynamic> _model = kApiAutoModel;
+  List<Map<String, dynamic>> _models = const [kApiAutoModel];
+  bool _modelsFailed = false;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadModels());
     unawaited(_loadAccount());
     unawaited(_loadKeys());
     unawaited(_loadHistory());
@@ -162,6 +562,37 @@ class _ApiSheetState extends State<_ApiSheet> {
         _accountError = _replyError(reply);
       }
     });
+  }
+
+  Future<void> _loadModels() async {
+    final rows = apiModelRows(await _api.models());
+    if (!mounted) return;
+    setState(() {
+      _modelsFailed = rows.isEmpty;
+      _models = rows.isEmpty ? const [kApiAutoModel] : rows;
+      final kind = apiModelKind(_model);
+      _setModel(_models.firstWhere(
+          (m) => m['id'] == _model['id'] && apiModelKind(m) == kind,
+          orElse: () => kApiAutoModel));
+    });
+  }
+
+  void _setModel(Map<String, dynamic> m) {
+    _model = m;
+    if (!apiTabsFor(m).contains(_snippet)) _snippet = 'curl';
+  }
+
+  Future<void> _pickModel() async {
+    final picked = await showModelChoice(
+      context,
+      title: t('Pick a model'),
+      catalog: _pickerCatalog(_models),
+      current: _pickerEntry(_model)['key'] as String,
+      price: (e) => apiPriceLine(e['source'] as Map<String, dynamic>?),
+    );
+    final source = picked?['source'];
+    if (source is! Map<String, dynamic> || !mounted) return;
+    setState(() => _setModel(source));
   }
 
   Future<void> _loadKeys() async {
@@ -464,25 +895,54 @@ class _ApiSheetState extends State<_ApiSheet> {
   }
 
   Widget _quickStart() {
-    final code = apiSnippet(_snippet);
+    final code = apiSnippet(_snippet, _model);
+    final tabs = apiTabsFor(_model);
+    final docs = apiDocsFor(_snippet, _model);
+    final picker = _pickerCatalog(_models);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(t('Model'),
+              style: TextStyle(
+                  fontSize: 12, color: Theme.of(context).hintColor)),
+        ),
+        ModelSlot(
+          key: const ValueKey('api-model'),
+          title: t('Model'),
+          model: _pickerEntry(_model),
+          catalog: picker,
+          onTap: _pickModel,
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4, bottom: 8),
+          child: Text(
+            apiModelHint(_model, failed: _modelsFailed),
+            key: const ValueKey('api-model-hint'),
+            style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: Theme.of(context).hintColor),
+          ),
+        ),
         Wrap(
           spacing: 6,
           runSpacing: 6,
           children: [
             for (final kind in _snippetNames)
-              ChoiceChip(
-                key: ValueKey('api-snippet-$kind'),
-                label: Text(switch (kind) {
-                  'python' => 'Python',
-                  'js' => 'JavaScript',
-                  _ => 'cURL',
-                }),
-                selected: _snippet == kind,
-                onSelected: (_) => setState(() => _snippet = kind),
-              ),
+              if (tabs.contains(kind))
+                ChoiceChip(
+                  key: ValueKey('api-snippet-$kind'),
+                  label: Text(switch (kind) {
+                    'python' => 'Python',
+                    'js' => 'JavaScript',
+                    'anthropic' => 'Anthropic SDK',
+                    _ => 'cURL',
+                  }),
+                  selected: _snippet == kind,
+                  onSelected: (_) => setState(() => _snippet = kind),
+                ),
           ],
         ),
         const SizedBox(height: 8),
@@ -516,10 +976,15 @@ class _ApiSheetState extends State<_ApiSheet> {
             {'url': kApiAnthropicBaseUrl})),
         Align(
           alignment: AlignmentDirectional.centerStart,
-          child: TextButton(
-            key: const ValueKey('api-docs'),
-            onPressed: () => _open(kApiDocsUrl),
-            child: Text(t('Read the API docs')),
+          child: Semantics(
+            key: const ValueKey('api-docs-link'),
+            link: true,
+            linkUrl: Uri.parse(docs),
+            child: TextButton(
+              key: const ValueKey('api-docs'),
+              onPressed: () => _open(docs),
+              child: Text(t('Read the API docs')),
+            ),
           ),
         ),
       ],

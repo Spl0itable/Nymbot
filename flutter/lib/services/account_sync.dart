@@ -1098,24 +1098,57 @@ class AccountSync {
 
   Future<bool> push(String dTag, Object? value) => _push(dTag, value);
 
+  static const int casRetries = 3;
+
   Future<bool> _push(String dTag, Object? value, {int? gen}) async {
     bool stale() => gen != null && !_live(gen);
     if (blocked) return false;
     _load();
-    final plain = jsonEncode({'__cat': dTag, 'v': value});
     final category = categoryFor(dTag);
-    final hash = _sha256Hex('${_identity.pubkey}|${_hybrid ? 'pq' : 'c'}|$plain');
-    if (_hashes[category] == hash) return true;
-    final blob = await _seal(plain);
-    if (blob == null || stale()) return false;
-    final ok = await _storage.settingsSet(_identity.signer,
-        category: category, blob: blob, contentHash: hash);
-    if (!ok || stale()) return false;
-    _hashes[category] = hash;
-    _names[category] = dTag;
-    _remember(_sha256Hex(blob), plain);
-    _appliedBlobs[dTag] = _sha256Hex(blob);
-    return true;
+    var current = value;
+    String? base;
+    for (var attempt = 0; attempt <= casRetries; attempt++) {
+      final plain = jsonEncode({'__cat': dTag, 'v': current});
+      final hash =
+          _sha256Hex('${_identity.pubkey}|${_hybrid ? 'pq' : 'c'}|$plain');
+      if (_hashes[category] == hash) return true;
+      final blob = await _seal(plain);
+      if (blob == null || stale()) return false;
+      final put = await _storage.settingsPut(_identity.signer,
+          category: category,
+          blob: blob,
+          contentHash: hash,
+          baseHash: base ?? _hashes[category] ?? '');
+      if (stale()) return false;
+      if (put.conflict) {
+        base = put.current ?? '';
+        if (value == null) continue;
+        final merged = await _mergeFor(dTag, category, gen);
+        if (merged == null || stale()) return false;
+        current = merged.value;
+        continue;
+      }
+      if (!put.ok) return false;
+      _hashes[category] = hash;
+      _names[category] = dTag;
+      _remember(_sha256Hex(blob), plain);
+      _appliedBlobs[dTag] = _sha256Hex(blob);
+      return true;
+    }
+    return false;
+  }
+
+  Future<({Object? value})?> _mergeFor(
+      String dTag, String category, int? gen) async {
+    final at = gen ?? _gen;
+    if (!await _fetch([category], at)) return null;
+    final theirs = _remote[dTag];
+    if (theirs != null) {
+      final applied = await _applyAlone({dTag: theirs}, at);
+      if (applied == null) return null;
+    }
+    final local = await snapshot();
+    return (value: local[dTag]);
   }
 
   Future<SyncRound> run() {

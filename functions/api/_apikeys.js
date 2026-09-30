@@ -1,6 +1,6 @@
 import { ledgerCall } from "./_ledger.js";
 import { bytesToHex, randomBytes } from "./_shared.js";
-import { ApiError, apiBad, apiIso, apiJson, apiRateLimit, apiClientIp } from "./_apihttp.js";
+import { ApiError, apiBad, apiIso, apiJson, apiRateLimit, apiIpBucket } from "./_apihttp.js";
 import { apiKeysDb, apiKeyNew, apiKeyHash, apiKeyHint } from "./_apiauth.js";
 import { apiBalances } from "./_apibill.js";
 
@@ -119,7 +119,7 @@ async function pruneRevoked(db, pubkey) {
 }
 
 async function createKey(api) {
-  await apiRateLimit(api, "keysIp", apiClientIp(api), "API keys created from this address");
+  await apiRateLimit(api, "keysIp", apiIpBucket(api), "API keys created from this address");
   await apiRateLimit(api, "keysPubkey", api.auth.pubkey, "API keys created by this account");
   const b = api.body || {};
   const unknown = Object.keys(b).find((k) => !PATCHABLE.includes(k));

@@ -872,6 +872,12 @@ function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
   if (threadRoot) rumor.tags.push(["nymthread", threadRoot]);
   // The model tag is inside the rumor, so it's sealed and never travels in the clear.
   if (opts && opts.model) rumor.tags.push(["model", String(opts.model).slice(0, 60)]);
+  var link = opts && Array.isArray(opts.replyTo) ? opts.replyTo.filter(function (v) { return typeof v === "string" && /^[0-9a-f]{64}$/i.test(v); }) : [];
+  if (link.length) rumor.tags.push(["nymreply"].concat(link.slice(0, 2).map(function (v) { return v.toLowerCase(); })));
+  var sched = opts && Array.isArray(opts.sched) ? opts.sched : null;
+  if (sched && typeof sched[0] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(sched[0]) && /^[0-9]{1,16}$/.test(String(sched[1]))) {
+    rumor.tags.push(["nymsched", sched[0], String(sched[1])]);
+  }
   rumor.id = getEventHash(rumor);
   return rumor;
 }

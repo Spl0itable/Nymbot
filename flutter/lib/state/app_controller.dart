@@ -25,6 +25,7 @@ import '../models/workspace.dart';
 import '../services/account_sync.dart';
 import '../services/anon.dart';
 import '../services/api_access.dart';
+import '../services/background_jobs.dart';
 import '../services/backup.dart';
 import '../services/blossom.dart';
 import '../services/canary.dart';
@@ -32,6 +33,7 @@ import '../services/chat_engine.dart';
 import '../services/connectors.dart';
 import '../services/dev_contact.dart';
 import '../services/doc_library.dart';
+import '../services/done_since.dart';
 import '../services/free_tier.dart';
 import '../services/gifts.dart';
 import '../services/key_backup.dart';
@@ -51,6 +53,7 @@ import '../services/relay_pool.dart';
 import '../services/reply_notify.dart';
 import '../services/research.dart';
 import '../services/server_runs.dart';
+import '../services/server_schedules.dart';
 import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
 import '../services/support_thread.dart';
@@ -158,6 +161,7 @@ class AppController extends ChangeNotifier {
     pq: pq,
     api: api,
     anon: anon,
+    botPubkey: botPubkey,
   );
 
   Nip46SocketFactory? signerSockets;
@@ -171,6 +175,7 @@ class AppController extends ChangeNotifier {
     register: _registerReplyNotify,
     titleOf: (id) => _conversationById(id)?.title ?? '',
     open: openChat,
+    openAt: openChatAt,
   );
 
   static const _notifyAskedKey = 'reply_notify_asked';
@@ -184,7 +189,34 @@ class AppController extends ChangeNotifier {
 
   Future<void> openChat(String id) async {
     final conv = _conversationById(id);
-    if (conv != null) await open(conv);
+    if (conv != null) {
+      await open(conv);
+      return;
+    }
+    for (final s in schedules) {
+      if (s.id == id && s.due && s.server != 'run') {
+        await runSchedule(id);
+        return;
+      }
+    }
+  }
+
+  String? jumpTo;
+
+  Future<void> openChatAt(String id, String asked) async {
+    final conv = _conversationById(id);
+    if (conv == null) return;
+    await open(conv);
+    for (final m in messages) {
+      if (m.role == ChatRole.self && m.wire == asked) jumpTo = m.id;
+    }
+    notifyListeners();
+  }
+
+  String? takeJump() {
+    final id = jumpTo;
+    jumpTo = null;
+    return id;
   }
 
   Future<Map<String, dynamic>?> _registerReplyNotify(
@@ -224,13 +256,58 @@ class AppController extends ChangeNotifier {
   int relaysUp = 0;
 
   final Map<String, ChatTurn> turns = {};
-  final Map<String, List<String>> _queues = {};
-  final Map<String, int> _queueEdits = {};
 
-  ChatTurn? turnOf(Conversation? conv) =>
-      conv == null ? null : turns[conv.id];
+  @visibleForTesting
+  static String botPubkey = NymbotConfig.botPubkey;
 
-  bool sendingIn(Conversation? conv) => turnOf(conv) != null;
+  @visibleForTesting
+  static List<Duration> claimBackoff = const [
+    Duration(seconds: 3),
+    Duration(seconds: 6),
+    Duration(seconds: 12),
+    Duration(seconds: 24),
+    Duration(seconds: 48),
+    Duration(seconds: 60),
+  ];
+
+  static const claimFor = Duration(hours: 1);
+
+  static const slotPollDefault = [
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 20),
+    Duration(seconds: 30),
+  ];
+
+  @visibleForTesting
+  static List<Duration> slotPoll = slotPollDefault;
+
+  @visibleForTesting
+  static Duration slotWaitFor = claimFor;
+
+  List<ChatTurn> runsIn(Conversation? conv) {
+    if (conv == null) return const [];
+    final list = [
+      for (final t in turns.values)
+        if (t.conv.id == conv.id) t
+    ];
+    list.sort((a, b) => a.began.compareTo(b.began));
+    return list;
+  }
+
+  ChatTurn? turnOf(Conversation? conv) {
+    final list = runsIn(conv);
+    return list.isEmpty ? null : list.last;
+  }
+
+  ChatTurn? runOfAsk(Conversation conv, String askId) {
+    for (final t in turns.values) {
+      if (t.conv.id == conv.id && t.askId == askId) return t;
+    }
+    return null;
+  }
+
+  bool sendingIn(Conversation? conv) => runsIn(conv).isNotEmpty;
 
   bool get sending => sendingIn(current);
 
@@ -306,51 +383,16 @@ class AppController extends ChangeNotifier {
       model: activeModel,
       pricing: catalogPricing);
 
-  List<String> get queued => _queues[current?.id] ?? const [];
-
-  int? get editingQueued => _queueEdits[current?.id];
-
-  void editQueued(int at, {Conversation? target}) {
-    final conv = target ?? current;
-    final queue = conv == null ? null : _queues[conv.id];
-    if (queue == null || at < 0 || at >= queue.length) return;
-    _queueEdits[conv!.id] = at;
-    notifyListeners();
-  }
-
-  Future<void> saveQueued(String text, {Conversation? target}) async {
-    final conv = target ?? current;
-    if (conv == null) return;
-    final at = _queueEdits.remove(conv.id);
-    final queue = _queues[conv.id];
-    if (at != null && queue != null && at < queue.length) {
-      final body = text.trim();
-      if (body.isEmpty) {
-        queue.removeAt(at);
-        if (queue.isEmpty) _queues.remove(conv.id);
-      } else {
-        queue[at] = body;
-      }
-    }
-    notifyListeners();
-    await _sendQueued(conv);
-  }
-
-  Future<void> cancelQueuedEdit({Conversation? target}) async {
-    final conv = target ?? current;
-    if (conv == null || _queueEdits.remove(conv.id) == null) return;
-    notifyListeners();
-    await _sendQueued(conv);
-  }
-
   @visibleForTesting
   Future<void> carryOnForTest(Conversation conv, TurnResult first) =>
       _carryOn(ChatTurn(conv), first);
 
   @visibleForTesting
-  void holdForTest(Conversation conv) {
-    turns[conv.id] = ChatTurn(conv);
+  ChatTurn holdForTest(Conversation conv) {
+    final turn = ChatTurn(conv);
+    turns[turn.key] = turn;
     notifyListeners();
+    return turn;
   }
 
   @visibleForTesting
@@ -379,9 +421,8 @@ class AppController extends ChangeNotifier {
 
   @visibleForTesting
   Future<void> releaseForTest(Conversation conv) async {
-    turns.remove(conv.id);
+    turns.removeWhere((_, t) => t.conv.id == conv.id);
     notifyListeners();
-    await _sendQueued(conv);
   }
 
   List<Conversation> conversations = [];
@@ -434,6 +475,7 @@ class AppController extends ChangeNotifier {
 
   void _loadSettings() {
     settings = store.settings();
+    chat.defaultWhenDone = settings.whenDone;
     final raw = store.getString('settings');
     if (raw != null) {
       try {
@@ -451,6 +493,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> saveSettings(AppSettings next) async {
     settings = next;
+    chat.defaultWhenDone = next.whenDone;
     await store.saveSettings(next);
     notifyListeners();
   }
@@ -459,6 +502,7 @@ class AppController extends ChangeNotifier {
     final kept = (name: settings.nickname, at: settings.nicknameAt);
     await store.resetSettings();
     settings = store.settings();
+    chat.defaultWhenDone = settings.whenDone;
     if (kept.at > 0) {
       settings
         ..nickname = kept.name
@@ -1166,6 +1210,17 @@ class AppController extends ChangeNotifier {
     return left < 0 ? 0 : left;
   }
 
+  Future<void> setWhenDone(String choice) async {
+    final picked = whenDoneOf(choice);
+    settings.whenDone =
+        picked == whenDoneDefault && whenDoneOf(settings.whenDone).isEmpty
+            ? ''
+            : picked;
+    chat.defaultWhenDone = settings.whenDone;
+    await store.saveSettings(settings);
+    notifyListeners();
+  }
+
   Future<void> setAutoContinue(int credits) async {
     settings.autoContinue = credits;
     await store.saveSettings(settings);
@@ -1223,7 +1278,7 @@ class AppController extends ChangeNotifier {
   /// Polls the turn's progress until it ends, never delaying the send.
   void _watchTurn(ChatTurn turn, String eventId) {
     _askReplyNotifyOnce();
-    replyNotify.pendingTurn(turn.conv.id, eventId);
+    replyNotify.pendingTurn(turn.conv.id, eventId, run: turn.key);
     final showSteps = settings.showProgress ||
         turn.research != null ||
         turn.team != null;
@@ -1246,9 +1301,13 @@ class AppController extends ChangeNotifier {
             onDraft: (text, seq) {
               draft = text;
               draftAfter = seq;
+            },
+            onPlan: (plan) {
+              if (plan.isNotEmpty) turn.plan = plan;
             });
         final steps = ChatEngine.steps(raw);
         if (!turn.watching) return;
+        await noteBranchSteps(turn, raw);
         if (steps.isNotEmpty) after = steps.last.n;
         if (steps.isNotEmpty && showSteps) {
           turn.steps = [...turn.steps, ...steps];
@@ -1258,7 +1317,9 @@ class AppController extends ChangeNotifier {
           turn.draft = draft;
           turn.drafted = true;
         }
-        if ((steps.isNotEmpty && showSteps) || draft != null) notifyListeners();
+        if ((steps.isNotEmpty && showSteps) || draft != null || turn.plan.isNotEmpty) {
+          notifyListeners();
+        }
         final fast = turn.draft != null && turn.research == null;
         await Future<void>.delayed(signer.isRemote
             ? const Duration(seconds: 5)
@@ -1626,16 +1687,28 @@ class AppController extends ChangeNotifier {
 
   Future<void> allowPendingTool(ChatMessage m) => _resumePending(m, approve: true);
 
+  final Set<String> _resuming = {};
+
   Future<void> _resumePending(ChatMessage m, {required bool approve}) async {
     final conv = current;
     final p = m.pendingTool;
-    if (conv == null || p == null || turns.containsKey(conv.id)) return;
+    if (conv == null || p == null || !_resuming.add(m.id)) return;
+    try {
+      await _resumeRun(conv, m, p, approve: approve);
+    } finally {
+      _resuming.remove(m.id);
+    }
+  }
+
+  Future<void> _resumeRun(Conversation conv, ChatMessage m,
+      Map<String, dynamic> p, {required bool approve}) async {
     final run = p['kind'] == 'server-run';
     final runCredits = run && approve ? ((p['maxCredits'] as num?)?.toDouble() ?? 0) : 0.0;
     final token = p['token'] as String? ?? '';
     if (token.isEmpty) {
       await _settlePending(conv, m, 'denied');
-      await note(t('That request has expired. Ask again and Nymbot will start it fresh.'), conv: conv);
+      await note(t('That request has expired. Ask again and Nymbot will start it fresh.'),
+          conv: conv, replyTo: m.replyTo);
       return;
     }
     final model = modelOf(conv);
@@ -1660,19 +1733,33 @@ class AppController extends ChangeNotifier {
       }
     }
     await _settlePending(conv, m, approve ? 'allowed' : 'denied');
-    final turn = ChatTurn(conv);
+    final link = m.replyTo;
+    String? askId;
+    if (link != null) {
+      for (final x in _messagesOf(conv)) {
+        if (x.role == ChatRole.self && x.wire == link) askId = x.id;
+      }
+    }
+    final turn = ChatTurn(conv, askId: askId, msgId: link);
     if (p['team'] == true) turn.team = <String, dynamic>{};
-    turns[conv.id] = turn;
+    turn.model = model;
+    turn.kind = run ? 'server-run' : (p['team'] == true ? 'team' : 'connector');
+    turns[turn.key] = turn;
     turn.status = run
         ? (approve ? t('Running on a Nymbot server…') : t('Continuing without the server run…'))
         : approve
             ? t('Running {tool} on {connector}', {'tool': '${p['tool']}', 'connector': '${p['connector']}'})
             : t('Carrying on without {tool}', {'tool': '${p['tool']}'});
+    turn.control.onStatus = (s) {
+      turn.status = s;
+      notifyListeners();
+    };
     notifyListeners();
     TurnResult? carry;
     var resendWaived = false;
     try {
-      final res = await chat.send(
+      await _takeSlot(turn, force: true);
+      turn.prepared = await chat.prepare(
         conv: conv,
         text: text,
         maxCost: maxCost,
@@ -1684,86 +1771,59 @@ class AppController extends ChangeNotifier {
         serverRuns: serverRunsOf(conv),
         runApprove: run && approve ? '${p['id']}' : null,
         runDecline: run && !approve ? '${p['id']}' : null,
-        timeout: run && approve
-            ? NymbotConfig.pmTimeout +
-                Duration(seconds: ((p['timeoutSec'] as num?)?.toInt() ?? 0) + 180)
-            : null,
         persona: personaOf(conv),
         workspace: workspaceOf(conv),
         bot: botOf(conv),
         memories: store.memories(),
         webSearch: webOn,
-        firstTurn: false,
         resume: token,
+        runExtras: {
+          ..._runExtras(conv),
+          ...await _grantFor(conv, model, team: turn.team),
+        },
         onTurn: (eventId) => _watchTurn(turn, eventId),
         onStep: (step) => _localStep(turn, step),
-        onThreadIds: (ids) {
-          final thread = [...store.thread(conv.id), ...ids];
-          unawaited(store.setThread(conv.id, thread));
-        },
-        control: turn.control,
       );
-      _stopWatching(turn, keepDraft: true);
-      final reply = ChatMessage(
-        id: bytesToHex(randomBytes(8)),
-        role: ChatRole.bot,
-        content: res.reply,
-        thinking: res.thinking,
-        cost: res.cost,
-        pro: res.pro,
-        model: res.pro ? (model?['label'] as String?) : null,
-        modelKey: res.pro ? _maker(model)?.key : null,
-        modelMaker: res.pro ? _maker(model)?.slug : null,
-        modelMakerName: res.pro ? _maker(model)?.name : null,
-        calls: res.modelCalls,
-        checkpoint: res.checkpoint,
-        pendingTool: res.pendingTool,
-        sources: res.sources,
-        followUps: res.followUps,
-        serverRunCredits: res.serverRunCredits,
-        serverRuns: res.serverRuns,
-        team: Team.normalize(res.team),
-      );
-      if (turn.drafted) streamedReplies.add(reply.id);
-      turn.draft = null;
-      await _addTo(conv, reply);
-      await harvestArtifacts(reply, conv: conv);
-      _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
-      conv.messageCount += 1;
-      conv.creditsSpent += res.cost + res.serverRunCredits;
-      _touch(conv);
-      await store.saveConversations(conversations);
-      await store.recordUsage(res.cost);
-      _creditBalance(res.pro, res.balance,
-          anonKey: conv.anon, anonPk: conv.anonPk);
-      if (res.truncated) carry = res;
+      if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+      final res = await _deliver(turn,
+          timeout: run && approve
+              ? NymbotConfig.pmTimeout +
+                  Duration(seconds: ((p['timeoutSec'] as num?)?.toInt() ?? 0) + 180)
+              : null);
+      carry = await _land(turn, res);
     } on ChatFailure catch (e) {
-      _stopWatching(turn);
-      if (e.capExceeded) {
+      if (await _commonFailure(turn, e)) {
+        notifyListeners();
+      } else if (e.capExceeded) {
         await _putPending(conv, m, p);
         if (onCapPrompt == null) {
           await note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
-              conv: conv);
+              conv: conv, replyTo: _linkOf(turn));
         } else {
           final choice = await onCapPrompt!(
               SpendCaps.refusal(e.required, e.pro, team: e.team));
           resendWaived = choice == 'send';
         }
       } else {
-        await note(e.message, conv: conv);
+        await note(e.message, conv: conv, replyTo: _linkOf(turn));
       }
     } catch (_) {
       _stopWatching(turn);
-      await note(t('Could not carry on from there.'), conv: conv);
+      if (!turn.stopped) {
+        await note(t('Could not carry on from there.'), conv: conv, replyTo: _linkOf(turn));
+      }
     } finally {
-      turn.status = null;
+      if (turn.phase != 'claiming') {
+        _stopWatching(turn);
+        turn.status = null;
+      }
       notifyListeners();
     }
     if (carry != null && !turn.stopped) await _carryOn(turn, carry);
-    _endTurn(turn);
+    if (turn.phase != 'claiming') _endTurn(turn);
     if (resendWaived) {
       _capWaive = conv.id;
-      await _resumePending(m, approve: approve);
+      await _resumeRun(conv, m, p, approve: approve);
     }
   }
 
@@ -1939,15 +1999,17 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteSchedule(String id) async {
+    final held = schedules.where((s) => s.id == id).firstOrNull;
     await store.bury(id);
     schedules = schedules.where((s) => s.id != id).toList();
     await store.saveSchedules(schedules);
     notifyListeners();
+    if (held != null && held.serverSha != null) {
+      await api.scheduleDelete(identity.signer, id);
+    }
   }
 
-  /// Runs in the open app, and only when not already awaiting a reply.
   Future<void> runSchedule(String id) async {
-    if (sending) return;
     final at = schedules.indexWhere((s) => s.id == id);
     if (at == -1) return;
     final entry = schedules[at];
@@ -1967,14 +2029,17 @@ class AppController extends ChangeNotifier {
     entry.lastConvId = target.id;
     await store.saveSchedules(schedules);
     await note(t('Running “{name}”.',
-        {'name': entry.title.isEmpty ? t('Untitled') : entry.title}));
-    await send(entry.prompt, unattended: true);
+        {'name': entry.title.isEmpty ? t('Untitled') : entry.title}), conv: target);
+    await send(entry.prompt, target: target, bare: false, unattended: true, withAttachments: const []);
   }
 
-  List<Schedule> get dueSchedules => schedules.where((s) => s.due).toList();
+  List<Schedule> get dueSchedules => schedules
+      .where((s) =>
+          s.due &&
+          !(settings.serverSchedules && s.server == 'run' && s.serverSha != null))
+      .toList();
 
   Future<void> runDueSchedules() async {
-    if (sending) return;
     final due = dueSchedules;
     if (due.isEmpty) return;
     await runSchedule(due.first.id);
@@ -2056,6 +2121,186 @@ class AppController extends ChangeNotifier {
     await store.saveMessages(conv.id, messages);
     notifyListeners();
     if (failure != null) throw failure;
+  }
+
+  Future<int> rememberBranches(
+      Conversation conv, Map<String, dynamic> mark) async {
+    final jobs = jobsOf(mark);
+    if (jobs.isEmpty) return 0;
+    final scoped = reposOf(conv);
+    var n = 0;
+    for (final job in jobs) {
+      final repo = scoped.where((r) => r.repo == job['repo']).firstOrNull;
+      final sha = job['sha'];
+      if (repo == null || sha is! String || sha.isEmpty) continue;
+      repo.nymBranches = rememberBranch(repo.nymBranches, job);
+      n++;
+    }
+    if (n > 0) await store.saveRepos(repos);
+    return n;
+  }
+
+  Future<bool> rememberBranchStep(Map<String, dynamic> step,
+      {Conversation? conv}) async {
+    final found = branchStepsOf([step]);
+    if (found.isEmpty) return false;
+    final b = found.single;
+    final pool = conv == null ? repos : reposOf(conv);
+    final repo =
+        pool.where((r) => r.repo == b['repo'] && r.allowWrites).firstOrNull;
+    if (repo == null) return false;
+    final had =
+        repo.nymBranches.where((r) => r['branch'] == b['branch']).firstOrNull;
+    if (had != null && had['sha'] == b['sha']) return false;
+    repo.nymBranches = rememberBranch(repo.nymBranches, {
+      'branch': b['branch'],
+      'base': '${b['base']}'.isNotEmpty ? b['base'] : (had?['base'] ?? ''),
+      'sha': b['sha'],
+      'pull': had?['pull'],
+    }, now: (had?['at'] as num?)?.toInt());
+    await store.saveRepos(repos);
+    return true;
+  }
+
+  Future<void> noteBranchSteps(
+      ChatTurn turn, List<Map<String, dynamic>> raw) async {
+    final found = branchStepsOf(
+        raw.where((s) => s['kind'] == 'branch'));
+    if (found.isEmpty) return;
+    turn.branches = branchStepsOf([...turn.branches, ...found]);
+    for (final b in found) {
+      await rememberBranchStep(b, conv: turn.conv);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _patchJob(
+      ChatMessage m, String branch, Map<String, dynamic> patch) async {
+    final conv = current;
+    if (conv == null) return;
+    messages = messages.map((x) {
+      final mark = x.checkpoint;
+      if (x.id != m.id || mark == null) return x;
+      return x.copyWith(checkpoint: patchJob(mark, branch, patch));
+    }).toList();
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
+  }
+
+  Future<String> branchAction(
+      ChatMessage m, Map<String, dynamic> job, String op) async {
+    final conv = current;
+    final branch = '${job['branch'] ?? ''}';
+    final base = '${job['base'] ?? ''}';
+    if (conv == null) return '';
+    final repo = activeRepos.where((r) => r.repo == job['repo']).firstOrNull;
+    if (repo == null) return t('That repository is no longer connected.');
+    if (!repo.allowWrites) return t('Writes are off for that repository.');
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    Map<String, dynamic> data;
+    try {
+      data = await chat.branchOp(repo: repo, op: op, job: job, signer: signer);
+    } catch (e) {
+      return t('The forge could not be reached.');
+    }
+    if (data['conflict'] == true) {
+      await _patchJob(m, branch, {'conflict': true, 'pull': data['pull'] ?? job['pull']});
+      return t('This branch conflicts with {base}. Open the PR to resolve it, or ask Nymbot to update the branch.',
+          {'base': base});
+    }
+    if (data['gone'] == true && data['deleted'] != true) {
+      await _patchJob(m, branch, {'deleted': true});
+      repo.nymBranches = forgetBranches(repo.nymBranches, [branch]);
+      await store.saveRepos(repos);
+      return t('That branch is already gone.');
+    }
+    if (data['moved'] == true) {
+      return t('The branch has new commits since Nymbot made it, so it was left alone.');
+    }
+    if (data['unsupported'] == true) {
+      return op == 'update'
+          ? t('This forge cannot update the branch without rebasing. Open the PR to update it.')
+          : t('This forge has no pull request API Nymbot can use, so the branch was left as it is.');
+    }
+    if (data['error'] != null) return '${data['error']}';
+    switch (op) {
+      case 'pr':
+        await _patchJob(m, branch, {
+          'pull': data['pull'] ?? job['pull'],
+          if (data['merged'] == true) 'merged': true,
+        });
+        if (data['pull'] is Map) {
+          repo.nymBranches = [
+            for (final r in repo.nymBranches)
+              r['branch'] == branch ? {...r, 'pull': data['pull']} : r,
+          ];
+          await store.saveRepos(repos);
+        }
+        return '';
+      case 'merge':
+        await _patchJob(m, branch, {
+          'merged': true,
+          'conflict': false,
+          'pull': data['pull'] ?? job['pull'],
+        });
+        return t('Merged {branch} into {base}.', {'branch': branch, 'base': base});
+      case 'update':
+        final sha = data['sha'] is String ? data['sha'] as String : job['sha'];
+        await _patchJob(m, branch, {'conflict': false, 'sha': sha});
+        repo.nymBranches =
+            rememberBranch(repo.nymBranches, {...job, 'sha': sha});
+        await store.saveRepos(repos);
+        return data['upToDate'] == true
+            ? t('{branch} already has everything from {base}.',
+                {'branch': branch, 'base': base})
+            : t('Updated {branch} with a merge commit from {base}.',
+                {'branch': branch, 'base': base});
+      default:
+        await _patchJob(m, branch, {'deleted': true});
+        repo.nymBranches = forgetBranches(repo.nymBranches, [branch]);
+        await store.saveRepos(repos);
+        return t('Deleted {branch}.', {'branch': branch});
+    }
+  }
+
+  Future<String> cleanupRepoBranches(GitRepo repo) async {
+    if (!repo.allowWrites || repo.token.isEmpty || repo.nymBranches.isEmpty) {
+      return t('No Nymbot branches were ready to clean up.');
+    }
+    try {
+      final data =
+          await chat.cleanupBranches(repo: repo, signer: identity.signer);
+      final done = [
+        ...(data['deleted'] as List? ?? const []),
+        ...(data['gone'] as List? ?? const []),
+      ];
+      if (done.isNotEmpty) {
+        repo.nymBranches = forgetBranches(repo.nymBranches, done);
+        await store.saveRepos(repos);
+        notifyListeners();
+      }
+      return done.isEmpty
+          ? t('No Nymbot branches were ready to clean up.')
+          : t('Cleaned up {n} Nymbot branches.', {'n': done.length});
+    } catch (e) {
+      return e is ChatFailure ? e.message : t('The forge could not be reached.');
+    }
+  }
+
+  final Map<String, int> _cleanedAt = {};
+
+  void cleanupSoon(Conversation conv) {
+    if (conv.anon) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final repo in reposOf(conv)) {
+      if (!repo.allowWrites || repo.nymBranches.isEmpty) continue;
+      if (now - (_cleanedAt[repo.id] ?? 0) < branchCleanupEvery.inMilliseconds) {
+        continue;
+      }
+      _cleanedAt[repo.id] = now;
+      unawaited(cleanupRepoBranches(repo));
+    }
   }
 
   Future<void> discardStaged(ChatMessage m) async {
@@ -2417,8 +2662,10 @@ class AppController extends ChangeNotifier {
     unawaited(sync.run().then((round) {
       if (round.isOk || round.state == 'blocked') notifyListeners();
     }));
-    _syncTimer = Timer.periodic(
-        const Duration(minutes: 5), (_) => unawaited(sync.run()));
+    _syncTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      unawaited(sync.run());
+      if (settings.serverSchedules) unawaited(refreshServerSchedules());
+    });
     unawaited(refreshNotices());
     unawaited(refreshRunner());
     _noticeTimer = Timer.periodic(
@@ -2445,6 +2692,13 @@ class AppController extends ChangeNotifier {
       await refreshBalance();
       await resumeInvoice();
       await anon.flush(identity: identity.signer);
+      unawaited(resumeClaims());
+      unawaited(refreshRuns());
+      unawaited(syncChecks());
+      _loadBackground();
+      if (backgroundRuns.isNotEmpty) unawaited(pollBackground());
+      if (settings.serverSchedules) unawaited(refreshServerSchedules());
+      if (conversations.any((c) => pendingIn(c).isNotEmpty)) _watchPending();
       startScheduler();
       await runDueSchedules();
       await autoTopUp();
@@ -2455,7 +2709,10 @@ class AppController extends ChangeNotifier {
   }
 
   void _afterSync(List<String> touched) {
-    if (touched.contains('settings')) _loadSettings();
+    if (touched.contains('settings')) {
+      _loadSettings();
+      unawaited(syncChecks());
+    }
     if (touched.contains('repos')) unawaited(_loadRepos());
     if (touched.contains('connectors')) unawaited(_loadConnectors());
     if (touched.contains('favouriteModels')) {
@@ -2487,7 +2744,20 @@ class AppController extends ChangeNotifier {
   }
 
   @override
+  void notifyListeners() {
+    if (_gone) return;
+    super.notifyListeners();
+  }
+
+  @override
   void dispose() {
+    _gone = true;
+    _pendingTimer?.cancel();
+    _runsTimer?.cancel();
+    _bgTimer?.cancel();
+    for (final turn in turns.values) {
+      turn.control.cancel();
+    }
     _stopSupport();
     replyNotify.detach();
     _bootWork?.cancel();
@@ -2814,6 +3084,19 @@ class AppController extends ChangeNotifier {
     return branchFrom(messages.sublist(0, at < 0 ? 0 : at));
   }
 
+  Future<Conversation> forkForEdit(ChatMessage message) async {
+    final parent = current!;
+    final thread = parent.rootId;
+    final copy = await branchBefore(message);
+    final before = message.wire;
+    if (before != null && before.isNotEmpty) {
+      copy.forkOf = {'thread': thread, 'before': before};
+      copy.seed = null;
+      await store.saveConversations(conversations);
+    }
+    return copy;
+  }
+
   /// A fresh root id resets the model's context, since the worker scopes history to it.
   ChatSnapshot _snapshot(Conversation conv) => (
         conv: conv,
@@ -2867,21 +3150,38 @@ class AppController extends ChangeNotifier {
 
   Future<void> _add(ChatMessage m) => _addTo(current!, m);
 
-  Future<void> _addTo(Conversation conv, ChatMessage m) async {
-    if (conv.id == current?.id) {
-      messages = [...messages, m];
-      await store.saveMessages(conv.id, messages);
-    } else {
-      await store.saveMessages(conv.id, [...store.messages(conv.id), m]);
+  static int placeAt(List<ChatMessage> list, String? link) {
+    if (link == null || link.isEmpty) return list.length;
+    final ask = list.lastIndexWhere((x) => x.role == ChatRole.self && x.wire == link);
+    if (ask == -1) {
+      final last = list.lastIndexWhere((x) => x.replyTo == link);
+      return last == -1 ? list.length : last + 1;
     }
+    var at = ask + 1;
+    while (at < list.length &&
+        list[at].role != ChatRole.self &&
+        list[at].replyTo == link) {
+      at++;
+    }
+    return at;
+  }
+
+  Future<void> _addTo(Conversation conv, ChatMessage m) async {
+    if (m.checkpoint != null) await rememberBranches(conv, m.checkpoint!);
+    final list = _messagesOf(conv);
+    final at = placeAt(list, m.replyTo);
+    final next = [...list]..insert(at, m);
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
     notifyListeners();
   }
 
-  Future<void> note(String text, {Conversation? conv}) =>
+  Future<void> note(String text, {Conversation? conv, String? replyTo}) =>
       _addTo(conv ?? current!, ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.note,
         content: text,
+        replyTo: replyTo,
       ));
 
   Future<void> rate(ChatMessage m, int rating) async {
@@ -3037,61 +3337,1813 @@ class AppController extends ChangeNotifier {
 
   // Sending
 
-  void stop({Conversation? target}) {
-    final conv = target ?? current;
-    if (conv == null) return;
-    // Also cancels continuation legs and anything queued behind the aborted run.
-    _queues.remove(conv.id);
-    _queueEdits.remove(conv.id);
-    final turn = turns.remove(conv.id);
-    if (turn != null) {
-      turn.stopped = true;
-      turn.control.cancel();
-      _stopWatching(turn);
-      turn.status = null;
+  int get runLimit {
+    final n = settings.maxRuns;
+    return n >= 1 && n <= 10 ? n : 3;
+  }
+
+  Future<void> setMaxRuns(int n) async {
+    settings.maxRuns = n.clamp(1, 10);
+    await store.saveSettings(settings);
+    notifyListeners();
+    _wakeSlots();
+  }
+
+  Map<String, String> policyOf(Conversation? conv) {
+    final own = conv?.policy ?? const <String, String>{};
+    return {
+      'readOnlyTools': own['readOnlyTools'] ?? settings.readOnlyTools,
+      'serverRuns': own['serverRuns'] ?? settings.serverRunPolicy,
+    };
+  }
+
+  Future<void> setPolicy({String? readOnlyTools, String? serverRuns}) async {
+    if (readOnlyTools == 'allow' || readOnlyTools == 'ask') {
+      settings.readOnlyTools = readOnlyTools!;
+    }
+    if (serverRuns == 'allow' || serverRuns == 'ask') {
+      settings.serverRunPolicy = serverRuns!;
+    }
+    await store.saveSettings(settings);
+    notifyListeners();
+  }
+
+  Future<void> setChatPolicy(Conversation conv,
+      {String? readOnlyTools, String? serverRuns}) async {
+    final next = {...?conv.policy};
+    void put(String key, String? value) {
+      if (value == 'allow' || value == 'ask') next[key] = value!;
+      if (value == 'default') next.remove(key);
+    }
+
+    put('readOnlyTools', readOnlyTools);
+    put('serverRuns', serverRuns);
+    conv.policy = next.isEmpty ? null : next;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
+  Map<String, dynamic> _runExtras(Conversation conv, {String? kind}) => {
+        if (settings.maxRuns > 0) 'maxRuns': settings.maxRuns,
+        'policy': policyOf(conv),
+        if (kind != null) 'runKind': kind,
+      };
+
+  static String _labelOf(String text) {
+    final flat = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return flat.length > 80 ? flat.substring(0, 80) : flat;
+  }
+
+  final Set<String> _starting = {};
+  final List<Completer<void>> _endWaiters = [];
+  final Map<String, ChatTurn> _parked = {};
+  Timer? _pendingTimer;
+  bool _flushing = false;
+
+  int get _slotsUsed => turns.values.where((t) => t.holdsSlot).length;
+
+  Future<void> _takeSlot(ChatTurn turn, {bool force = false}) async {
+    if (turn.holdsSlot) return;
+    bool ahead() => turns.values.any((o) =>
+        !identical(o, turn) &&
+        o.slotWait != null &&
+        o.began.isBefore(turn.began));
+    while (!force && !turn.stopped && (_slotsUsed >= runLimit || ahead())) {
+      turn.phase = 'slot';
+      turn.status = t('Waiting for a free slot');
+      notifyListeners();
+      final wait = turn.slotWait = Completer<void>();
+      await wait.future;
+    }
+    turn.slotWait = null;
+    if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+    turn.holdsSlot = true;
+    turn.phase = 'running';
+    if (turn.status == t('Waiting for a free slot')) turn.status = null;
+    notifyListeners();
+  }
+
+  void _wakeSlots() {
+    final waiting = turns.values.where((t) => t.slotWait != null).toList()
+      ..sort((a, b) => a.began.compareTo(b.began));
+    var free = runLimit - _slotsUsed;
+    for (final w in waiting) {
+      if (free-- <= 0) break;
+      final gate = w.slotWait;
+      w.slotWait = null;
+      if (gate != null && !gate.isCompleted) gate.complete();
+    }
+  }
+
+  void _dropRun(ChatTurn turn) {
+    turns.removeWhere((_, v) => identical(v, turn));
+    if (turn.holdsSlot) {
+      turn.holdsSlot = false;
+      _wakeSlots();
     }
     notifyListeners();
   }
 
+  void stop({Conversation? target}) {
+    final conv = target ?? current;
+    if (conv == null) return;
+    for (final turn in runsIn(conv)) {
+      unawaited(stopRun(turn));
+    }
+    notifyListeners();
+  }
+
+  Future<EventSigner> _signerOf(Conversation conv) async =>
+      conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+
+  Future<void> stopRun(ChatTurn turn) async {
+    if (turn.stopped) return;
+    turn.stopped = true;
+    final told = turn.sent && turn.runId.isNotEmpty;
+    turn.control.cancel();
+    final gate = turn.slotWait;
+    turn.slotWait = null;
+    if (gate != null && !gate.isCompleted) gate.complete();
+    _stopWatching(turn);
+    turn.status = null;
+    turn.draft = null;
+    unawaited(_dropClaim(turn));
+    if (turn.askId != null) {
+      await note(t('Stopped.'), conv: turn.conv, replyTo: _linkOf(turn));
+    }
+    _endTurn(turn);
+    if (!told) return;
+    try {
+      final signer = turn.prepared?.signer ?? await _signerOf(turn.conv);
+      final res = await api.cancelRun(signer, turn.runId);
+      if (res.status == 200) unawaited(refreshBalance());
+    } catch (_) {}
+  }
+
+  String? _linkOf(ChatTurn turn) {
+    final id = turn.runId;
+    return id.isEmpty ? null : id;
+  }
+
   void _endTurn(ChatTurn turn) {
-    if (turns[turn.conv.id] == turn) turns.remove(turn.conv.id);
+    final ended = turns.values.any((v) => identical(v, turn));
+    turns.removeWhere((_, v) => identical(v, turn));
+    if (turn.holdsSlot) turn.holdsSlot = false;
+    _wakeSlots();
+    if (ended) {
+      final waiters = [..._endWaiters];
+      _endWaiters.clear();
+      for (final w in waiters) {
+        if (!w.isCompleted) w.complete();
+      }
+    }
     unawaited(_keepTasks(turn));
-    final said = _messagesOf(turn.conv).lastWhere(
-        (m) => m.role != ChatRole.note,
-        orElse: () => ChatMessage(id: '', role: ChatRole.note, content: ''));
-    unawaited(replyNotify.settled(turn.conv.id,
-        replied: said.role == ChatRole.bot));
+    if (ended) {
+      final link = _linkOf(turn);
+      final list = _messagesOf(turn.conv);
+      final replied = link == null
+          ? list.lastWhere((m) => m.role != ChatRole.note,
+                  orElse: () => ChatMessage(id: '', role: ChatRole.note, content: ''))
+              .role ==
+              ChatRole.bot
+          : list.any((m) => m.role == ChatRole.bot && m.replyTo == link);
+      final carried = turn.outcome == 'background';
+      unawaited(replyNotify.settled(turn.conv.id,
+          replied: replied,
+          run: turn.key,
+          asked: link,
+          stopped: (turn.stopped && turn.outcome != 'stopped') || carried,
+          state: turn.outcome ?? (replied ? 'done' : 'failed')));
+      if (!carried && link != null && _checksWanted) {
+        unawaited(DoneSince.markSeen(store, [link]));
+      }
+    }
     turn.status = null;
     notifyListeners();
   }
 
   LiveTasks? liveTasks(Conversation? conv) {
     final turn = turnOf(conv);
-    if (turn == null) return null;
-    return (
-      steps: turn.log,
-      team: turn.team,
-      research: turn.research != null,
-      label: turn.status ?? t('Nymbot is thinking'),
-    );
+    return turn == null ? null : liveTasksOf(turn);
   }
+
+  LiveTasks liveTasksOf(ChatTurn turn) => (
+        steps: turn.log,
+        team: turn.team,
+        research: turn.research != null,
+        label: turn.status ?? turn.progress ?? t('Nymbot is thinking'),
+      );
 
   Future<void> _keepTasks(ChatTurn turn) async {
     if (turn.kept) return;
     turn.kept = true;
-    if (turn.log.isEmpty && turn.team == null && turn.research == null) return;
+    if (turn.log.isEmpty &&
+        turn.team == null &&
+        turn.research == null &&
+        turn.plan.isEmpty) {
+      return;
+    }
     final conv = turn.conv;
     final list = _messagesOf(conv);
-    final hit = Tasks.target(list, turn.began);
+    final hit = turn.askId == null
+        ? Tasks.target(list, turn.began)
+        : Tasks.targetFor(list, turn.askId!, _linkOf(turn));
     if (hit == null) return;
     final rec = Tasks.record(
         (steps: turn.log, team: turn.team, research: turn.research != null, label: ''),
-        turn.stopped ? 'stopped' : (hit['bot'] == true ? 'done' : 'failed'));
+        turn.stopped ? 'stopped' : (hit['bot'] == true ? 'done' : 'failed'),
+        plan: turn.plan);
     if (rec == null) return;
-    final next = [for (final m in list) m.id == hit['id'] ? m.copyWith(tasks: rec) : m];
+    final now = _messagesOf(conv);
+    final next = [for (final m in now) m.id == hit['id'] ? m.copyWith(tasks: rec) : m];
     if (conv.id == current?.id) messages = next;
     notifyListeners();
     await store.saveMessages(conv.id, next);
+  }
+
+  void Function(List<String> ids) _threadIdsOf(Conversation conv) => (ids) {
+        final thread = [...store.thread(conv.id), ...ids];
+        unawaited(store.setThread(conv.id, thread));
+      };
+
+  Future<TurnResult> _deliver(ChatTurn turn, {Duration? timeout}) {
+    turn.sent = true;
+    turn.phase = 'running';
+    notifyListeners();
+    return chat.deliver(turn.prepared!,
+        timeout: timeout,
+        control: turn.control,
+        onThreadIds: _threadIdsOf(turn.conv));
+  }
+
+  ChatMessage _replyOf(ChatTurn turn, TurnResult res) {
+    final model = turn.model;
+    return ChatMessage(
+      id: bytesToHex(randomBytes(8)),
+      role: ChatRole.bot,
+      content: res.reply,
+      thinking: res.thinking,
+      cost: res.cost,
+      pro: res.pro,
+      model: res.pro ? (model?['label'] as String?) : null,
+      modelKey: res.pro ? _maker(model)?.key : null,
+      modelMaker: res.pro ? _maker(model)?.slug : null,
+      modelMakerName: res.pro ? _maker(model)?.name : null,
+      calls: res.modelCalls,
+      checkpoint: res.checkpoint,
+      pendingTool: res.pendingTool,
+      staged: res.staged,
+      repos: res.repos.length > 1 ? res.repos : const [],
+      sources: res.sources,
+      followUps: res.followUps,
+      serverRunCredits: res.serverRunCredits,
+      serverRuns: res.serverRuns,
+      team: Team.normalize(res.team),
+      replyTo: _linkOf(turn),
+    );
+  }
+
+  String _outcomeOf(TurnResult res) {
+    if (res.pendingTool != null) return 'approval';
+    final token = res.resumeToken;
+    return token != null && token.isNotEmpty ? 'paused' : 'done';
+  }
+
+  Future<void> _count(Conversation conv, TurnResult res) async {
+    _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
+    conv.messageCount += 1;
+    conv.creditsSpent += res.cost + res.serverRunCredits;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    await store.recordUsage(res.cost);
+    _creditBalance(res.pro, res.balance,
+        anonKey: conv.anon, anonPk: conv.anonPk);
+  }
+
+  Future<TurnResult?> _land(ChatTurn turn, TurnResult res) async {
+    final conv = turn.conv;
+    final prepared = turn.prepared;
+    if (prepared != null && prepared.plan.isNotEmpty) turn.plan = prepared.plan;
+    _stopWatching(turn, keepDraft: true);
+    if (res.checkpoint != null) await rememberBranches(conv, res.checkpoint!);
+    if (turn.stopped || (prepared?.stopped ?? false)) {
+      turn.draft = null;
+      if (!turn.stopped) {
+        turn.stopped = true;
+        turn.outcome = 'stopped';
+        await note(t('Stopped.'), conv: conv, replyTo: _linkOf(turn));
+      }
+      await _count(conv, res);
+      return null;
+    }
+    final reply = _replyOf(turn, res);
+    turn.outcome = _outcomeOf(res);
+    if (turn.drafted) streamedReplies.add(reply.id);
+    turn.draft = null;
+    await _addTo(conv, reply);
+    await harvestArtifacts(reply, conv: conv);
+    if (conv.seed != null) conv.seed = null;
+    await _count(conv, res);
+    if (res.free != null) {
+      // Counted on the device too, so a fresh key does not reset the day.
+      free = res.free;
+      await store.freeTier.spent();
+      await store.freeTier.observe(res.free!.used);
+    }
+    if (conv.anon && anonStandardBalance == null) {
+      unawaited(refreshBalance());
+    }
+    final handed = prepared?.background;
+    if (handed != null) {
+      turn.outcome = 'background';
+      await _trackBackground(turn, handed);
+    }
+    if (res.lowBalance) {
+      // In an anonymous chat, a low balance usually means the throwaway key ran dry.
+      final topped = conv.anon ? await autoTopUp(pk: conv.anonPk) : null;
+      if (topped != null) {
+        await note(describeTopUp(topped), conv: conv, replyTo: _linkOf(turn));
+      } else {
+        await note(
+            res.pro
+                ? t('Pro credits running low: {n} left. Tap Buy to top up.',
+                    {'n': creditFigure(res.balance)})
+                : t('Credits running low: {n} left. Tap Buy to top up.',
+                    {'n': creditFigure(res.balance)}),
+            conv: conv,
+            replyTo: _linkOf(turn));
+      }
+    }
+    if (handed != null) return null;
+    return res.truncated ? res : null;
+  }
+
+  Future<bool> _commonFailure(ChatTurn turn, ChatFailure e,
+      {ChatMessage? mine}) async {
+    final conv = turn.conv;
+    _stopWatching(turn);
+    if (e.checkpoint != null) await rememberBranches(conv, e.checkpoint!);
+    if (e.cancelled || turn.stopped) return true;
+    if (e.runCap != null) {
+      await _runCapped(turn, e);
+      return true;
+    }
+    if (e.lost && e.offline && mine != null && turn.prepared != null) {
+      await _parkOffline(turn, mine);
+      return true;
+    }
+    if (e.pending || e.lost) {
+      _startClaim(turn);
+      return true;
+    }
+    return conv.id.isEmpty;
+  }
+
+  Future<void> _placeError(ChatTurn turn, String text,
+      {String? retry, String? retryEvent}) =>
+      _addTo(
+          turn.conv,
+          ChatMessage(
+            id: bytesToHex(randomBytes(8)),
+            role: ChatRole.error,
+            content: text,
+            retry: retry,
+            retryEvent: retryEvent,
+            replyTo: _linkOf(turn),
+          ));
+
+  Future<void> _runAsk(ChatTurn turn, ChatMessage mine,
+      {required String body,
+      required String typed,
+      required bool bare,
+      required bool unattended,
+      required bool composing,
+      required List<Attachment> sent,
+      required String? quoted,
+      Map<String, dynamic>? asked,
+      Object? research,
+      Map<String, dynamic>? team,
+      double? maxCost}) async {
+    final conv = turn.conv;
+    turn.research = research;
+    turn.team = team;
+    turn.kind = team != null
+        ? 'team'
+        : research != null
+            ? 'research'
+            : (reposOf(conv).isNotEmpty ? 'repo' : 'chat');
+    turn.control.onStatus = (s) {
+      turn.status = s;
+      notifyListeners();
+    };
+    final model = asked ?? modelOf(conv);
+    turn.model = model;
+    TurnResult? carry;
+    var resendWaived = false;
+    try {
+      await _takeSlot(turn);
+      final fork = conv.forkOf;
+      if (!conv.anon) cleanupSoon(conv);
+      final prepared = await chat.prepare(
+        conv: conv,
+        text: body,
+        maxCost: maxCost,
+        proModel: asked ?? proModelForTurnOf(conv),
+        repos: reposOf(conv),
+        connectors: connectorsOf(conv),
+        serverRuns: serverRunsOf(conv),
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
+        memories: store.memories(),
+        attachments: sent,
+        quote: quoted,
+        webSearch: webOn,
+        research: research,
+        team: team,
+        msgId: turn.msgId,
+        runExtras: {
+          ..._runExtras(conv),
+          if (fork != null) 'forkOf': fork,
+          ...await _grantFor(conv, asked ?? proModelForTurnOf(conv),
+              research: research, team: team),
+        },
+        onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
+      );
+      turn.prepared = prepared;
+      if (fork != null && conv.forkOf == fork) {
+        conv.forkOf = null;
+        await store.saveConversations(conversations);
+      }
+      if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+      final res = await _deliver(turn);
+      carry = await _land(turn, res);
+    } on ChatFailure catch (e) {
+      if (await _commonFailure(turn, e, mine: mine)) {
+        notifyListeners();
+      } else if (e.capExceeded) {
+        await _dropMessage(conv, mine);
+        if (unattended || onCapPrompt == null) {
+          await note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
+              conv: conv);
+        } else {
+          final choice = await onCapPrompt!(
+              SpendCaps.refusal(e.required, e.pro, team: e.team));
+          if (choice == 'send') {
+            resendWaived = true;
+          } else if (composing) {
+            _capReturned = typed;
+          }
+          if (composing) {
+            attachments = sent;
+            quote = quoted;
+          }
+        }
+      } else if (e.team && !e.noCredits) {
+        await _dropMessage(conv, mine);
+        await note(Team.refusal(e), conv: conv);
+        if (composing) {
+          _capReturned = typed;
+          attachments = sent;
+          quote = quoted;
+        }
+      } else if (e.noCredits) {
+        _creditBalance(e.pro, e.balance,
+            anonKey: conv.anon, anonPk: conv.anonPk);
+        // Trust the worker's count over the device's, which can only lag.
+        if (e.free != null) {
+          free = e.free;
+          await store.freeTier.observe(e.free!.used);
+        }
+        if (e.free != null && !e.pro) {
+          // The allowance ran out, not a balance, so there is nothing to top up.
+          await note(freeSpentMessage(), conv: conv, replyTo: _linkOf(turn));
+        } else {
+          final topped = conv.anon
+              ? await autoTopUp(force: true, pk: conv.anonPk)
+              : null;
+          if (topped != null) {
+            await note('${describeTopUp(topped)} '
+                '${t('Send that again when you are ready.')}', conv: conv, replyTo: _linkOf(turn));
+          } else {
+            await note(e.team ? Team.refusal(e) : e.message,
+                conv: conv, replyTo: _linkOf(turn));
+          }
+        }
+      } else {
+        await _placeError(turn, e.message,
+            retry: typed, retryEvent: turn.sent ? turn.prepared?.eventId : null);
+      }
+    } catch (e) {
+      if (!turn.stopped) {
+        await _placeError(turn, t('Something went wrong sending that message.'),
+            retry: typed);
+      }
+    } finally {
+      if (turn.phase != 'claiming') _stopWatching(turn);
+      if (turn.phase != 'claiming') turn.status = null;
+      notifyListeners();
+    }
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry, asked: asked);
+    if (turn.phase != 'claiming') _endTurn(turn);
+    if (resendWaived) {
+      _capWaive = conv.id;
+      await send(typed, target: conv, bare: bare, withAttachments: sent, withQuote: quoted);
+    }
+  }
+
+  Future<bool> send(String text,
+      {Conversation? target,
+      bool bare = false,
+      bool unattended = false,
+      List<Attachment>? withAttachments,
+      String? withQuote}) async {
+    final conv = target ?? current;
+    if (conv == null || text.trim().isEmpty) return false;
+    if (conv.support) {
+      return await sendSupport(text) == ContactOutcome.sent;
+    }
+    final typed = text.trim();
+    final guard = '${conv.id}\n$typed';
+    if (_starting.contains(guard)) return false;
+    _starting.add(guard);
+    final composing =
+        !bare && withAttachments == null && conv.id == current?.id;
+    final sent = withAttachments ?? (composing ? [...attachments] : <Attachment>[]);
+    final quoted = withQuote ?? (composing ? quote : null);
+    if (composing) {
+      attachments = [];
+      quote = null;
+    }
+    final turn = ChatTurn(conv,
+        askId: bytesToHex(randomBytes(8)),
+        msgId: bytesToHex(randomBytes(32)),
+        label: _labelOf(typed));
+    turn.unattended = unattended;
+    turn.phase = 'starting';
+    turns[turn.key] = turn;
+    notifyListeners();
+    var placed = false;
+    void release() {
+      if (placed) return;
+      placed = true;
+      _starting.remove(guard);
+    }
+
+    bool bail() {
+      release();
+      _dropRun(turn);
+      if (composing && attachments.isEmpty && quote == null) {
+        attachments = sent;
+        quote = quoted;
+      }
+      return false;
+    }
+
+    try {
+      MentionResult? mention;
+      final head = bare ? null : Mentions.parse(typed);
+      if (head != null) {
+        final catalog = await ensureMentionCatalog();
+        mention = catalog == null
+            ? MentionResult(unknown: head.name, text: typed)
+            : Mentions.apply(typed, catalog);
+        if (mention != null && mention.resolved && mention.text.isEmpty) {
+          await note(t('Say what to ask {name} after the mention.',
+              {'name': mention.model!['label']}), conv: conv);
+          if (conv.id == current?.id) _capReturned = typed;
+          return bail();
+        }
+        final wallet = conv.anon ? anonProBalance : proBalance;
+        if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
+          await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
+              {'name': mention.model!['key']}), conv: conv);
+          if (conv.id == current?.id) _capReturned = typed;
+          return bail();
+        }
+      }
+      if (api.offline && !bare) {
+        await _addTo(conv, ChatMessage(
+          id: turn.askId!,
+          role: ChatRole.self,
+          content: typed,
+          attachments: sent,
+          quote: quoted,
+          pending: 'offline',
+        ));
+        release();
+        _dropRun(turn);
+        await _titleFrom(conv, typed);
+        _watchPending();
+        return true;
+      }
+      // Device-side free-tier count across keys; never reported to the worker (see [freeAllows]).
+      final asked = mention != null && mention.resolved ? Mentions.pinned(mention.model!) : null;
+      if (asked == null && !freeAllows) {
+        await note(freeSpentMessage(), conv: conv);
+        return bail();
+      }
+      final research = bare
+          ? null
+          : Research.claim(asked != null ? mention!.text : typed,
+              armed: researchNext,
+              model: asked ?? modelOf(conv),
+              pricing: catalogPricing);
+      if (research != null && researchNext) {
+        researchNext = false;
+        notifyListeners();
+      }
+      if (research?.blocked != null) {
+        await note(research!.blocked!, conv: conv);
+        return bail();
+      }
+      final team = bare
+          ? null
+          : Team.claim(conv.team,
+              lead: asked ?? teamLeadOf(conv),
+              research: research != null,
+              repos: reposOf(conv).isNotEmpty);
+      if (!bare &&
+          mentionCatalog == null &&
+          mediaModelOf(conv)?['resolution'] != null) {
+        await ensureMentionCatalog();
+      }
+      final body = research != null
+          ? research.question
+          : asked != null
+              ? mention!.text
+              : (bare ? typed : withMediaModel(typed, conv: conv));
+
+      // Pictures must be uploaded first, since the link is what travels.
+      if (sent.any((a) => a.uploads && a.url == null)) {
+        final stranded = await settleAttachments(sent);
+        if (stranded.isNotEmpty) {
+          await note(
+              stranded.length == 1
+                  ? t('{name} could not be uploaded, so Nymbot will not be able to see it.',
+                      {'name': stranded.first.name})
+                  : t('{names} could not be uploaded, so Nymbot will not be able to see them.',
+                      {'names': stranded.map((a) => a.name).join(', ')}),
+              conv: conv);
+        }
+      }
+
+      double? maxCost;
+      if (SpendCaps.any(conv, botOf(conv))) {
+        final waived = _capWaive == conv.id;
+        _capWaive = null;
+        var est = _capEstimate(conv, body, model: asked);
+        if (!waived) {
+          if (team != null) {
+            final priced = await teamEstimate(conv,
+                workers: team['workers'] as int,
+                model: team['model'] as String,
+                mode: team['mode'] as String,
+                lead: asked);
+            if (priced.error == null) {
+              est = (
+                tier: 'pro',
+                low: priced.typical,
+                high: priced.max.toDouble(),
+                max: priced.max.toDouble(),
+                metered: true,
+                unpriced: false
+              );
+            }
+          }
+          final gate = await _capGate(conv, est.tier == 'pro', est.max,
+              unattended: unattended);
+          if (gate != 'send' && gate != 'ok') {
+            if (composing) _capReturned = typed;
+            return bail();
+          }
+          if (gate == 'ok') {
+            maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
+                pro: est.tier == 'pro');
+          }
+        }
+      }
+
+      if (conv.anon) {
+        final had = conv.anonPk;
+        final est = _capEstimate(conv, body, model: asked);
+        final funded = await fundAnonTurn(conv,
+            need: est.max, tier: est.tier == 'pro' ? 'pro' : 'standard');
+        if (had != conv.anonPk) await store.saveConversations(conversations);
+        if (funded != null) await note(describeTopUp(funded), conv: conv);
+      }
+
+      final selfId = turn.askId!;
+      final docsUsed = DocLibrary.instance.usageFor(conv.id, body, sent);
+      final mine = ChatMessage(
+        id: selfId,
+        role: ChatRole.self,
+        content: typed,
+        attachments: sent,
+        quote: quoted,
+        wire: turn.msgId,
+      );
+      await _addTo(conv, mine);
+      release();
+      turn.phase = 'running';
+      unawaited(DocLibrary.instance.recordUsage(selfId, docsUsed));
+      unawaited(DocLibrary.instance.keep(conv.id, sent));
+      await _titleFrom(conv, typed);
+      if (mention?.unknown != null) {
+        await note(t('No model called @{name}, so that went as an ordinary message. Type @ to pick one.',
+            {'name': mention!.unknown}), conv: conv, replyTo: turn.msgId);
+      }
+      await _runAsk(turn, mine,
+          body: body,
+          typed: typed,
+          bare: bare,
+          unattended: unattended,
+          composing: composing,
+          sent: sent,
+          quoted: quoted,
+          asked: asked,
+          research: research?.payload,
+          team: team,
+          maxCost: maxCost);
+      return true;
+    } catch (e) {
+      if (!placed) return bail();
+      rethrow;
+    } finally {
+      release();
+    }
+  }
+
+  Future<void> _titleFrom(Conversation conv, String typed) async {
+    if (conv.title.isNotEmpty) return;
+    conv.title = ChatEngine.titleFor(typed);
+    _touch(conv);
+    await store.saveConversations(conversations);
+  }
+
+  // Late replies
+
+  static const _claimsKey = 'pending_claims';
+
+  List<Map<String, dynamic>> _storedClaims() {
+    final raw = store.getString(_claimsKey);
+    if (raw == null) return [];
+    try {
+      final list = jsonDecode(raw);
+      return list is List ? list.whereType<Map<String, dynamic>>().toList() : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _keepClaim(ChatTurn turn) async {
+    final p = turn.prepared;
+    if (p == null || turn.conv.ephemeral) return;
+    final entry = {
+      'conv': turn.conv.id,
+      'ask': turn.askId,
+      'wire': turn.msgId,
+      'label': turn.label,
+      'extra': p.extra,
+      'msgId': p.msgId,
+      'anonPk': p.anonPk,
+      'fresh': p.fresh,
+      'at': (turn.since ?? turn.began).millisecondsSinceEpoch,
+    };
+    final text = jsonEncode(entry);
+    if (text.length > 256 * 1024) return;
+    final list = _storedClaims()..removeWhere((c) => c['extra']?['eventId'] == p.eventId);
+    await store.setString(_claimsKey, jsonEncode([...list, entry]));
+  }
+
+  Future<void> _dropClaim(ChatTurn turn) async {
+    final id = turn.prepared?.eventId;
+    if (id == null) return;
+    final list = _storedClaims();
+    final kept = list.where((c) => c['extra']?['eventId'] != id).toList();
+    if (kept.length != list.length) {
+      await store.setString(_claimsKey, jsonEncode(kept));
+    }
+  }
+
+  void _startClaim(ChatTurn turn) {
+    if (turn.prepared == null) return;
+    turn.phase = 'claiming';
+    turn.status = t('Still working on that one…');
+    notifyListeners();
+    unawaited(_keepClaim(turn));
+    unawaited(_claimLoop(turn));
+  }
+
+  Future<void> _claimLoop(ChatTurn turn) async {
+    final prepared = turn.prepared!;
+    final until = (turn.since ?? turn.began).add(claimFor);
+    var i = 0;
+    var gaveUp = false;
+    while (!turn.stopped && !_gone) {
+      if (DateTime.now().isAfter(until)) {
+        gaveUp = true;
+        break;
+      }
+      await Future<void>.delayed(
+          claimBackoff[math.min(i++, claimBackoff.length - 1)]);
+      if (turn.stopped || _gone) return;
+      try {
+        final got = await chat.claim(prepared,
+            onThreadIds: _threadIdsOf(turn.conv));
+        if (turn.stopped || _gone) return;
+        final result = got.result;
+        if (result != null) {
+          turn.phase = 'running';
+          turn.status = null;
+          final carry = await _land(turn, result);
+          await _dropClaim(turn);
+          if (carry != null && !turn.stopped) {
+            await _carryOn(turn, carry, asked: turn.model);
+          }
+          _endTurn(turn);
+          return;
+        }
+        if (got.unknown) {
+          gaveUp = true;
+          break;
+        }
+      } on ChatFailure catch (e) {
+        turn.phase = 'running';
+        turn.status = null;
+        await _dropClaim(turn);
+        if (!await _commonFailure(turn, e)) {
+          await _placeError(turn, e.message, retryEvent: prepared.eventId);
+        }
+        if (turn.phase != 'claiming') _endTurn(turn);
+        return;
+      } catch (_) {}
+    }
+    if (turn.stopped || _gone || !gaveUp) return;
+    turn.phase = 'running';
+    turn.status = null;
+    await _dropClaim(turn);
+    _parked[prepared.eventId] = turn;
+    await _placeError(turn,
+        t('Nymbot could not finish that one. Try again; it will not be charged twice.'),
+        retryEvent: prepared.eventId);
+    _endTurn(turn);
+  }
+
+  bool _gone = false;
+
+  Future<void> resumeClaims() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final list = _storedClaims();
+    final fresh = list
+        .where((c) => now - ((c['at'] as num?)?.toInt() ?? 0) < claimFor.inMilliseconds)
+        .toList();
+    if (fresh.length != list.length) {
+      await store.setString(_claimsKey, jsonEncode(fresh));
+    }
+    for (final c in fresh) {
+      final conv = _conversationById('${c['conv']}');
+      final extra = c['extra'];
+      if (conv == null || extra is! Map<String, dynamic> || extra['wrap'] is! Map) continue;
+      if (turns.values.any((t) => t.prepared?.eventId == extra['eventId'])) continue;
+      final signer = c['anonPk'] is String
+          ? await anon.signer(pk: c['anonPk'] as String)
+          : identity.signer;
+      final turn = ChatTurn(conv,
+          askId: c['ask'] as String?,
+          msgId: c['wire'] as String?,
+          label: '${c['label'] ?? ''}');
+      turn.sent = true;
+      turn.since = DateTime.fromMillisecondsSinceEpoch((c['at'] as num?)?.toInt() ?? 0);
+      turn.model = modelOf(conv);
+      turn.prepared = PreparedTurn(
+        conv: conv,
+        signer: signer,
+        extra: extra,
+        wrap: NostrEvent.fromJson((extra['wrap'] as Map).cast<String, dynamic>()),
+        msgId: '${c['msgId'] ?? c['wire'] ?? ''}',
+        anonPk: c['anonPk'] as String?,
+        fresh: c['fresh'] == true,
+      );
+      turns[turn.key] = turn;
+      turn.phase = 'claiming';
+      turn.status = t('Still working on that one…');
+      unawaited(_claimLoop(turn));
+    }
+    notifyListeners();
+  }
+
+  Future<void> retryMessage(ChatMessage error) async {
+    final conv = current;
+    final id = error.retryEvent;
+    final held = id == null ? null : _parked.remove(id);
+    if (conv == null) return;
+    if (held == null || held.prepared == null) {
+      final again = error.retry;
+      await deleteMessage(error);
+      if (again != null) await send(again);
+      return;
+    }
+    await _dropMessage(held.conv, error);
+    await _redeliver(held);
+  }
+
+  Future<void> _redeliver(ChatTurn old,
+      {int? maxRuns,
+      bool force = false,
+      bool afterEnd = false,
+      int? waitLimit,
+      String? waitText}) async {
+    final conv = old.conv;
+    final prepared = old.prepared!;
+    if (maxRuns != null) prepared.extra['maxRuns'] = maxRuns;
+    final turn = ChatTurn(conv,
+        askId: old.askId, msgId: old.msgId, label: old.label);
+    turn.prepared = prepared;
+    turn.model = old.model;
+    turn.research = old.research;
+    turn.team = old.team;
+    turn.kind = old.kind;
+    turn.unattended = old.unattended;
+    turn.since = old.since ?? old.began;
+    turns[turn.key] = turn;
+    turn.control.onStatus = (s) {
+      turn.status = s;
+      notifyListeners();
+    };
+    notifyListeners();
+    TurnResult? carry;
+    try {
+      if (afterEnd) {
+        turn.phase = 'slot';
+        turn.status = t('Waiting for a free slot');
+        notifyListeners();
+        final room = await _waitForRoom(turn, waitLimit ?? runLimit);
+        if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+        if (!room) {
+          turn.phase = 'running';
+          turn.status = null;
+          _parked[prepared.eventId] = turn;
+          await _placeError(turn,
+              waitText ?? t('3 requests are already running. Wait for one to finish.'),
+              retryEvent: prepared.eventId);
+          _endTurn(turn);
+          return;
+        }
+      }
+      await _takeSlot(turn, force: force);
+      _watchTurn(turn, prepared.eventId);
+      final res = await _deliver(turn);
+      carry = await _land(turn, res);
+    } on ChatFailure catch (e) {
+      final mine = _messagesOf(conv).where((m) => m.id == old.askId).firstOrNull;
+      if (!await _commonFailure(turn, e, mine: mine)) {
+        if (e.noCredits) {
+          _creditBalance(e.pro, e.balance, anonKey: conv.anon, anonPk: conv.anonPk);
+          await note(e.team ? Team.refusal(e) : e.message, conv: conv, replyTo: _linkOf(turn));
+        } else {
+          _parked[prepared.eventId] = turn;
+          await _placeError(turn, e.message, retryEvent: prepared.eventId);
+        }
+      }
+    } catch (_) {
+      if (!turn.stopped) {
+        _parked[prepared.eventId] = turn;
+        await _placeError(turn, t('Something went wrong sending that message.'),
+            retryEvent: prepared.eventId);
+      }
+    } finally {
+      if (turn.phase != 'claiming') {
+        _stopWatching(turn);
+        turn.status = null;
+      }
+      notifyListeners();
+    }
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry, asked: turn.model);
+    if (turn.phase != 'claiming') _endTurn(turn);
+  }
+
+  // The run cap
+
+  VoidCallback? onBuy;
+
+  static List<String> runCapChoices(Map<String, dynamic> cap) {
+    final limit = (cap['limit'] as num?)?.toInt() ?? 0;
+    final ceiling = (cap['ceiling'] as num?)?.toInt() ?? 0;
+    if (cap['free'] == true) return const [];
+    if (limit >= ceiling) return const ['wait'];
+    return const ['start', 'always', 'wait'];
+  }
+
+  static int runCapAllow(Map<String, dynamic> cap) {
+    final running = (cap['running'] as num?)?.toInt() ?? 0;
+    final ceiling = (cap['ceiling'] as num?)?.toInt() ?? 10;
+    return math.min(running + 1, ceiling);
+  }
+
+  Future<void> _runCapped(ChatTurn turn, ChatFailure e) async {
+    final conv = turn.conv;
+    final cap = e.runCap!;
+    if (cap['free'] == true) {
+      await note(e.message, conv: conv, replyTo: _linkOf(turn));
+      onBuy?.call();
+      return;
+    }
+    final prepared = turn.prepared;
+    if (prepared != null) _parked[prepared.eventId] = turn;
+    await _addTo(
+        conv,
+        ChatMessage(
+          id: bytesToHex(randomBytes(8)),
+          role: ChatRole.error,
+          content: e.message,
+          runCap: {
+            for (final k in const ['running', 'limit', 'ceiling', 'reserve', 'free'])
+              if (cap[k] != null) k: cap[k],
+          },
+          retryEvent: prepared?.eventId,
+          replyTo: _linkOf(turn),
+        ));
+  }
+
+  ChatTurn? _heldFor(ChatMessage card) {
+    final id = card.retryEvent;
+    return id == null ? null : _parked.remove(id);
+  }
+
+  Future<void> startAnyway(ChatMessage card) async {
+    final held = _heldFor(card);
+    if (held == null || held.prepared == null) return;
+    await _dropMessage(held.conv, card);
+    final running = (card.runCap?['running'] as num?)?.toInt() ?? runLimit;
+    await _redeliver(held, maxRuns: math.min(running + 1, 10), force: true);
+  }
+
+  Future<void> alwaysAllowRuns(ChatMessage card) async {
+    final held = _heldFor(card);
+    final n = runCapAllow(card.runCap ?? const {});
+    settings.maxRuns = n.clamp(1, 10);
+    await store.saveSettings(settings);
+    notifyListeners();
+    if (held == null || held.prepared == null) return;
+    await _dropMessage(held.conv, card);
+    await _redeliver(held, maxRuns: settings.maxRuns, force: true);
+  }
+
+  Future<void> waitForSlot(ChatMessage card) async {
+    final held = _heldFor(card);
+    if (held == null || held.prepared == null) return;
+    await _dropMessage(held.conv, card);
+    await _redeliver(held,
+        afterEnd: true,
+        waitLimit: (card.runCap?['limit'] as num?)?.toInt(),
+        waitText: card.content);
+  }
+
+  Future<bool> _waitForRoom(ChatTurn turn, int limit) async {
+    final ended = Completer<void>();
+    _endWaiters.add(ended);
+    final until = DateTime.now().add(slotWaitFor);
+    final signer = turn.prepared?.signer ?? await _signerOf(turn.conv);
+    var i = 0;
+    while (!turn.stopped && !_gone) {
+      final left = until.difference(DateTime.now());
+      if (left <= Duration.zero) return false;
+      final step = slotPoll[math.min(i++, slotPoll.length - 1)];
+      final gate = turn.slotWait = Completer<void>();
+      await Future.any([
+        ended.future,
+        gate.future,
+        Future<void>.delayed(step < left ? step : left),
+      ]);
+      turn.slotWait = null;
+      if (turn.stopped || _gone) return false;
+      if (ended.isCompleted) return true;
+      if (DateTime.now().isAfter(until)) return false;
+      final res = await api.liveRuns(signer);
+      final runs = res.data['runs'];
+      if (res.status == 200 && runs is List && runs.length < limit) return true;
+    }
+    return false;
+  }
+
+  // Steering
+
+  Future<String> steer(String runId, String text, {Conversation? conv}) async {
+    final body = text.trim();
+    if (body.isEmpty || runId.isEmpty) return 'failed';
+    ChatTurn? local;
+    for (final t in turns.values) {
+      if (t.runId == runId) local = t;
+    }
+    final signer = local?.prepared?.signer ??
+        (conv != null ? await _signerOf(conv) : identity.signer);
+    final res = await api.steerRun(signer, runId, body);
+    if (res.status == 200 && res.data['ok'] == true) {
+      if (local != null) {
+        local.progress = t('Passed on. It applies at the next step.');
+        notifyListeners();
+      }
+      return 'ok';
+    }
+    if (res.status == 413) return 'long';
+    if (res.status == 429 || res.status == 0) return 'failed';
+    return 'finished';
+  }
+
+  Future<bool?> Function(double? credits)? onBackgroundPrompt;
+  List<BackgroundRun> backgroundRuns = [];
+  Map<String, Map> _runsRaw = {};
+  Timer? _bgTimer;
+  bool _following = false;
+  bool _asking = false;
+
+  static Duration backgroundPoll = const Duration(seconds: 30);
+
+  bool get _checksWanted => DoneSince.wanted(
+      backgroundJobs: settings.backgroundJobs,
+      serverSchedules: settings.serverSchedules);
+
+  Future<void> setBackgroundJobs(bool on) async {
+    settings.backgroundJobs = on;
+    await store.saveSettings(settings);
+    notifyListeners();
+    unawaited(syncChecks());
+  }
+
+  Future<void> syncChecks() async {
+    if (!replyNotify.supported ||
+        replyNotify.platform != TargetPlatform.android) {
+      return;
+    }
+    final on = _checksWanted;
+    if (on && store.getInt(DoneSince.sinceKey) <= 0) {
+      await store.setInt(
+          DoneSince.sinceKey, DateTime.now().millisecondsSinceEpoch);
+    }
+    await replyNotify.channel.checks(on, channelName: t('Replies'));
+  }
+
+  bool get unifiedPushOn => store.getBool(_unifiedPushKey);
+
+  String? get unifiedPushDistributor =>
+      unifiedPushOn ? store.getString(_distributorKey) : null;
+
+  static const _unifiedPushKey = 'unifiedpush_on';
+  static const _distributorKey = 'unifiedpush_distributor';
+
+  Future<List<({String package, String name})>> pushDistributors() =>
+      replyNotify.channel.upDistributors();
+
+  Future<String?> unifiedPushEndpoint() async =>
+      (await replyNotify.channel.upState())?['endpoint'];
+
+  Future<bool> useUnifiedPush(String? distributor) async {
+    if (distributor == null) {
+      await replyNotify.channel.upUnregister();
+      await store.remove(_distributorKey);
+      await store.setBool(_unifiedPushKey, false);
+      notifyListeners();
+      return true;
+    }
+    await replyNotify.askPermission();
+    final ok = await replyNotify.channel.upRegister(distributor,
+        channelName: t('Replies'), texts: ReplyNotify.pushTexts());
+    await store.setBool(_unifiedPushKey, ok);
+    if (ok) await store.setString(_distributorKey, distributor);
+    notifyListeners();
+    return ok;
+  }
+
+  bool _bgEligible(Conversation conv, Map<String, dynamic>? model,
+          {Object? research, Map<String, dynamic>? team, double spent = 0}) =>
+      BackgroundJobs.eligible(
+          anon: conv.anon,
+          ghost: conv.ephemeral,
+          pro: model != null,
+          proBalance: proBalance,
+          standardBalance: standardBalance,
+          budget: continueBudgetAfter(spent),
+          long: research != null || team != null);
+
+  Future<Map<String, dynamic>> _grantFor(
+      Conversation conv, Map<String, dynamic>? model,
+      {Object? research, Map<String, dynamic>? team, double spent = 0}) async {
+    if (settings.backgroundJobs != true) return const {};
+    if (!_bgEligible(conv, model,
+        research: research, team: team, spent: spent)) {
+      return const {};
+    }
+    Map<String, dynamic>? notify;
+    if (settings.replyNotify) {
+      try {
+        notify = await replyNotify.pushRegistration(
+            conv.id, BackgroundJobs.pushText());
+      } catch (_) {
+        notify = null;
+      }
+    }
+    final grant = BackgroundJobs.grant(
+        optedIn: true,
+        anon: conv.anon,
+        ghost: conv.ephemeral,
+        pro: model != null,
+        proBalance: proBalance,
+        standardBalance: standardBalance,
+        budget: continueBudgetAfter(spent),
+        long: research != null || team != null,
+        notify: notify);
+    return grant == null ? const {} : {'background': grant};
+  }
+
+  Future<void> _askBackgroundOnce(
+      ChatTurn turn, Map<String, dynamic>? model) async {
+    final ask = onBackgroundPrompt;
+    if (ask == null || _asking || turn.unattended) return;
+    if (settings.backgroundJobs != null) return;
+    final conv = turn.conv;
+    if (!_bgEligible(conv, model,
+        research: turn.research,
+        team: turn.team,
+        spent: turn.continuedSpend)) {
+      return;
+    }
+    _asking = true;
+    try {
+      final budget = continueBudgetAfter(turn.continuedSpend);
+      final own = turn.research != null || turn.team != null;
+      final answer = await ask(own || budget <= 0 ? null : budget);
+      if (settings.backgroundJobs != null) return;
+      await setBackgroundJobs(answer == true);
+    } finally {
+      _asking = false;
+    }
+  }
+
+  void _loadBackground() {
+    final raw = store.getString(BackgroundJobs.runsKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final list = jsonDecode(raw);
+      backgroundRuns = [
+        for (final r in (list is List ? list : const []))
+          if (BackgroundRun.fromJson(r) != null) BackgroundRun.fromJson(r)!,
+      ];
+    } catch (_) {
+      backgroundRuns = [];
+    }
+    if (backgroundRuns.isNotEmpty) _watchBackground();
+  }
+
+  Future<void> _saveBackground() => store.setString(BackgroundJobs.runsKey,
+      jsonEncode([for (final r in backgroundRuns) r.toJson()]));
+
+  void _watchBackground() {
+    if (backgroundRuns.isEmpty) {
+      _bgTimer?.cancel();
+      _bgTimer = null;
+      return;
+    }
+    _bgTimer ??= Timer.periodic(backgroundPoll, (_) {
+      if (!_gone) unawaited(pollBackground());
+    });
+  }
+
+  Future<void> _trackBackground(
+      ChatTurn turn, ({String runId, int until}) handed) async {
+    final run = BackgroundRun(
+        runId: handed.runId, conv: turn.conv.id, until: handed.until);
+    backgroundRuns = [
+      for (final r in backgroundRuns)
+        if (r.runId != run.runId) r,
+      run,
+    ];
+    await _saveBackground();
+    _watchBackground();
+    notifyListeners();
+  }
+
+  Future<void> pollBackground() async {
+    if (_following || backgroundRuns.isEmpty || !identity.present) return;
+    _following = true;
+    try {
+      await refreshRuns();
+      final listed = <String, Map>{..._runsRaw};
+      final missing = [
+        for (final r in backgroundRuns)
+          if (!listed.containsKey(r.runId)) r
+      ];
+      if (missing.isNotEmpty) {
+        final since = missing
+                .map((r) => r.startedAt)
+                .reduce((a, b) => a < b ? a : b) -
+            60000;
+        final res = await api.doneSince(identity.signer, since);
+        final ended = res.data['runs'];
+        if (res.status == 200 && ended is List) {
+          for (final r in ended) {
+            if (r is Map && r['replyTo'] is String) {
+              listed.putIfAbsent(r['replyTo'] as String, () => r);
+            }
+          }
+        }
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      for (final run in [...backgroundRuns]) {
+        if (_gone) return;
+        final r = listed[run.runId];
+        if (r == null) {
+          if (run.until > 0 &&
+              now > run.until + BackgroundJobs.keepAfter.inMilliseconds) {
+            await _dropBackground(run);
+          }
+          continue;
+        }
+        await _followBackground(run, r);
+      }
+    } finally {
+      _following = false;
+    }
+  }
+
+  Future<void> _dropBackground(BackgroundRun run) async {
+    backgroundRuns = [
+      for (final r in backgroundRuns)
+        if (r.runId != run.runId) r
+    ];
+    await _saveBackground();
+    _watchBackground();
+    notifyListeners();
+  }
+
+  Future<void> _followBackground(BackgroundRun run, Map r) async {
+    final conv = _conversationById(run.conv);
+    if (conv == null) {
+      await _dropBackground(run);
+      return;
+    }
+    final legs = BackgroundJobs.legsOf(r['legs']);
+    for (final leg in legs) {
+      if (run.claimed.contains(leg)) continue;
+      final got = await api.claimRun(identity.signer, leg);
+      if (got.status == 202 || got.status <= 0 || got.data['pending'] == true) {
+        break;
+      }
+      if (got.status != 404) {
+        await _landLeg(conv, run, leg, got.status, got.data);
+      }
+      run.claimed.add(leg);
+      await _saveBackground();
+    }
+    final state = r['state'];
+    if (state is! String || !BackgroundJobs.ended.contains(state)) return;
+    if (!legs.every(run.claimed.contains)) return;
+    final said = BackgroundJobs.endNote(state, body: run.last);
+    if (said != null) await note(said, conv: conv, replyTo: run.runId);
+    if (_checksWanted) await DoneSince.markSeen(store, [run.runId]);
+    await _dropBackground(run);
+  }
+
+  Future<void> _landLeg(Conversation conv, BackgroundRun run, String leg,
+      int status, Map<String, dynamic> data) async {
+    run.last = {
+      if (data['noCredits'] == true) 'noCredits': true,
+      if (data['capExceeded'] == true) 'capExceeded': true,
+      if (data['background'] is Map) 'background': data['background'],
+    };
+    final shadow = ChatTurn(conv, msgId: run.runId)..model = modelOf(conv);
+    try {
+      final res = await chat.openLeg(conv, leg, status, data,
+          onThreadIds: _threadIdsOf(conv));
+      final reply = _replyOf(shadow, res);
+      await _addTo(conv, reply);
+      await harvestArtifacts(reply, conv: conv);
+      await _count(conv, res);
+    } on ChatFailure catch (e) {
+      if (data['noCredits'] == true || data['capExceeded'] == true) return;
+      await note(e.message, conv: conv, replyTo: run.runId);
+    } catch (_) {}
+  }
+
+  Future<String?> setServerSchedules(bool on) async {
+    settings.serverSchedules = on;
+    await store.saveSettings(settings);
+    notifyListeners();
+    unawaited(syncChecks());
+    if (on) {
+      unawaited(refreshServerSchedules());
+      return null;
+    }
+    var changed = false;
+    for (final s in schedules) {
+      if (s.server != null || s.serverSha != null || s.serverOff) {
+        _unserve(s);
+        changed = true;
+      }
+    }
+    if (changed) {
+      await store.saveSchedules(schedules);
+      notifyListeners();
+    }
+    final res = await api.scheduleClear(identity.signer);
+    return res.status == 200 && res.data['ok'] == true
+        ? t("The server's copies of your schedules were deleted.")
+        : t('Could not reach the server to delete its copies of your schedules. Try again from Settings.');
+  }
+
+  Future<void> setScheduleDailyCap(int credits) async {
+    settings.scheduleDailyCap = credits.clamp(1, 10000);
+    await store.saveSettings(settings);
+    notifyListeners();
+    final held = schedules.where((s) => s.server != null).firstOrNull;
+    if (held != null && settings.serverSchedules) {
+      unawaited(saveServerSchedule(held, held.server));
+    }
+  }
+
+  Future<String> toggleSchedule(Schedule s) async {
+    s.enabled = !s.enabled;
+    await saveSchedule(s);
+    if (s.server == null || !settings.serverSchedules) return '';
+    if (!s.enabled) {
+      if (s.serverSha == null) return '';
+      s.serverSha = null;
+      s.serverExpiresAt = 0;
+      await saveSchedule(s);
+      await api.scheduleDelete(identity.signer, s.id);
+      return '';
+    }
+    return saveServerSchedule(s, s.server);
+  }
+
+  void _unserve(Schedule s) {
+    s.server = null;
+    s.serverSha = null;
+    s.serverExpiresAt = 0;
+    s.serverError = null;
+    s.serverOff = false;
+  }
+
+  Future<String> saveServerSchedule(Schedule s, String? mode) async {
+    if (mode == null) {
+      final had = s.serverSha != null;
+      _unserve(s);
+      await saveSchedule(s);
+      if (had) await api.scheduleDelete(identity.signer, s.id);
+      return '';
+    }
+    if (!settings.serverSchedules) return '';
+    final conv = s.convId == null ? null : _conversationById(s.convId!);
+    final run = mode == 'run';
+    final model = run ? '${modelOf(conv)?['key'] ?? ''}' : '';
+    if (run) {
+      final have = model.isEmpty ? standardBalance : proBalance;
+      if (have != null && have <= 0) {
+        return t('Server schedules spend your paid balance, which is empty. Top up first.');
+      }
+    }
+    final chatId = conv?.id ?? s.id;
+    final title = s.title.trim().isEmpty ? t('Your reply is ready') : s.title.trim();
+    Map<String, dynamic>? push;
+    try {
+      push = await replyNotify.pushRegistration(
+          chatId, run ? title : ServerSchedules.dueText());
+    } catch (_) {
+      push = null;
+    }
+    if (!run && push == null) return ServerSchedules.noPush();
+    final text = ServerSchedules.payload(s,
+        mode: mode,
+        thread: conv?.rootId ?? '',
+        model: model,
+        tier: model.isEmpty ? 'standard' : 'pro');
+    final body = ServerSchedules.body(s,
+        mode: mode,
+        payload: text,
+        dailyCap: settings.scheduleDailyCap,
+        now: DateTime.now().millisecondsSinceEpoch,
+        push: push);
+    final res = await api.schedulePut(identity.signer, body);
+    final refused = ServerSchedules.refusal(res.status, res.data);
+    if (refused != null) {
+      s.server = mode;
+      s.serverSha = null;
+      s.serverExpiresAt = 0;
+      s.serverError = refused;
+      await saveSchedule(s);
+      return refused;
+    }
+    s.server = mode;
+    s.serverSha = body['sha256'] as String;
+    final expires = res.data['expiresAt'];
+    s.serverExpiresAt =
+        expires is num ? expires.toInt() : body['expiresAt'] as int;
+    s.serverError = null;
+    s.serverOff = false;
+    await saveSchedule(s);
+    return run ? ServerSchedules.savedRun() : ServerSchedules.savedNotify();
+  }
+
+  bool _refreshing = false;
+
+  Future<void> refreshServerSchedules() async {
+    if (_refreshing || !settings.serverSchedules || !identity.present) return;
+    if (!schedules.any((s) => s.server != null && s.serverSha != null)) return;
+    _refreshing = true;
+    try {
+      final res = await api.scheduleList(identity.signer);
+      final list = res.data['schedules'];
+      if (res.status != 200 || list is! List) return;
+      final listed = <String, Map>{
+        for (final r in list)
+          if (r is Map && r['id'] is String) r['id'] as String: r,
+      };
+      var changed = false;
+      for (final s in [...schedules]) {
+        if (s.server == null || s.serverSha == null) continue;
+        final r = listed[s.id];
+        if (r != null && s.serverSha != null && r['sha256'] != s.serverSha) {
+          continue;
+        }
+        if (r == null) {
+          if (s.server == 'run' &&
+              s.repeat == ScheduleRepeat.once &&
+              s.serverSha != null) {
+            if (await _claimFired(s, s.nextAt.millisecondsSinceEpoch + 1)) {
+              s.enabled = false;
+              changed = true;
+            }
+          }
+          continue;
+        }
+        final off = r['enabled'] == false;
+        if (off != s.serverOff) {
+          s.serverOff = off;
+          changed = true;
+        }
+        final expires = r['expiresAt'];
+        if (expires is num && expires.toInt() != s.serverExpiresAt) {
+          s.serverExpiresAt = expires.toInt();
+          changed = true;
+        }
+        final next = r['nextAt'];
+        if (s.server == 'run' && next is num) {
+          if (await _claimFired(s, next.toInt())) changed = true;
+          if (next.toInt() > s.nextAt.millisecondsSinceEpoch) {
+            s.nextAt = DateTime.fromMillisecondsSinceEpoch(next.toInt());
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        await store.saveSchedules(schedules);
+        notifyListeners();
+      }
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  Future<bool> _claimFired(Schedule s, int serverNextAt) async {
+    final slots = ServerSchedules.firedSlots(s,
+        serverNextAt: serverNextAt, since: s.serverSeenAt);
+    var moved = false;
+    for (final at in slots) {
+      final id = ServerSchedules.eventIdFor(s.id, at);
+      final got = await api.claimRun(identity.signer, id);
+      if (got.status == 202 || got.status <= 0 || got.data['pending'] == true) {
+        break;
+      }
+      if (got.status == 200 && got.data['event'] is Map) {
+        await _fileScheduled(s, id, got.data);
+      }
+      s.serverSeenAt = at;
+      moved = true;
+    }
+    return moved;
+  }
+
+  Future<void> _fileScheduled(
+      Schedule s, String eventId, Map<String, dynamic> data) async {
+    var conv = s.convId == null ? null : _conversationById(s.convId!);
+    if (conv == null) {
+      conv = Conversation(
+        id: bytesToHex(randomBytes(8)),
+        rootId: bytesToHex(randomBytes(32)),
+        title: s.title.isEmpty ? ChatEngine.titleFor(s.prompt) : s.title,
+      );
+      conversations.insert(0, conv);
+      await store.saveConversations(conversations);
+    }
+    String? link;
+    try {
+      final res = await chat.openLeg(conv, eventId, 200, data,
+          onThreadIds: _threadIdsOf(conv),
+          onRumor: (rumor) =>
+              link = ChatEngine.linkOf(rumor, data).replyTo);
+      final wire = link ?? eventId;
+      await _addTo(
+          conv,
+          ChatMessage(
+            id: bytesToHex(randomBytes(8)),
+            role: ChatRole.self,
+            content: s.prompt.isEmpty ? t('A scheduled prompt') : s.prompt,
+            wire: wire,
+            sched: s.id,
+          ));
+      final shadow = ChatTurn(conv, msgId: wire)..model = modelOf(conv);
+      final reply = _replyOf(shadow, res);
+      await _addTo(conv, reply);
+      await harvestArtifacts(reply, conv: conv);
+      await _count(conv, res);
+      s.lastRunAt = DateTime.now();
+      s.lastConvId = conv.id;
+      s.runs += 1;
+      if (conv.id != current?.id) {
+        conv.unread += 1;
+        await store.saveConversations(conversations);
+      }
+    } catch (_) {}
+  }
+
+  // Runs on any device
+
+  List<RemoteRun> remoteRuns = [];
+  int _runsWatchers = 0;
+  Timer? _runsTimer;
+
+  static RemoteRun? remoteRunOf(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['replyTo'];
+    if (id is! String || id.isEmpty) return null;
+    return (
+      replyTo: id,
+      thread: raw['thread'] is String ? raw['thread'] as String : '',
+      kind: raw['kind'] is String ? raw['kind'] as String : 'chat',
+      label: raw['label'] is String ? raw['label'] as String : '',
+      progress: raw['progress'] is String ? raw['progress'] as String : '',
+      plan: ChatEngine.planOf(raw['plan']),
+      state: raw['state'] is String ? raw['state'] as String : 'running',
+      startedAt: (raw['startedAt'] as num?)?.toInt() ?? 0,
+      updatedAt: (raw['updatedAt'] as num?)?.toInt() ?? 0,
+      branches: branchStepsOf(raw['branches'] is List ? raw['branches'] as List : const []),
+      background: raw['background'] == true,
+      until: (raw['until'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<void> refreshRuns() async {
+    if (!signedIn && identity.pubkey.isEmpty) return;
+    final res = await api.liveRuns(identity.signer);
+    final list = res.data['runs'];
+    if (res.status != 200 || list is! List) return;
+    _runsRaw = {
+      for (final r in list)
+        if (r is Map && r['replyTo'] is String) r['replyTo'] as String: r,
+    };
+    final runs = list.map(remoteRunOf).whereType<RemoteRun>().toList();
+    for (final r in runs) {
+      for (final b in r.branches) {
+        await rememberBranchStep(b);
+      }
+      for (final t in turns.values) {
+        if (t.runId == r.replyTo) {
+          if (r.progress.isNotEmpty) t.progress = r.progress;
+          if (r.plan.isNotEmpty) t.plan = r.plan;
+        }
+      }
+    }
+    remoteRuns = runs;
+    notifyListeners();
+  }
+
+  bool _isLocal(String runId) => turns.values.any((t) => t.runId == runId);
+
+  List<RemoteRun> remoteRunsIn(Conversation conv) => [
+        for (final r in remoteRuns)
+          if (r.thread == conv.rootId && !_isLocal(r.replyTo)) r
+      ];
+
+  List<RemoteRun> get otherRuns =>
+      [for (final r in remoteRuns) if (!_isLocal(r.replyTo)) r];
+
+  int get runningCount => turns.values.length + otherRuns.length;
+
+  Conversation? chatOfThread(String thread) {
+    if (thread.isEmpty) return null;
+    for (final c in conversations) {
+      if (c.rootId == thread) return c;
+    }
+    return null;
+  }
+
+  void watchRuns(bool on) {
+    _runsWatchers += on ? 1 : -1;
+    if (_runsWatchers < 0) _runsWatchers = 0;
+    if (_runsWatchers > 0 && _runsTimer == null) {
+      unawaited(refreshRuns());
+      _runsTimer = Timer.periodic(
+          const Duration(seconds: 5), (_) => unawaited(refreshRuns()));
+    } else if (_runsWatchers == 0) {
+      _runsTimer?.cancel();
+      _runsTimer = null;
+    }
+  }
+
+  Future<void> stopRemote(RemoteRun run) async {
+    remoteRuns = remoteRuns.where((r) => r.replyTo != run.replyTo).toList();
+    notifyListeners();
+    final conv = chatOfThread(run.thread);
+    final signer = conv != null ? await _signerOf(conv) : identity.signer;
+    await api.cancelRun(signer, run.replyTo);
+  }
+
+  // Offline sends
+
+  List<ChatMessage> pendingIn(Conversation conv) =>
+      [for (final m in _messagesOf(conv)) if (m.pending != null) m];
+
+  void _watchPending() {
+    _pendingTimer ??= Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (_flushing || _gone) return;
+      if (api.offline) await refreshBalance();
+      if (!api.offline && !_gone) await flushPending();
+    });
+  }
+
+  Future<void> _parkOffline(ChatTurn turn, ChatMessage mine) async {
+    final conv = turn.conv;
+    final list = _messagesOf(conv);
+    final next = [
+      for (final m in list)
+        if (m.id == mine.id)
+          ChatMessage.fromJson({...m.toJson(), 'pending': 'offline'})
+        else
+          m
+    ];
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+    _parked[turn.prepared!.eventId] = turn;
+    _offlineHeld[mine.id] = turn;
+    turn.phase = 'offline';
+    turn.status = t('Waiting for connection');
+    _watchPending();
+    notifyListeners();
+  }
+
+  final Map<String, ChatTurn> _offlineHeld = {};
+
+  Future<void> flushPending() async {
+    if (_flushing) return;
+    _flushing = true;
+    try {
+      for (final conv in [...conversations]) {
+        for (final m in pendingIn(conv)) {
+          final held = _offlineHeld.remove(m.id);
+          final list = _messagesOf(conv);
+          if (held != null && held.prepared != null) {
+            _parked.remove(held.prepared!.eventId);
+            final next = [for (final x in list) x.id == m.id ? x.copyWith(sent: true) : x];
+            if (conv.id == current?.id) messages = next;
+            await store.saveMessages(conv.id, next);
+            await _redeliver(held);
+          } else {
+            await _dropMessage(conv, m);
+            await send(m.content,
+                target: conv, withAttachments: m.attachments, withQuote: m.quote);
+          }
+          if (api.offline) return;
+        }
+      }
+      if (conversations.every((c) => pendingIn(c).isEmpty)) {
+        _pendingTimer?.cancel();
+        _pendingTimer = null;
+      }
+    } finally {
+      _flushing = false;
+    }
+  }
+
+  Future<String?> editPending(ChatMessage m) async {
+    final conv = current;
+    if (conv == null || m.pending == null) return null;
+    final held = _offlineHeld.remove(m.id);
+    if (held?.prepared != null) _parked.remove(held!.prepared!.eventId);
+    await _dropMessage(conv, m);
+    if (m.attachments.isNotEmpty) attachments = [...attachments, ...m.attachments];
+    if (m.quote != null) quote = m.quote;
+    notifyListeners();
+    return m.content;
+  }
+
+  Future<void> deletePending(ChatMessage m) async {
+    final conv = current;
+    if (conv == null || m.pending == null) return;
+    final held = _offlineHeld.remove(m.id);
+    if (held?.prepared != null) _parked.remove(held!.prepared!.eventId);
+    await _dropMessage(conv, m);
   }
 
   /// The last few turns, as a seed for a model new to this thread.
@@ -3112,7 +5164,7 @@ class AppController extends ChangeNotifier {
   Future<List<CompareRun>> compare(
       String text, List<Map<String, dynamic>> models) async {
     final conv = current;
-    if (conv == null || sending || models.length < 2) return const [];
+    if (conv == null || models.length < 2) return const [];
     final body = text.trim();
     if (body.isEmpty) return const [];
 
@@ -3148,10 +5200,6 @@ class AppController extends ChangeNotifier {
       } catch (_) {}
     }
 
-    final turn = ChatTurn(conv);
-    turns[conv.id] = turn;
-    notifyListeners();
-
     final seed = compareSeed();
     final scoped = activeRepos;
     final persona = activePersona;
@@ -3159,6 +5207,10 @@ class AppController extends ChangeNotifier {
     final bot = activeBot;
 
     Future<CompareRun> once(Map<String, dynamic> model, double? maxCost) async {
+      final turn = ChatTurn(conv, label: _labelOf(body));
+      turn.kind = 'compare';
+      turns[turn.key] = turn;
+      notifyListeners();
       final scratch = Conversation(
         id: 'cmp-${bytesToHex(randomBytes(6))}',
         rootId: bytesToHex(randomBytes(32)),
@@ -3190,7 +5242,17 @@ class AppController extends ChangeNotifier {
           fresh: true,
           onThreadIds: (_) {},
           control: turn.control,
+          runExtras: _runExtras(conv, kind: 'compare'),
+          onPrepared: (p) {
+            turn.prepared = p;
+            turn.sent = true;
+          },
+          slot: () async {
+            await _takeSlot(turn);
+            return () {};
+          },
         );
+        _endTurn(turn);
         return CompareRun(
           model: model,
           reply: res.reply,
@@ -3200,15 +5262,16 @@ class AppController extends ChangeNotifier {
           followUps: res.followUps,
         );
       } on ChatFailure catch (e) {
+        _endTurn(turn);
         return CompareRun(model: model, error: e.message);
       } catch (e) {
+        _endTurn(turn);
         return CompareRun(model: model, error: e.toString());
       }
     }
 
     final out = await Future.wait(
         [for (var i = 0; i < models.length; i++) once(models[i], caps[i])]);
-    _endTurn(turn);
 
     final spent = out.fold<double>(0, (n, r) => n + r.cost);
     if (spent > 0) await store.recordUsage(spent);
@@ -3256,385 +5319,6 @@ class AppController extends ChangeNotifier {
     await store.saveConversations(conversations);
     await store.setThread(conv.id, const []);
     notifyListeners();
-  }
-
-  /// Removes a message queued while a reply was being written.
-  void unqueue(int at, {Conversation? target}) {
-    final conv = target ?? current;
-    final queue = conv == null ? null : _queues[conv.id];
-    if (queue == null || at < 0 || at >= queue.length) return;
-    queue.removeAt(at);
-    final editing = _queueEdits[conv!.id];
-    if (editing != null) {
-      if (editing == at) {
-        _queueEdits.remove(conv.id);
-      } else if (editing > at) {
-        _queueEdits[conv.id] = editing - 1;
-      }
-    }
-    if (queue.isEmpty) _queues.remove(conv.id);
-    notifyListeners();
-  }
-
-  /// Sends queued messages one at a time, in order.
-  Future<void> _sendQueued(Conversation conv) async {
-    final queue = _queues[conv.id];
-    if (queue == null || queue.isEmpty || turns.containsKey(conv.id)) return;
-    final editing = _queueEdits[conv.id];
-    if (editing == 0) return;
-    final next = queue.removeAt(0);
-    if (editing != null) _queueEdits[conv.id] = editing - 1;
-    if (queue.isEmpty) _queues.remove(conv.id);
-    notifyListeners();
-    await send(next, target: conv);
-  }
-
-  /// Returns false when the message was queued instead of sent.
-  Future<bool> send(String text,
-      {Conversation? target, bool bare = false, bool unattended = false}) async {
-    final conv = target ?? current;
-    if (conv == null || text.trim().isEmpty) return false;
-    if (conv.support) {
-      return await sendSupport(text) == ContactOutcome.sent;
-    }
-    if (turns.containsKey(conv.id)) {
-      if (bare) return false;
-      (_queues[conv.id] ??= []).add(text.trim());
-      notifyListeners();
-      return false;
-    }
-    // Device-side free-tier count across keys; never reported to the worker (see [freeAllows]).
-    final typed = text.trim();
-    MentionResult? mention;
-    final head = bare ? null : Mentions.parse(typed);
-    if (head != null) {
-      final catalog = await ensureMentionCatalog();
-      mention = catalog == null
-          ? MentionResult(unknown: head.name, text: typed)
-          : Mentions.apply(typed, catalog);
-      if (mention != null && mention.resolved && mention.text.isEmpty) {
-        await note(t('Say what to ask {name} after the mention.',
-            {'name': mention.model!['label']}), conv: conv);
-        if (conv.id == current?.id) _capReturned = typed;
-        return false;
-      }
-      final wallet = conv.anon ? anonProBalance : proBalance;
-      if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
-        await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
-            {'name': mention.model!['key']}), conv: conv);
-        if (conv.id == current?.id) _capReturned = typed;
-        return false;
-      }
-    }
-    final asked = mention != null && mention.resolved ? Mentions.pinned(mention.model!) : null;
-    if (asked == null && !freeAllows) {
-      await note(freeSpentMessage(), conv: conv);
-      return false;
-    }
-    final research = bare
-        ? null
-        : Research.claim(asked != null ? mention!.text : typed,
-            armed: researchNext,
-            model: asked ?? modelOf(conv),
-            pricing: catalogPricing);
-    if (research != null && researchNext) {
-      researchNext = false;
-      notifyListeners();
-    }
-    if (research?.blocked != null) {
-      await note(research!.blocked!, conv: conv);
-      return false;
-    }
-    final team = bare
-        ? null
-        : Team.claim(conv.team,
-            lead: asked ?? teamLeadOf(conv),
-            research: research != null,
-            repos: reposOf(conv).isNotEmpty);
-    if (!bare &&
-        mentionCatalog == null &&
-        mediaModelOf(conv)?['resolution'] != null) {
-      await ensureMentionCatalog();
-    }
-    final body = research != null
-        ? research.question
-        : asked != null
-            ? mention!.text
-        : (bare ? typed : withMediaModel(typed, conv: conv));
-    final composing = !bare && conv.id == current?.id;
-    final sent = composing ? [...attachments] : <Attachment>[];
-    final quoted = composing ? quote : null;
-
-    // Pictures must be uploaded first, since the link is what travels.
-    if (sent.any((a) => a.uploads && a.url == null)) {
-      final stranded = await settleAttachments(sent);
-      if (stranded.isNotEmpty) {
-        await note(
-            stranded.length == 1
-                ? t('{name} could not be uploaded, so Nymbot will not be able to see it.',
-                    {'name': stranded.first.name})
-                : t('{names} could not be uploaded, so Nymbot will not be able to see them.',
-                    {'names': stranded.map((a) => a.name).join(', ')}),
-            conv: conv);
-      }
-    }
-
-    double? maxCost;
-    if (SpendCaps.any(conv, botOf(conv))) {
-      final waived = _capWaive == conv.id;
-      _capWaive = null;
-      var est = _capEstimate(conv, body, model: asked);
-      if (!waived) {
-        if (team != null) {
-          final priced = await teamEstimate(conv,
-              workers: team['workers'] as int,
-              model: team['model'] as String,
-              mode: team['mode'] as String,
-              lead: asked);
-          if (priced.error == null) {
-            est = (
-              tier: 'pro',
-              low: priced.typical,
-              high: priced.max.toDouble(),
-              max: priced.max.toDouble(),
-              metered: true,
-              unpriced: false
-            );
-          }
-        }
-        final gate = await _capGate(conv, est.tier == 'pro', est.max,
-            unattended: unattended);
-        if (gate != 'send' && gate != 'ok') {
-          if (composing) _capReturned = typed;
-          return false;
-        }
-        if (gate == 'ok') {
-          maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
-              pro: est.tier == 'pro');
-        }
-      }
-    }
-
-    if (conv.anon) {
-      final had = conv.anonPk;
-      final est = _capEstimate(conv, body, model: asked);
-      final funded = await fundAnonTurn(conv,
-          need: est.max, tier: est.tier == 'pro' ? 'pro' : 'standard');
-      if (had != conv.anonPk) await store.saveConversations(conversations);
-      if (funded != null) await note(describeTopUp(funded), conv: conv);
-    }
-
-    if (composing) {
-      attachments = [];
-      quote = null;
-    }
-
-    final selfId = bytesToHex(randomBytes(8));
-    final docsUsed = DocLibrary.instance.usageFor(conv.id, body, sent);
-    final mine = ChatMessage(
-      id: selfId,
-      role: ChatRole.self,
-      content: typed,
-      attachments: sent,
-      quote: quoted,
-    );
-    await _addTo(conv, mine);
-    unawaited(DocLibrary.instance.recordUsage(selfId, docsUsed));
-    unawaited(DocLibrary.instance.keep(conv.id, sent));
-
-    if (conv.title.isEmpty) {
-      conv.title = ChatEngine.titleFor(typed);
-      _touch(conv);
-      await store.saveConversations(conversations);
-    }
-    if (mention?.unknown != null) {
-      await note(t('No model called @{name}, so that went as an ordinary message. Type @ to pick one.',
-          {'name': mention!.unknown}), conv: conv);
-    }
-
-    final turn = ChatTurn(conv);
-    turn.research = research?.payload;
-    turn.team = team;
-    turns[conv.id] = turn;
-    notifyListeners();
-    turn.control.onStatus = (s) {
-      turn.status = s;
-      notifyListeners();
-    };
-
-    final scoped = reposOf(conv);
-    final model = asked ?? modelOf(conv);
-    TurnResult? carry;
-    var resendWaived = false;
-    try {
-      final res = await chat.send(
-        conv: conv,
-        text: body,
-        maxCost: maxCost,
-        proModel: asked ?? proModelForTurnOf(conv),
-        repos: scoped,
-        connectors: connectorsOf(conv),
-        serverRuns: serverRunsOf(conv),
-        persona: personaOf(conv),
-        workspace: workspaceOf(conv),
-        bot: botOf(conv),
-        memories: store.memories(),
-        attachments: sent,
-        quote: quoted,
-        webSearch: webOn,
-        firstTurn: store.thread(conv.id).isEmpty,
-        research: research?.payload,
-        team: team,
-        onTurn: (eventId) => _watchTurn(turn, eventId),
-        onStep: (step) => _localStep(turn, step),
-        onThreadIds: (ids) {
-          final thread = [...store.thread(conv.id), ...ids];
-          unawaited(store.setThread(conv.id, thread));
-        },
-        control: turn.control,
-      );
-      _stopWatching(turn, keepDraft: true);
-      final reply = ChatMessage(
-        id: bytesToHex(randomBytes(8)),
-        role: ChatRole.bot,
-        content: res.reply,
-        thinking: res.thinking,
-        cost: res.cost,
-        pro: res.pro,
-        model: res.pro ? (model?['label'] as String?) : null,
-        modelKey: res.pro ? _maker(model)?.key : null,
-        modelMaker: res.pro ? _maker(model)?.slug : null,
-        modelMakerName: res.pro ? _maker(model)?.name : null,
-        calls: res.modelCalls,
-        // Repo changes and the prior branch head, so the run can be reverted.
-        checkpoint: res.checkpoint,
-        pendingTool: res.pendingTool,
-        staged: res.staged,
-        repos: res.repos.length > 1 ? res.repos : const [],
-        sources: res.sources,
-        followUps: res.followUps,
-        serverRunCredits: res.serverRunCredits,
-        serverRuns: res.serverRuns,
-        team: Team.normalize(res.team),
-      );
-      if (turn.drafted) streamedReplies.add(reply.id);
-      turn.draft = null;
-      await _addTo(conv, reply);
-      await harvestArtifacts(reply, conv: conv);
-      if (conv.seed != null) conv.seed = null;
-      _bumpSpent(conv, res.cost + res.serverRunCredits, res.pro);
-      conv.messageCount += 1;
-      conv.creditsSpent += res.cost + res.serverRunCredits;
-      _touch(conv);
-      await store.saveConversations(conversations);
-      await store.recordUsage(res.cost);
-      if (res.free != null) {
-        // Counted on the device too, so a fresh key does not reset the day.
-        free = res.free;
-        await store.freeTier.spent();
-        await store.freeTier.observe(res.free!.used);
-      }
-      _creditBalance(res.pro, res.balance,
-          anonKey: conv.anon, anonPk: conv.anonPk);
-      if (conv.anon && anonStandardBalance == null) {
-        unawaited(refreshBalance());
-      }
-      if (res.lowBalance) {
-        // In an anonymous chat, a low balance usually means the throwaway key ran dry.
-        final topped = conv.anon ? await autoTopUp(pk: conv.anonPk) : null;
-        if (topped != null) {
-          await note(describeTopUp(topped), conv: conv);
-        } else {
-          await note(
-              res.pro
-                  ? t('Pro credits running low: {n} left. Tap Buy to top up.',
-                      {'n': creditFigure(res.balance)})
-                  : t('Credits running low: {n} left. Tap Buy to top up.',
-                      {'n': creditFigure(res.balance)}),
-              conv: conv);
-        }
-      }
-      if (res.truncated) carry = res;
-    } on ChatFailure catch (e) {
-      if (e.cancelled) {
-        await note(t('Stopped. That reply was not charged for unless it had already finished.'),
-            conv: conv);
-      } else if (e.capExceeded) {
-        await _dropMessage(conv, mine);
-        if (unattended || onCapPrompt == null) {
-          await note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'),
-              conv: conv);
-        } else {
-          final choice = await onCapPrompt!(
-              SpendCaps.refusal(e.required, e.pro, team: e.team));
-          if (choice == 'send') {
-            resendWaived = true;
-          } else if (composing) {
-            _capReturned = typed;
-          }
-          if (composing) {
-            attachments = sent;
-            quote = quoted;
-          }
-        }
-      } else if (e.team && !e.noCredits) {
-        await _dropMessage(conv, mine);
-        await note(Team.refusal(e), conv: conv);
-        if (composing) {
-          _capReturned = typed;
-          attachments = sent;
-          quote = quoted;
-        }
-      } else if (e.noCredits) {
-        _creditBalance(e.pro, e.balance,
-            anonKey: conv.anon, anonPk: conv.anonPk);
-        // Trust the worker's count over the device's, which can only lag.
-        if (e.free != null) {
-          free = e.free;
-          await store.freeTier.observe(e.free!.used);
-        }
-        if (e.free != null && !e.pro) {
-          // The allowance ran out, not a balance, so there is nothing to top up.
-          await note(freeSpentMessage(), conv: conv);
-        } else {
-          final topped = conv.anon
-              ? await autoTopUp(force: true, pk: conv.anonPk)
-              : null;
-          if (topped != null) {
-            await note('${describeTopUp(topped)} '
-                '${t('Send that again when you are ready.')}', conv: conv);
-          } else {
-            await note(e.team ? Team.refusal(e) : e.message, conv: conv);
-          }
-        }
-      } else {
-        await _addTo(conv, ChatMessage(
-          id: bytesToHex(randomBytes(8)),
-          role: ChatRole.error,
-          content: e.message,
-          retry: typed,
-        ));
-      }
-    } catch (e) {
-      await _addTo(conv, ChatMessage(
-        id: bytesToHex(randomBytes(8)),
-        role: ChatRole.error,
-        content: t('Something went wrong sending that message.'),
-        retry: typed,
-      ));
-    } finally {
-      _stopWatching(turn);
-      turn.status = null;
-      notifyListeners();
-    }
-    if (carry != null && !turn.stopped) await _carryOn(turn, carry, asked: asked);
-    _endTurn(turn);
-    if (resendWaived) {
-      _capWaive = conv.id;
-      return send(typed, target: conv, bare: bare);
-    }
-    await _sendQueued(conv);
-    return true;
   }
 
   List<ChatMessage> _messagesOf(Conversation conv) =>
@@ -3739,39 +5423,47 @@ class AppController extends ChangeNotifier {
       {Map<String, dynamic>? asked}) {
     final conv = turn.conv;
     final research = turn.research;
-    final model = asked ?? modelOf(conv);
-    return _carryOnWith(
-        turn,
-        first,
-        (token) => chat.send(
-              conv: conv,
-              text: t('Continue.'),
-              maxCost: SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
-                  pro: true),
-              proModel: model,
-              repos: reposOf(conv),
-              connectors: connectorsOf(conv),
-              serverRuns: serverRunsOf(conv),
-              persona: personaOf(conv),
-              workspace: workspaceOf(conv),
-              bot: botOf(conv),
-              memories: store.memories(),
-              webSearch: webOn,
-              firstTurn: false,
-              resume: token,
+    final model = asked ?? turn.model ?? modelOf(conv);
+    return _carryOnWith(turn, first, (token) async {
+      turn.prepared = await chat.prepare(
+        conv: conv,
+        text: t('Continue.'),
+        maxCost: SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
+            pro: true),
+        proModel: model,
+        repos: reposOf(conv),
+        connectors: connectorsOf(conv),
+        serverRuns: serverRunsOf(conv),
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
+        memories: store.memories(),
+        webSearch: webOn,
+        resume: token,
+        research: research,
+        runExtras: {
+          ..._runExtras(conv),
+          ...await _grantFor(conv, model,
               research: research,
-              onTurn: (eventId) => _watchTurn(turn, eventId),
-              onStep: (step) => _localStep(turn, step),
-              onThreadIds: (ids) {
-                final thread = [...store.thread(conv.id), ...ids];
-                unawaited(store.setThread(conv.id, thread));
-              },
-              control: turn.control,
-            ),
-        model: model);
+              team: turn.team,
+              spent: turn.continuedSpend),
+        },
+        onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
+      );
+      if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+      return _deliver(turn);
+    }, model: model);
   }
 
   @visibleForTesting
+  Future<void> landResultForTest(ChatTurn turn, TurnResult res) async {
+    await _land(turn, res);
+  }
+
+  Future<bool> commonFailureForTest(ChatTurn turn, ChatFailure e) =>
+      _commonFailure(turn, e);
+
   Future<void> carryOnWithForTest(ChatTurn turn, TurnResult first,
           Future<TurnResult> Function(String token) leg) =>
       _carryOnWith(turn, first, leg);
@@ -3807,26 +5499,27 @@ class AppController extends ChangeNotifier {
     var stallResumes = 0;
     if ((token == null || token.isEmpty) && first.capStopped) {
       await note(t('That answer stopped early to stay inside this chat\'s spending cap.'),
-          conv: conv);
+          conv: conv, replyTo: _linkOf(turn));
       return;
     }
     if (token == null || token.isEmpty) {
       await note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'),
-          conv: conv);
+          conv: conv, replyTo: _linkOf(turn));
       return;
     }
+    await _askBackgroundOnce(turn, model ?? modelOf(conv));
     var left = research != null
         ? double.infinity
         : continueBudgetAfter(turn.continuedSpend);
     if (stall == null && left <= 0) {
       await note(t('That answer stopped early — the task needs more steps than one '
           'turn holds. Set “When a repo task runs out of room” in Settings and '
-          'Nymbot will carry on by itself.'), conv: conv);
+          'Nymbot will carry on by itself.'), conv: conv, replyTo: _linkOf(turn));
       return;
     }
     if (stall == null && reserve > left) {
       await note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-          {'n': creditFigure(reserve - left)}), conv: conv);
+          {'n': creditFigure(reserve - left)}), conv: conv, replyTo: _linkOf(turn));
       return;
     }
 
@@ -3855,7 +5548,7 @@ class AppController extends ChangeNotifier {
                   .state ==
               'block') {
         await note(t('Stopped: this chat has reached its spending cap.'),
-            conv: conv);
+            conv: conv, replyTo: _linkOf(turn));
         return;
       }
       turn.status = t('Carrying on where it left off');
@@ -3866,6 +5559,11 @@ class AppController extends ChangeNotifier {
       } on ChatFailure catch (e) {
         _stopWatching(turn);
         turn.status = null;
+        if (e.cancelled || turn.stopped) return;
+        if (e.pending || e.lost) {
+          _startClaim(turn);
+          return;
+        }
         final again = e.resumeToken;
         if (stall != null &&
             again != null &&
@@ -3884,32 +5582,43 @@ class AppController extends ChangeNotifier {
           legs = 0;
           await note(t('That step could not go out — the gateway is busy. '
               'Nothing is lost; trying again in {n} seconds.',
-              {'n': wait.inSeconds}), conv: conv);
+              {'n': wait.inSeconds}), conv: conv, replyTo: _linkOf(turn));
           await _legPause(turn, wait);
           continue;
         }
         if (again != null && again.isNotEmpty) {
           await note(t('Stopped there — the gateway stayed busy. The work so '
-              'far is saved, so ask it to carry on later.'), conv: conv);
+              'far is saved, so ask it to carry on later.'), conv: conv, replyTo: _linkOf(turn));
           return;
         }
         if (e.capExceeded) {
           await note(t('Stopped: carrying on could go past this chat\'s spending cap.'),
-              conv: conv);
+              conv: conv, replyTo: _linkOf(turn));
           return;
         }
-        await note(e.message, conv: conv);
+        await note(e.message, conv: conv, replyTo: _linkOf(turn));
         return;
       } catch (_) {
         _stopWatching(turn);
         turn.status = null;
-        await note(t('Could not carry on from there.'), conv: conv);
+        if (turn.stopped) return;
+        await note(t('Could not carry on from there.'), conv: conv, replyTo: _linkOf(turn));
         return;
       }
       stalls = 0;
       _stopWatching(turn);
       turn.status = null;
 
+      final prepared = turn.prepared;
+      if (prepared != null && prepared.plan.isNotEmpty) turn.plan = prepared.plan;
+      if (turn.stopped || (prepared?.stopped ?? false)) {
+        if (!turn.stopped) {
+          turn.stopped = true;
+          turn.outcome = 'stopped';
+          await note(t('Stopped.'), conv: conv, replyTo: _linkOf(turn));
+        }
+        return;
+      }
       final more = ChatMessage(
         id: bytesToHex(randomBytes(8)),
         role: ChatRole.bot,
@@ -3930,9 +5639,12 @@ class AppController extends ChangeNotifier {
         serverRunCredits: next.serverRunCredits,
         serverRuns: next.serverRuns,
         team: Team.normalize(next.team),
+        replyTo: _linkOf(turn),
       );
+      turn.outcome = _outcomeOf(next);
       await _addTo(conv, more);
       await harvestArtifacts(more, conv: conv);
+      final handed = prepared?.background;
       _bumpSpent(conv, next.cost + next.serverRunCredits, next.pro);
       conv.messageCount += 1;
       conv.creditsSpent += next.cost + next.serverRunCredits;
@@ -3942,6 +5654,11 @@ class AppController extends ChangeNotifier {
       turn.continuedSpend += next.cost;
       _creditBalance(next.pro, next.balance,
           anonKey: conv.anon, anonPk: conv.anonPk);
+      if (handed != null) {
+        turn.outcome = 'background';
+        await _trackBackground(turn, handed);
+        return;
+      }
 
       left = research != null
           ? double.infinity
@@ -3961,28 +5678,28 @@ class AppController extends ChangeNotifier {
           settings.autoContinue == 0) {
         await note(t('That answer stopped early — the task needs more steps than one '
             'turn holds. Set “When a repo task runs out of room” in Settings and '
-            'Nymbot will carry on by itself.'), conv: conv);
+            'Nymbot will carry on by itself.'), conv: conv, replyTo: _linkOf(turn));
         return;
       }
       if (token != null && token.isNotEmpty && reserve > left) {
         await note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-            {'n': creditFigure(reserve), 'left': creditFigure(left)}), conv: conv);
+            {'n': creditFigure(reserve), 'left': creditFigure(left)}), conv: conv, replyTo: _linkOf(turn));
         return;
       }
       if (token != null && token.isNotEmpty && left <= 0) {
         await note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-            {'n': creditFigure(turn.continuedSpend)}), conv: conv);
+            {'n': creditFigure(turn.continuedSpend)}), conv: conv, replyTo: _linkOf(turn));
         return;
       }
     }
     if (token != null && token.isNotEmpty && stall != null && !turn.stopped) {
       await note(t('Stopped there — the gateway stayed busy. The work so '
-          'far is saved, so ask it to carry on later.'), conv: conv);
+          'far is saved, so ask it to carry on later.'), conv: conv, replyTo: _linkOf(turn));
       return;
     }
     if (turn.continuedSpend > 0 && (token == null || token.isEmpty)) {
       await note(t('Finished. Carrying on cost {n} extra credits.', {'n': creditFigure(turn.continuedSpend)}),
-          conv: conv);
+          conv: conv, replyTo: _linkOf(turn));
     }
   }
 
@@ -4663,6 +6380,11 @@ class AppController extends ChangeNotifier {
             onTimeout: () => false,
           );
     }
+    _bgTimer?.cancel();
+    _bgTimer = null;
+    backgroundRuns = [];
+    await replyNotify.channel.checks(false);
+    if (unifiedPushOn) await replyNotify.channel.upUnregister();
     _stopSupport();
     _supportSeen = null;
     _supportWraps.clear();
@@ -4676,9 +6398,14 @@ class AppController extends ChangeNotifier {
     notices = [];
     dismissedNotices = [];
     current = null;
+    for (final turn in turns.values) {
+      turn.stopped = true;
+      turn.control.cancel();
+    }
     turns.clear();
-    _queues.clear();
-    _queueEdits.clear();
+    _parked.clear();
+    _offlineHeld.clear();
+    remoteRuns = [];
     signedIn = false;
     _entered = false;
     notifyListeners();
@@ -4686,11 +6413,29 @@ class AppController extends ChangeNotifier {
 }
 
 class ChatTurn {
-  ChatTurn(this.conv);
+  ChatTurn(this.conv, {String? key, this.askId, this.msgId, this.label = ''})
+      : key = key ?? bytesToHex(randomBytes(8));
 
   final Conversation conv;
+  final String key;
+
+  String? askId;
+
+  String? msgId;
+  String label;
+  String kind = 'chat';
   final TurnControl control = TurnControl();
   String? status;
+
+  String phase = 'running';
+  PreparedTurn? prepared;
+  bool sent = false;
+  bool holdsSlot = false;
+  Completer<void>? slotWait;
+  String? progress;
+  List<Map<String, dynamic>> plan = [];
+  List<Map<String, dynamic>> branches = [];
+  bool unattended = false;
 
   /// The running turn's steps, newest last; emptied when a turn ends.
   List<TurnStep> steps = [];
@@ -4698,13 +6443,36 @@ class ChatTurn {
   String? draft;
   bool drafted = false;
   final DateTime began = DateTime.now();
+
+  DateTime? since;
   bool kept = false;
   bool watching = false;
   bool stopped = false;
+  String? outcome;
 
   Object? research;
   Map<String, dynamic>? team;
+  Map<String, dynamic>? model;
 
   /// Credits spent continuing the current run, so the budget covers the whole task.
   double continuedSpend = 0;
+
+  String get runId => prepared?.replyTo ?? msgId ?? prepared?.msgId ?? '';
+
+  bool get live => phase == 'running' && sent && !stopped;
 }
+
+typedef RemoteRun = ({
+  String replyTo,
+  String thread,
+  String kind,
+  String label,
+  String progress,
+  List<Map<String, dynamic>> plan,
+  String state,
+  int startedAt,
+  int updatedAt,
+  List<Map<String, dynamic>> branches,
+  bool background,
+  int until,
+});

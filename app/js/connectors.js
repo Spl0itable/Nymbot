@@ -584,23 +584,25 @@
             const Chat = window.NymbotChat;
             if (!ui.conv) return;
             const conv = ui.conv;
-            if (ui.sendingIn(conv.id)) return;
+            if (ui.turnsIn(conv.id).some(x => x.approving === m.id)) return;
             const p = m.pendingTool;
+            const link = { convId: conv.id, asked: m.askedBy || null, runId: m.replyTo || null };
             if (!p || !p.token) {
                 this.settle(ui, conv.id, m, 'denied');
-                ui.note(t('That request has expired. Ask again and Nymbot will start it fresh.'), conv.id);
+                ui.runNote(link, t('That request has expired. Ask again and Nymbot will start it fresh.'));
                 return;
             }
             const Caps = window.NymbotCaps;
             const capStop = ui.capStopsLeg(conv);
             if (capStop) {
-                ui.note(capStop, conv.id);
+                ui.runNote(link, capStop);
                 return;
             }
             this.settle(ui, conv.id, m, approve ? 'allowed' : 'denied');
             const turn = ui.beginTurn(conv, approve
                 ? t('Running {tool} on {connector}', { tool: p.tool, connector: p.connector })
-                : t('Carrying on without {tool}', { tool: p.tool }));
+                : t('Carrying on without {tool}', { tool: p.tool }), { asked: m.askedBy || null, runId: m.replyTo || null, resumed: true });
+            turn.approving = m.id;
             if (p.team) {
                 turn.team = {};
                 ui.renderProgress(turn);
@@ -611,16 +613,28 @@
                     maxCost: Caps ? Caps.maxCost(conv, true, ui.models) : null,
                     controller: turn.controller,
                     onStatus: (text) => ui.turnStatus(turn, text),
-                    onTurn: (eventId, signer) => ui.watchTurn(turn, eventId, signer)
+                    onSlot: (waiting) => ui.turnState(turn, { slot: waiting }),
+                    onClaiming: (on) => ui.turnState(turn, { claiming: on }),
+                    onTurn: (eventId, signer, info) => {
+                        ui.bindRun(turn, conv.id, null, eventId, signer, info);
+                        ui.watchTurn(turn, eventId, signer);
+                    }
                 };
                 if (approve) opts.mcpApprove = p.id;
                 else opts.mcpDecline = p.id;
                 const res = await Chat.send(conv, t('Continue.'), ui.settings, opts);
                 ui.stopWatchingTurn(turn);
+                if (turn.stopped) return;
+                if (res.stopped) {
+                    ui.runNote(turn, t('Stopped.'));
+                    return;
+                }
                 const reply = this.replyFrom(conv, ui.settings, res);
-                Store.addMessage(conv.id, reply);
+                reply.replyTo = res.replyTo || turn.runId || null;
+                reply.askedBy = turn.asked || null;
+                ui.placeMessage(conv.id, reply, turn);
+                turn.lastReplyId = reply.id;
                 if (window.NymbotArtifacts) window.NymbotArtifacts.harvest(conv.id, reply);
-                ui.showMessage(conv.id, reply);
                 const spent = window.NymbotServerRun ? window.NymbotServerRun.totalCost(reply) : reply.cost;
                 Store.recordUsage(spent, !!res.pro);
                 ui.bumpStats(conv, spent);
@@ -628,11 +642,14 @@
                 if (res.truncated) await ui.continueRun(turn, res);
             } catch (e) {
                 ui.stopWatchingTurn(turn);
-                if (e && e.capExceeded) {
+                if (turn.stopped) return;
+                if (e && e.stopped) {
+                    ui.runNote(turn, t('Stopped.'));
+                } else if (e && e.capExceeded) {
                     this.settle(ui, conv.id, m, 'waiting');
-                    ui.note(t('Stopped: carrying on could go past this chat\'s spending cap.'), conv.id);
+                    ui.runNote(turn, t('Stopped: carrying on could go past this chat\'s spending cap.'));
                 } else {
-                    ui.note((e && e.message) || t('Could not carry on from there.'), conv.id);
+                    ui.runNote(turn, (e && e.message) || t('Could not carry on from there.'));
                 }
             } finally {
                 ui.endTurn(turn);

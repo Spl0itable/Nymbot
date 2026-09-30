@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tools and SDKs - Nymbot Knowledge Base</title>
-    <meta name="description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <meta name="description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Aider, Open WebUI, Goose and plain HTTP.">
     <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
     <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
@@ -13,7 +13,7 @@
 
     <!-- Open Graph Meta Tags -->
     <meta property="og:title" content="Tools and SDKs - Nymbot Knowledge Base">
-    <meta property="og:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <meta property="og:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Aider, Open WebUI, Goose and plain HTTP.">
     <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
     <meta property="og:url" content="https://nymbot.ai/docs/api-integrations/">
     <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
     <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
     <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
     <meta name="twitter:title" content="Tools and SDKs - Nymbot Knowledge Base">
-    <meta name="twitter:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <meta name="twitter:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Aider, Open WebUI, Goose and plain HTTP.">
     <link rel="canonical" href="https://nymbot.ai/docs/api-integrations/">
     <!--HREFLANG-->
     <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
@@ -54,9 +54,10 @@
                 <a href="/docs/api/#keys">API keys</a>), and a model id from
                 <a href="/docs/api-chat/#models">the model list</a>. The examples use
                 <code>anthropic/claude-sonnet-5</code> on the Pro balance. <code>nymbot/auto</code> is the
-                cheaper choice on the standard balance for plain chat, but it cannot call tools, which Claude
-                Code, Codex, Cline and Goose all need; for those, pick a catalog model with
-                <code>capabilities.tools</code>.</p>
+                cheaper choice on the standard balance for plain chat, but it cannot call tools, which Goose
+                needs; for that, pick a catalog model with <code>capabilities.tools</code>.</p>
+            <p>Setup for coding agents such as Claude Code, Codex, Cline, Kilo Code and Continue is on its own
+                page: <a href="/docs/api-tools/">coding tools</a>.</p>
             <div class="docs-note is-tip">
                 <span class="docs-note-label">Give each tool its own key</span>
                 <p>Make a separate key for each tool, with a cap. Coding agents make many
@@ -139,68 +140,6 @@ const message = await client.messages.create({
 });
 console.log(message.content[0].text);</code></pre>
 
-            <h2 id="claude-code">Claude Code</h2>
-            <p>Claude Code runs on the Nymbot API with three environment variables. Set them in the shell you
-                start it from, or in your shell profile:</p>
-            <p class="docs-note-label" data-i18n-skip>Shell</p>
-<pre><code>export ANTHROPIC_BASE_URL=https://nymbot.ai/api
-export ANTHROPIC_AUTH_TOKEN=sk-nymbot-...
-export ANTHROPIC_API_KEY=""
-claude</code></pre>
-            <ul>
-                <li>The base URL is exactly <code>https://nymbot.ai/api</code>: no <code>/v1</code> and no
-                    slash at the end.</li>
-                <li>The key goes in <code>ANTHROPIC_AUTH_TOKEN</code>. <code>ANTHROPIC_API_KEY</code> is set
-                    empty so Claude Code does not try to use an Anthropic account instead.</li>
-                <li>Claude Code's own model names, such as <code>claude-opus-5</code> and
-                    <code>claude-sonnet-5</code>, dated or not, are matched to the catalog, so
-                    <code>/model</code> works as usual. See
-                    <a href="/docs/api-chat/#messages">Anthropic Messages</a> for the rules.</li>
-                <li>Extended thinking works, but is left off on the step that follows a tool result, since
-                    Nymbot cannot hand back the signed thinking Anthropic needs to resume it.</li>
-            </ul>
-            <p>To run it on a model that is not Claude, point its model slots at catalog ids:</p>
-            <p class="docs-note-label" data-i18n-skip>Shell</p>
-<pre><code>export ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/claude-opus-5
-export ANTHROPIC_DEFAULT_SONNET_MODEL=moonshotai/kimi-k3
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5</code></pre>
-            <p>Every request Claude Code makes is a Pro request, and it makes a great many: a single task can be
-                dozens of model calls, each carrying the conversation so far. Give it a key with a daily cap.</p>
-
-            <h2 id="codex">Codex</h2>
-            <p>Codex uses the Responses API. Add Nymbot as a provider in <code>~/.codex/config.toml</code>:</p>
-            <p class="docs-note-label" data-i18n-skip>config.toml</p>
-<pre><code>model = "openai/gpt-5.6-sol"
-model_provider = "nymbot"
-
-[model_providers.nymbot]
-name = "Nymbot"
-base_url = "https://nymbot.ai/api/v1"
-env_key = "NYMBOT_API_KEY"
-wire_api = "responses"</code></pre>
-            <p>Then set <code>NYMBOT_API_KEY</code> in your environment and run <code>codex</code>. The
-                <code>wire_api = "responses"</code> line matters: without it Codex uses an older format.</p>
-            <p>Nymbot passes function tools and web search to the model, and refuses other built-in tool
-                types with <code>400</code> <code>unsupported_tool</code>. If Codex reports that, turn off the
-                Codex features that add other tool types in <code>config.toml</code>. Use a model with
-                <code>capabilities.tools</code>; the few models that run on OpenAI's Responses transport cannot
-                take tools through Nymbot, and <code>nymbot/auto</code> cannot either. Nymbot does not store
-                responses, so Codex has to send the whole conversation each turn, which it does by
-                default.</p>
-
-            <h2 id="cline">Cline</h2>
-            <p>In Cline's settings in VS Code:</p>
-            <ol>
-                <li>Set <strong>API Provider</strong> to <strong>OpenAI Compatible</strong>.</li>
-                <li>Set <strong>Base URL</strong> to <code>https://nymbot.ai/api/v1</code>.</li>
-                <li>Paste your key into <strong>API Key</strong>.</li>
-                <li>Set <strong>Model ID</strong> to a catalog id such as
-                    <code>anthropic/claude-sonnet-5</code>.</li>
-            </ol>
-            <p>Under the model's settings you can enter its context window and whether it takes images, from
-                <code>context_length</code> and <code>capabilities.vision</code> in the model list, so Cline
-                manages its context correctly.</p>
-
             <h2 id="aider">Aider</h2>
             <p>Aider talks to any OpenAI-compatible server. Set the base URL and key, and put
                 <code>openai/</code> in front of the model id so Aider knows which kind of server it is:</p>
@@ -223,29 +162,6 @@ aider --model openai/anthropic/claude-sonnet-5</code></pre>
                 <code>OPENAI_API_BASE_URL</code> and <code>OPENAI_API_KEY</code>.</p>
             <p>Open WebUI keeps your conversations on its own server. Nymbot does not store them, but Open WebUI
                 does, wherever you run it.</p>
-
-            <h2 id="continue">Continue</h2>
-            <p>Add a model to Continue's <code>config.yaml</code>:</p>
-            <p class="docs-note-label" data-i18n-skip>config.yaml</p>
-<pre><code>models:
-  - name: Claude Sonnet 5 (Nymbot)
-    provider: openai
-    model: anthropic/claude-sonnet-5
-    apiBase: https://nymbot.ai/api/v1
-    apiKey: sk-nymbot-...
-    roles:
-      - chat
-      - edit
-      - apply
-  - name: Nymbot embeddings
-    provider: openai
-    model: "@cf/baai/bge-m3"
-    apiBase: https://nymbot.ai/api/v1
-    apiKey: sk-nymbot-...
-    roles:
-      - embed</code></pre>
-            <p>The second entry uses a Nymbot <a href="/docs/api-media/#embeddings">embedding model</a> for
-                Continue's codebase search.</p>
 
             <h2 id="goose">Goose</h2>
             <p>Run <code>goose configure</code>, choose <strong>Configure Providers</strong>, pick

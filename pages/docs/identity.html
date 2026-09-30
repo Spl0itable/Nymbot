@@ -154,7 +154,10 @@
             <p><strong>Wipe this device</strong>, under Identity, asks once and then destroys everything the app
                 keeps here: your key, every conversation, your repository and connector tokens, stored documents,
                 cached files, the throwaway key and any credits left on it. Before the key is gone it also asks the
-                server to delete the sealed copy of your chats and settings that sync keeps for this account.</p>
+                server to delete the sealed copy of your chats and settings that sync keeps for this account, and
+                everything the <a href="/docs/api/#privacy">API</a> holds for it: every API key, which stops
+                working at once, the query history, usage records, a saved auto top-up wallet and video jobs.
+                Your balance and any charges you still owe stay on the key.</p>
             <p>It is not a logout and it cannot be undone. If you have backed up your <code>nsec</code> you can
                 come back to the same account later, starting with no chats; if you have not, that identity is gone.</p>
         <!--DOCS-PAGER-->

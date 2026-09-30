@@ -1,7 +1,7 @@
 name: nymbot
 description: "Nymbot — a private AI assistant. No account, end-to-end encrypted, paid in sats."
 publish_to: "none"
-version: 1.0.7+344
+version: 1.0.7+350
 environment:
   sdk: ^3.6.0
 

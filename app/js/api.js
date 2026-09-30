@@ -9,21 +9,65 @@
     const MONEY = new Set([
         'transfer-credits', 'create-invoice', 'claim-credits',
         'clear-history', 'voucher-issue', 'voucher-redeem',
-        'pm-revert', 'git-apply', 'mcp-probe', 'runner-run',
-        'gift-create', 'gift-redeem', 'gift-cancel'
+        'pm-revert', 'git-apply', 'git-branch', 'mcp-probe', 'runner-run',
+        'gift-create', 'gift-redeem', 'gift-cancel',
+        'schedule-put', 'schedule-delete', 'schedule-clear'
     ]);
 
-    const SERIAL = new Set(['pm']);
+    const SLOTTED = new Set(['pm']);
+    const RUN_LIMIT = 3;
+    const RUN_CEILING = 10;
 
     const BUSY_STATUS = new Set([429, 503, 529]);
     const BUSY_TEXT = /rate[- ]?limit|too many requests|overloaded|over capacity|no capacity|try again later|temporarily unavailable/i;
 
-    let gate = Promise.resolve();
+    const slots = { busy: 0, waiting: [] };
 
-    function queued(run) {
-        const mine = gate.then(run, run);
-        gate = mine.then(() => { }, () => { });
-        return mine;
+    function runLimit() {
+        let n = RUN_LIMIT;
+        try { n = Number(Api.runLimit()) || RUN_LIMIT; } catch (_) { n = RUN_LIMIT; }
+        return Math.max(1, Math.min(RUN_CEILING, Math.floor(n)));
+    }
+
+    function pump() {
+        while (slots.waiting.length && slots.busy < runLimit()) {
+            const next = slots.waiting.shift();
+            slots.busy++;
+            next.grant();
+        }
+    }
+
+    function takeSlot(signal, onSlot) {
+        if (!slots.waiting.length && slots.busy < runLimit()) {
+            slots.busy++;
+            return Promise.resolve(true);
+        }
+        return new Promise((resolve) => {
+            const entry = {
+                grant: () => {
+                    if (signal) signal.removeEventListener('abort', drop);
+                    if (onSlot) { try { onSlot(false); } catch (_) { } }
+                    resolve(true);
+                }
+            };
+            const drop = () => {
+                const at = slots.waiting.indexOf(entry);
+                if (at !== -1) slots.waiting.splice(at, 1);
+                if (onSlot) { try { onSlot(false); } catch (_) { } }
+                resolve(false);
+            };
+            if (signal) {
+                if (signal.aborted) { resolve(false); return; }
+                signal.addEventListener('abort', drop, { once: true });
+            }
+            slots.waiting.push(entry);
+            if (onSlot) { try { onSlot(true); } catch (_) { } }
+        });
+    }
+
+    function freeSlot() {
+        slots.busy = Math.max(0, slots.busy - 1);
+        pump();
     }
 
     const url = () => `https://${C.apiHost}/api/bot`;
@@ -130,28 +174,69 @@
         async call(action, extra, opts) {
             const options = opts || {};
             const body = await this.signedBody(action, extra, options);
-            const controller = options.controller || new AbortController();
+            const outer = options.controller ? options.controller.signal : (options.signal || null);
             const attempt = async () => {
-                if (controller.signal.aborted) {
-                    return { status: 0, data: { error: t('timed out') } };
+                if (outer && outer.aborted) {
+                    return { status: 0, aborted: true, data: { error: t('Stopped.') } };
                 }
-                const timer = setTimeout(() => controller.abort(), options.timeout || 30000);
+                const own = new AbortController();
+                let timedOut = false;
+                const relay = () => own.abort();
+                if (outer) outer.addEventListener('abort', relay, { once: true });
+                const timer = setTimeout(() => { timedOut = true; own.abort(); }, options.timeout || 30000);
                 try {
                     const resp = await Edge.fetch(url(), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body,
-                        signal: controller.signal
+                        signal: own.signal
                     });
                     const data = await resp.json().catch(() => ({}));
                     return { status: resp.status, data: priced(data || {}) };
                 } catch (e) {
-                    return { status: 0, data: e.name === 'AbortError' ? { error: t('timed out') } : unreachable() };
+                    if (e && e.name === 'AbortError') {
+                        return timedOut
+                            ? { status: 0, timedOut: true, data: { error: t('timed out') } }
+                            : { status: 0, aborted: true, data: { error: t('Stopped.') } };
+                    }
+                    return { status: 0, data: unreachable() };
                 } finally {
                     clearTimeout(timer);
+                    if (outer) outer.removeEventListener('abort', relay);
                 }
             };
-            return SERIAL.has(action) ? queued(attempt) : attempt();
+            if (!SLOTTED.has(action) || options.slot === false) return attempt();
+            const got = await takeSlot(outer, options.onSlot);
+            if (!got) return { status: 0, aborted: true, data: { error: t('Stopped.') } };
+            try {
+                return await attempt();
+            } finally {
+                freeSlot();
+            }
+        },
+
+        runLimit: () => RUN_LIMIT,
+        RUN_LIMIT,
+        RUN_CEILING,
+
+        inFlight() { return { busy: slots.busy, waiting: slots.waiting.length }; },
+
+        refreshSlots() { pump(); },
+
+        cancelRun(replyTo, opts) {
+            return this.call('pm-cancel', { replyTo }, Object.assign({ timeout: 10000 }, opts || {}));
+        },
+
+        steerRun(replyTo, text, opts) {
+            return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, opts || {}));
+        },
+
+        claimRun(eventId, opts) {
+            return this.call('pm-claim', { eventId }, Object.assign({ timeout: 90000 }, opts || {}));
+        },
+
+        liveRuns(thread, opts) {
+            return this.call('pm-runs', thread == null ? {} : { thread }, Object.assign({ timeout: 10000 }, opts || {}));
         },
 
         busy(status, data) {

@@ -511,6 +511,7 @@ export async function runResearch(deps, input) {
     try {
       noted = parseModelJson(await call(noteMessages(state, material.join("\n\n")), L.noteTokens));
     } catch (e) {
+      if (e && e.botStopped) throw e;
       if (!state.notes.length && state.round <= 1) throw e;
       state.phase = "report";
       break;
@@ -541,6 +542,7 @@ export async function runResearch(deps, input) {
   try {
     written = await call(reportMessages(state), reportOut(input && input.model));
   } catch (e) {
+    if (e && e.botStopped) throw e;
     if (legCalls > 1) return park("failed");
     throw e;
   }

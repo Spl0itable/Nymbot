@@ -5,6 +5,7 @@ import '../../services/ngit.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../../services/git_forge.dart';
+import '../../services/git_review.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
@@ -32,6 +33,8 @@ class _ReposSheetState extends State<_ReposSheet> {
   String _provider = 'github';
   bool _writes = false;
   bool _approve = false;
+  bool _jobBranches = true;
+  String _whenDone = '';
   String? _editingId;
   String? _error;
   List<ForgeRepo>? _found;
@@ -61,6 +64,8 @@ class _ReposSheetState extends State<_ReposSheet> {
       _provider = 'github';
       _writes = false;
       _approve = false;
+      _jobBranches = true;
+      _whenDone = '';
       _error = null;
       _host.clear();
       _token.clear();
@@ -247,6 +252,8 @@ class _ReposSheetState extends State<_ReposSheet> {
           branch: r.branch,
           allowWrites: _writes,
           approve: _approve,
+          jobBranches: _jobBranches,
+          whenDone: _whenDone,
         ),
         useHere: true,
       );
@@ -353,12 +360,22 @@ class _ReposSheetState extends State<_ReposSheet> {
     );
   }
 
+  Future<void> _cleanup(AppController app, GitRepo r) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final said = await app.cleanupRepoBranches(r);
+    if (!mounted) return;
+    messenger?.showSnackBar(SnackBar(content: Text(said)));
+    setState(() {});
+  }
+
   void _edit(GitRepo r) {
     setState(() {
       _editingId = r.id;
       _provider = r.provider;
       _writes = r.allowWrites;
       _approve = r.approve;
+      _jobBranches = r.jobBranches;
+      _whenDone = whenDoneOf(r.whenDone);
       _error = null;
       _host.text = r.host;
       _token.text = r.token;
@@ -422,16 +439,32 @@ class _ReposSheetState extends State<_ReposSheet> {
                   subtitle: Text(
                     [
                       r.allowWrites ? '${r.subtitle} · ${t('writes')}' : r.subtitle,
+                      if (r.allowWrites)
+                        r.jobBranches
+                            ? t('Each task gets its own branch · when done: {choice}', {
+                                'choice': whenDoneLabel(
+                                    whenDoneFor(r.whenDone, app.settings.whenDone))
+                              })
+                            : t('Commits straight to the working branch, one task at a time'),
                       if (r.token.isEmpty)
                         t('No access token on this device. Edit it to add one.'),
                     ].join('\n'),
                     style: const TextStyle(fontSize: 11),
                     overflow: TextOverflow.ellipsis,
-                    maxLines: 3,
+                    maxLines: 4,
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (r.token.isNotEmpty &&
+                          r.allowWrites &&
+                          r.nymBranches.isNotEmpty)
+                        IconButton(
+                          key: ValueKey('repo-cleanup-${r.id}'),
+                          icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                          tooltip: t('Clean up Nymbot branches'),
+                          onPressed: () => _cleanup(app, r),
+                        ),
                       IconButton(
                         icon: const NymGlyph('pencil', size: 18),
                         tooltip: t('Edit'),
@@ -572,6 +605,36 @@ class _ReposSheetState extends State<_ReposSheet> {
                   style: const TextStyle(fontSize: 13)),
               onChanged: (v) => setState(() => _approve = v),
             ),
+            SwitchListTile(
+              key: const ValueKey('repo-job-branches'),
+              contentPadding: EdgeInsets.zero,
+              value: _jobBranches,
+              title: Text(t('Each task gets its own branch'),
+                  style: const TextStyle(fontSize: 13)),
+              subtitle: Text(
+                  t('Off commits straight to the working branch, one task at a time.'),
+                  style: const TextStyle(fontSize: 11)),
+              onChanged: (v) => setState(() => _jobBranches = v),
+            ),
+            if (_jobBranches)
+              DropdownButtonFormField<String>(
+                key: ValueKey('repo-when-done-$_editingId'),
+                initialValue: _whenDone,
+                isExpanded: true,
+                decoration: InputDecoration(labelText: t('When done')),
+                items: [
+                  DropdownMenuItem(
+                    value: '',
+                    child: Text(t('Use the default in Settings ({choice})', {
+                      'choice': whenDoneLabel(whenDoneFor('', app.settings.whenDone))
+                    })),
+                  ),
+                  for (final choice in whenDoneOptions)
+                    DropdownMenuItem(
+                        value: choice, child: Text(whenDoneLabel(choice))),
+                ],
+                onChanged: (v) => setState(() => _whenDone = whenDoneOf(v)),
+              ),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -614,6 +677,9 @@ class _ReposSheetState extends State<_ReposSheet> {
                     label: _label.text.trim(),
                     allowWrites: _writes,
                     approve: _approve,
+                    jobBranches: _jobBranches,
+                    whenDone: _whenDone,
+                    nymBranches: before?.nymBranches,
                     ngit: _originFor(_repo.text.trim(), _host.text.trim()),
                   ),
                   useHere: _editingId == null,

@@ -479,7 +479,8 @@ export async function mcpProbe(server, deps) {
   };
 }
 
-export async function mcpPrepare(servers, deps, progress) {
+export async function mcpPrepare(servers, deps, progress, policy) {
+  var readOnlyOk = !!(policy && policy.readOnlyTools === "allow");
   var say = typeof progress === "function" ? progress : function () { };
   var slugs = Object.create(null);
   var names = Object.create(null);
@@ -515,7 +516,9 @@ export async function mcpPrepare(servers, deps, progress) {
         }
       });
       runtime.byName[exposed] = {
-        entry: entry, tool: tool.name, confirm: mcpNeedsConfirm(tool, mcpAutoAllowed(server, tool.name)),
+        entry: entry, tool: tool.name,
+        confirm: mcpNeedsConfirm(tool, mcpAutoAllowed(server, tool.name) ||
+          (readOnlyOk && !!(tool.annotations && tool.annotations.readOnlyHint === true))),
         destructive: !!(tool.annotations && tool.annotations.destructiveHint === true)
       };
       entry.tools++;
@@ -622,6 +625,9 @@ export async function runMcpToolLoop(ctx) {
   var runtime = ctx.runtime;
   var git = ctx.git || null;
   var tools = (git ? git.tools : []).concat(runtime.tools);
+  var planOn = typeof ctx.plan === "function" && ctx.planTool;
+  if (planOn) tools = tools.concat([ctx.planTool]);
+  var stopped = typeof ctx.stopped === "function" ? ctx.stopped : function () { return false; };
   var convo = ctx.messages.slice();
   var calls = 0;
   var outputTokens = 0;
@@ -647,6 +653,7 @@ export async function runMcpToolLoop(ctx) {
   }
 
   async function execItem(item) {
+    if (item.kind === "plan") return String(ctx.plan(item.args));
     if (item.kind === "git" && git) {
       progress({ kind: "tool", tool: item.name, target: git.target(item.name, item.args) });
       try { return String(await git.exec(item.name, item.args, item, usage)); } catch (e) { return "Error: " + ((e && e.message) || String(e)); }
@@ -732,6 +739,7 @@ export async function runMcpToolLoop(ctx) {
 
   var lastUsage = null;
   while (true) {
+    if (calls > 0 && stopped()) return done({ reply: "", cancelled: true });
     if (calls > 0 && guard && !guard.room(usage, 1,
       capNextUsage(convo, calls + 1 >= budget ? null : tools, ctx.outCeiling || ctx.proModel.maxTokens, lastUsage))) {
       return done({ reply: capStoppedReply(sofar), truncated: true, capStopped: true, convo: convo });
@@ -744,6 +752,10 @@ export async function runMcpToolLoop(ctx) {
     try {
       r = await d.proGatewayChat(ctx.env, ctx.proModel, convo, ctx.proModel.maxTokens, lastTurn ? null : tools);
     } catch (e) {
+      if (e && e.botStopped) {
+        calls--;
+        return done({ reply: "", cancelled: true });
+      }
       if (calls < 2 && !priorCalls) throw e;
       calls--;
       d.botUsageAdd(usage, e && e.usage);
@@ -781,7 +793,8 @@ export async function runMcpToolLoop(ctx) {
       var fnArgs = {};
       try { fnArgs = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
       if (!fnArgs || typeof fnArgs !== "object" || Array.isArray(fnArgs)) fnArgs = {};
-      queue.push({ id: tc.id, name: String(fnName || ""), args: fnArgs, kind: gitNames[fnName] ? "git" : "mcp" });
+      queue.push({ id: tc.id, name: String(fnName || ""), args: fnArgs,
+        kind: planOn && fnName === "plan_update" ? "plan" : (gitNames[fnName] ? "git" : "mcp") });
     }
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: fixed });
     var stop = await drain();

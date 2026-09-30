@@ -7,12 +7,14 @@ import { getPublicKey, botBase64Encode, botBase64Decode, bytesToHex, randomBytes
 import { hasD1 } from "./_d1.js";
 import { mediaTiers, mediaTier, mediaRate } from "./_mediaprice.js";
 import { ledgerCall } from "./_ledger.js";
-import { ApiError, apiBad, apiJson, apiRandomId, apiRound, apiIso } from "./_apihttp.js";
+import { ApiError, apiBad, apiJson, apiRandomId, apiRound, apiIso, apiDropBody, apiUrlHasUserinfo, API_IMAGE_URL_MAX_CHARS } from "./_apihttp.js";
 import {
   apiBillOpen, apiBillSettle, apiBillRelease, apiCostObject, apiCostHeaders, apiRecordQuery, apiMilliSats, apiUsd
 } from "./_apibill.js";
 import { apiResolveModel } from "./_apimodels.js";
-import { apiL402StatusUrl, apiL402VideoToken, apiL402VideoRefund, apiL402GiveBack } from "./_apil402.js";
+import {
+  apiL402StatusUrl, apiL402VideoToken, apiL402VideoRefund, apiL402VideoRefundToken, apiL402GiveBack, apiL402RefundHooks
+} from "./_apil402.js";
 
 export const API_IMAGE_MAX_N = 4;
 export const API_IMAGE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
@@ -299,6 +301,8 @@ export function apiImageRef(v, param) {
     return { bytes: clean };
   }
   if (!/^https?:\/\/[^\s]+$/i.test(v)) throw apiBad("`" + param + "` must be an http(s) URL or a base64 data URL of a picture.", param, "invalid_image_url");
+  if (v.length > API_IMAGE_URL_MAX_CHARS) throw apiBad("`" + param + "` is longer than " + API_IMAGE_URL_MAX_CHARS + " characters.", param, "invalid_image_url");
+  if (apiUrlHasUserinfo(v)) throw apiBad("`" + param + "` must not carry a user name or password.", param, "invalid_image_url");
   if (isPrivateHostUrl(v)) throw apiBad("`" + param + "` points at a private or local address.", param, "invalid_image_url");
   return { url: v };
 }
@@ -424,7 +428,7 @@ async function imagesRun(api, o) {
     : botMediaQuote("image", pick.gen, { refs: o.ref ? 1 : 0 }, btc).milli;
   const signer = o.format === "url" || (o.ref && o.ref.bytes) ? apiNeedSigner(env, "use response_format b64_json with a URL image") : null;
   const extra = pick.gen ? imageExtra(pick.gen, o.params) : null;
-  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: perMilli * o.n, l402Partial: true });
+  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: perMilli * o.n, l402Partial: true, refresh: true });
   const record = (milli, status) => api.waitUntil(apiRecordQuery(api, {
     type: "image", model: pick.id, usage: null, milli, tier: pick.tier, status, btcUsd: btc, ms: Date.now() - t0, calls: o.n
   }));
@@ -475,11 +479,14 @@ async function generations(api) {
 }
 
 async function readForm(api, what) {
+  let form;
   try {
-    return await api.request.formData();
+    form = await api.request.formData();
   } catch (e) {
     throw apiBad("This endpoint takes multipart/form-data with " + what + ".", null, "invalid_multipart");
   }
+  apiDropBody(api);
+  return form;
 }
 
 function formText(form, name) {
@@ -527,7 +534,9 @@ const VIDEO_DDL = [
   "CREATE INDEX IF NOT EXISTS api_video_jobs_pubkey ON api_video_jobs (pubkey, created_at)",
   "CREATE INDEX IF NOT EXISTS api_video_jobs_expires ON api_video_jobs (expires_at)",
   "ALTER TABLE api_video_jobs ADD COLUMN refunded_milli INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE api_video_jobs ADD COLUMN input_blob TEXT"
+  "ALTER TABLE api_video_jobs ADD COLUMN input_blob TEXT",
+  "ALTER TABLE api_video_jobs ADD COLUMN refund_hash TEXT",
+  "CREATE INDEX IF NOT EXISTS api_video_jobs_refund ON api_video_jobs (refund_hash)"
 ];
 const videoReady = new WeakSet();
 
@@ -569,7 +578,7 @@ function videoObject(row, btc, env) {
     out.nymbot = { payment: "l402", tier: "pro", paid_sats: apiMilliSats(row.charged_milli, "pro") };
     if (refunded > 0) {
       out.nymbot.refund_sats = apiMilliSats(refunded, "pro");
-      out.nymbot.refund_token = env ? apiL402VideoToken(env, row.id) : null;
+      if (!row.refund_hash) out.nymbot.refund_token = env ? apiL402VideoToken(env, row.id) : null;
     }
   }
   return out;
@@ -585,7 +594,7 @@ async function refundJob(env, row) {
   if (!milli) return 0;
   if (paidRow(row)) {
     let minted = null;
-    try { minted = await apiL402VideoRefund(env, row.id, apiMilliSats(milli, "pro")); } catch (e) { minted = null; }
+    try { minted = await apiL402VideoRefund(env, row.id, apiMilliSats(milli, "pro"), row.refund_hash || null); } catch (e) { minted = null; }
     return minted ? milli : null;
   }
   let got;
@@ -684,14 +693,14 @@ async function videoSubmit(api) {
   const btc = await botBtcPrice();
   let plan;
   try {
-    plan = await botVideoPlan(env, prompt, gen, ref && ref.url ? ref.url : "", res || "", extra);
+    plan = await botVideoPlan(env, prompt, gen, "", res || "", extra);
   } catch (e) {
     throw new ApiError(503, "api_error", "Video generation is not available on this server right now.", { code: "service_unavailable" });
   }
   const milli = botMediaQuote("video", gen, { body: plan.body, seconds: plan.seconds }, btc).milli;
   const tierRes = mediaRate("video", gen, { body: plan.body }).res || null;
   const t0 = Date.now();
-  const bill = await apiBillOpen(api, { tier: "pro", reserveMilli: milli });
+  const bill = await apiBillOpen(api, { tier: "pro", reserveMilli: milli, refresh: true });
   const fail = async (e) => {
     const settled = e && e.billed ? await apiBillSettle(api, bill, milli) : await apiBillRelease(api, bill);
     if (!(e && e.billed)) dropRef(api, ref);
@@ -701,7 +710,7 @@ async function videoSubmit(api) {
   };
   let got;
   try {
-    if (ref && ref.bytes) plan = await botVideoPlan(env, prompt, gen, await hostRef(env, ref, signer), res || "", extra);
+    if (ref) plan = await botVideoPlan(env, prompt, gen, ref.bytes ? await hostRef(env, ref, signer) : ref.url, res || "", extra);
     got = await botVideoStart(env, plan, gen);
   } catch (e) {
     return fail(e);
@@ -713,7 +722,9 @@ async function videoSubmit(api) {
   const settled = await apiBillSettle(api, bill, milli);
   const cost = await apiCostObject(api, bill, settled, btc);
   const now = Date.now();
+  const refundKey = bill.l402 ? apiL402VideoRefundToken() : null;
   const row = {
+    refund_hash: refundKey ? refundKey.hash : null,
     id: apiRandomId("vid_", 24), pubkey: bill.pubkey || "l402:" + bytesToHex(randomBytes(16)), key_id: bill.keyId, model: hit.key, status: done ? "completed" : "in_progress",
     job_url: got.job ? got.job.url : null, hold_id: bill.id, hold_credits: bill.holdCredits, key_limited: bill.keyLimited ? 1 : 0,
     milli, seconds: plan.seconds || null, resolution: tierRes, url: done ? done.url : null, content_type: done ? done.type : null,
@@ -737,8 +748,12 @@ async function videoSubmit(api) {
   const out = videoObject(row, btc, env);
   out.cost = cost.charged_usd;
   out.nymbot = apiNymbotCost(cost);
-  if (bill.l402) out.status_url = apiL402StatusUrl(api, row.id, row.expires_at);
+  if (bill.l402) {
+    out.status_url = apiL402StatusUrl(api, row.id, row.expires_at);
+    out.nymbot.refund_token = refundKey.token;
+  }
   if (Math.random() < 0.02) api.waitUntil(db.prepare("DELETE FROM api_video_jobs WHERE expires_at < ?").bind(Date.now()).run());
+  if (Math.random() < 0.05) api.waitUntil(settleStale(api, db));
   return apiJson(out, 202, apiCostHeaders(cost));
 }
 
@@ -762,20 +777,48 @@ async function claim(db, row) {
   return !!(r && r.meta && r.meta.changes === 1);
 }
 
+const jobOpen = (row) => row.status !== "completed" && row.status !== "failed" && !!row.job_url;
+
 async function videoGet(api) {
   const env = api.env;
   const db = await videoDb(env);
   let row = await loadJob(api, db);
   let btc = null;
   try { btc = await botBtcPrice(); } catch (e) { btc = null; }
-  if (row.status === "completed" || row.status === "failed" || !row.job_url) {
-    return apiJson(videoObject(row, btc, env), row.status === "completed" || row.status === "failed" ? 200 : 202);
+  if (Math.random() < 0.05) api.waitUntil(settleStale(api, db));
+  row = await advanceJob(api, db, row);
+  const done = row.status === "completed" || row.status === "failed";
+  return apiJson(videoObject(row, btc, env), done ? 200 : 202);
+}
+
+async function settleStale(api, db) {
+  const now = Date.now();
+  const rs = await db.prepare("SELECT * FROM api_video_jobs WHERE status IN ('in_progress', 'delivering') AND job_url IS NOT NULL AND created_at < ? AND expires_at > ? " +
+    "ORDER BY created_at LIMIT 3").bind(now - API_VIDEO_RENDER_LIMIT_MS, now).all();
+  for (const row of (rs && rs.results) || []) {
+    try { await advanceJob(api, db, row); } catch (e) { }
   }
-  if (row.status === "delivering" && row.updated_at >= Date.now() - API_VIDEO_CLAIM_MS) return apiJson(videoObject(row, btc, env), 202);
+}
+
+async function settleByRefund(api, hash) {
+  const db = await videoDb(api.env);
+  const row = await db.prepare("SELECT * FROM api_video_jobs WHERE refund_hash = ? AND expires_at > ?").bind(String(hash), Date.now()).first();
+  if (!row) return false;
+  const after = await advanceJob(api, db, row);
+  return jobOpen(after);
+}
+
+apiL402RefundHooks.push(settleByRefund);
+
+async function advanceJob(api, db, row0) {
+  const env = api.env;
+  let row = row0;
+  if (!jobOpen(row)) return row;
+  if (row.status === "delivering" && row.updated_at >= Date.now() - API_VIDEO_CLAIM_MS) return row;
   const polled = await botPollVideoOnce(row.job_url);
   const late = Date.now() - row.created_at > API_VIDEO_RENDER_LIMIT_MS;
-  if (polled.pending && !late) return apiJson(videoObject(row, btc, env), 202);
-  if (!(await claim(db, row))) return apiJson(videoObject(row, btc, env), 202);
+  if (polled.pending && !late) return row;
+  if (!(await claim(db, row))) return row;
   const gens = await botProGenerators(env);
   const hit = apiFindGenerator(gens.video, row.model);
   const gen = hit ? hit.model : { label: row.model };
@@ -796,8 +839,7 @@ async function videoGet(api) {
     outcome = { status: "failed", error: "The video was still rendering after " + Math.round(API_VIDEO_RENDER_LIMIT_MS / 60000) +
       " minutes, so Nymbot stopped waiting. The provider bills a render once it accepts it, so the charge stays." };
   }
-  row = await finishJob(api, db, row, outcome);
-  return apiJson(videoObject(row, btc, env), 200);
+  return finishJob(api, db, row, outcome);
 }
 
 async function videoList(api) {

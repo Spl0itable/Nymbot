@@ -8,7 +8,7 @@ import {
 } from "./bot.js";
 import {
   ApiError, apiBad, apiJson, apiRandomId, apiSseStream, apiSseHeaders, apiClientGone, apiErrorBody,
-  API_TIMING
+  apiUrlHasUserinfo, API_TIMING, API_IMAGE_URL_MAX_CHARS
 } from "./_apihttp.js";
 import {
   apiBillOpen, apiBillSettle, apiBillFail, apiBillPrecheck, apiCostObject, apiCostHeaders, apiRecordQuery
@@ -26,12 +26,13 @@ export const API_RESERVE_NONASCII_BYTES_PER_TOKEN = 3;
 export const API_WEB_SEARCH_USD = 0.008;
 const CLASSIFIER_PROMPT_CHARS = 700;
 const CLASSIFIER_INPUT_CHARS = 1000;
-const ROLES = { system: 1, developer: 1, user: 1, assistant: 1, tool: 1 };
+const ROLES = Object.assign(Object.create(null), { system: 1, developer: 1, user: 1, assistant: 1, tool: 1 });
 const EFFORTS = ["minimal", "low", "medium", "high"];
-const EFFORT_BUDGET = { minimal: 1024, low: 2048, medium: 8192, high: 16384 };
+const EFFORT_BUDGET = Object.assign(Object.create(null), { minimal: 1024, low: 2048, medium: 8192, high: 16384 });
 const SAMPLING = ["temperature", "top_p", "stop", "seed", "presence_penalty", "frequency_penalty", "response_format"];
 const STANDARD_SAMPLING = ["temperature", "top_p", "seed", "presence_penalty", "frequency_penalty"];
-const WEB_TOOLS = { web_search: 1, web_search_preview: 1, "openrouter:web_search": 1 };
+const IMAGE_DETAILS = ["auto", "low", "high"];
+const WEB_TOOLS = Object.assign(Object.create(null), { web_search: 1, web_search_preview: 1, "openrouter:web_search": 1 });
 
 function textOf(content) {
   if (typeof content === "string") return content;
@@ -68,8 +69,11 @@ export function apiCheckNesting(obj) {
 function checkImageUrl(url, where) {
   const bad = (why) => apiBad("Image " + where + ": " + why, where, "invalid_image_url");
   if (typeof url !== "string" || !url) throw bad("`image_url.url` is required.");
+  if (/^data:image\/svg/i.test(url)) throw bad("SVG pictures are not accepted; send PNG, JPEG, WebP or GIF.");
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(url)) return url;
   if (!/^https?:\/\//i.test(url)) throw bad("only http(s) and data:image URLs are accepted.");
+  if (url.length > API_IMAGE_URL_MAX_CHARS) throw bad("the URL is longer than " + API_IMAGE_URL_MAX_CHARS + " characters.");
+  if (apiUrlHasUserinfo(url)) throw bad("the URL must not carry a user name or password.");
   if (isPrivateHostUrl(url)) throw bad("the URL must point to a public host.");
   return url;
 }
@@ -87,7 +91,10 @@ function normalizePart(p, where, counter) {
       throw apiBad("At most " + API_CHAT_MAX_IMAGES + " images per request.", where, "too_many_images");
     }
     const out = { type: "image_url", image_url: { url: checkImageUrl(url, where) } };
-    if (p.image_url && typeof p.image_url === "object" && p.image_url.detail) out.image_url.detail = p.image_url.detail;
+    if (p.image_url && typeof p.image_url === "object" && p.image_url.detail != null) {
+      if (!IMAGE_DETAILS.includes(p.image_url.detail)) throw apiBad("`image_url.detail` must be auto, low or high.", where + ".image_url.detail", "invalid_value");
+      out.image_url.detail = p.image_url.detail;
+    }
     return out;
   }
   if (p.type === "input_audio" || p.type === "file" || p.type === "input_file") {
@@ -198,10 +205,61 @@ function checkEffort(body, resolved) {
   return e;
 }
 
+export const API_STOP_MAX = 4;
+export const API_STOP_MAX_CHARS = 256;
+export const API_LOGIT_BIAS_MAX = 300;
+export const API_USER_MAX_CHARS = 256;
+export const API_METADATA_MAX_KEYS = 16;
+export const API_METADATA_KEY_CHARS = 64;
+export const API_METADATA_VALUE_CHARS = 512;
+const SAMPLING_RANGES = { temperature: [0, 2], top_p: [0, 1], presence_penalty: [-2, 2], frequency_penalty: [-2, 2] };
+
+const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+const isPlain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+
+export function apiCheckMetadata(v, param) {
+  if (v == null) return;
+  const keys = isPlain(v) ? Object.keys(v) : null;
+  if (!keys || keys.length > API_METADATA_MAX_KEYS || keys.some((k) => k.length > API_METADATA_KEY_CHARS || typeof v[k] !== "string" || v[k].length > API_METADATA_VALUE_CHARS)) {
+    throw apiBad("`" + param + "` must be an object of at most " + API_METADATA_MAX_KEYS + " string values, keys up to " + API_METADATA_KEY_CHARS +
+      " characters and values up to " + API_METADATA_VALUE_CHARS + ".", param, "invalid_value");
+  }
+}
+
+export function apiCheckSampling(body) {
+  for (const k of Object.keys(SAMPLING_RANGES)) {
+    const v = body[k];
+    if (v == null) continue;
+    const [lo, hi] = SAMPLING_RANGES[k];
+    if (!isNum(v) || v < lo || v > hi) throw apiBad("`" + k + "` must be a number from " + lo + " to " + hi + ".", k, "invalid_value");
+  }
+  if (body.seed != null && !Number.isSafeInteger(body.seed)) throw apiBad("`seed` must be an integer.", "seed", "invalid_value");
+  if (body.stop != null) {
+    const list = Array.isArray(body.stop) ? body.stop : [body.stop];
+    if (list.length > API_STOP_MAX || list.some((x) => typeof x !== "string" || x.length > API_STOP_MAX_CHARS)) {
+      throw apiBad("`stop` must be a string or an array of at most " + API_STOP_MAX + " strings of at most " + API_STOP_MAX_CHARS + " characters.", "stop", "invalid_value");
+    }
+  }
+  if (body.response_format != null && !(isPlain(body.response_format) && typeof body.response_format.type === "string")) {
+    throw apiBad("`response_format` must be an object with a `type`.", "response_format", "invalid_value");
+  }
+  if (body.logit_bias != null) {
+    const keys = isPlain(body.logit_bias) ? Object.keys(body.logit_bias) : null;
+    if (!keys || keys.length > API_LOGIT_BIAS_MAX || keys.some((k) => !isNum(body.logit_bias[k]) || body.logit_bias[k] < -100 || body.logit_bias[k] > 100)) {
+      throw apiBad("`logit_bias` must map at most " + API_LOGIT_BIAS_MAX + " token ids to numbers from -100 to 100.", "logit_bias", "invalid_value");
+    }
+  }
+  if (body.user != null && (typeof body.user !== "string" || body.user.length > API_USER_MAX_CHARS)) {
+    throw apiBad("`user` must be a string of at most " + API_USER_MAX_CHARS + " characters.", "user", "invalid_value");
+  }
+  apiCheckMetadata(body.metadata, "metadata");
+}
+
 export async function apiChatPrepare(api, body) {
   if (typeof body.model !== "string" || !body.model.trim()) throw apiBad("`model` is required.", "model", "missing_required_parameter");
   if (body.n != null && body.n !== 1) throw apiBad("Only n = 1 is supported.", "n");
   apiCheckNesting(body);
+  apiCheckSampling(body);
   const resolved = await apiResolveModel(api.env, body.model);
   const counter = { images: 0 };
   const messages = normalizeMessages(body.messages, counter);
@@ -252,17 +310,21 @@ export function apiAnthropicToolLoopGuard(req) {
 export function apiReserveTokens(text) {
   const s = typeof text === "string" ? text : "";
   let ascii = 0;
+  let dense = 0;
   let wide = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c < 0x80) ascii++;
+    if (c < 0x80) {
+      if ((c >= 0x30 && c <= 0x39) || (c > 0x20 && c < 0x7f && !((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)))) dense++;
+      else ascii++;
+    }
     else if (c < 0x800) wide += 2;
     else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
       wide += 4;
       i++;
     } else wide += 3;
   }
-  return ascii / BOT_RESERVE_CHARS_PER_TOKEN + wide / API_RESERVE_NONASCII_BYTES_PER_TOKEN;
+  return ascii / BOT_RESERVE_CHARS_PER_TOKEN + dense + wide / API_RESERVE_NONASCII_BYTES_PER_TOKEN;
 }
 
 function inputTokens(req, pro) {
@@ -283,6 +345,36 @@ function inputTokens(req, pro) {
   return Math.ceil(tokens) + images * BOT_IMAGE_RESERVE_TOKENS + (req.web ? botWebReserveTokens(pro) : 0);
 }
 
+function searchFeeMilli(tier, btc) {
+  return botMilliForUsd(API_WEB_SEARCH_USD, btc, tier === "pro" ? BOT_PRO_SATS_PER_CREDIT : BOT_SATS_PER_CREDIT);
+}
+
+function estimatedUsage(req, plan, messages, u, outChars) {
+  const base = u || botUsageZero();
+  const fed = (Number(base.fresh) || 0) + (Number(base.read) || 0) + (Number(base.wrote) || 0);
+  const inTok = inputTokens({ messages, tools: req.tools, web: null }, plan.tier === "pro");
+  const hidden = plan.tier === "pro" && apiModelReasons(plan.model) ? plan.maxOut : 0;
+  const out = Math.max(Number(base.out) || 0, Math.ceil((Number(outChars) || 0) / 4), hidden);
+  if (fed >= inTok) return { fresh: Number(base.fresh) || 0, read: Number(base.read) || 0, wrote: Number(base.wrote) || 0, out };
+  return { fresh: inTok, read: 0, wrote: 0, out };
+}
+
+function providerToolCalls(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  list.forEach((tc, i) => {
+    const f = tc && typeof tc === "object" ? tc.function : null;
+    if (!f || typeof f !== "object" || typeof f.name !== "string" || !f.name) return;
+    let args = "{}";
+    if (typeof f.arguments === "string") args = f.arguments;
+    else if (f.arguments != null) {
+      try { args = JSON.stringify(f.arguments); } catch (e) { args = "{}"; }
+    }
+    out.push({ id: String((tc && tc.id) || ("call_" + i)), type: "function", function: { name: f.name, arguments: args } });
+  });
+  return out.length ? out : null;
+}
+
 function lastUserIndex(messages) {
   for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user") return i;
   return -1;
@@ -299,6 +391,7 @@ async function planRun(api, req, btc) {
     const maxOut = Math.min(req.maxTokens || ceiling, ceiling);
     let reserve = botMeteredReserveMilli(Object.assign({}, m, { maxTokens: maxOut }), 1, false, btc, BOT_PRO_SATS_PER_CREDIT, null, inTok);
     if (reserve == null) reserve = botProMaxCost(m, false) * 1000;
+    if (req.web) reserve += searchFeeMilli("pro", btc);
     return { tier: "pro", model: m, maxOut, reserveMilli: reserve, btc, stdRates: null };
   }
   if (!env.AI || typeof env.AI.run !== "function") {
@@ -326,6 +419,7 @@ async function planRun(api, req, btc) {
     if (milli != null && (reserve == null || milli > reserve)) reserve = milli;
   }
   if (reserve == null) reserve = botCreditsForTask(task) * 1000;
+  if (req.web) reserve += searchFeeMilli("standard", btc);
   return { tier: "standard", model: null, task, route, pmModel, maxOut, reserveMilli: reserve, btc, stdRates, classifyUsage };
 }
 
@@ -447,14 +541,24 @@ async function runPro(api, req, plan, messages, draft, gone) {
     gone,
     params: apiUpstreamParams(req, m, plan.maxOut)
   });
-  const msg = (res && res.msg) || {};
-  const split = apiSplitThink(msg.content, msg.reasoning_content || msg.reasoning);
   const usage = (res && res.usage) || botUsageZero();
-  const metered = botUsageBilled(usage) ? botMeteredCharge(m, usage, plan.btc, BOT_PRO_SATS_PER_CREDIT) : null;
-  const milli = metered != null ? metered
-    : botProCost(m, 1, (res && res.outputTokens) || Math.ceil(split.text.length / 4), false) * 1000;
-  const calls = normalizeToolCalls(Array.isArray(msg.tool_calls) && msg.tool_calls.length ? msg.tool_calls : null, "tool_calls");
-  return { content: split.text, reasoning: split.reasoning, toolCalls: calls, usage, milli };
+  try {
+    const msg = (res && res.msg) || {};
+    const split = apiSplitThink(msg.content, msg.reasoning_content || msg.reasoning);
+    const billed = botUsageBilled(usage);
+    const guess = billed ? null : estimatedUsage(req, Object.assign({}, plan, { maxOut: 0 }), messages, null,
+      split.text.length + split.reasoning.length);
+    if (guess && res && res.outputTokens > guess.out) guess.out = res.outputTokens;
+    let milli = botMeteredCharge(m, billed ? usage : guess, plan.btc, BOT_PRO_SATS_PER_CREDIT);
+    if (milli == null) milli = botProCost(m, 1, (res && res.outputTokens) || Math.ceil(split.text.length / 4), false) * 1000;
+    const calls = providerToolCalls(msg.tool_calls);
+    return { content: split.text, reasoning: split.reasoning, toolCalls: calls, usage, milli };
+  } catch (e) {
+    if (e && typeof e === "object" && !botUsageBilled(e.usage)) {
+      e.usage = botUsageBilled(usage) ? usage : estimatedUsage(req, plan, messages, null, 0);
+    }
+    throw e;
+  }
 }
 
 async function runStandard(api, req, plan, messages, draft, gone) {
@@ -474,13 +578,15 @@ async function runStandard(api, req, plan, messages, draft, gone) {
     throw e;
   }
   let metered = null;
-  if (plan.stdRates && botUsageBilled(std.usage)) {
+  const split = apiSplitThink(std.reply, "");
+  if (plan.stdRates) {
     const billed = std.billedModel && std.billedModel !== plan.route
       ? (await botStandardRates(env, std.billedModel)) || plan.stdRates
       : plan.stdRates;
-    metered = await botStandardPartsMilli(env, std.usageParts, billed);
+    const parts = botUsageBilled(std.usage) ? std.usageParts
+      : [{ model: std.billedModel || plan.pmModel, usage: estimatedUsage(req, plan, messages, null, split.text.length + split.reasoning.length) }];
+    metered = await botStandardPartsMilli(env, parts, billed);
   }
-  const split = apiSplitThink(std.reply, "");
   return {
     content: split.text, reasoning: split.reasoning, toolCalls: null, usage: std.usage,
     milli: metered != null ? metered : botCreditsForTask(plan.task) * 1000
@@ -505,6 +611,10 @@ export function apiOpenAiUsage(usage, cost) {
 export function apiUpstreamError(e) {
   if (e instanceof ApiError) return e;
   const msg = String((e && e.message) || "");
+  if (e && e.holdLost) {
+    return new ApiError(402, "insufficient_quota", "The balance held for this request was spent elsewhere while it ran, so it was stopped. What it generated is charged.",
+      { code: "insufficient_balance" });
+  }
   if (e && e.clientGone) return new ApiError(400, "invalid_request_error", "The client closed the stream.", { code: "client_closed" });
   const codes = [...msg.matchAll(/HTTP (\d{3})/g)].map((x) => Number(x[1]));
   const status = (e && e.httpStatus) || codes[0] || 0;
@@ -537,17 +647,27 @@ async function prepFailMilli(api, req, plan, btc) {
   return milli > 0 ? Math.max(BOT_MIN_CHARGE_MILLI, milli) : 0;
 }
 
-function goneCheck(api, draft) {
+function goneCheck(api, draft, bill) {
   const signal = api.request && api.request.signal;
-  return () => !!(signal && signal.aborted) || !!(draft && draft.gone);
+  return () => !!(signal && signal.aborted) || !!(draft && draft.gone) || !!(bill && bill.holdLost);
 }
 
-function watchedDraft(draft, gone) {
+function holdLostError() {
+  const e = new Error("The balance held for this request is no longer available.");
+  e.holdLost = true;
+  e.abortUpstream = true;
+  return e;
+}
+
+function watchedDraft(draft, gone, bill) {
   if (!draft) return null;
   return {
     push(t) { return draft.push(t); },
     reset() { return draft.reset(); },
-    delta(kind, piece) { return draft.delta(kind, piece); },
+    delta(kind, piece) {
+      if (bill && bill.holdLost) throw holdLostError();
+      return draft.delta(kind, piece);
+    },
     get committed() { return !!draft.committed || gone(); }
   };
 }
@@ -564,14 +684,15 @@ async function chatRun(api, req, sink) {
   const btc = await botBtcPrice();
   const plan = await planRun(api, req, btc);
   const bill = await apiBillOpen(api, { tier: plan.tier, reserveMilli: plan.reserveMilli, refresh: true });
-  const gone = goneCheck(api, sink && sink.draft);
-  const draft = watchedDraft(sink && sink.draft ? sink.draft : null, gone);
+  const gone = goneCheck(api, sink && sink.draft, bill);
+  const draft = watchedDraft(sink && sink.draft ? sink.draft : null, gone, bill);
   let web = null;
   let got = null;
   let failure = null;
+  let messages = req.messages;
   try {
     web = await webContext(api, req, plan.tier);
-    const messages = withWeb(req.messages, web);
+    messages = withWeb(req.messages, web);
     try {
       got = plan.tier === "pro" ? await runPro(api, req, plan, messages, draft, gone) : await runStandard(api, req, plan, messages, draft, gone);
     } catch (e) {
@@ -592,13 +713,18 @@ async function chatRun(api, req, sink) {
     milli: settled.chargedMilli, tier: plan.tier, status, web: !!(web && web.context), task: plan.task || null,
     ms: Date.now() - started, btcUsd: btc, err: status === "error" ? "upstream" : null
   }));
+  if (failure && typeof failure === "object" && failure.usageEstimated) {
+    const est = estimatedUsage(req, plan, messages, failure.usage, failure.streamed ? failure.streamed.chars : 0);
+    if (plan.tier === "pro") failure.usage = est;
+    else failure.usageParts = [{ model: plan.pmModel, usage: est }];
+  }
   if (failure) {
     const extraMilli = bill.done ? 0 : await prepFailMilli(api, req, plan, btc);
     const settled = bill.done ? { chargedMilli: 0 } : await apiBillFail(api, bill, failure, { proModel: plan.model, stdRates: plan.stdRates, extraMilli });
     record(settled, "error");
     throw apiUpstreamError(failure);
   }
-  const settled = await apiBillSettle(api, bill, got.milli);
+  const settled = await apiBillSettle(api, bill, got.milli + (req.webSearched ? searchFeeMilli(plan.tier, btc) : 0));
   const cost = await apiCostObject(api, bill, settled, btc);
   record(settled, "ok");
   const finish = got.finish || (got.toolCalls && got.toolCalls.length ? "tool_calls"

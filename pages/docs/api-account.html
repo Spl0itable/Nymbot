@@ -282,7 +282,7 @@ console.log(status);</code></pre>
                         <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td><code>page</code></td><td>integer (query)</td><td>No</td><td>Default 1.</td></tr>
+                        <tr><td><code>page</code></td><td>integer (query)</td><td>No</td><td>Default 1, at most 1,000; a higher page is <code>400</code> <code>invalid_value</code>.</td></tr>
                         <tr><td><code>page_count</code></td><td>integer (query)</td><td>No</td><td>Rows per page. Default 20, at most 100.</td></tr>
                         <tr><td><code>start_date</code><br><code>end_date</code></td><td>string (query)</td><td>No</td><td>ISO 8601 dates or times.</td></tr>
                         <tr><td><code>model</code></td><td>string (query)</td><td>No</td><td>Only this model.</td></tr>
@@ -348,6 +348,7 @@ for (const row of (await res.json()).data) console.log(row.timestamp, row.model,
   "tags": [
     ["u", "https://nymbot.ai/api/v1/keys"],
     ["method", "POST"],
+    ["nonce", "9c4e21f07a3b...16 random bytes in hex"],
     ["payload", "3f1a0d7c8e2b...sha256 of the exact request body in hex"]
   ],
   "content": "",
@@ -362,14 +363,23 @@ for (const row of (await res.json()).data) console.log(row.timestamp, row.model,
                     <code>POST</code> and <code>PATCH</code>, and the body you send has to be byte for byte the
                     one you hashed.</li>
                 <li><code>created_at</code> has to be within 60 seconds of the server's clock.</li>
-                <li>An event for a <code>POST</code>, <code>PATCH</code> or <code>DELETE</code> works once; sign
-                    a new one for every change. A <code>GET</code> may be repeated with the same event while it
-                    is within its 60 seconds.</li>
+                <li>Every event works once, a <code>GET</code> included, so a captured header cannot be
+                    replayed. Sign a new one for every request. Add a <code>nonce</code> tag with a random value
+                    so two requests signed in the same second still differ.</li>
+                <li>The body of a signed request can be at most 64 KB, and a body needs
+                    <code>Content-Type: application/json</code>.</li>
             </ul>
             <p>A missing event returns <code>401</code> <code>missing_nostr_auth</code>; one that is badly
                 formed, badly signed, too old, or for a different URL, method or body returns
                 <code>invalid_nostr_auth</code>, with the reason in the message; a reused one returns
-                <code>nostr_auth_replayed</code>. An API key sent to these endpoints is refused.</p>
+                <code>nostr_auth_replayed</code>. An API key sent to these endpoints is refused. The signature
+                is checked before the body is read, and each address can fail it 30 times a minute (an IPv6
+                address counts as its whole /64); after that it gets <code>429</code> with
+                <code>Retry-After</code>.</p>
+            <p>Browsers can call these endpoints only from Nymbot's own sites (<code>https://nymbot.ai</code>,
+                <code>https://nymchat.app</code> and their subdomains). A page on any other site gets no CORS
+                headers back, so it cannot read what they return. Scripts and native apps, which send no
+                <code>Origin</code>, are not affected.</p>
             <div class="docs-note is-warning">
                 <span class="docs-note-label">Your secret key</span>
                 <p>Signing needs your nym's secret key (the <code>nsec</code>), which controls
@@ -384,11 +394,12 @@ for (const row of (await res.json()).data) console.log(row.timestamp, row.model,
             <p class="docs-note-label" data-i18n-skip>cURL</p>
 <pre><code>nostr_auth() {
   method="$1"; url="$2"; body="$3"
+  nonce=$(openssl rand -hex 16)
   if [ -n "$body" ]; then
     hash=$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)
-    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method" -t "payload=$hash")
+    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method" -t "nonce=$nonce" -t "payload=$hash")
   else
-    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method")
+    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method" -t "nonce=$nonce")
   fi
   printf 'Nostr %s' "$(printf '%s' "$event" | base64 | tr -d '\n')"
 }</code></pre>
@@ -401,7 +412,7 @@ SECRET = bytes.fromhex(os.environ["NOSTR_SECRET_HEX"])
 
 def nostr_auth(method, url, body=b""):
     pubkey = PublicKeyXOnly.from_secret(SECRET).format().hex()
-    tags = [["u", url], ["method", method]]
+    tags = [["u", url], ["method", method], ["nonce", os.urandom(16).hex()]]
     if body:
         tags.append(["payload", hashlib.sha256(body).hexdigest()])
     created_at = int(time.time())
@@ -419,13 +430,13 @@ def nostr_auth(method, url, body=b""):
     return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()</code></pre>
             <p class="docs-note-label" data-i18n-skip>JavaScript</p>
 <pre><code>// npm install nostr-tools
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { finalizeEvent } from "nostr-tools/pure";
 
 const secret = Buffer.from(process.env.NOSTR_SECRET_HEX, "hex");
 
 export function nostrAuth(method, url, body = "") {
-  const tags = [["u", url], ["method", method]];
+  const tags = [["u", url], ["method", method], ["nonce", randomBytes(16).toString("hex")]];
   if (body) tags.push(["payload", createHash("sha256").update(body).digest("hex")]);
   const event = finalizeEvent(
     { kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: "" },
@@ -799,6 +810,14 @@ console.log(await res.json());</code></pre>
                 <strong>L402</strong> (also accepted under its old name, <code>LSAT</code>) and the IETF draft
                 <strong>Payment</strong> HTTP authentication scheme with the <code>lightning</code> method and
                 <code>charge</code> intent. Use whichever your client understands.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Running your own server</span>
+                <p>Paying without a key is on only when <code>API_L402_SECRET</code> holds at least 32 random
+                    bytes, as hex (64 characters) or base64 (44). Make one with <code>openssl rand -hex 32</code>.
+                    A shorter or guessable value turns the feature off and logs why. To rotate it, move the old
+                    value to <code>API_L402_SECRET_PREVIOUS</code> for a day: credentials, status URLs and
+                    challenges made under it keep working until they expire.</p>
+            </div>
 
             <h3 id="l402-challenge">The challenge</h3>
             <p>Send the request with no <code>Authorization</code> header. If it is valid, nothing runs, and
@@ -839,9 +858,14 @@ WWW-Authenticate: Payment id="kM9x...", realm="nymbot", method="lightning", inte
                 time they encode a form, so encode it once and send those bytes twice.</p>
             <p>Each address can ask for 30 challenges a minute (an IPv6 address counts as its whole /64).
                 Requests whose address is not known share a stricter 10 a minute, and there is an overall cap
-                across all addresses. Beyond that the answer is <code>429</code> with <code>Retry-After</code>,
-                sent before the body is read. Paid endpoints called without a key or credential also count
-                toward the general limit of 120 unauthenticated requests a minute per address.</p>
+                on the challenges Nymbot issues across all addresses; a request refused before a challenge is
+                made (for example with a body that is not valid JSON) does not count toward it. Beyond that the
+                answer is <code>429</code> with <code>Retry-After</code>, sent before the body is read. Paid
+                endpoints called without a key or credential also count toward the general limit of 120
+                unauthenticated requests a minute per address. A credential is checked before the body is
+                read, and a request whose <code>Content-Type</code> is not <code>application/json</code> (or
+                <code>multipart/form-data</code> for uploads) is refused with <code>415</code> and never gets
+                an invoice.</p>
             <p>Embeddings are priced from an estimate of the tokens in the input, with a 1.5&times; margin,
                 since the real count is only known afterwards. You pay for the tokens actually used, and the
                 unused part of the payment comes back as a <a href="#l402-refunds">refund token</a>.</p>
@@ -875,9 +899,10 @@ WWW-Authenticate: Payment id="kM9x...", realm="nymbot", method="lightning", inte
                     <tbody>
                         <tr><td><code>402</code> <code>payment_already_used</code></td><td>Every payment pays for one request. The response is a fresh challenge for this request, so a client that caches its last credential (as <code>lnget</code> does) simply pays again.</td></tr>
                         <tr><td><code>402</code> <code>payment_mismatch</code></td><td>The credential was issued for another endpoint, <code>Content-Type</code> or body, or pays less than this request now costs. A fresh challenge for this request comes with it; if the payment was too small, what you paid comes back as a <a href="#l402-refunds">refund token</a> (<code>refund_token</code> and <code>refund_sats</code> in the body).</td></tr>
-                        <tr><td><code>402</code> <code>payment_expired</code></td><td>More than 15 minutes passed since the challenge. A fresh challenge comes with it.</td></tr>
+                        <tr><td><code>402</code> <code>payment_expired</code></td><td>More than 15 minutes passed since the challenge. A fresh challenge comes with it. If the preimage shows you paid, what you paid comes back as a <a href="#l402-refunds">refund token</a> (<code>refund_token</code> and <code>refund_sats</code> in the body), once; the credential is then used up.</td></tr>
                         <tr><td><code>401</code> <code>invalid_preimage</code></td><td>The preimage does not hash to the invoice's payment hash. The payment is not used up.</td></tr>
-                        <tr><td><code>401</code> <code>invalid_payment_credential</code></td><td>The credential is malformed, or was changed after Nymbot issued it. A macaroon with a caveat Nymbot does not know, or with conflicting caveats, is refused.</td></tr>
+                        <tr><td><code>401</code> <code>invalid_payment_credential</code></td><td>The credential is malformed, was changed after Nymbot issued it, or names a payment hash Nymbot never issued an invoice for. A macaroon with a caveat Nymbot does not know, or with conflicting caveats, is refused.</td></tr>
+                        <tr><td><code>429</code> <code>rate_limit_exceeded</code></td><td>More than 30 credentials or keys that failed to verify came from this address in a minute, or one refund token was sent more than 60 times in a minute. Wait for <code>Retry-After</code>.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -947,8 +972,16 @@ console.log((await res.json()).nymbot, res.headers.get("payment-receipt"));</cod
   "id": "vid_...",
   "status": "in_progress",
   "status_url": "https://nymbot.ai/api/v1/videos/vid_...?exp=1790000000&amp;sig=...",
-  "nymbot": { "payment": "l402", "tier": "pro", "paid_sats": 4800, "charged_sats": 4800 }
+  "nymbot": {
+    "payment": "l402", "tier": "pro", "paid_sats": 4800, "charged_sats": 4800,
+    "refund_token": "REFUND-5E0B..."
+  }
 }</code></pre>
+            <p>Keep the <code>refund_token</code> from this response: it is shown only here. It is empty while
+                the video renders (<code>GET /api/v1/l402/refunds</code> answers <code>"status": "pending"</code>);
+                if the render fails unbilled, the payment lands on it. The status URL shows
+                <code>refund_sats</code> for a refunded job but never the token, so sharing the status URL does
+                not share the refund. Checking the token also settles a failed job that nobody polled.</p>
 
             <h3 id="l402-refunds">Refunds</h3>
             <p>If a paid request fails and the provider billed Nymbot for the attempt, the payment is kept and
@@ -969,7 +1002,7 @@ console.log((await res.json()).nymbot, res.headers.get("payment-receipt"));</cod
                 a transcription whose length could not be read up front is priced for the longest the file
                 could be (never more than 30 minutes), and the difference to the real length comes back as a
                 refund token; if it turns out to be longer than 30 minutes, it is refused with <code>413</code>
-                and the whole payment comes back. Embeddings return what the estimate held back. A failed video shows its refund token in the job's status.</p>
+                and the whole payment comes back. Embeddings return what the estimate held back. A failed video refunds to the token its submission returned.</p>
             <p>A refund token is a random 256-bit code. Nymbot stores only its hash, and it expires after 30
                 days. It holds a sat balance, and you can:</p>
             <ul>
@@ -980,6 +1013,7 @@ console.log((await res.json()).nymbot, res.headers.get("payment-receipt"));</cod
                     <code>refund_insufficient</code>; an unbilled failure puts the sats back on the same token.</li>
                 <li><strong>Check it.</strong> <code>GET /api/v1/l402/refunds</code> with the same header
                     returns <code>{"sats": 237, "status": "open", "expires_at": "..."}</code>.</li>
+                <li>One token can be used at most 60 times a minute.</li>
                 <li><strong>Move it to a nym.</strong> Paste it into <strong>Redeem a gift</strong> in the
                     Nymbot app, or call <code>POST /api/v1/l402/refunds/redeem</code> with a
                     <a href="#nip98">signed request</a> and <code>{"refund_token": "REFUND-...", "balance":

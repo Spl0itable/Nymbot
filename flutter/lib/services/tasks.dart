@@ -45,6 +45,9 @@ class TaskGroup {
     required this.title,
     required this.state,
     required this.items,
+    this.plan = const [],
+    this.note,
+    this.run,
   });
 
   final String id;
@@ -53,6 +56,10 @@ class TaskGroup {
   final String title;
   final String state;
   final List<TaskItem> items;
+  final List<Map<String, dynamic>> plan;
+  final String? note;
+
+  final String? run;
 }
 
 class Tasks {
@@ -106,10 +113,11 @@ class Tasks {
     return 'chat';
   }
 
-  static Map<String, dynamic>? record(LiveTasks live, String end) {
+  static Map<String, dynamic>? record(LiveTasks live, String end,
+      {List<Map<String, dynamic>> plan = const []}) {
     final steps = _bounded(live.steps);
     final mode = modeOf(live.team, live.research, steps);
-    if (steps.isEmpty && mode == 'chat') return null;
+    if (steps.isEmpty && mode == 'chat' && plan.isEmpty) return null;
     final workers = (live.team?['workers'] as num?)?.floor() ?? 0;
     return {
       'v': 1,
@@ -117,7 +125,33 @@ class Tasks {
       'end': end,
       'steps': steps,
       if (workers > 0) 'workers': workers > _maxWorkers ? _maxWorkers : workers,
+      if (plan.isNotEmpty) 'plan': plan,
     };
+  }
+
+  static Map<String, dynamic>? targetFor(
+      List<ChatMessage> list, String askId, String? link) {
+    final at = list.indexWhere((m) => m.id == askId);
+    if (at == -1) return null;
+    Map<String, dynamic>? hit;
+    for (var i = at + 1; i < list.length; i++) {
+      final m = list[i];
+      if (m.role == ChatRole.self) break;
+      if (m.role == ChatRole.bot && link != null && m.replyTo == link) {
+        hit = {'id': m.id, 'bot': true};
+      }
+    }
+    if (hit != null) return hit;
+    return list[at].tasks != null ? null : {'id': askId, 'bot': false};
+  }
+
+  static List<Map<String, dynamic>> planOf(Object? raw) {
+    if (raw is! List) return const [];
+    return [
+      for (final item in raw)
+        if (item is Map && item['text'] is String)
+          {'text': item['text'], 'state': '${item['state'] ?? 'planned'}'},
+    ];
   }
 
   static ({String mode, String end, List<Map<String, dynamic>> steps, int workers})? normalize(Object? raw) {
@@ -457,7 +491,16 @@ class Tasks {
               .join(', '),
           children: all.map((s) => '${s['message'] ?? ''}').where((x) => x.isNotEmpty).take(3).toList()));
     } else if (m.checkpoint != null && '${m.checkpoint!['repo'] ?? ''}'.isNotEmpty) {
-      out.add(TaskItem(t('Changes committed to {repo}', {'repo': '${m.checkpoint!['repo']}'}), 'done'));
+      final jobs = jobsOf(m.checkpoint);
+      if (jobs.isEmpty) {
+        out.add(TaskItem(t('Changes committed to {repo}', {'repo': '${m.checkpoint!['repo']}'}), 'done'));
+      }
+      for (final job in jobs) {
+        out.add(TaskItem(
+            t('Changes committed to branch {branch}', {'branch': '${job['branch']}'}),
+            job['conflict'] == true ? 'waiting' : 'done',
+            detail: '${job['repo'] ?? ''} · ${branchState(job)}'));
+      }
     }
     final p = m.pendingTool;
     if (p != null) {
@@ -491,6 +534,8 @@ class Tasks {
     }
     return [...items, ..._trailing(m)];
   }
+
+  static String clipTitle(String text) => _clip(text, 90);
 
   static String _asked(List<ChatMessage> list, int i) {
     for (var j = i; j >= 0; j--) {
@@ -527,24 +572,46 @@ class Tasks {
     );
   }
 
+  static TaskGroup liveGroup(LiveTasks live,
+      {required String id,
+      required String title,
+      Map<String, dynamic>? catalog,
+      List<Map<String, dynamic>> plan = const [],
+      String? note,
+      String? run,
+      String? mode,
+      List<Map<String, dynamic>> branches = const []}) {
+    final kind = mode ?? modeOf(live.team, live.research, live.steps);
+    final workers = (live.team?['workers'] as num?)?.floor() ?? 0;
+    var items = live.steps.isEmpty && (kind == 'chat' || mode != null)
+        ? <TaskItem>[]
+        : itemsFor(kind, live.steps, null, true, '', workers, catalog);
+    if (items.isEmpty) items = [TaskItem(live.label, 'active')];
+    items = [
+      ...items,
+      for (final b in branchStepsOf(branches))
+        TaskItem(t('Working on branch {branch}', {'branch': '${b['branch']}'}),
+            'active',
+            detail: '${b['repo']}'),
+    ];
+    return TaskGroup(
+      id: id,
+      mode: kind,
+      live: true,
+      title: title.isNotEmpty ? title : live.label,
+      state: 'running',
+      items: items,
+      plan: plan,
+      note: note,
+      run: run,
+    );
+  }
+
   static List<TaskGroup> outline(List<ChatMessage> list, {LiveTasks? live, Map<String, dynamic>? catalog}) {
     final groups = <TaskGroup>[];
     if (live != null) {
-      final mode = modeOf(live.team, live.research, live.steps);
-      final workers = (live.team?['workers'] as num?)?.floor() ?? 0;
-      var items = mode == 'chat' && live.steps.isEmpty
-          ? <TaskItem>[]
-          : itemsFor(mode, live.steps, null, true, '', workers, catalog);
-      if (items.isEmpty) items = [TaskItem(live.label, 'active')];
-      final asked = _asked(list, list.length - 1);
-      groups.add(TaskGroup(
-        id: 'live',
-        mode: mode,
-        live: true,
-        title: asked.isNotEmpty ? asked : live.label,
-        state: 'running',
-        items: items,
-      ));
+      groups.add(liveGroup(live,
+          id: 'live', title: _asked(list, list.length - 1), catalog: catalog));
     }
     for (var i = list.length - 1; i >= 0; i--) {
       final m = list[i];

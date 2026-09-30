@@ -399,6 +399,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--line-strong); }
 label { display: block; margin: 0.85rem 0 0.3rem; color: var(--text-dim); font-size: 0.85rem; }
 label.check { display: flex; align-items: center; gap: 0.5rem; color: var(--text); }
 label.check input { width: auto; }
+.schedule-server { border: 0; padding: 0; margin: 0.8rem 0 0; min-width: 0; }
+.schedule-server legend { padding: 0; margin-bottom: 0.3rem; font-weight: 600; color: var(--text); }
+.schedule-server .hint { margin: 0.1rem 0 0.5rem 1.6rem; }
 
 .section-head {
     font-size: 0.72rem;
@@ -2591,6 +2594,23 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .staged-message { font-size: 0.78rem; color: var(--text-dim); overflow-wrap: anywhere; }
 .staged-diff { min-width: 0; max-height: 26rem; overflow: auto; }
 .staged-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.branch-chip {
+    display: grid;
+    gap: 0.25rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg);
+}
+.branch-chip.is-merged, .branch-chip.is-deleted { opacity: 0.75; }
+.branch-chip.is-conflict { border-color: var(--lightning); }
+.branch-chip-name { font-size: 0.76rem; font-family: var(--mono); overflow-wrap: anywhere; }
+.branch-chip-base { color: var(--text-faint); }
+.branch-chip-state { font-size: 0.74rem; color: var(--text-dim); }
+.branch-chip-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.repo-jobs { color: var(--text-faint); }
+.run-branch { font-size: 0.74rem; font-family: var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
 
 /* Drawn only while something is dragged over the window. */
 .drop-target {
@@ -2616,22 +2636,52 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     font-size: 0.95rem;
 }
 
-.queue-strip { display: grid; gap: 0.25rem; padding: 0 0 0.35rem; }
-.queue-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0.5rem;
-    border: 1px dashed var(--line);
-    border-radius: 8px;
-    font-size: 0.8rem;
-    color: var(--text-dim);
+.run-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.35rem; margin-top: 0.35rem; }
+.run-actions .btn[hidden] { display: none; }
+.run-plan {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.12rem;
+    justify-items: start;
+    max-width: min(34rem, 100%);
+    min-width: 0;
+    font-size: 0.74rem;
+    color: var(--text-faint);
 }
-.queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-order { flex: 0 0 auto; font-size: 0.66rem; color: var(--text-faint); }
-.queue-item.is-editing { flex-wrap: wrap; align-items: flex-start; border-style: solid; border-color: var(--line-strong); }
-.queue-edit-input { flex: 1 1 12rem; min-width: 0; resize: vertical; }
-.queue-edit-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.run-plan[hidden] { display: none; }
+.plan-item { display: flex; gap: 0.35rem; min-width: 0; max-width: 100%; }
+.plan-mark { flex: 0 0 1em; text-align: center; }
+.plan-text { min-width: 0; overflow-wrap: anywhere; }
+.plan-item.is-done { color: var(--text-dim); }
+.plan-item.is-done .plan-mark { color: var(--primary); }
+.plan-item.is-doing { color: var(--text); font-weight: 600; }
+.plan-item.is-skipped .plan-text { text-decoration: line-through; }
+.task-group > .run-plan { margin: 0.2rem 0 0.3rem 0.4rem; }
+.run-cap, .pending-card { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
+.pending-badge {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    padding: 0.1rem 0.45rem;
+    border: 1px dashed var(--line-strong);
+    border-radius: 999px;
+}
+.running-list { display: grid; gap: 0.5rem; }
+.running-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+.running-main { display: grid; gap: 0.15rem; flex: 1 1 14rem; min-width: 0; }
+.running-chat { font-weight: 600; font-size: 0.85rem; overflow-wrap: anywhere; }
+.running-label { font-size: 0.82rem; color: var(--text-dim); overflow-wrap: anywhere; }
+.running-meta { font-size: 0.72rem; color: var(--text-faint); overflow-wrap: anywhere; }
+.running-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 
 .toast-undo {
     margin-left: 0.6rem;
@@ -2803,6 +2853,8 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .api-copy-row input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.82rem; }
 .api-balances { margin-top: 0.5rem; color: var(--text-dim); font-size: 0.85rem; }
 .api-balances:empty { display: none; }
+.api-model { margin-top: 0.25rem; }
+.api-model-hint { margin: 0.35rem 0 0.5rem; }
 .api-snippet { margin: 0.5rem 0 0; padding: 0.65rem 0.75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); overflow-x: auto; font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; }
 .api-snippet code { background: none; padding: 0; font-size: inherit; white-space: pre; }
 .api-snippet-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; margin-top: 0.45rem; font-size: 0.85rem; }

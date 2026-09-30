@@ -7,6 +7,7 @@ import '../app.dart';
 import '../config.dart';
 import '../core/theme/theme.dart';
 import '../models/conversation.dart';
+import '../services/background_jobs.dart';
 import '../services/media_cache.dart';
 import '../services/tasks.dart';
 import '../state/app_controller.dart';
@@ -14,6 +15,7 @@ import 'citation_cards.dart';
 import 'i18n/i18n.dart';
 import 'motion.dart';
 import 'nym_glyph.dart';
+import 'run_card.dart';
 import 'sheets/sheet.dart';
 
 const double kTasksWide = 900;
@@ -37,7 +39,11 @@ class TasksButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final theme = Theme.of(context);
-    final live = app.liveTasks(app.current);
+    final conv = app.current;
+    final live = app.liveTasks(conv) ??
+        (conv != null && app.remoteRunsIn(conv).isNotEmpty
+            ? (steps: const <Map<String, dynamic>>[], team: null, research: false, label: app.remoteRunsIn(conv).first.label)
+            : null);
     final waiting = live == null ? Tasks.waiting(app.messages) : 0;
     var badge = '';
     if (live != null) {
@@ -158,11 +164,66 @@ class _TasksPaneState extends State<TasksPane> {
   Timer? _speak;
   String _spoken = '';
   DateTime _spokenAt = DateTime.fromMillisecondsSinceEpoch(0);
+  AppController? _watching;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_watching == null) {
+      _watching = AppScope.read(context);
+      _watching!.watchRuns(true);
+    }
+  }
 
   @override
   void dispose() {
     _speak?.cancel();
+    _watching?.watchRuns(false);
     super.dispose();
+  }
+
+  static String _remoteMode(String kind) => switch (kind) {
+        'server-run' || 'repo' => 'repo',
+        'connector' => 'tool',
+        'team' || 'research' => kind,
+        _ => 'chat',
+      };
+
+  List<TaskGroup> _groups(AppController app) {
+    final conv = app.current;
+    final out = <TaskGroup>[];
+    if (conv != null) {
+      for (final run in app.runsIn(conv).reversed) {
+        final asked = run.askId == null
+            ? null
+            : app.messages.where((m) => m.id == run.askId).firstOrNull;
+        out.add(Tasks.liveGroup(app.liveTasksOf(run),
+            id: run.askId ?? 'live',
+            title: asked == null ? run.label : Tasks.clipTitle(asked.content),
+            catalog: app.mentionCatalog,
+            plan: run.plan,
+            run: run.key,
+            branches: run.branches));
+      }
+      for (final r in app.remoteRunsIn(conv)) {
+        final asked = app.messages
+            .where((m) => m.role == ChatRole.self && m.wire == r.replyTo)
+            .firstOrNull;
+        out.add(Tasks.liveGroup(
+            (steps: const [], team: null, research: false,
+                label: r.progress.isNotEmpty
+                    ? r.progress
+                    : (r.background ? BackgroundJobs.cardLabel() : r.label)),
+            id: asked?.id ?? 'live',
+            title: r.label,
+            plan: r.plan,
+            note: r.background ? BackgroundJobs.listMeta() : t('On another device'),
+            run: r.replyTo,
+            mode: _remoteMode(r.kind),
+            branches: r.branches));
+      }
+    }
+    return [...out, ...Tasks.outline(app.messages, catalog: app.mentionCatalog)];
   }
 
   void _announce(String text) {
@@ -187,7 +248,7 @@ class _TasksPaneState extends State<TasksPane> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final theme = Theme.of(context);
-    final groups = Tasks.outline(app.messages, live: app.liveTasks(app.current), catalog: app.mentionCatalog);
+    final groups = _groups(app);
     if (groups.isNotEmpty && groups.first.live) {
       final items = groups.first.items;
       final active = items.where((x) => x.state == 'active').toList();
@@ -241,6 +302,7 @@ class _TasksPaneState extends State<TasksPane> {
   }
 
   String _meta(TaskGroup g) {
+    if (g.note != null) return '${Tasks.modeLabel(g.mode)} · ${g.note}';
     final state = g.live
         ? t('running')
         : switch (g.state) {
@@ -296,18 +358,63 @@ class _TasksPaneState extends State<TasksPane> {
                   ),
                 ),
               ),
-              if (g.live)
+              if (g.live) ...[
+                if (_steerable(app, g))
+                  TextButton(
+                    key: const ValueKey('tasks-steer'),
+                    onPressed: () => unawaited(_steer(app, g)),
+                    child: Text(t('Add instructions')),
+                  ),
                 TextButton(
                   key: const ValueKey('tasks-stop'),
-                  onPressed: () => app.stop(),
+                  onPressed: () => _stop(app, g),
                   child: Text(t('Stop')),
                 ),
+              ],
             ],
           ),
           for (final it in g.items) _item(context, app, g, it),
+          if (g.plan.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+              child: RunPlan(plan: g.plan),
+            ),
         ],
       ),
     );
+  }
+
+  ChatTurn? _local(AppController app, TaskGroup g) =>
+      g.run == null ? null : app.turns.values.where((r) => r.key == g.run).firstOrNull;
+
+  bool _steerable(AppController app, TaskGroup g) {
+    final local = _local(app, g);
+    if (local != null) return local.live || local.phase == 'claiming';
+    return g.note != null && g.run != null;
+  }
+
+  Future<void> _steer(AppController app, TaskGroup g) async {
+    final local = _local(app, g);
+    final runId = local?.runId ?? g.run;
+    if (runId == null || runId.isEmpty) return;
+    await addInstructions(context, runId: runId, conv: local?.conv ?? app.current);
+  }
+
+  void _stop(AppController app, TaskGroup g) {
+    final local = _local(app, g);
+    if (local != null) {
+      unawaited(app.stopRun(local));
+      return;
+    }
+    if (g.note != null && g.run != null) {
+      final conv = app.current;
+      final r = conv == null
+          ? null
+          : app.remoteRunsIn(conv).where((x) => x.replyTo == g.run).firstOrNull;
+      if (r != null) unawaited(app.stopRemote(r));
+      return;
+    }
+    app.stop();
   }
 
   Widget _mark(BuildContext context, String state) {

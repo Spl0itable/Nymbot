@@ -4,9 +4,9 @@ import {
   BOT_UNIFIED_BILLING_FEE, BOT_PRICE_MARGIN, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT
 } from "./bot.js";
 import { botBase64Encode } from "./_shared.js";
-import { audioSeconds, audioMinSeconds } from "./_audiolen.js";
+import { audioSeconds, audioMinSeconds, AUDIO_FLOOR_BPS } from "./_audiolen.js";
 import { transcribeUsd } from "./_mediaprice.js";
-import { ApiError, apiBad, apiJson, apiRound } from "./_apihttp.js";
+import { ApiError, apiBad, apiJson, apiRound, apiDropBody } from "./_apihttp.js";
 import {
   apiBillOpen, apiBillSettle, apiBillRelease, apiCostObject, apiCostHeaders, apiRecordQuery, apiMilliSats
 } from "./_apibill.js";
@@ -20,34 +20,34 @@ export const API_TRANSCRIBE_GRACE_SECONDS = 3;
 export const API_TRANSCRIBE_MIN_BYTES = 256;
 
 const STANDARD_TTS = BOT_TTS_MODELS.standard;
-const WHISPER_NAMES = { whisper: 1, "whisper-1": 1, "whisper-large-v3-turbo": 1 };
+const WHISPER_NAMES = Object.assign(Object.create(null), { whisper: 1, "whisper-1": 1, "whisper-large-v3-turbo": 1 });
 const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
 const AURA_DEFAULT = "luna";
-const AURA_VOICES = {
+const AURA_VOICES = Object.assign(Object.create(null), {
   amalthea: "female", andromeda: "female", apollo: "male", arcas: "male", aries: "male", asteria: "female", athena: "female",
   atlas: "male", aurora: "female", callista: "female", cora: "female", cordelia: "female", delia: "female", draco: "male",
   electra: "female", harmonia: "female", helena: "female", hera: "female", hermes: "male", hyperion: "male", iris: "female",
   janus: "female", juno: "female", jupiter: "male", luna: "female", mars: "male", minerva: "female", neptune: "male",
   odysseus: "male", ophelia: "female", orion: "male", orpheus: "male", pandora: "female", phoebe: "female", pluto: "male",
   saturn: "male", selene: "female", thalia: "female", theia: "female", vesta: "female", zeus: "male"
-};
-const MELO_VOICES = { en: "English", es: "Spanish", fr: "French", zh: "Chinese" };
-const AURA_FORMATS = {
+});
+const MELO_VOICES = Object.assign(Object.create(null), { en: "English", es: "Spanish", fr: "French", zh: "Chinese" });
+const AURA_FORMATS = Object.assign(Object.create(null), {
   mp3: { type: "audio/mpeg", extra: null },
   opus: { type: "audio/ogg", extra: { encoding: "opus", container: "ogg" } },
   aac: { type: "audio/aac", extra: { encoding: "aac" } },
   flac: { type: "audio/flac", extra: { encoding: "flac" } },
   wav: { type: "audio/wav", extra: { encoding: "linear16", container: "wav" } },
   pcm: { type: "audio/pcm", extra: { encoding: "linear16", container: "none" } }
-};
-const MP3_ONLY = { mp3: { type: "audio/mpeg", extra: null } };
+});
+const MP3_ONLY = Object.assign(Object.create(null), { mp3: { type: "audio/mpeg", extra: null } });
 const TRANSCRIBE_FORMATS = ["json", "text", "srt", "vtt", "verbose_json"];
-const LANGUAGE_NAMES = {
+const LANGUAGE_NAMES = Object.assign(Object.create(null), {
   en: "english", es: "spanish", fr: "french", de: "german", it: "italian", pt: "portuguese", nl: "dutch", ja: "japanese",
   zh: "chinese", ko: "korean", ru: "russian", ar: "arabic", hi: "hindi", pl: "polish", tr: "turkish", uk: "ukrainian",
   sv: "swedish", da: "danish", fi: "finnish", no: "norwegian", cs: "czech", el: "greek", he: "hebrew", id: "indonesian",
   vi: "vietnamese", th: "thai", fa: "persian", ro: "romanian", hu: "hungarian"
-};
+});
 
 function engineOf(modelId) {
   const id = String(modelId || "");
@@ -126,7 +126,7 @@ async function speech(api) {
   const milli = pick.tier === "standard"
     ? BOT_MEDIA_COSTS.speak.standard * BOT_MILLI_PER_CREDIT
     : botMediaQuote("speech", pick.gen, { chars: input.length }, btc).milli;
-  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: milli });
+  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: milli, refresh: true });
   let bytes = null;
   try {
     bytes = await botSpeechBytes(env, pick.model, input, extra);
@@ -153,12 +153,12 @@ function transcribeMilli(seconds, tier, btc) {
 async function openEither(api, seconds, btc) {
   if (api.auth.via === "l402") return apiBillOpen(api, { tier: "standard", reserveMilli: transcribeMilli(seconds, "standard", btc), l402Partial: true });
   try {
-    const bill = await apiBillOpen(api, { tier: "standard", reserveMilli: transcribeMilli(seconds, "standard", btc) });
+    const bill = await apiBillOpen(api, { tier: "standard", reserveMilli: transcribeMilli(seconds, "standard", btc), refresh: true });
     return bill;
   } catch (e) {
     if (!(e instanceof ApiError) || e.status !== 402) throw e;
     try {
-      return await apiBillOpen(api, { tier: "pro", reserveMilli: transcribeMilli(seconds, "pro", btc) });
+      return await apiBillOpen(api, { tier: "pro", reserveMilli: transcribeMilli(seconds, "pro", btc), refresh: true });
     } catch (e2) {
       if (!(e2 instanceof ApiError) || e2.status !== 402) throw e2;
       const std = e.extra || {};
@@ -208,8 +208,15 @@ async function transcribe(api, task) {
   } catch (e) {
     throw apiBad("This endpoint takes multipart/form-data with a `file` and a `model`.", null, "invalid_multipart");
   }
-  const text = (n) => { const v = form.get(n); return typeof v === "string" ? v : null; };
-  const bytes = await apiFormFile(form, ["file"], API_TRANSCRIBE_MAX_BYTES, "The audio file");
+  apiDropBody(api);
+  const fields = {};
+  for (const n of ["model", "response_format", "language", "prompt"]) {
+    const v = form.get(n);
+    fields[n] = typeof v === "string" ? v : null;
+  }
+  const text = (n) => fields[n];
+  let bytes = await apiFormFile(form, ["file"], API_TRANSCRIBE_MAX_BYTES, "The audio file");
+  form = null;
   if (!bytes) throw apiBad("`file` is required: send the audio as a file.", "file", "missing_required_parameter");
   const name = (text("model") || "whisper").trim();
   if (!WHISPER_NAMES[name.toLowerCase()] && name !== BOT_TRANSCRIBE_MODEL) throw await apiWrongModel(env, name, "transcription");
@@ -222,12 +229,19 @@ async function transcribe(api, task) {
     { code: "audio_too_long", param: "file" });
   const limit = API_TRANSCRIBE_MAX_SECONDS + API_TRANSCRIBE_GRACE_SECONDS;
   if (len.measured && len.seconds > limit) throw tooLong(len.seconds);
+  if (!len.measured && len.seconds > limit) {
+    throw new ApiError(413, "invalid_request_error", "The length of this " + (len.format || "audio") + " file cannot be read before transcribing, and at " +
+      (AUDIO_FLOOR_BPS / 1000) + " kbps its " + bytes.length + " bytes could hold more than " + API_TRANSCRIBE_MAX_SECONDS / 60 + " minutes. Send at most " +
+      Math.floor(limit * AUDIO_FLOOR_BPS / 8) + " bytes in this format, or WAV, WebM, MP4 or Ogg audio, whose length is read from the file.",
+    { code: "audio_too_long", param: "file" });
+  }
   const reserveSecs = Math.min(len.measured ? Math.max(len.seconds, least) : len.seconds, API_TRANSCRIBE_MAX_SECONDS);
   const language = task === "transcribe" ? langCode(text("language")) : null;
   const prompt = text("prompt");
   const btc = await botBtcPrice();
   const bill = await openEither(api, reserveSecs, btc);
   const input = { audio: botBase64Encode(bytes), task };
+  bytes = null;
   if (language) input.language = language;
   if (prompt && prompt.trim()) input.initial_prompt = prompt.slice(0, 1000);
   let heard;
@@ -244,9 +258,11 @@ async function transcribe(api, task) {
   const reported = Number(info.duration);
   const heardSecs = Number.isFinite(reported) && reported > 0 ? reported : 0;
   if (heardSecs > limit) {
-    await apiBillRelease(api, bill);
-    api.waitUntil(apiRecordQuery(api, { type: "transcription", model: "whisper", milli: 0, tier: bill.tier, status: "error", btcUsd: btc, ms: Date.now() - t0 }));
-    throw tooLong(heardSecs);
+    const over = await apiBillSettle(api, bill, transcribeMilli(API_TRANSCRIBE_MAX_SECONDS, bill.tier, btc));
+    api.waitUntil(apiRecordQuery(api, { type: "transcription", model: "whisper", milli: over.chargedMilli, tier: bill.tier, status: "error", btcUsd: btc, ms: Date.now() - t0 }));
+    const e = tooLong(heardSecs);
+    e.message += " Whisper ran on it, so " + API_TRANSCRIBE_MAX_SECONDS / 60 + " minutes are charged (" + apiMilliSats(over.chargedMilli, bill.tier) + " sats).";
+    throw e;
   }
   const seconds = len.measured ? Math.max(len.seconds, heardSecs, least) : (heardSecs ? Math.max(heardSecs, least) : reserveSecs);
   const settled = await apiBillSettle(api, bill, transcribeMilli(seconds, bill.tier, btc));

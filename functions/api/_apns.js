@@ -60,12 +60,23 @@ export function apnsConfigured(env) {
   return !!(env && env.APNS_KEY_P8 && env.APNS_KEY_ID && env.APNS_TEAM_ID);
 }
 
-export function apnsReplyPayload(chat, text) {
+const RUN_STATES = { done: true, paused: true, approval: true, stopped: true, failed: true, due: true, disabled: true };
+
+export function runNoticeFields(extra) {
+  const out = {};
+  if (!extra || typeof extra !== "object") return out;
+  if (typeof extra.asked === "string" && /^[0-9a-f]{64}$/.test(extra.asked)) out.asked = extra.asked;
+  if (typeof extra.state === "string" && Object.prototype.hasOwnProperty.call(RUN_STATES, extra.state)) out.state = extra.state;
+  if (typeof extra.schedule === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(extra.schedule)) out.schedule = extra.schedule;
+  return out;
+}
+
+export function apnsReplyPayload(chat, text, extra) {
   const body = typeof text === "string" && text.trim() ? text.trim().slice(0, 80) : APNS_DEFAULT_TEXT;
-  return {
+  return Object.assign({
     aps: { alert: { title: "Nymbot", body: body }, sound: "default", "thread-id": chat },
     chat: chat
-  };
+  }, runNoticeFields(extra));
 }
 
 export async function apnsSendReply(env, reg, fetchFn) {
@@ -90,7 +101,7 @@ export async function apnsSendReply(env, reg, fetchFn) {
         "apns-topic": env.APNS_TOPIC || APNS_DEFAULT_TOPIC,
         "content-type": "application/json"
       },
-      body: JSON.stringify(apnsReplyPayload(reg.chat, reg.text))
+      body: JSON.stringify(apnsReplyPayload(reg.chat, reg.text, reg))
     });
   } catch (e) {
     return { status: 0, reason: "network" };

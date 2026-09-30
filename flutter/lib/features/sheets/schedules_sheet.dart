@@ -6,6 +6,7 @@ import '../../models/conversation.dart';
 import '../../models/schedule.dart';
 import '../../state/app_controller.dart';
 import '../../services/chat_engine.dart';
+import '../../services/server_schedules.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
@@ -40,11 +41,17 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
   DateTime _when = DateTime.now().add(const Duration(hours: 1));
   bool _here = false;
   String _error = '';
+  String? _mode;
+  int _cap = ServerSchedules.defaultCap;
+  String _status = '';
 
   @override
   void initState() {
     super.initState();
     _prompt.text = widget.prefill;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppScope.read(context).refreshServerSchedules();
+    });
   }
 
   @override
@@ -60,6 +67,8 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
         _when = DateTime.now().add(const Duration(hours: 1));
         _here = false;
         _error = '';
+        _mode = null;
+        _cap = ServerSchedules.defaultCap;
         _title.clear();
         _prompt.clear();
       });
@@ -70,6 +79,11 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
         _when = entry.nextAt;
         _here = entry.convId != null;
         _error = '';
+        _status = '';
+        _mode = entry.server;
+        _cap = ServerSchedules.runCaps.contains(entry.serverCap)
+            ? entry.serverCap
+            : ServerSchedules.defaultCap;
         _title.text = entry.title;
         _prompt.text = entry.prompt;
       });
@@ -110,10 +124,84 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
     entry.nextAt = _when;
     entry.convId = _here ? app.current?.id : null;
     entry.enabled = true;
+    entry.serverCap = _cap;
     await app.saveSchedule(entry);
+    var said = '';
+    if (app.settings.serverSchedules && (_mode != null || entry.server != null)) {
+      var mode = _mode;
+      if (mode == 'run' && mounted && !await _confirmRun(_cap)) mode = entry.server;
+      said = await app.saveServerSchedule(entry, mode);
+    }
     if (!mounted) return;
     _reset();
+    setState(() => _status = said);
   }
+
+  Future<bool> _confirmRun(int cap) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: Text(t('Run this on the server?')),
+          content: SingleChildScrollView(child: Text(ServerSchedules.consent(cap))),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialog).pop(false),
+              child: Text(t('Cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialog).pop(true),
+              child: Text(t('Run it on the server')),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
+  Widget _choice(String? value, String label, String hint) {
+    final on = _mode == value;
+    return ListTile(
+      key: ValueKey('schedule-mode-${value ?? 'device'}'),
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      selected: on,
+      leading: NymGlyph('dot',
+          size: 14,
+          filled: on,
+          color: on ? Theme.of(context).colorScheme.primary : Theme.of(context).hintColor),
+      title: Text(label, style: const TextStyle(fontSize: 13)),
+      subtitle: hint.isEmpty ? null : Text(hint, style: const TextStyle(fontSize: 11)),
+      onTap: () => setState(() => _mode = value),
+    );
+  }
+
+  Widget _serverChoices(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 6),
+          Text(t('While the app is closed'), style: Theme.of(context).textTheme.labelLarge),
+          _choice('notify', t('Notify me instead of running'),
+              t('The server keeps only the due time and where to send the notification. The prompt stays on this device, and the app runs it when you open it.')),
+          _choice('run', t('Run on the server'), ''),
+          if (_mode == 'run') ...[
+            DropdownButtonFormField<int>(
+              key: const ValueKey('schedule-run-cap'),
+              initialValue: _cap,
+              isExpanded: true,
+              decoration: InputDecoration(labelText: t('Most credits one run may spend')),
+              items: [
+                for (final n in ServerSchedules.runCaps)
+                  DropdownMenuItem(
+                      value: n,
+                      child: Text(n == 1 ? t('1 credit') : t('{n} credits', {'n': n}))),
+              ],
+              onChanged: (v) => setState(() => _cap = v ?? ServerSchedules.defaultCap),
+            ),
+            const SizedBox(height: 4),
+            Text(ServerSchedules.consent(_cap), style: const TextStyle(fontSize: 11)),
+          ],
+          _choice(null, t('Neither: only while the app is open'), ''),
+        ],
+      );
 
   String _stamp(DateTime at) {
     final d = at.toLocal();
@@ -158,6 +246,8 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 11),
           ),
+          if (ServerSchedules.rowLine(entry).isNotEmpty)
+            Text(ServerSchedules.rowLine(entry), style: const TextStyle(fontSize: 11)),
           if (target != null)
             Align(
               alignment: AlignmentDirectional.centerStart,
@@ -201,11 +291,13 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             Text(t('Scheduled prompts'), style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
-              t('A prompt Nymbot sends for you on a schedule. There is no server '
-                  'doing this: it runs while the app is open, and a run that came '
-                  'due while it was shut runs once when you come back rather than '
-                  'catching up on all of them. Each run costs a reply, like any '
-                  'other.'),
+              app.settings.serverSchedules
+                  ? t("A prompt Nymbot sends for you: once, hourly, daily or weekly. By default it runs while the app is open, and a run that came due while it was shut fires once when you come back. Turn on server schedules in Settings and each schedule can instead notify you when it is due (the server keeps only the time), or run on Nymbot's server while the app is closed (the server keeps the prompt, sealed, and spends up to the cap you set per run). Turning the switch off, deleting a schedule or wiping the app deletes the server copy at once.")
+                  : t('A prompt Nymbot sends for you on a schedule. There is no server '
+                      'doing this: it runs while the app is open, and a run that came '
+                      'due while it was shut runs once when you come back rather than '
+                      'catching up on all of them. Each run costs a reply, like any '
+                      'other.'),
               style: const TextStyle(fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -244,10 +336,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                           size: 18,
                         ),
                         tooltip: entry.enabled ? t('Pause') : t('Resume'),
-                        onPressed: () {
-                          entry.enabled = !entry.enabled;
-                          app.saveSchedule(entry);
-                        },
+                        onPressed: () => app.toggleSchedule(entry),
                       ),
                       IconButton(
                         icon: const NymGlyph('send', size: 18),
@@ -315,6 +404,12 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
                   style: const TextStyle(fontSize: 13)),
               onChanged: (v) => setState(() => _here = v),
             ),
+            if (app.settings.serverSchedules) _serverChoices(context),
+            if (_status.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(_status, style: const TextStyle(fontSize: 12)),
+              ),
             if (_error.isNotEmpty)
               Text(_error,
                   style: TextStyle(

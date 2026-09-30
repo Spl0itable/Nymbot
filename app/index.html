@@ -251,6 +251,10 @@
                 <svg class="side-links-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </button>
             <div class="sidebar-links" id="sidebarLinks">
+                <button class="side-link" type="button" data-act="open-running" id="runningLink">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+                    <span>Running now</span><span class="side-count" id="runningCount"></span>
+                </button>
                 <button class="side-link" type="button" data-act="open-repos">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
                     <span>Repositories</span><span class="side-count" id="repoCount"></span>
@@ -362,6 +366,7 @@
                     <button type="button" data-act="open-tags">Tags and folder</button>
                     <button type="button" data-act="open-stats">Chat statistics</button>
                     <button type="button" data-act="open-caps">Spending caps</button>
+                    <button type="button" data-act="open-policy">Permissions</button>
                     <button type="button" data-act="share-chat">Share a link</button>
                     <button type="button" data-act="share-transcript" id="menuShareTranscript">Share the transcript</button>
                     <button type="button" data-act="export-md">Export as Markdown</button>
@@ -518,7 +523,6 @@
             <div class="composer">
                 <div class="attach-tray" id="attachTray" hidden></div>
                 <div class="attach-tray doc-tray" id="docTray" hidden></div>
-                <div class="queue-strip" id="queueStrip" hidden></div>
                 <div class="composer-status" id="composerStatus" hidden></div>
                 <div class="dictate-status" id="dictateStatus" role="status" aria-live="polite"></div>
                 <div class="dictate-strip" id="dictateStrip" hidden>
@@ -595,7 +599,7 @@
                 <button class="pill" type="button" data-act="model-filter" data-filter="speech">Speech</button>
                 <button class="pill" type="button" data-act="model-filter" data-filter="favourites">Starred</button>
             </div>
-            <div class="model-tools">
+            <div class="model-tools" id="modelTools">
                 <label class="check" id="modelForChatRow"><input type="checkbox" id="modelForChat"> Only for this chat</label>
                 <label class="model-sort">Sort
                     <select id="modelSort">
@@ -607,7 +611,7 @@
                 </label>
             </div>
             <div class="model-list" id="modelList"></div>
-            <p class="hint">An estimate for one reply at the rates shown: the low end is a short answer, the high end a long one. Whatever the model has to read pushes it up &mdash; web results, repository files, attachments, and a long chat behind you &mdash; and a task that takes several passes costs more again. You pay for the tokens actually used, never a flat price per message. A full breakdown of every model and what it costs is in the <a href="https://nymbot.ai/docs/credits/" target="_blank" rel="noopener">pricing knowledge base</a>.</p>
+            <p class="hint" id="modelsHint">An estimate for one reply at the rates shown: the low end is a short answer, the high end a long one. Whatever the model has to read pushes it up &mdash; web results, repository files, attachments, and a long chat behind you &mdash; and a task that takes several passes costs more again. You pay for the tokens actually used, never a flat price per message. A full breakdown of every model and what it costs is in the <a href="https://nymbot.ai/docs/credits/" target="_blank" rel="noopener">pricing knowledge base</a>.</p>
             <footer>
                 <button class="btn" type="button" data-act="model-off" id="modelOff">Auto-routed (standard)</button>
             </footer>
@@ -718,10 +722,14 @@
             </div>
             <div class="api-balances" id="apiBalances"></div>
             <h3 class="section-head">Quick start</h3>
+            <label for="apiModel">Model</label>
+            <button class="compare-slot api-model" type="button" id="apiModel" data-act="api-model-pick"></button>
+            <p class="hint api-model-hint" id="apiModelHint"></p>
             <div class="filter-row" role="group" aria-label="Quick start language">
                 <button class="pill" type="button" data-act="api-snippet" data-snippet="curl" aria-pressed="false">cURL</button>
                 <button class="pill" type="button" data-act="api-snippet" data-snippet="python" aria-pressed="false">Python</button>
                 <button class="pill" type="button" data-act="api-snippet" data-snippet="js" aria-pressed="false">JavaScript</button>
+                <button class="pill" type="button" data-act="api-snippet" data-snippet="anthropic" aria-pressed="false" hidden>Anthropic SDK</button>
             </div>
             <pre class="api-snippet" data-i18n-skip><code id="apiSnippet"></code></pre>
             <div class="api-snippet-foot">
@@ -808,10 +816,11 @@
     <div class="modal" id="modalSchedules" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Scheduled prompts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
-            <p class="modal-lede">A prompt Nymbot sends for you on a schedule. There is no server doing
-                this: it runs while the app is open, and a run that came due while it was shut runs
-                once when you come back rather than catching up on all of them. Each run costs a
-                reply, like any other.</p>
+            <p class="modal-lede">A prompt Nymbot sends for you on a schedule. Normally it runs while
+                the app is open, and a run that came due while it was shut runs once when you come
+                back rather than catching up on all of them. Turn on server schedules in Settings and
+                each one can notify you when it is due, or run on Nymbot's server while the app is
+                closed. Each run costs a reply, like any other.</p>
             <div class="repo-list" id="scheduleList"></div>
             <div class="repo-form" id="scheduleForm">
                 <h3 class="section-head" id="scheduleFormTitle">New scheduled prompt</h3>
@@ -835,6 +844,25 @@
                     </div>
                 </div>
                 <label class="check"><input type="checkbox" id="scheduleHere"> Send it into this chat rather than a new one</label>
+                <fieldset class="schedule-server" id="scheduleServerField" hidden>
+                    <legend>While the app is closed</legend>
+                    <label class="check"><input type="radio" name="scheduleServer" value="notify"> Notify me instead of running</label>
+                    <p class="hint">The server keeps only the due time and where to send the notification. The prompt stays on this device, and the app runs it when you open it.</p>
+                    <label class="check"><input type="radio" name="scheduleServer" value="run"> Run on the server</label>
+                    <div id="scheduleRunFields" hidden>
+                        <label for="scheduleServerCap">Most credits one run may spend</label>
+                        <select id="scheduleServerCap">
+                            <option value="1">1 credit</option>
+                            <option value="2">2 credits</option>
+                            <option value="5">5 credits</option>
+                            <option value="10">10 credits</option>
+                            <option value="25">25 credits</option>
+                            <option value="50">50 credits</option>
+                        </select>
+                        <p class="hint" id="scheduleConsent"></p>
+                    </div>
+                    <label class="check"><input type="radio" name="scheduleServer" value="" checked> Neither: only while the app is open</label>
+                </fieldset>
                 <p class="modal-status" id="scheduleStatus"></p>
                 <footer>
                     <button class="btn btn-primary" type="button" data-act="schedule-save">Save it</button>
@@ -1068,6 +1096,17 @@
                 <input data-i18n-skip type="text" id="gitLabel" placeholder="Frontend" autocomplete="off" spellcheck="false">
                 <label class="check"><input type="checkbox" id="gitWrites"> Allow commits, branches and pull requests</label>
                 <label class="check"><input type="checkbox" id="gitApprove"> Ask before committing: show the changes for review first</label>
+                <label class="check"><input type="checkbox" id="gitJobBranches" checked> Each task gets its own branch</label>
+                <p class="hint">Off commits straight to the working branch, one task at a time.</p>
+                <div id="gitWhenDoneField">
+                    <label for="gitWhenDone">When done</label>
+                    <select id="gitWhenDone">
+                        <option value="">Use the default in Settings</option>
+                        <option value="pr">Open a pull request</option>
+                        <option value="merge">Offer a merge</option>
+                        <option value="leave">Leave the branch</option>
+                    </select>
+                </div>
                 <p class="modal-status" id="gitStatus"></p>
                 <div class="gate-actions">
                     <button class="btn btn-primary" type="button" data-act="repo-save" id="repoSaveBtn">Add repository</button>
@@ -1372,6 +1411,36 @@
         </div>
     </div>
 
+    <div class="modal" id="modalRunning" hidden>
+        <div class="modal-card">
+            <header><h2>Running now</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <div class="running-list" id="runningList"></div>
+        </div>
+    </div>
+
+    <div class="modal" id="modalPolicy" hidden>
+        <div class="modal-card">
+            <header><h2>Permissions</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">What this chat may do without asking you first.</p>
+            <label for="chatPolicyRead">Read-only tool calls</label>
+            <select id="chatPolicyRead">
+                <option value="">Use my default</option>
+                <option value="ask">Ask me first</option>
+                <option value="allow">Always allow</option>
+            </select>
+            <label for="chatPolicyRuns">Server runs</label>
+            <select id="chatPolicyRuns">
+                <option value="">Use my default</option>
+                <option value="ask">Ask me first</option>
+                <option value="allow">Allow when they fit the reply's budget</option>
+            </select>
+            <p class="hint">Anything that deletes, pushes or could cost more than the reply holds always asks.</p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="policy-save">Save</button>
+            </footer>
+        </div>
+    </div>
+
     <div class="modal" id="modalAppearance" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Settings</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1470,7 +1539,60 @@
             <p class="hint">A repo task can stop mid-way when it has used its allowance of model
                 calls. Carrying on buys it another allowance from the same balance, one leg at a
                 time, and every leg says what it cost. Stop cancels the rest.</p>
+            <label class="check"><input type="checkbox" id="setBackground"> Keep long tasks going on the server while the app is closed</label>
+            <p class="hint">Off unless you turn it on. When a task runs out of room, Nymbot's server carries it on by itself instead of waiting for this device. To do that it keeps what the next step needs, sealed with a key the server holds, for at most 6 hours: the task's saved progress and its settings, including the tokens for the repositories and connectors it uses. It spends no more than the budget above and deletes it all when the task ends. Never for anonymous chats or the free allowance.</p>
+            <label class="check"><input type="checkbox" id="setServerSchedules"> Let scheduled prompts use Nymbot's server while the app is closed</label>
+            <p class="hint">Off unless you turn it on. Each scheduled prompt can then choose to notify you when it is due, or to run on Nymbot's server. Turning this off deletes every schedule the server holds at once.</p>
+            <label for="setScheduleDailyCap">Most credits server schedules may spend in a day</label>
+            <select id="setScheduleDailyCap">
+                <option value="10">10 credits</option>
+                <option value="25">25 credits</option>
+                <option value="50">50 credits</option>
+                <option value="100">100 credits</option>
+                <option value="250">250 credits</option>
+            </select>
+            <p class="hint">Notifications in this app go through your browser's push service (Google's, in Chrome). What they carry is encrypted, so the push service cannot read it.</p>
             <label class="check"><input type="checkbox" id="setProgress"> Show what Nymbot is doing while it works</label>
+            <label for="setMaxRuns">Requests at once</label>
+            <select id="setMaxRuns">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+            </select>
+            <p class="hint">How many requests can run at the same time across your chats. Each running request holds its credits until it finishes.</p>
+            <label for="setWhenDone">When a task's branch is done</label>
+            <select id="setWhenDone">
+                <option value="pr">Open a pull request</option>
+                <option value="merge">Offer a merge</option>
+                <option value="leave">Leave the branch</option>
+            </select>
+            <p class="hint">A repository task with its own branch does this when it finishes. Each repository can choose differently when you edit it.</p>
+
+            <h3 class="section-head">Standing permissions</h3>
+            <div class="field-grid">
+                <div>
+                    <label for="setPolicyRead">Read-only tool calls</label>
+                    <select id="setPolicyRead">
+                        <option value="ask">Ask me first</option>
+                        <option value="allow">Always allow</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="setPolicyRuns">Server runs</label>
+                    <select id="setPolicyRuns">
+                        <option value="ask">Ask me first</option>
+                        <option value="allow">Allow when they fit the reply's budget</option>
+                    </select>
+                </div>
+            </div>
+            <p class="hint">Anything that deletes, pushes or could cost more than the reply holds always asks.</p>
 
             <h3 class="section-head">Your data</h3>
             <label class="check"><input type="checkbox" id="setSync"> Keep this account in step across my devices</label>
@@ -1880,6 +2002,8 @@
     <script src="/app/js/runner.js"></script>
     <script src="/app/js/serverrun.js"></script>
     <script src="/app/js/tasks.js"></script>
+    <script src="/app/js/runs.js"></script>
+    <script src="/app/js/background.js"></script>
     <script src="/app/js/vault.js"></script>
     <script src="/app/js/keybackup.js"></script>
     <script src="/app/js/notify.js"></script>

@@ -27,6 +27,7 @@
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
     const SUPPORT_ID = 'support';
+    const CAS_RETRIES = 3;
 
     // Nymchat's row name, hashed its way: one account, one root, whichever app reached it first.
     const PQ_ROOT_D_TAG = 'nymchat-pq-root';
@@ -746,22 +747,55 @@
             return out;
         },
 
-        async push(dTag, value) {
+        async push(dTag, value, opts) {
             if (this.blocked) return false;
             this._load();
-            const plain = JSON.stringify({ __cat: dTag, v: value });
+            const force = !!(opts && opts.force);
             const category = await categoryFor(dTag);
-            const hash = await sha256Hex(Identity.pubkey + '|' + (selfKem() ? 'pq' : 'c') + '|' + plain);
-            if (this._hashes.get(category) === hash) return true;
-            let blob;
-            try { blob = await seal(plain); } catch (_) { return false; }
-            if (!blob) return false;
-            const resp = await call('settings-set', { category, blob, contentHash: hash });
-            if (!resp || resp.error) return false;
-            this._hashes.set(category, hash);
-            this._names.set(category, dTag);
-            if (Identity.isRemote) remember(await sha256Hex(blob), plain);
-            return true;
+            let current = value;
+            let base = this._hashes.has(category) ? this._hashes.get(category) : '';
+            for (let attempt = 0; attempt <= CAS_RETRIES; attempt++) {
+                const plain = JSON.stringify({ __cat: dTag, v: current });
+                const hash = await sha256Hex(Identity.pubkey + '|' + (selfKem() ? 'pq' : 'c') + '|' + plain);
+                if (this._hashes.get(category) === hash) return true;
+                let blob;
+                try { blob = await seal(plain); } catch (_) { return false; }
+                if (!blob) return false;
+                const fields = { category, blob, contentHash: hash };
+                if (!force) fields.baseHash = base || '';
+                const resp = await call('settings-set', fields);
+                if (resp && resp.conflict === true && !force) {
+                    const merged = await this._mergeRemote(category, dTag, current);
+                    if (!merged) return false;
+                    current = merged.value;
+                    base = typeof resp.contentHash === 'string' ? resp.contentHash : '';
+                    continue;
+                }
+                if (!resp || resp.error) return false;
+                this._hashes.set(category, hash);
+                this._names.set(category, dTag);
+                if (Identity.isRemote) remember(await sha256Hex(blob), plain);
+                return true;
+            }
+            return false;
+        },
+
+        async _mergeRemote(category, dTag, fallback) {
+            const data = await call('settings-get', { only: [category] });
+            if (!data || !data.categories || typeof data.categories !== 'object') return null;
+            const entry = data.categories[category];
+            if (entry && typeof entry.blob === 'string') {
+                let payload;
+                try { payload = JSON.parse(await open(entry.blob)); } catch (_) { return null; }
+                if (!payload || typeof payload !== 'object' || payload.__cat !== dTag) return null;
+                const theirs = payload.v !== undefined ? payload.v : payload;
+                const touched = this.apply({ [dTag]: theirs });
+                if (touched.length && typeof this.onChange === 'function') {
+                    try { this.onChange(touched); } catch (_) { }
+                }
+            }
+            const local = this.snapshot();
+            return { value: dTag in local ? local[dTag] : fallback };
         },
 
         async run(opts) {
@@ -854,7 +888,7 @@
             const remote = await this.pull({ full: true });
             if (!remote) return false;
             this.forget();
-            for (const dTag of Object.keys(remote)) await this.push(dTag, null);
+            for (const dTag of Object.keys(remote)) await this.push(dTag, null, { force: true });
             this._saveHashes();
             return true;
         }

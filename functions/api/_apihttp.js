@@ -5,12 +5,27 @@ import { BtcPriceUnavailable } from "./_btcprice.js";
 export const API_TIMING = { keepAliveMs: 15000, firstByteWaitMs: 8000 };
 export const API_JSON_MAX_BYTES = 4 * 1024 * 1024;
 export const API_MULTIPART_MAX_BYTES = 32 * 1024 * 1024;
+export const API_MULTIPART_MAX_PARTS = 64;
+export const API_MULTIPART_MAX_HEADER_BYTES = 8192;
+export const API_EMPTY_BODY_SHA256 = bytesToHex(sha256(new Uint8Array(0)));
 export const API_RATE_LIMITS = {
   unauthIp: { limit: 120, windowMs: 60000 },
   keysPubkey: { limit: 60, windowMs: 3600000 },
   keysIp: { limit: 120, windowMs: 3600000 },
   topupPubkey: { limit: 60, windowMs: 3600000 },
-  topupIp: { limit: 120, windowMs: 3600000 }
+  topupIp: { limit: 120, windowMs: 3600000 },
+  authFailIp: { limit: 30, windowMs: 60000 },
+  refundToken: { limit: 60, windowMs: 60000 },
+  nwcPubkey: { limit: 10, windowMs: 3600000 },
+  nwcIp: { limit: 30, windowMs: 3600000 }
+};
+export const API_NOSTR_MAX_BYTES = 64 * 1024;
+export const API_ACCOUNT_ORIGINS = ["https://nymbot.ai", "https://nymchat.app", "https://nymbot.pages.dev"];
+const ACCOUNT_ORIGIN_SUFFIXES = [".nymbot.ai", ".nymchat.app", ".nymbot.pages.dev"];
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"
 };
 
 const ALLOW_HEADERS = [
@@ -41,8 +56,25 @@ export function apiRandomId(prefix, n) {
   return (prefix || "") + out;
 }
 
-export function apiPreflightHeaders(request) {
+export function apiAccountOrigin(origin) {
+  let u;
+  try { u = new URL(String(origin || "")); } catch (e) { return false; }
+  if (u.protocol !== "https:" || u.origin !== String(origin)) return false;
+  if (API_ACCOUNT_ORIGINS.includes(u.origin)) return true;
+  return ACCOUNT_ORIGIN_SUFFIXES.some((s) => u.hostname.endsWith(s));
+}
+
+export function apiCorsHeaders(request, account) {
   const h = Object.assign({}, API_CORS_HEADERS);
+  if (!account) return h;
+  const origin = request && request.headers ? request.headers.get("Origin") : "";
+  h["Access-Control-Allow-Origin"] = origin && apiAccountOrigin(origin) ? origin : null;
+  h.Vary = "Origin";
+  return h;
+}
+
+export function apiPreflightHeaders(request, account) {
+  const h = apiCorsHeaders(request, account);
   const asked = request && request.headers ? request.headers.get("Access-Control-Request-Headers") : "";
   if (asked && /^[A-Za-z0-9\-_, ]{1,2000}$/.test(asked)) {
     const known = new Set(ALLOW_HEADERS.map((x) => x.toLowerCase()));
@@ -73,7 +105,7 @@ export const apiBad = (message, param, code) => new ApiError(400, "invalid_reque
 
 const ANTHROPIC_TYPES = {
   400: "invalid_request_error", 401: "authentication_error", 402: "billing_error", 403: "permission_error",
-  404: "not_found_error", 405: "invalid_request_error", 413: "request_too_large", 422: "invalid_request_error",
+  404: "not_found_error", 405: "invalid_request_error", 413: "request_too_large", 415: "invalid_request_error", 422: "invalid_request_error",
   429: "rate_limit_error", 500: "api_error", 501: "api_error", 502: "api_error", 503: "overloaded_error", 529: "overloaded_error"
 };
 
@@ -99,22 +131,39 @@ export function apiErrorResponse(err, format) {
   return apiJson(apiErrorBody(err, format), err.status, headers);
 }
 
-export function apiFinish(res, requestId, extraHeaders) {
+function finishHeaders(headers, requestId, cors) {
+  for (const [k, v] of Object.entries(Object.assign({}, cors || API_CORS_HEADERS, SECURITY_HEADERS))) {
+    if (v == null) headers.delete(k);
+    else headers.set(k, v);
+  }
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
+  headers.set("X-Request-Id", requestId);
+}
+
+export function apiFinish(res, requestId, cors) {
   if (res.headers.has("WWW-Authenticate")) {
     try {
-      for (const [k, v] of Object.entries(API_CORS_HEADERS)) res.headers.set(k, v);
-      if (extraHeaders) for (const [k, v] of Object.entries(extraHeaders)) res.headers.set(k, v);
-      if (!res.headers.has("Cache-Control")) res.headers.set("Cache-Control", "no-store");
-      res.headers.set("X-Request-Id", requestId);
+      finishHeaders(res.headers, requestId, cors);
       return res;
     } catch (e) { }
   }
   const headers = new Headers(res.headers);
-  for (const [k, v] of Object.entries(API_CORS_HEADERS)) headers.set(k, v);
-  if (extraHeaders) for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
-  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
-  headers.set("X-Request-Id", requestId);
+  finishHeaders(headers, requestId, cors);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+export function apiRequireContentType(request, kind) {
+  const type = String(request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+  const ok = kind === "multipart" ? type === "multipart/form-data" : (type === "application/json" || /^application\/[a-z0-9.+-]+\+json$/.test(type));
+  if (ok) return;
+  if (!type && kind !== "multipart") {
+    const declared = request.headers.get("Content-Length");
+    if (!request.body || declared === "0") return;
+  }
+  const want = kind === "multipart" ? "multipart/form-data" : "application/json";
+  throw new ApiError(415, "invalid_request_error", "This endpoint takes " + (kind === "multipart" ? "a multipart form" : "a JSON body") +
+    ". Send `Content-Type: " + want + "`.",
+    { code: "unsupported_media_type" });
 }
 
 export async function apiReadBody(request, max) {
@@ -141,6 +190,73 @@ export async function apiReadBody(request, max) {
   let at = 0;
   for (const c of chunks) { out.set(c, at); at += c.length; }
   return out;
+}
+
+function multipartBad(message) {
+  return new ApiError(400, "invalid_request_error", message, { code: "invalid_multipart" });
+}
+
+function delimiterAt(bytes, at, delim) {
+  if (at + delim.length > bytes.length) return false;
+  for (let j = 0; j < delim.length; j++) if (bytes[at + j] !== delim[j]) return false;
+  return true;
+}
+
+function headerEnd(bytes, from, limit) {
+  const stop = Math.min(bytes.length - 3, from + limit);
+  for (let i = from; i < stop; i++) {
+    if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) return i + 4;
+  }
+  return -1;
+}
+
+export function apiCheckMultipart(bytes, contentType) {
+  const m = /;\s*boundary=(?:"([^"]*)"|([^\s;]*))/i.exec(String(contentType || ""));
+  const boundary = m ? (m[1] != null ? m[1] : m[2]) : "";
+  if (!/^[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]$/.test(boundary)) {
+    throw multipartBad("The multipart Content-Type needs a boundary of 1 to 70 letters, digits or '()+_,-./:=? characters.");
+  }
+  const delim = utf8ToBytes("--" + boundary);
+  let parts = 0;
+  let at = delimiterAt(bytes, 0, delim) ? 0 : -1;
+  let i = 0;
+  while (true) {
+    if (at < 0) {
+      for (; i < bytes.length - 1; i++) {
+        if (bytes[i] === 13 && bytes[i + 1] === 10 && delimiterAt(bytes, i + 2, delim)) { at = i + 2; break; }
+      }
+      if (at < 0) break;
+    }
+    const after = at + delim.length;
+    if (bytes[after] === 45 && bytes[after + 1] === 45) break;
+    if (++parts > API_MULTIPART_MAX_PARTS) throw multipartBad("A multipart body may hold at most " + API_MULTIPART_MAX_PARTS + " parts.");
+    const end = headerEnd(bytes, after, API_MULTIPART_MAX_HEADER_BYTES);
+    if (end < 0) throw multipartBad("Each multipart part needs its headers, at most " + API_MULTIPART_MAX_HEADER_BYTES + " bytes, ended by a blank line.");
+    i = end - 2;
+    at = -1;
+  }
+}
+
+export async function apiBufferMultipart(api, max, hash) {
+  const bytes = await apiReadBody(api.request, max);
+  apiCheckMultipart(bytes, api.request.headers.get("Content-Type"));
+  if (hash) api.bodyHex = bytesToHex(sha256(bytes));
+  api.request = new Request(api.request.url, { method: api.request.method, headers: api.request.headers, body: bytes });
+}
+
+export const API_IMAGE_URL_MAX_CHARS = 4096;
+
+export function apiUrlHasUserinfo(url) {
+  try {
+    const u = new URL(url);
+    return !!(u.username || u.password);
+  } catch (e) {
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(String(url));
+  }
+}
+
+export function apiDropBody(api) {
+  api.request = new Request(api.request.url, { method: api.request.method, headers: api.request.headers });
 }
 
 export function apiSseHeaders() {
@@ -247,12 +363,46 @@ export function apiClientIp(api) {
   try { return String(api.request.headers.get("CF-Connecting-IP") || "").trim().slice(0, 64); } catch (e) { return ""; }
 }
 
-function rateSecret(env) {
+function ipv6Groups(s) {
+  let text = s;
+  const tail = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (tail) {
+    const o = tail.slice(1).map(Number);
+    if (o.some((x) => x > 255)) return null;
+    text = text.slice(0, tail.index) + (o[0] * 256 + o[1]).toString(16) + ":" + (o[2] * 256 + o[3]).toString(16);
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (halves.length === 2 && fill < 1) return null;
+  const groups = head.concat(new Array(Math.max(0, fill)).fill("0"), rest);
+  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => parseInt(g, 16));
+}
+
+export function apiIpBucket(api) {
+  const raw = apiClientIp(api).toLowerCase();
+  if (!raw) return null;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
+  if (v4) return v4.slice(1).every((x) => Number(x) <= 255) ? "4:" + v4.slice(1).map(Number).join(".") : null;
+  if (!/^[0-9a-f:.]+$/.test(raw)) return null;
+  const g = ipv6Groups(raw);
+  if (!g) return null;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return "4:" + [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
+  return "6:" + g.slice(0, 4).map((x) => x.toString(16)).join(":") + "::/64";
+}
+
+let isolateRateKey = null;
+
+function rateKey(env) {
   for (const name of ["API_RATE_SECRET", "API_L402_SECRET", "API_NWC_SECRET"]) {
     const s = env && env[name];
-    if (typeof s === "string" && s.trim()) return s.trim();
+    if (typeof s === "string" && s.trim()) return hmac(sha256, utf8ToBytes(s.trim()), utf8ToBytes("nymbot-api-rate-key/v1"));
   }
-  return "nymbot-api-rate";
+  if (!isolateRateKey) isolateRateKey = randomBytes(32);
+  return isolateRateKey;
 }
 
 function rateError(rule, waitMs, what) {
@@ -262,39 +412,66 @@ function rateError(rule, waitMs, what) {
     { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
 }
 
-export async function apiRateLimit(api, name, who, what) {
-  const rule = API_RATE_LIMITS[name];
+export async function apiRateHit(env, name, who, rule) {
+  const r0 = rule || API_RATE_LIMITS[name];
   const id = String(who || "");
-  if (!rule || !id) return;
-  const keyId = bytesToHex(hmac(sha256, utf8ToBytes(rateSecret(api.env)), utf8ToBytes("nymbot-api-rate/" + name + "/" + id))).slice(0, 16);
+  if (!r0 || !id) return 0;
+  const keyId = bytesToHex(hmac(sha256, rateKey(env), utf8ToBytes("nymbot-api-rate/" + name + "/" + id))).slice(0, 16);
   let r = null;
   try {
-    r = await ledgerCall(api.env, { op: "key-reserve", keyId, sats: 0, now: Date.now(), rateLimit: rule.limit, rateWindowMs: rule.windowMs });
-  } catch (e) { return; }
-  if (r && r.rateLimited) throw rateError(rule, r.retryAfterMs, what);
+    r = await ledgerCall(env, { op: "key-reserve", keyId, sats: 0, now: Date.now(), rateLimit: r0.limit, rateWindowMs: r0.windowMs });
+  } catch (e) { r = null; }
+  if (!r || r._noLedger) return -1;
+  return r.rateLimited ? Math.max(1, Number(r.retryAfterMs) || 1000) : 0;
+}
+
+export async function apiRateLimit(api, name, who, what) {
+  const rule = API_RATE_LIMITS[name];
+  const wait = await apiRateHit(api.env, name, who, rule);
+  if (wait > 0) throw rateError(rule, wait, what);
 }
 
 export async function apiIpRateLimit(api, name, what) {
-  const rule = API_RATE_LIMITS[name];
-  const ip = apiClientIp(api);
-  if (!rule || !ip) return;
-  const now = Date.now();
-  const win = Math.floor(now / rule.windowMs);
-  let key = null;
-  let count = 0;
+  const bucket = apiIpBucket(api);
+  if (!bucket) return;
+  await apiRateLimit(api, name, "ip/" + bucket, what);
+}
+
+function authFailKey(bucket) {
+  return new Request("https://nymbot-api-rate.invalid/auth-fail?b=" + encodeURIComponent(bucket));
+}
+
+function authFailError(secs) {
+  return new ApiError(429, "rate_limit_error", "Too many failed authentication attempts from this address: at most " +
+    API_RATE_LIMITS.authFailIp.limit + " a minute. Retry in " + secs + " s.", { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
+}
+
+export async function apiAuthFailGate(api) {
+  const bucket = apiIpBucket(api);
+  if (!bucket) return;
+  let until = NaN;
   try {
     if (typeof caches === "undefined" || !caches.default) return;
-    key = new Request("https://nymbot-api-rate.invalid/" + name + "?ip=" + encodeURIComponent(ip) + "&w=" + win);
-    const hit = await caches.default.match(key);
-    if (hit) {
-      const n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
+    const hit = await caches.default.match(authFailKey(bucket));
+    if (!hit) return;
+    until = parseInt(await hit.text(), 10);
   } catch (e) { return; }
-  if (count >= rule.limit) throw rateError(rule, (win + 1) * rule.windowMs - now, what);
+  const now = Date.now();
+  if (Number.isFinite(until) && until > now) throw authFailError(Math.max(1, Math.ceil((until - now) / 1000)));
+}
+
+export async function apiAuthFailed(api) {
+  const bucket = apiIpBucket(api);
+  if (!bucket) return null;
+  const wait = await apiRateHit(api.env, "authFailIp", "ip/" + bucket);
+  if (wait <= 0) return null;
+  const until = Date.now() + wait;
   try {
-    await caches.default.put(key, new Response(String(count + 1), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(rule.windowMs / 1000) }
-    }));
+    if (typeof caches !== "undefined" && caches.default) {
+      await caches.default.put(authFailKey(bucket), new Response(String(until), {
+        headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.max(1, Math.ceil(wait / 1000)) }
+      }));
+    }
   } catch (e) { }
+  return authFailError(Math.max(1, Math.ceil(wait / 1000)));
 }

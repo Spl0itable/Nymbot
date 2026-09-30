@@ -50,6 +50,7 @@
     const GitRun = window.NymbotGitRun;
     const ServerRun = window.NymbotServerRun;
     const Notify = window.NymbotNotify;
+    const Background = window.NymbotBackground;
     const KB = window.NymbotKeyBackup;
     const Support = window.NymbotSupport;
     const SUPPORT_MAX = 2000;
@@ -101,6 +102,8 @@
     // How far to look for the epoch an account's announced key sits at.
     const PQ_EPOCH_SCAN = 12;
 
+    const CAP_WAIT_POLL_MS = 15000;
+
     const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
 
     const shortcuts = () => [
@@ -118,7 +121,7 @@
         { keys: [MODIFIER, 'Shift', 'M'], what: t('Pick a model') },
         { keys: [MODIFIER, 'Shift', 'G'], what: t('Repositories') },
         { keys: [MODIFIER, 'Shift', 'P'], what: t('Prompt library') },
-        { keys: ['Shift', 'Esc'], what: t('Stop the reply') },
+        { keys: ['Shift', 'Esc'], what: t('Stop every reply in this chat') },
         { keys: ['\u2191'], what: t('Edit your last message, from an empty composer') },
         { keys: ['Esc'], what: t('Close whatever is open') },
         { keys: ['?'], what: t('Commands, typed at the start of a message') }
@@ -150,11 +153,11 @@
         invoice: null,
         attachments: [],
         turns: new Map(),
-        queues: new Map(),
-        queueEdit: null,
+        _preparing: new Set(),
+        _replays: new Map(),
+        _capWaiters: [],
         dictation: null,
         get sending() { return this.sendingIn(this.conv && this.conv.id); },
-        get queue() { return this.queueFor(this.conv && this.conv.id); },
         quote: null,
         editing: null,
         convFilter: 'all',
@@ -287,12 +290,22 @@
                     const c = Store.conversation(id);
                     return c ? c.title || '' : '';
                 },
-                open: (id) => {
+                open: (id, asked) => {
                     const c = Store.conversation(id);
-                    if (c) this.open(c);
+                    if (!c) return;
+                    this.open(c);
+                    if (asked) this.showAsked(c.id, asked);
                 }
             });
             if (this.conv) Notify.viewingChat(this.conv.id);
+            Api.runLimit = () => Chat.validRuns(this.settings.maxRuns) || Api.RUN_LIMIT;
+            this.watchOnline();
+            setTimeout(() => {
+                this.flushPending().catch(() => { });
+                this.resumeClaims();
+                if (Background && !Identity.isRemote) Background.resume(this);
+                if (window.NymbotRuns && !Identity.isRemote) window.NymbotRuns.poll(this).catch(() => { });
+            }, 1500);
             this.startSupport();
             window.NymbotGift.fromUrl(this);
             this.watchScrolling();
@@ -487,6 +500,7 @@
         saveSettings(patch) {
             this.settings = Store.setSettings(patch);
             this.applyAppearance();
+            if (patch && 'maxRuns' in patch) Api.refreshSlots();
             return this.settings;
         },
 
@@ -706,18 +720,32 @@
             if (value) this.setNickname(value);
         },
 
-        renderMessages() {
+        renderMessages(opts) {
+            const keep = !!(opts && opts.keep);
             const box = $('messages');
+            const at = box.scrollTop;
+            const pinned = keep && this.nearBottom();
+            for (const turn of this.turnsIn(this.conv.id)) {
+                if (turn.draftNode) turn.draftNode = null;
+            }
             box.innerHTML = '';
             this._lastGroup = null;
             this._lastKey = null;
             const msgs = Store.messages(this.conv.id);
-            if (!msgs.length) {
+            const live = this.turnsIn(this.conv.id).filter(x => !x.quiet);
+            if (!msgs.length && !live.length) {
                 box.appendChild(this.emptyState());
                 return;
             }
+            const ends = new Map();
+            const tail = [];
+            for (const turn of live) {
+                const end = this.anchorIndex(msgs, { asked: turn.asked, replyTo: turn.runId });
+                if (end === -1) tail.push(turn);
+                else ends.set(end, (ends.get(end) || []).concat([turn]));
+            }
             let lastDay = null;
-            for (const m of msgs) {
+            msgs.forEach((m, i) => {
                 const day = new Date(m.ts || Date.now()).toDateString();
                 if (day !== lastDay) {
                     lastDay = day;
@@ -726,10 +754,28 @@
                     box.appendChild(el('div', 'day-divider', this.dayLabel(m.ts)));
                 }
                 this.appendMessage(m, true);
-            }
-            this.mountTurn();
+                for (const turn of ends.get(i) || []) this.attachCard(turn, box);
+            });
+            for (const turn of tail) this.attachCard(turn, box);
             this.syncFollowUps();
-            this.scrollToBottom(true);
+            if (keep && !pinned) {
+                const before = box.style.scrollBehavior;
+                box.style.scrollBehavior = 'auto';
+                box.scrollTop = at;
+                box.style.scrollBehavior = before;
+            } else {
+                this.scrollToBottom(true);
+            }
+        },
+
+        attachCard(turn, box) {
+            if (!turn.node) turn.node = this.runCard(turn);
+            box.appendChild(turn.node);
+            this._lastGroup = null;
+            this._lastKey = null;
+            this.renderCard(turn);
+            this.renderProgress(turn);
+            this.renderDraft(turn);
         },
 
         dayLabel(ts) {
@@ -797,7 +843,7 @@
             const box = $('messages');
             const self = m.role === 'self';
             const key = m.role === 'bot' ? (m.support ? 'support' : 'bot') : self ? 'self' : m.role + '-' + m.id;
-            if (this._lastGroup && this._lastKey === key && this._lastGroup.isConnected) {
+            if (this._lastGroup && this._lastKey === key && this._lastGroup.isConnected && box.lastElementChild === this._lastGroup) {
                 return { group: this._lastGroup, grouped: true };
             }
             const system = m.role === 'note' || m.role === 'error';
@@ -932,6 +978,7 @@
                     who.classList.add(me.colour);
                     who.appendChild(document.createTextNode(me.name));
                     if (m.edited) who.appendChild(el('span', 'author-model', t('edited')));
+                    if (m.scheduled) who.appendChild(el('span', 'author-model', t('Scheduled')));
                 }
                 node.appendChild(who);
             }
@@ -1032,6 +1079,9 @@
                 body.appendChild(tray);
             }
 
+            if (m.role === 'note' && m.runCap) body.appendChild(this.capCard(m));
+            if (m.role === 'self' && m.pending === 'offline') body.appendChild(this.pendingCard(m));
+
             const foot = el('span', 'bubble-foot');
             foot.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
             const paid = window.NymbotServerRun ? window.NymbotServerRun.totalCost(m) : m.cost;
@@ -1061,6 +1111,40 @@
                 actions.classList.toggle('is-open', !open);
             });
             return node;
+        },
+
+        capCard(m) {
+            const card = el('div', 'run-cap');
+            const cap = m.runCap || {};
+            const ceiling = Number(cap.ceiling) || Api.RUN_CEILING;
+            const running = Number(cap.running) || 0;
+            const limit = Number(cap.limit) || 0;
+            const add = (label, act, primary) => {
+                const b = el('button', 'btn btn-small ' + (primary ? 'btn-primary' : 'btn-ghost'), label);
+                b.type = 'button';
+                b.dataset.act = act;
+                b.dataset.id = m.id;
+                card.appendChild(b);
+            };
+            if (limit < ceiling) {
+                add(t('Start anyway'), 'msg-cap-start', true);
+                add(t('Always allow up to {n}', { n: Math.min(ceiling, running + 1) }), 'msg-cap-always', false);
+            }
+            add(t('Wait'), 'msg-cap-wait', limit >= ceiling);
+            return card;
+        },
+
+        pendingCard(m) {
+            const card = el('div', 'pending-card');
+            card.appendChild(el('span', 'pending-badge', t('Waiting for connection')));
+            for (const [label, act] of [[t('Edit'), 'msg-pending-edit'], [t('Delete'), 'msg-pending-delete']]) {
+                const b = el('button', 'btn btn-small btn-ghost', label);
+                b.type = 'button';
+                b.dataset.act = act;
+                b.dataset.id = m.id;
+                card.appendChild(b);
+            }
+            return card;
         },
 
         actionsFor(m) {
@@ -1139,8 +1223,6 @@
                 if (m.role === 'bot') node.classList.add('from-draft');
             }
             group.querySelector('.message-group-stack').appendChild(node);
-            const spinner = box.querySelector('#thinkingNode');
-            if (spinner) box.appendChild(spinner);
             if (!quiet) {
                 if (m.role === 'bot') {
                     this._pinnedReply = node;
@@ -1160,24 +1242,6 @@
             old.replaceWith(node);
             this.syncFollowUps();
             if (window.NymbotTasks) window.NymbotTasks.refresh(this);
-            return node;
-        },
-
-        thinkingNode(label) {
-            const node = el('div', 'bot-thinking');
-            node.id = 'thinkingNode';
-            const head = el('div', 'bot-thinking-head');
-            const img = document.createElement('img');
-            img.className = 'avatar-bubble';
-            img.src = C.botAvatar;
-            img.alt = '';
-            head.appendChild(img);
-            head.appendChild(el('span', 'bot-thinking-label', label || t('Nymbot is thinking')));
-            head.appendChild(el('span', 'typing-dot'));
-            head.appendChild(el('span', 'typing-dot'));
-            head.appendChild(el('span', 'typing-dot'));
-            node.appendChild(head);
-            node.appendChild(el('div', 'bot-progress', ''));
             return node;
         },
 
@@ -1210,25 +1274,35 @@
             let token = res.resumeToken;
             let reserve = res.nextReserve || 0;
             const research = res.research ? (turn.research || true) : null;
+            if (res.background && Background) {
+                await Background.follow(this, turn, res);
+                return;
+            }
             let stall = GitRun.stallWait(res);
             let stallResumes = 0;
             if (!token && !res.capStopped) {
-                this.note(t('That answer stopped early and could not be resumed. Ask again to pick it up.'), convId);
+                this.runNote(turn, t('That answer stopped early and could not be resumed. Ask again to pick it up.'));
                 return;
             }
             if (!token && res.capStopped) {
-                this.note(t('That answer stopped early to stay inside this chat\'s spending cap.'), convId);
+                this.runNote(turn, t('That answer stopped early to stay inside this chat\'s spending cap.'));
                 return;
             }
             let left = research ? Infinity : this.continueBudget(turn);
             if (stall == null && left <= 0) {
-                this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'), convId);
+                this.runNote(turn, t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'));
                 return;
             }
             if (stall == null && reserve && reserve > left) {
-                this.note(t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
-                    { n: num(reserve - left) }), convId);
+                this.runNote(turn, t('That answer stopped early. Carrying on reserves {n} more credits than the budget left.',
+                    { n: num(reserve - left) }));
                 return;
+            }
+
+            if (stall == null && Background && !turn.bgOff) {
+                const startConv = Store.conversation(convId);
+                if (startConv) await Background.askOnce(this, startConv, turn, { research: !!research, team: !!turn.team });
+                if (turn.stopped) return;
             }
 
             let legs = 0;
@@ -1248,26 +1322,41 @@
                 }
                 const stored = Store.conversation(convId);
                 if (!stored) return;
-                const conv = turn.asked ? Object.assign({}, stored, { proModel: turn.asked, mediaModel: null }) : stored;
+                const conv = turn.askedModel ? Object.assign({}, stored, { proModel: turn.askedModel, mediaModel: null }) : stored;
                 const capStop = this.capStopsLeg(conv);
                 if (capStop) {
-                    this.note(capStop, convId);
+                    this.runNote(turn, capStop);
                     return;
                 }
                 this.turnLabel(turn, t('Carrying on where it left off'));
+                const background = Background && !turn.bgOff && stall == null
+                    ? await Background.grantWithPush(this, conv, turn, { research: !!research, team: !!turn.team })
+                    : null;
                 let next;
                 try {
                     next = await Chat.send(conv, t('Continue.'), this.turnSettings(), {
                         resume: token,
                         maxCost: Caps.maxCost(conv, true, this.models),
+                        background,
                         research,
                         controller: turn.controller,
                         onStatus: (text) => this.turnStatus(turn, text),
                         onStep: (step) => this.localStep(turn, step),
-                        onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
+                        onSlot: (waiting) => this.turnState(turn, { slot: waiting }),
+                        onClaiming: (on) => this.turnState(turn, { claiming: on }),
+                        onTurn: (eventId, signer, info) => {
+                            this.bindRun(turn, convId, null, eventId, signer, info);
+                            this.watchTurn(turn, eventId, signer);
+                        }
                     });
                 } catch (e) {
                     this.stopWatchingTurn(turn);
+                    if (turn.stopped) return;
+                    if (e && e.stopped) {
+                        turn.outcome = 'stopped';
+                        this.runNote(turn, t('Stopped.'));
+                        return;
+                    }
                     if (stall != null && e && e.resumable && e.resumeToken && !turn.stopped
                         && stallResumes < GitRun.MAX_STALL_RESUMES) {
                         token = e.resumeToken;
@@ -1278,88 +1367,108 @@
                         const wait = LEG_STALL_WAITS_MS[stalls++];
                         token = e.resumeToken;
                         legs = 0;
-                        this.note(t('That step could not go out — the gateway is busy. Nothing is lost; trying again in {n} seconds.',
-                            { n: Math.round(wait / 1000) }), convId);
+                        this.runNote(turn, t('That step could not go out — the gateway is busy. Nothing is lost; trying again in {n} seconds.',
+                            { n: Math.round(wait / 1000) }));
                         await this.legPause(turn, wait);
                         continue;
                     }
                     if (e && e.resumable) {
-                        this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'), convId);
+                        this.runNote(turn, t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'));
                         return;
                     }
                     if (e && e.capExceeded) {
-                        this.note(t('Stopped: carrying on could go past this chat\'s spending cap.'), convId);
+                        this.runNote(turn, t('Stopped: carrying on could go past this chat\'s spending cap.'));
                         return;
                     }
-                    this.note((e && e.message) || t('Could not carry on from there.'), convId);
+                    this.runNote(turn, (e && e.message) || t('Could not carry on from there.'));
                     return;
                 }
                 stalls = 0;
                 this.stopWatchingTurn(turn);
 
-                const more = {
-                    id: Store.uid(),
-                    role: 'bot',
-                    content: next.reply,
-                    thinking: next.thinking || null,
-                    cost: next.cost || 0,
-                    pro: !!next.pro,
-                    model: next.modelLabel
-                        || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
-                    ...this.modelStamp(next.modelLabel
-                        || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null),
-                    [{ key: next.modelKey }, conv.mediaModel, conv.proModel, this.settings.proModel]),
-                    sources: next.sources || null,
-                    team: Team.carry(next),
-                    followUps: next.followUps || null,
-                    serverRuns: next.serverRuns || null,
-                    serverRunCredits: next.serverRunCredits || 0,
-                    calls: next.modelCalls || 1,
-                    task: next.taskType || null,
-                    checkpoint: next.checkpoint || null,
-                    staged: next.staged || null,
-                    continued: true,
-                    pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(next) : null,
-                    ts: Date.now()
-                };
-                Store.addMessage(convId, more);
-                Artifacts.harvest(convId, more);
-                this.showMessage(convId, more);
-                const legSpent = ServerRun ? ServerRun.totalCost(more) : more.cost;
-                Store.recordUsage(legSpent, !!next.pro);
-                this.bumpStats(conv, legSpent, !!next.pro);
-
-                turn.continued = (turn.continued || 0) + (legSpent || 0);
-                this.creditBalance(next.pro,
-                    next.balanceCredits != null ? next.balanceCredits : next.balance);
+                if (next.stopped) {
+                    if (Array.isArray(next.plan)) turn.plan = next.plan;
+                    this.runNote(turn, t('Stopped.'));
+                    turn.stopped = true;
+                    turn.outcome = 'stopped';
+                    return;
+                }
+                this.placeLeg(turn, conv, next);
                 left = research ? Infinity : this.continueBudget(turn);
                 token = next.truncated ? next.resumeToken : null;
                 reserve = next.nextReserve || 0;
+                if (next.background && Background) {
+                    await Background.follow(this, turn, next);
+                    return;
+                }
                 stall = GitRun.stallWait(next);
                 if (stall != null) continue;
 
                 if (token && !research && !(Number(this.settings.autoContinue) || 0)) {
-                    this.note(t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'), convId);
+                    this.runNote(turn, t('That answer stopped early — the task needs more steps than one turn holds. Set “When a repo task runs out of room” in Settings and Nymbot will carry on by itself.'));
                     return;
                 }
                 if (token && reserve && reserve > left) {
-                    this.note(t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
-                        { n: num(reserve), left: num(left) }), convId);
+                    this.runNote(turn, t('Stopped: carrying on again needs {n} credits and {left} are left in the budget.',
+                        { n: num(reserve), left: num(left) }));
                     return;
                 }
                 if (token && left <= 0) {
-                    this.note(t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
-                        { n: creditAmount(turn.continued) }), convId);
+                    this.runNote(turn, t('Budget spent — {n} credits on carrying that on. Raise it in Settings to go further.',
+                        { n: creditAmount(turn.continued) }));
                     return;
                 }
             }
             if (token && stall != null && !turn.stopped) {
-                this.note(t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'), convId);
+                this.runNote(turn, t('Stopped there — the gateway stayed busy. The work so far is saved, so ask it to carry on later.'));
                 return;
             }
             if (turn.continued && !token) {
-                this.note(t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(turn.continued) }), convId);
+                this.runNote(turn, t('Finished. Carrying on cost {n} extra credits.', { n: creditAmount(turn.continued) }));
             }
+        },
+
+        placeLeg(turn, conv, next) {
+            const convId = turn.convId;
+            const label = next.modelLabel
+                || (next.pro ? ((conv.proModel || this.settings.proModel || {}).label || null) : null);
+            const more = {
+                id: Store.uid(),
+                role: 'bot',
+                content: next.reply,
+                thinking: next.thinking || null,
+                cost: next.cost || 0,
+                pro: !!next.pro,
+                model: label,
+                ...this.modelStamp(label, [{ key: next.modelKey }, conv.mediaModel, conv.proModel, this.settings.proModel]),
+                sources: next.sources || null,
+                team: Team.carry(next),
+                followUps: next.followUps || null,
+                serverRuns: next.serverRuns || null,
+                serverRunCredits: next.serverRunCredits || 0,
+                calls: next.modelCalls || 1,
+                task: next.taskType || null,
+                checkpoint: next.checkpoint || null,
+                staged: next.staged || null,
+                continued: true,
+                pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(next) : null,
+                ts: Date.now()
+            };
+            if (Array.isArray(next.plan)) turn.plan = next.plan;
+            more.replyTo = next.replyTo || turn.runId || null;
+            more.askedBy = turn.asked || null;
+            if (more.checkpoint) Chat.rememberBranches(conv, more.checkpoint);
+            this.placeMessage(convId, more, turn);
+            turn.lastReplyId = more.id;
+            turn.outcome = this.outcomeOf(more, next);
+            Artifacts.harvest(convId, more);
+            const legSpent = ServerRun ? ServerRun.totalCost(more) : more.cost;
+            Store.recordUsage(legSpent, !!next.pro);
+            this.bumpStats(Store.conversation(convId) || conv, legSpent, !!next.pro);
+            turn.continued = (turn.continued || 0) + (legSpent || 0);
+            this.creditBalance(next.pro,
+                next.balanceCredits != null ? next.balanceCredits : next.balance);
+            return more;
         },
 
         capStopsLeg(conv) {
@@ -1508,7 +1617,7 @@
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
             turn.eventId = eventId;
-            Notify.watch(turn.convId, eventId, signer);
+            Notify.watch(turn.convId, eventId, signer, { key: turn.id, asked: turn.runId });
             turn.steps = (turn.steps || []).filter(s => s && s.local);
             let after = 0;
             let draftAfter = 0;
@@ -1518,12 +1627,31 @@
             const tick = async () => {
                 while (alive) {
                     let draft = null;
-                    const steps = await Chat.progress(eventId, after,
-                        { signer, draftAfter, onDraft: (d) => { draft = d; } });
+                    const steps = await Chat.progress(eventId, after, {
+                        signer, draftAfter,
+                        onDraft: (d) => { draft = d; },
+                        onPlan: (plan) => {
+                            turn.plan = plan;
+                            this.renderCard(turn);
+                            if (window.NymbotTasks) window.NymbotTasks.refresh(this);
+                        }
+                    });
                     if (!alive) return;
                     if (steps.length) {
                         after = steps[steps.length - 1].n || after;
-                        for (const s of steps) turn.steps.push(s);
+                        for (const s of steps) {
+                            if (s && s.kind === 'branch') {
+                                this.noteBranch(turn, s);
+                                continue;
+                            }
+                            if (s && s.kind === 'plan') {
+                                const plan = Chat.planOf(s.items);
+                                if (plan) turn.plan = plan;
+                                this.renderCard(turn);
+                                continue;
+                            }
+                            turn.steps.push(s);
+                        }
                         if (window.NymbotTasks) window.NymbotTasks.seen(this, turn, steps);
                         this.renderProgress(turn);
                     }
@@ -1537,6 +1665,15 @@
                 }
             };
             tick().catch(() => { });
+        },
+
+        noteBranch(turn, step) {
+            turn.branches = GitRun.branchSteps((turn.branches || []).concat([step]));
+            const conv = Store.conversation(turn.convId);
+            try { Chat.rememberBranchStep(step, conv); } catch (_) { }
+            this.renderCard(turn);
+            if (window.NymbotTasks) window.NymbotTasks.refresh(this);
+            if (window.NymbotRuns && window.NymbotRuns.render) window.NymbotRuns.render(this);
         },
 
         localStep(turn, step) {
@@ -1556,31 +1693,24 @@
             if (!turn.pin) turn.pin = { follow: this.nearBottom(), placed: $('messages').scrollTop };
             let msg = turn.draftNode && turn.draftNode.msg;
             if (!msg || !msg.isConnected) {
-                const last = this._lastGroup;
-                const grouped = !!(last && this._lastKey === 'bot' && last.isConnected);
-                msg = el('div', 'chat-message is-draft' + (grouped ? ' bubble-grouped' : ''));
+                msg = el('div', 'chat-message is-draft');
                 msg.dataset.role = 'bot';
                 msg.appendChild(el('span', 'message-author bot-author', C.botName));
                 const body = el('span', 'message-content');
                 body.appendChild(el('div', 'msg-text'));
                 msg.appendChild(body);
-                let group = null;
-                if (grouped) {
-                    last.querySelector('.message-group-stack').appendChild(msg);
-                } else {
-                    group = el('div', 'message-group');
-                    const avatarBox = el('div', 'message-group-avatar');
-                    const img = document.createElement('img');
-                    img.className = 'avatar-bubble';
-                    img.alt = '';
-                    img.src = C.botAvatar;
-                    avatarBox.appendChild(img);
-                    const stack = el('div', 'message-group-stack');
-                    stack.appendChild(msg);
-                    group.appendChild(avatarBox);
-                    group.appendChild(stack);
-                    $('messages').insertBefore(group, node);
-                }
+                const group = el('div', 'message-group');
+                const avatarBox = el('div', 'message-group-avatar');
+                const img = document.createElement('img');
+                img.className = 'avatar-bubble';
+                img.alt = '';
+                img.src = C.botAvatar;
+                avatarBox.appendChild(img);
+                const stack = el('div', 'message-group-stack');
+                stack.appendChild(msg);
+                group.appendChild(avatarBox);
+                group.appendChild(stack);
+                $('messages').insertBefore(group, node);
                 turn.draftNode = { msg, group };
             }
             const text = msg.querySelector('.msg-text');
@@ -1606,7 +1736,7 @@
             const d = turn && turn.draftNode;
             const node = d && d.msg;
             if (!turn || !turn.pin || !node || !node.isConnected) {
-                this.scrollToBottom();
+                if (this.nearBottom()) this.scrollToBottom();
                 return;
             }
             if (!turn.pin.follow) return;
@@ -1709,20 +1839,66 @@
             if (!conv) return;
             const input = $('input');
             const typed = override != null ? override : input.value.trim();
-            const bare = !!(opts && opts.bare);
             if (!typed) return;
+            const key = conv.id + '\n' + typed;
+            if (this._preparing.has(key)) return;
+            this._preparing.add(key);
+            const release = () => { this._preparing.delete(key); };
+            try {
+                return await this.sendNow(conv, typed, override, opts || {}, release);
+            } finally {
+                release();
+            }
+        },
+
+        async sendNow(conv, typed, override, opts, release) {
+            const input = $('input');
+            const bare = !!opts.bare;
             if (conv.support) return this.sendSupport(conv, typed, override == null);
             Notify.askOnce();
             this._pinnedReply = null;
             const here = () => !!(this.conv && this.conv.id === conv.id);
+            const started = () => {
+                release();
+                if (typeof opts.onStarted === 'function') { try { opts.onStarted(); } catch (_) { } }
+            };
+            const restore = () => {
+                if (override != null) return;
+                $('input').value = typed;
+                this.autoGrow();
+                this.updateHints();
+            };
 
-            // Commands always run: they are free, instant, and one of them stops the pending reply.
             if (override == null && await this.handleCommand(typed)) {
                 input.value = '';
                 Store.setDraft(conv.id, '');
                 this.autoGrow();
                 this.updateHints();
                 this.hideSuggest();
+                return;
+            }
+
+            const carried = Array.isArray(opts.attachments);
+            const composing = here() && !bare && !carried;
+
+            if (navigator.onLine === false && !opts.reuse) {
+                const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
+                const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
+                if (override == null) {
+                    input.value = '';
+                    Store.setDraft(conv.id, '');
+                    this.autoGrow();
+                    this.updateHints();
+                    this.hideSuggest();
+                }
+                if (composing) {
+                    this.attachments = [];
+                    this.quote = null;
+                    this.renderAttachments();
+                    this.renderQuote();
+                }
+                this.holdOffline(conv, typed, attachments, quote, { bare, unattended: !!opts.unattended });
+                started();
                 return;
             }
 
@@ -1744,26 +1920,6 @@
             const asked = mention && mention.model ? Mention.pinned(mention.model) : null;
             let text = asked ? mention.text : (bare ? typed : this.withMediaModel(typed, conv));
 
-            // Messages typed during a reply queue visibly rather than being dropped.
-            if (this.sendingIn(conv.id) || (override == null && this.queueEdit && this.queueEdit.convId === conv.id)) {
-                if (bare) return;
-                this.queueFor(conv.id, true).push(typed);
-                if (here()) this.renderQueue();
-                if (override == null) {
-                    input.value = '';
-                    Store.setDraft(conv.id, '');
-                    this.autoGrow();
-                    this.updateHints();
-                    this.hideSuggest();
-                }
-                return;
-            }
-
-            if (navigator.onLine === false) {
-                this.toast(t('You are offline. Your message is still here; send it once you are back online.'));
-                return;
-            }
-
             const research = bare ? null : Research.claim(this,
                 asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv, asked ? text : typed);
             if (research && research.blocked) {
@@ -1782,23 +1938,15 @@
                 this.hideSuggest();
             }
 
-            const carried = !!(opts && Array.isArray(opts.attachments));
-            const composing = here() && !bare && !carried;
             const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
             const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
 
-            // The device's free count is a speed bump that must never reach the worker, or it would link a person's keys.
             if (!asked && !this.freeAllows()) {
                 this.offerUpgrade();
-                if (override == null) {
-                    $('input').value = typed;
-                    this.autoGrow();
-                    this.updateHints();
-                }
+                restore();
                 return;
             }
 
-            // Pictures upload before pricing, since the link is what travels and is charged.
             if (attachments.some(a => (a.kind === 'image' || a.kind === 'video') && !a.url)) {
                 const stranded = await this.settleAttachments(attachments);
                 if (stranded.length) {
@@ -1816,11 +1964,7 @@
                             this.attachments = attachments;
                             this.renderAttachments();
                         }
-                        if (override == null) {
-                            $('input').value = typed;
-                            this.autoGrow();
-                            this.updateHints();
-                        }
+                        restore();
                         return;
                     }
                 }
@@ -1829,11 +1973,7 @@
             if (window.NymbotDocs && !window.NymbotDocs.loaded(conv.id)) await window.NymbotDocs.load(conv.id);
             const cost = Chat.wireCost(conv, text, { attachments, quote });
             if (cost.over > 0) {
-                if (override == null) {
-                    $('input').value = typed;
-                    this.autoGrow();
-                    this.updateHints();
-                }
+                restore();
                 this.toast(Chat.overLimitMessage(
                     Chat.wireTextFor(conv, text, { attachments, quote })));
                 return;
@@ -1851,13 +1991,9 @@
                 this._capWaive = null;
                 const gate = waived
                     ? { go: true, waived: true }
-                    : await Caps.gate(this, capConv, est, { unattended: !!(opts && opts.unattended) });
+                    : await Caps.gate(this, capConv, est, { unattended: !!opts.unattended });
                 if (!gate.go) {
-                    if (override == null) {
-                        $('input').value = typed;
-                        this.autoGrow();
-                        this.updateHints();
-                    }
+                    restore();
                     return;
                 }
                 if (!gate.waived) maxCost = Caps.maxCost(capConv, est.tier === 'pro', this.models);
@@ -1870,22 +2006,27 @@
                 this.renderQuote();
             }
 
-            const mine = {
-                id: Store.uid(),
-                role: 'self',
-                content: typed,
-                ts: Date.now(),
-                attachments: attachments.map(a => this.attachmentRecord(a)),
-                quote: quote ? quote.slice(0, 200) : null,
-                docs: window.NymbotDocs ? window.NymbotDocs.usage(conv, text, attachments) : null
-            };
-            Store.addMessage(conv.id, mine);
-            this.showMessage(conv.id, mine);
+            let mine;
+            if (opts.reuse && Store.messages(conv.id).some(m => m.id === opts.reuse.id)) {
+                mine = Store.patchMessage(conv.id, opts.reuse.id, { pending: undefined, ts: Date.now() });
+                if (here()) this.renderMessages({ keep: true });
+            } else {
+                mine = {
+                    id: Store.uid(),
+                    role: 'self',
+                    content: typed,
+                    ts: Date.now(),
+                    attachments: attachments.map(a => this.attachmentRecord(a)),
+                    quote: quote ? quote.slice(0, 200) : null,
+                    docs: window.NymbotDocs ? window.NymbotDocs.usage(conv, text, attachments) : null
+                };
+                Store.addMessage(conv.id, mine);
+                this.showMessage(conv.id, mine);
+            }
             if (window.NymbotDocs) {
                 window.NymbotDocs.keep(conv.id, attachments)
                     .then(() => { if (here()) window.NymbotDocs.renderTray(this.conv); });
             }
-            // Read for facts before the reply returns, so the offer shows while the message is on screen.
             if (!bare) this.noticeMemories(typed, conv);
 
             let live = conv;
@@ -1896,119 +2037,93 @@
                 this.renderList();
             }
 
-            const repos = Chat.reposFor(live);
-            const turn = this.beginTurn(live, team
-                ? t('Nymbot is leading a team')
-                : (research
-                    ? t('Nymbot is researching')
-                    : (repos.length && (live.proModel || this.settings.proModel)
-                        ? t('Nymbot is reading your repositories')
-                        : t('Nymbot is thinking'))));
-            turn.asked = asked;
-            if (research) turn.research = research.payload;
-            if (team) turn.team = team;
-            if (research || team) this.renderProgress(turn);
+            const turn = this.beginTurn(live, this.runLabel(live, research, team), { asked: mine.id });
+            started();
             if (mention && mention.unknown) {
                 this.note(t('No model called @{name}, so that went as an ordinary message. Type @ to pick one.',
                     { name: mention.unknown }), live.id);
             }
+            await this.runTurn(turn, live, mine, {
+                typed, text, asked, research, team, attachments, quote, maxCost, override, composing,
+                unattended: !!opts.unattended, toppedUp: !!opts.toppedUp, forkOf: opts.forkOf || null
+            });
+        },
 
+        runLabel(conv, research, team) {
+            if (team) return t('Nymbot is leading a team');
+            if (research) return t('Nymbot is researching');
+            if (Chat.reposFor(conv).length && (conv.proModel || this.settings.proModel)) return t('Nymbot is reading your repositories');
+            return t('Nymbot is thinking');
+        },
+
+        async runTurn(turn, conv, mine, ctx) {
+            const live = conv;
+            const here = () => !!(this.conv && this.conv.id === live.id);
+            const asked = ctx.asked;
+            const sendConv = asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live;
+            turn.asked = mine.id;
+            turn.askedModel = asked;
+            if (mine.wire) turn.runId = mine.wire;
+            if (ctx.research) turn.research = ctx.research.payload;
+            if (ctx.team) turn.team = ctx.team;
+            if (ctx.research || ctx.team) this.renderProgress(turn);
             try {
-                if (live.anon && Anon.bind(live)) {
-                    await this.fundAnon(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
-                        text, { attachments, quote });
+                if (!ctx.replay && live.anon && Anon.bind(live)) {
+                    await this.fundAnon(sendConv, ctx.text, { attachments: ctx.attachments, quote: ctx.quote });
                 }
-                const res = await Chat.send(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
-                    text, this.turnSettings(), {
-                    attachments, quote, maxCost,
-                    research: research ? research.payload : null,
-                    team,
+                if (turn.stopped) return;
+                const background = Background && !ctx.replay
+                    ? await Background.grantWithPush(this, sendConv, turn, { research: !!ctx.research, team: !!ctx.team })
+                    : null;
+                const res = await Chat.send(sendConv, ctx.text, this.turnSettings(), {
+                    attachments: ctx.attachments, quote: ctx.quote, maxCost: ctx.maxCost,
+                    background,
+                    research: ctx.research ? ctx.research.payload : null,
+                    team: ctx.team,
+                    replay: ctx.replay || null,
+                    maxRuns: ctx.maxRuns || null,
+                    forkOf: ctx.forkOf || null,
                     controller: turn.controller,
                     onStatus: (status) => this.turnStatus(turn, status),
                     onStep: (step) => this.localStep(turn, step),
-                    onTurn: (eventId, signer) => this.watchTurn(turn, eventId, signer)
+                    onSlot: (waiting) => this.turnState(turn, { slot: waiting }),
+                    onClaiming: (on) => this.turnState(turn, { claiming: on }),
+                    onTurn: (eventId, signer, info) => {
+                        this.bindRun(turn, live.id, mine, eventId, signer, info);
+                        this.watchTurn(turn, eventId, signer);
+                    }
                 });
                 this.stopWatchingTurn(turn);
-                const reply = {
-                    id: Store.uid(),
-                    role: 'bot',
-                    content: res.reply,
-                    thinking: res.thinking || null,
-                    cost: res.cost || 0,
-                    pro: !!res.pro,
-                    model: res.modelLabel
-                        || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null),
-                    ...this.modelStamp(res.modelLabel
-                        || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null),
-                    [{ key: res.modelKey }, asked, live.mediaModel, live.proModel, this.settings.proModel]),
-                    sources: res.sources || null,
-                    team: Team.carry(res),
-                    followUps: res.followUps || null,
-                    serverRuns: res.serverRuns || null,
-                    serverRunCredits: res.serverRunCredits || 0,
-                    repos: (res.repos && res.repos.length > 1) ? res.repos : null,
-                    // What the worker said it did, not a re-derived guess.
-                    calls: res.modelCalls || 1,
-                    task: res.taskType || null,
-                    checkpoint: res.checkpoint || null,
-                    pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(res) : null,
-                    staged: res.staged || null,
-                    ts: Date.now()
-                };
-                Store.addMessage(live.id, reply);
-                const lifted = Artifacts.harvest(live.id, reply);
-                const node = this.showMessage(live.id, reply);
-                if (node && lifted.length) this.renderArtifactStrip();
-                if (node && this.settings.typewriter && !turn.drafted && !this.reducedMotion() && reply.content.length < 12000) {
-                    await this.typeInto(node, reply);
-                }
-                const spent = ServerRun ? ServerRun.totalCost(reply) : reply.cost;
-                Store.recordUsage(spent, !!res.pro);
-                live = this.bumpStats(live, spent, !!res.pro) || live;
-                this.renderList();
-                this.notifyReply(reply);
-
-                if (res.free) {
-                    // Counted on this device too, so a fresh key does not reset the day.
-                    this.free = res.free;
-                    Free.spent();
-                    Free.observe(res.free.used);
-                }
-                this.creditBalance(res.pro,
-                    res.balanceCredits != null ? res.balanceCredits : res.balance);
-                if (live.anon) {
-                    const payer = Anon.forConv(live);
-                    if (payer) Anon.remember(payer.pk, res.pro ? 'pro' : 'standard', res.balanceCredits != null ? res.balanceCredits : res.balance);
-                }
-                if (live.anon && this.anonBalance.standard == null) {
-                    this.refreshBalance().catch(() => { });
-                }
-                if (res.lowBalance) {
-                    // In an anonymous chat a low balance usually means the throwaway key ran dry.
-                    const topped = live.anon ? await this.runAutoTopUp({ conv: live }) : null;
-                    if (!topped) {
-                        this.note(res.pro
-                            ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) })
-                            : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) }),
-                            live.id);
-                    }
-                }
-                if (res.truncated) await this.continueRun(turn, res);
+                if (turn.stopped) return;
+                await this.acceptReply(turn, live, res);
             } catch (e) {
                 this.stopWatchingTurn(turn);
-                if (e && e.name === 'AbortError') {
-                    this.note(t('Stopped. That reply was not charged for unless it had already finished.'), live.id);
+                if (turn.stopped) return;
+                const typed = ctx.typed;
+                const attachments = ctx.attachments || [];
+                const quote = ctx.quote || null;
+                if (e && (e.stopped || e.name === 'AbortError')) {
+                    if (e.stopped) turn.outcome = 'stopped';
+                    this.runNote(turn, t('Stopped.'));
+                } else if (e && e.runCap) {
+                    this.runCapRefused(turn, live, mine, e, ctx);
                 } else if (e && e.offline) {
-                    this.unsend(live, mine, { typed, attachments, quote, composing, override });
-                    this.toast(e.message);
+                    if (navigator.onLine === false) {
+                        Store.patchMessage(live.id, mine.id, { pending: 'offline' });
+                        this.clearInflight(mine.id);
+                        if (here()) this.renderMessages({ keep: true });
+                    } else {
+                        this.unsend(live, mine, { typed, attachments, quote, composing: ctx.composing, override: ctx.override });
+                        this.toast(e.message);
+                    }
                 } else if (e && e.capExceeded) {
-                    this.capRefused(live, e, { typed, mine, attachments, quote, override, unattended: !!(opts && opts.unattended) });
+                    this.capRefused(live, e, { typed, mine, attachments, quote, override: ctx.override, unattended: !!ctx.unattended });
                 } else if (e && e.team && !e.noCredits) {
-                    this.teamRefused(live, e, { typed, mine, attachments, quote, override });
+                    this.teamRefused(live, e, { typed, mine, attachments, quote, override: ctx.override });
                 } else if (e && e.noCredits && e.team) {
                     this.creditBalance(true, e.balanceCredits != null ? e.balanceCredits : e.balance);
                     this.renderBalance();
-                    this.note(Team.refusal(e), live.id);
+                    this.runNote(turn, Team.refusal(e));
                     if (here() && !live.anon) this.openCredits();
                 } else if (e && e.noCredits) {
                     this.creditBalance(e.pro,
@@ -2017,7 +2132,6 @@
                         const payer = Anon.forConv(live);
                         if (payer) Anon.remember(payer.pk, e.pro ? 'pro' : 'standard', e.balanceCredits != null ? e.balanceCredits : e.balance);
                     }
-                    // Trust the worker over the device count, which can only lag.
                     if (e.free) {
                         this.free = e.free;
                         Free.observe(e.free.used);
@@ -2033,16 +2147,16 @@
                     const topped = live.anon
                         ? await this.runAutoTopUp({ force: true, conv: live })
                         : null;
-                    if (topped && !(opts && opts.toppedUp)) {
+                    if (topped && !ctx.toppedUp) {
                         Store.deleteMessage(live.id, mine.id);
-                        if (here()) this.renderMessages();
+                        if (here()) this.renderMessages({ keep: true });
                         this.note(t('Topped the throwaway key up and sent it again.'), live.id);
                         const again = Object.assign(this.carriedFrom(mine.attachments, quote), { toppedUp: true });
                         setTimeout(() => this.send(typed, Store.conversation(live.id) || live, again), 0);
                     } else if (topped) {
-                        this.note(t('Topped the throwaway key up. Send that again when you are ready.'), live.id);
+                        this.runNote(turn, t('Topped the throwaway key up. Send that again when you are ready.'));
                     } else {
-                        this.note(e.message, live.id);
+                        this.runNote(turn, e.message);
                         if (here()) {
                             if (live.anon) this.openAnon(); else this.openCredits();
                         }
@@ -2053,23 +2167,352 @@
                         role: 'error',
                         content: (e && e.message) || t('Something went wrong.'),
                         retry: typed,
-                        retryAttachments: mine.attachments.length ? mine.attachments : null,
+                        retryAttachments: (mine.attachments || []).length ? mine.attachments : null,
                         retryQuote: quote || null,
                         ts: Date.now()
                     };
-                    Store.addMessage(live.id, err);
-                    this.showMessage(live.id, err);
+                    this.placeMessage(live.id, err, turn);
+                    if (e && e.replay) this._replays.set(err.id, { mine, ctx: Object.assign({}, ctx, { replay: e.replay }) });
                 }
             } finally {
                 this.endTurn(turn);
-                this.sendQueued(live.id);
             }
+        },
+
+        bindRun(turn, convId, mine, eventId, signer, info) {
+            turn.eventId = eventId;
+            turn.signer = signer || null;
+            turn.sent = true;
+            const wire = info && info.msgId;
+            if (wire && !turn.runId) turn.runId = wire;
+            if (info && info.replay) turn.replay = info.replay;
+            if (mine && wire && !turn.resumed) {
+                if (!mine.wire) {
+                    const kept = Store.patchMessage(convId, mine.id, { wire });
+                    if (kept) mine.wire = wire;
+                }
+                this.markInflight(convId, mine.id, eventId, mine.wire || wire);
+            }
+            this.renderCard(turn);
+        },
+
+        async acceptReply(turn, live, res) {
+            if (Array.isArray(res.plan)) turn.plan = res.plan;
+            if (res.stopped) {
+                turn.stopped = true;
+                turn.outcome = 'stopped';
+                this.runNote(turn, t('Stopped.'));
+                this.chargeFrom(live, res);
+                return;
+            }
+            const asked = turn.askedModel || null;
+            const label = res.modelLabel
+                || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null);
+            const reply = {
+                id: Store.uid(),
+                role: 'bot',
+                content: res.reply,
+                thinking: res.thinking || null,
+                cost: res.cost || 0,
+                pro: !!res.pro,
+                model: label,
+                ...this.modelStamp(label, [{ key: res.modelKey }, asked, live.mediaModel, live.proModel, this.settings.proModel]),
+                sources: res.sources || null,
+                team: Team.carry(res),
+                followUps: res.followUps || null,
+                serverRuns: res.serverRuns || null,
+                serverRunCredits: res.serverRunCredits || 0,
+                repos: (res.repos && res.repos.length > 1) ? res.repos : null,
+                calls: res.modelCalls || 1,
+                task: res.taskType || null,
+                checkpoint: res.checkpoint || null,
+                pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(res) : null,
+                staged: res.staged || null,
+                replyTo: res.replyTo || turn.runId || null,
+                askedBy: turn.asked || null,
+                ts: Date.now()
+            };
+            if (reply.checkpoint) Chat.rememberBranches(live, reply.checkpoint);
+            const node = this.placeMessage(live.id, reply, turn);
+            turn.lastReplyId = reply.id;
+            turn.outcome = this.outcomeOf(reply, res);
+            const lifted = Artifacts.harvest(live.id, reply);
+            if (node && lifted.length) this.renderArtifactStrip();
+            if (node && this.settings.typewriter && !turn.drafted && !this.reducedMotion() && reply.content.length < 12000
+                && Store.messages(live.id).slice(-1)[0].id === reply.id) {
+                await this.typeInto(node, reply);
+            }
+            this.chargeFrom(live, res, reply);
+            live = Store.conversation(live.id) || live;
+            this.notifyReply(reply);
+            if (res.lowBalance) {
+                const topped = live.anon ? await this.runAutoTopUp({ conv: live }) : null;
+                if (!topped) {
+                    this.runNote(turn, res.pro
+                        ? t('Pro credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) })
+                        : t('Credits running low: {balance} left. Tap Buy to top up.', { balance: creditAmount(res.balanceCredits != null ? res.balanceCredits : res.balance) }));
+                }
+            }
+            if (res.truncated || res.background) await this.continueRun(turn, res);
+            return reply;
+        },
+
+        outcomeOf(reply, res) {
+            if (reply && reply.pendingTool) return 'approval';
+            return res && res.resumeToken ? 'paused' : 'done';
+        },
+
+        chargeFrom(live, res, reply) {
+            const spent = reply ? (ServerRun ? ServerRun.totalCost(reply) : reply.cost) : (Number(res.cost) || 0);
+            if (spent) Store.recordUsage(spent, !!res.pro);
+            if (reply || spent) this.bumpStats(Store.conversation(live.id) || live, spent, !!res.pro);
+            this.renderList();
+            if (res.free) {
+                this.free = res.free;
+                Free.spent();
+                Free.observe(res.free.used);
+            }
+            if (res.balance != null || res.balanceCredits != null) {
+                this.creditBalance(res.pro, res.balanceCredits != null ? res.balanceCredits : res.balance);
+            }
+            if (live.anon) {
+                const payer = Anon.forConv(live);
+                if (payer && (res.balance != null || res.balanceCredits != null)) {
+                    Anon.remember(payer.pk, res.pro ? 'pro' : 'standard', res.balanceCredits != null ? res.balanceCredits : res.balance);
+                }
+                if (this.anonBalance.standard == null) this.refreshBalance().catch(() => { });
+            }
+            return spent;
+        },
+
+        runNote(turn, text) {
+            const m = { id: Store.uid(), role: 'note', content: text, ts: Date.now() };
+            if (turn && turn.asked) m.askedBy = turn.asked;
+            if (turn && turn.runId) m.replyTo = turn.runId;
+            this.placeMessage(turn ? turn.convId : (this.conv && this.conv.id), m, turn);
+            return m;
+        },
+
+        anchorIndex(list, where) {
+            const w = where || {};
+            let at = -1;
+            if (w.asked) at = list.findIndex(m => m.id === w.asked);
+            if (at === -1 && w.replyTo) at = list.findIndex(m => m.role === 'self' && m.wire === w.replyTo);
+            if (at === -1) return -1;
+            const q = list[at];
+            let i = at;
+            while (i + 1 < list.length) {
+                const n = list[i + 1];
+                if (n.role !== 'self' && (n.askedBy === q.id || (q.wire && n.replyTo === q.wire))) i++;
+                else break;
+            }
+            return i;
+        },
+
+        placeMessage(convId, m, turn) {
+            if (!convId) return null;
+            if (turn && turn.asked && !m.askedBy) m.askedBy = turn.asked;
+            if (turn && turn.runId && !m.replyTo) m.replyTo = turn.runId;
+            const list = Store.messages(convId);
+            const end = this.anchorIndex(list, { asked: m.askedBy, replyTo: m.replyTo });
+            if (end === -1 || end === list.length - 1) {
+                Store.addMessage(convId, m);
+                const node = this.showMessage(convId, m);
+                this.mountTurns();
+                return node;
+            }
+            list.splice(end + 1, 0, m);
+            Store.saveMessages(convId, list);
+            if (!this.conv || this.conv.id !== convId) return null;
+            this.renderMessages({ keep: true });
+            return $('messages').querySelector(`.chat-message[data-id="${m.id}"]`);
+        },
+
+        holdOffline(conv, typed, attachments, quote, flags) {
+            const m = {
+                id: Store.uid(),
+                role: 'self',
+                content: typed,
+                ts: Date.now(),
+                pending: 'offline',
+                attachments: attachments.map(a => this.attachmentRecord(a)),
+                quote: quote ? quote.slice(0, 200) : null
+            };
+            if (flags && flags.unattended) m.unattended = true;
+            if (flags && flags.bare) m.bare = true;
+            Store.addMessage(conv.id, m);
+            this.showMessage(conv.id, m);
+            this.watchOnline();
+            return m;
+        },
+
+        watchOnline() {
+            if (this._onlineWatch) return;
+            this._onlineWatch = true;
+            window.addEventListener('online', () => { this.flushPending().catch(() => { }); });
+        },
+
+        async flushPending() {
+            if (navigator.onLine === false || this._flushing) return;
+            this._flushing = true;
+            try {
+                for (const conv of Store.conversations()) {
+                    for (const m of Store.messages(conv.id)) {
+                        if (m.role !== 'self' || m.pending !== 'offline') continue;
+                        if (navigator.onLine === false) return;
+                        const target = Store.conversation(conv.id);
+                        if (!target) break;
+                        const opts = Object.assign(this.carriedFrom(m.attachments, m.quote), {
+                            reuse: m, unattended: !!m.unattended, bare: !!m.bare
+                        });
+                        await new Promise((resolve) => {
+                            opts.onStarted = resolve;
+                            Promise.resolve(this.send(m.content, target, opts)).catch(() => { }).then(resolve);
+                        });
+                    }
+                }
+            } finally {
+                this._flushing = false;
+            }
+        },
+
+        editPending(m) {
+            if (!this.conv) return;
+            Store.deleteMessage(this.conv.id, m.id);
+            this.renderMessages({ keep: true });
+            const input = $('input');
+            const draft = String(input.value || '').trim();
+            input.value = draft ? draft + '\n' + m.content : m.content;
+            Store.setDraft(this.conv.id, input.value);
+            const back = this.carriedFrom(m.attachments, m.quote);
+            if (back.attachments.length) {
+                this.attachments = this.attachments.concat(back.attachments);
+                this.renderAttachments();
+            }
+            if (back.quote && !this.quote) {
+                this.quote = back.quote;
+                this.renderQuote();
+            }
+            this.autoGrow();
+            this.updateHints();
+            input.focus();
+        },
+
+        async deletePending(m) {
+            const convId = this.conv && this.conv.id;
+            if (!convId) return;
+            const go = await this.ask({
+                title: t('Delete this message?'),
+                body: t('It has not been sent yet.'),
+                confirm: t('Delete'),
+                danger: true
+            });
+            if (!go) return;
+            Store.deleteMessage(convId, m.id);
+            if (this.conv && this.conv.id === convId) this.renderMessages({ keep: true });
+        },
+
+        runCapRefused(turn, conv, mine, err, ctx) {
+            const here = !!(this.conv && this.conv.id === conv.id);
+            if (err.freeCap) {
+                this.runNote(turn, err.message);
+                if (here) this.openCredits();
+                return;
+            }
+            const m = {
+                id: Store.uid(),
+                role: 'note',
+                content: err.message,
+                runCap: { running: err.running, limit: err.limit, ceiling: err.ceiling },
+                ts: Date.now()
+            };
+            this.placeMessage(conv.id, m, turn);
+            this._replays.set(m.id, { mine, ctx: Object.assign({}, ctx, { replay: err.replay || null }) });
+        },
+
+        capChoice(m, choice) {
+            const conv = this.conv;
+            if (!conv || !m.runCap) return;
+            const held = this._replays.get(m.id);
+            this._replays.delete(m.id);
+            const cap = m.runCap;
+            const ceiling = Number(cap.ceiling) || Api.RUN_CEILING;
+            const more = Math.min(ceiling, (Number(cap.running) || 0) + 1);
+            Store.deleteMessage(conv.id, m.id);
+            this.renderMessages({ keep: true });
+            const mine = held ? held.mine : Store.messages(conv.id).find(x => x.id === m.askedBy) || null;
+            if (!mine) return;
+            const base = held ? held.ctx : Object.assign(this.carriedFrom(mine.attachments, mine.quote), { typed: mine.content, text: mine.content });
+            const ctx = Object.assign({}, base);
+            if (choice === 'start') ctx.maxRuns = more;
+            if (choice === 'always') {
+                this.saveSettings({ maxRuns: more });
+                ctx.maxRuns = more;
+                Api.refreshSlots();
+            }
+            const turn = this.beginTurn(conv, this.runLabel(conv, ctx.research, ctx.team), { asked: mine.id, runId: mine.wire || null });
+            if (choice === 'wait') {
+                turn.waiting = true;
+                this.renderCard(turn);
+                this.waitForRunEnd(turn).then((go) => {
+                    turn.waiting = false;
+                    this.renderCard(turn);
+                    if (!go || turn.stopped) {
+                        if (this.turns.has(turn.id)) this.endTurn(turn);
+                        return;
+                    }
+                    this.runTurn(turn, conv, mine, ctx);
+                });
+                return;
+            }
+            this.runTurn(turn, conv, mine, ctx);
+        },
+
+        waitForRunEnd(turn) {
+            return new Promise((resolve) => {
+                let timer = 0;
+                const done = (go) => {
+                    clearTimeout(timer);
+                    const at = this._capWaiters.indexOf(entry);
+                    if (at !== -1) this._capWaiters.splice(at, 1);
+                    resolve(go);
+                };
+                const entry = { turn, resolve: done };
+                this._capWaiters.push(entry);
+                turn.controller.signal.addEventListener('abort', () => done(false), { once: true });
+                const check = async () => {
+                    const Runs = window.NymbotRuns;
+                    if (Runs && !Identity.isRemote) {
+                        await Runs.poll(this).catch(() => null);
+                        const busy = Runs.entries(this).filter(x => x.run !== turn.id).length;
+                        if (this._capWaiters.includes(entry) && busy < (Chat.validRuns(this.settings.maxRuns) || Api.RUN_LIMIT)) {
+                            done(true);
+                            return;
+                        }
+                    }
+                    if (this._capWaiters.includes(entry)) timer = setTimeout(check, CAP_WAIT_POLL_MS);
+                };
+                timer = setTimeout(check, CAP_WAIT_POLL_MS);
+            });
+        },
+
+        retryRun(m) {
+            const conv = this.conv;
+            const held = this._replays.get(m.id);
+            if (!conv || !held) return false;
+            this._replays.delete(m.id);
+            if (!Store.messages(conv.id).some(x => x.id === held.mine.id)) return false;
+            Store.deleteMessage(conv.id, m.id);
+            this.renderMessages({ keep: true });
+            const turn = this.beginTurn(conv, this.runLabel(conv, held.ctx.research, held.ctx.team), { asked: held.mine.id, runId: held.mine.wire || null });
+            this.runTurn(turn, conv, held.mine, held.ctx);
+            return true;
         },
 
         unsend(conv, mine, sent) {
             Store.deleteMessage(conv.id, mine.id);
             if (!this.conv || this.conv.id !== conv.id) return;
-            this.renderMessages();
+            this.renderMessages({ keep: true });
             const input = $('input');
             if (sent.override == null && !String(input.value || '').trim()) {
                 input.value = sent.typed;
@@ -2090,7 +2533,7 @@
         async capRefused(conv, err, sent) {
             Store.deleteMessage(conv.id, sent.mine.id);
             const here = !!(this.conv && this.conv.id === conv.id);
-            if (here) this.renderMessages();
+            if (here) this.renderMessages({ keep: true });
             if (sent.unattended) {
                 this.note(t('Not sent: this reply could go past the chat\'s spending cap, and nobody was here to agree to it.'), conv.id);
                 return;
@@ -2123,7 +2566,7 @@
         teamRefused(conv, err, sent) {
             Store.deleteMessage(conv.id, sent.mine.id);
             const here = !!(this.conv && this.conv.id === conv.id);
-            if (here) this.renderMessages();
+            if (here) this.renderMessages({ keep: true });
             this.note(Team.refusal(err), conv.id);
             if (!here || sent.override != null) return;
             this.attachments = sent.attachments;
@@ -2133,165 +2576,6 @@
             $('input').value = sent.typed;
             this.autoGrow();
             this.updateHints();
-        },
-
-        renderQueue() {
-            const strip = $('queueStrip');
-            const active = document.activeElement;
-            const refocus = !!(active && active.classList && active.classList.contains('queue-edit-input') && strip.contains(active));
-            const caret = refocus ? active.selectionStart : null;
-            strip.innerHTML = '';
-            strip.hidden = this.queue.length === 0;
-            const convId = this.conv && this.conv.id;
-            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
-            this.queue.forEach((text, i) => {
-                if (editing && editing.index === i) {
-                    strip.appendChild(this.queueEditRow(editing, i, refocus, caret));
-                    return;
-                }
-                const row = el('div', 'queue-item');
-                row.appendChild(el('span', 'queue-order', t('#{n}', { n: i + 1 })));
-                row.appendChild(el('span', 'queue-text', text));
-                const edit = el('button', 'icon-btn queue-edit');
-                edit.type = 'button';
-                edit.setAttribute('aria-label', t('Edit message'));
-                edit.title = t('Edit message');
-                edit.appendChild(Icons.node('pencil', { size: 13 }));
-                edit.addEventListener('click', () => this.editQueued(convId, i));
-                row.appendChild(edit);
-                const drop = el('button', 'icon-btn queue-drop');
-                drop.type = 'button';
-                drop.setAttribute('aria-label', t('Do not send this'));
-                drop.title = t('Do not send this');
-                drop.appendChild(Icons.node('close', { size: 13 }));
-                drop.addEventListener('click', () => this.dropQueued(convId, i));
-                row.appendChild(drop);
-                strip.appendChild(row);
-            });
-            this.syncFollowUps();
-        },
-
-        queueEditRow(editing, i, refocus, caret) {
-            const row = el('div', 'queue-item is-editing');
-            row.appendChild(el('span', 'queue-order', t('#{n}', { n: i + 1 })));
-            const field = document.createElement('textarea');
-            field.className = 'queue-edit-input';
-            field.rows = 2;
-            field.dir = 'auto';
-            field.value = editing.draft;
-            field.setAttribute('aria-label', t('Edit message'));
-            field.addEventListener('input', () => { editing.draft = field.value; });
-            field.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.cancelQueuedEdit();
-                } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                    e.preventDefault();
-                    this.saveQueuedEdit();
-                }
-            });
-            row.appendChild(field);
-            const actions = el('div', 'queue-edit-actions');
-            const save = el('button', 'btn btn-primary', t('Save'));
-            save.type = 'button';
-            save.addEventListener('click', () => this.saveQueuedEdit());
-            const cancel = el('button', 'btn', t('Cancel'));
-            cancel.type = 'button';
-            cancel.addEventListener('click', () => this.cancelQueuedEdit());
-            actions.appendChild(save);
-            actions.appendChild(cancel);
-            row.appendChild(actions);
-            if (refocus) {
-                requestAnimationFrame(() => {
-                    field.focus();
-                    if (caret != null) field.setSelectionRange(caret, caret);
-                });
-            }
-            return row;
-        },
-
-        editQueued(convId, index) {
-            const queue = this.queueFor(convId);
-            if (index < 0 || index >= queue.length) return;
-            this.queueEdit = { convId, index, draft: queue[index] };
-            this.renderQueue();
-            const field = $('queueStrip').querySelector('.queue-edit-input');
-            if (field) {
-                field.focus();
-                field.setSelectionRange(field.value.length, field.value.length);
-            }
-        },
-
-        dropQueued(convId, index) {
-            const queue = this.queueFor(convId);
-            if (index < 0 || index >= queue.length) return;
-            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
-            queue.splice(index, 1);
-            if (!queue.length) this.queues.delete(convId);
-            if (editing && editing.index === index) this.queueEdit = null;
-            else if (editing && editing.index > index) editing.index--;
-            if (this.conv && this.conv.id === convId) this.renderQueue();
-            this.resumeQueue(convId);
-        },
-
-        async saveQueuedEdit() {
-            const editing = this.queueEdit;
-            if (!editing) return;
-            const text = editing.draft.trim();
-            if (!text) {
-                const drop = await this.ask({
-                    title: t('Remove this message?'),
-                    body: t('It is empty now, so there is nothing to send. Take it out of the queue?'),
-                    confirm: t('Remove'),
-                    danger: true
-                });
-                if (this.queueEdit !== editing) return;
-                if (drop) this.dropQueued(editing.convId, editing.index);
-                return;
-            }
-            const queue = this.queueFor(editing.convId);
-            if (editing.index < queue.length) queue[editing.index] = text;
-            this.queueEdit = null;
-            if (this.conv && this.conv.id === editing.convId) this.renderQueue();
-            this.resumeQueue(editing.convId);
-        },
-
-        cancelQueuedEdit() {
-            const editing = this.queueEdit;
-            if (!editing) return;
-            this.queueEdit = null;
-            if (this.conv && this.conv.id === editing.convId) this.renderQueue();
-            this.resumeQueue(editing.convId);
-        },
-
-        resumeQueue(convId) {
-            if (this.sendingIn(convId) || !this.queueFor(convId).length) return;
-            this.sendQueued(convId);
-        },
-
-        sendQueued(convId) {
-            const queue = this.queues.get(convId);
-            if (!queue || !queue.length || this.sendingIn(convId)) return;
-            const editing = this.queueEdit && this.queueEdit.convId === convId ? this.queueEdit : null;
-            if (editing && editing.index === 0) return;
-            const next = queue.shift();
-            if (editing) editing.index--;
-            if (!queue.length) this.queues.delete(convId);
-            if (this.conv && this.conv.id === convId) this.renderQueue();
-            const conv = Store.conversation(convId);
-            if (!conv) return;
-            setTimeout(() => this.send(next, conv), 0);
-        },
-
-        queueFor(convId, create) {
-            if (!convId) return [];
-            let queue = this.queues.get(convId);
-            if (!queue && create) {
-                queue = [];
-                this.queues.set(convId, queue);
-            }
-            return queue || [];
         },
 
         refreshMic() {
@@ -2535,64 +2819,200 @@
             return raw;
         },
 
+        turnsIn(convId) {
+            if (!convId) return [];
+            return [...this.turns.values()].filter(x => x.convId === convId)
+                .sort((a, b) => a.startedAt - b.startedAt);
+        },
+
         turnOf(convId) {
-            return (convId && this.turns.get(convId)) || null;
+            const list = this.turnsIn(convId).filter(x => !x.quiet);
+            return list[list.length - 1] || null;
+        },
+
+        turnById(id) {
+            return this.turns.get(id) || null;
         },
 
         sendingIn(convId) {
-            return !!this.turnOf(convId);
+            return this.turnsIn(convId).length > 0;
         },
 
         beginTurn(conv, label, opts) {
+            const o = opts || {};
             const turn = {
+                id: Store.uid(),
                 convId: conv.id,
+                asked: o.asked || null,
+                runId: o.runId || null,
                 startedAt: Date.now(),
                 controller: new AbortController(),
                 label: label || t('Nymbot is thinking'),
-                quiet: !!(opts && opts.quiet),
+                quiet: !!o.quiet,
                 status: null,
                 steps: [],
+                plan: null,
                 watch: null,
                 node: null,
                 stopped: false,
                 continued: 0
             };
-            this.turns.set(conv.id, turn);
+            if (o.resumed) turn.resumed = true;
+            this.turns.set(turn.id, turn);
             if (window.NymbotTasks) window.NymbotTasks.began(this, turn);
-            this.mountTurn();
+            this.mountTurns();
             this.syncFollowUps();
             this.refreshComposer();
             this.renderList();
+            this.renderRunning();
             return turn;
         },
 
         endTurn(turn) {
             if (!turn) return;
-            if (this.turns.get(turn.convId) === turn) this.turns.delete(turn.convId);
+            const had = this.turns.get(turn.id) === turn;
+            if (had) this.turns.delete(turn.id);
             if (window.NymbotTasks) window.NymbotTasks.ended(this, turn);
-            if (turn.eventId) {
-                const last = Store.messages(turn.convId).slice(-1)[0];
-                const replied = !!(last && last.role === 'bot' && (last.ts || 0) >= (turn.startedAt || 0));
-                Notify.settled(turn.convId, { replied, stopped: !!turn.stopped }).catch(() => { });
+            if (had && turn.eventId) {
+                Notify.settled(turn.id, {
+                    replied: !!turn.lastReplyId,
+                    stopped: !!turn.stopped && turn.outcome !== 'stopped',
+                    state: turn.outcome || (turn.lastReplyId ? 'done' : 'failed')
+                }).catch(() => { });
             }
+            if (had && turn.asked && !turn.resumed) this.clearInflight(turn.asked);
             if (turn.node) {
                 turn.node.remove();
                 turn.node = null;
             }
+            if (had && !turn.waiting) {
+                const next = this._capWaiters.shift();
+                if (next) next.resolve(true);
+            }
             this.refreshComposer();
             this.renderList();
             this.syncFollowUps();
+            this.renderRunning();
         },
 
-        mountTurn() {
-            const turn = this.turnOf(this.conv && this.conv.id);
-            if (!turn || turn.quiet) return;
-            if (turn.node && turn.node.isConnected) return;
-            turn.node = this.thinkingNode(turn.label);
-            $('messages').appendChild(turn.node);
-            this.renderProgress(turn);
-            this.renderDraft(turn);
-            this.scrollToBottom();
+        turnState(turn, patch) {
+            if (!turn) return;
+            if ('slot' in patch) turn.slot = !!patch.slot;
+            if ('claiming' in patch) turn.claiming = !!patch.claiming;
+            this.renderCard(turn);
+            if (window.NymbotTasks) window.NymbotTasks.refresh(this);
+        },
+
+        cardLabel(turn) {
+            if (turn.waiting || turn.slot) return t('Waiting for a free slot');
+            if (turn.claiming) return t('Still working on that one…');
+            return turn.label || t('Nymbot is thinking');
+        },
+
+        runCard(turn) {
+            const node = el('div', 'bot-thinking');
+            node.dataset.run = turn.id;
+            const head = el('div', 'bot-thinking-head');
+            const img = document.createElement('img');
+            img.className = 'avatar-bubble';
+            img.src = C.botAvatar;
+            img.alt = '';
+            head.appendChild(img);
+            head.appendChild(el('span', 'bot-thinking-label', this.cardLabel(turn)));
+            head.appendChild(el('span', 'typing-dot'));
+            head.appendChild(el('span', 'typing-dot'));
+            head.appendChild(el('span', 'typing-dot'));
+            node.appendChild(head);
+            node.appendChild(el('div', 'bot-progress', ''));
+            const plan = el('ol', 'run-plan');
+            plan.hidden = true;
+            plan.setAttribute('aria-label', t('Plan'));
+            node.appendChild(plan);
+            const actions = el('div', 'run-actions');
+            const steer = el('button', 'btn btn-small btn-ghost run-steer', t('Add instructions'));
+            steer.type = 'button';
+            steer.dataset.act = 'run-steer';
+            steer.dataset.run = turn.id;
+            const stop = el('button', 'btn btn-small btn-ghost run-stop', t('Stop'));
+            stop.type = 'button';
+            stop.dataset.act = 'run-stop';
+            stop.dataset.run = turn.id;
+            actions.appendChild(steer);
+            actions.appendChild(stop);
+            node.appendChild(actions);
+            return node;
+        },
+
+        renderCard(turn) {
+            const node = turn && turn.node;
+            if (!node) return;
+            const label = node.querySelector('.bot-thinking-label');
+            if (label) label.textContent = this.cardLabel(turn);
+            const steer = node.querySelector('.run-steer');
+            if (steer) steer.hidden = !turn.runId || !turn.sent || !!turn.slot || !!turn.waiting;
+            const plan = node.querySelector('.run-plan');
+            if (plan) this.fillPlan(plan, turn.plan);
+            const branches = GitRun.branchSteps(turn.branches);
+            let line = node.querySelector('.run-branch');
+            if (branches.length && !line) {
+                line = el('div', 'run-branch');
+                if (plan) plan.before(line); else node.appendChild(line);
+            }
+            if (line) {
+                line.hidden = !branches.length;
+                line.textContent = branches.map(b => t('Working on branch {branch}', { branch: b.branch })).join(' · ');
+            }
+        },
+
+        fillPlan(list, plan) {
+            list.innerHTML = '';
+            const items = Array.isArray(plan) ? plan : [];
+            list.hidden = !items.length;
+            for (const item of items) {
+                const li = el('li', 'plan-item is-' + (item.state || 'planned'));
+                li.appendChild(el('span', 'plan-mark', item.state === 'done' ? '✓' : (item.state === 'doing' ? '▸' : (item.state === 'skipped' ? '–' : '○'))));
+                li.appendChild(el('span', 'plan-text', item.text));
+                list.appendChild(li);
+            }
+        },
+
+        mountTurns() {
+            const conv = this.conv;
+            if (!conv) return;
+            const box = $('messages');
+            const msgs = Store.messages(conv.id);
+            for (const turn of this.turnsIn(conv.id)) {
+                if (turn.quiet) continue;
+                if (!turn.node) turn.node = this.runCard(turn);
+                const end = this.anchorIndex(msgs, { asked: turn.asked, replyTo: turn.runId });
+                let after = null;
+                if (end !== -1) {
+                    const anchor = box.querySelector(`.chat-message[data-id="${msgs[end].id}"]`);
+                    if (!anchor) continue;
+                    const group = anchor.closest('.message-group');
+                    const stack = anchor.parentNode;
+                    if (!group || (stack && stack.lastElementChild !== anchor)) {
+                        this.renderMessages({ keep: true });
+                        return;
+                    }
+                    after = group;
+                    const draft = turn.draftNode && turn.draftNode.group;
+                    if (draft && draft.previousElementSibling === group) after = draft;
+                } else {
+                    if (box.querySelector('.empty')) box.innerHTML = '';
+                    after = box.lastElementChild;
+                }
+                if (after !== turn.node && (!after || after.nextElementSibling !== turn.node)) {
+                    if (after) after.after(turn.node);
+                    else box.appendChild(turn.node);
+                    if (this._lastGroup && box.lastElementChild !== this._lastGroup) {
+                        this._lastGroup = null;
+                        this._lastKey = null;
+                    }
+                }
+                this.renderCard(turn);
+                this.renderProgress(turn);
+            }
         },
 
         latestReply(convId) {
@@ -2607,7 +3027,7 @@
         syncFollowUps() {
             const box = $('messages');
             const conv = this.conv;
-            const m = conv && !this.sendingIn(conv.id) && !this.queueFor(conv.id).length ? this.latestReply(conv.id) : null;
+            const m = conv ? this.latestReply(conv.id) : null;
             const items = m && Chat.followUpsOf(m.followUps);
             const node = items && items.length ? box.querySelector(`.chat-message[data-id="${m.id}"]`) : null;
             const key = node ? m.id + '\n' + items.join('\n') : '';
@@ -2673,7 +3093,6 @@
 
         followUp(convId, id, text) {
             if (!this.conv || this.conv.id !== convId) return;
-            if (this.sendingIn(convId) || this.queueFor(convId).length) return;
             const m = this.latestReply(convId);
             const items = m && m.id === id ? Chat.followUpsOf(m.followUps) : null;
             if (!items || !items.includes(text)) return;
@@ -2699,8 +3118,7 @@
 
         turnLabel(turn, label) {
             turn.label = label;
-            const node = turn.node && turn.node.querySelector('.bot-thinking-label');
-            if (node) node.textContent = label;
+            this.renderCard(turn);
         },
 
         turnStatus(turn, text) {
@@ -2711,11 +3129,13 @@
         refreshComposer() {
             const turn = this.turnOf(this.conv && this.conv.id);
             const on = !!turn;
-            $('sendBtn').hidden = on;
-            $('stopBtn').hidden = !on;
-            $('sendBtn').disabled = on;
+            $('sendBtn').hidden = false;
+            $('sendBtn').disabled = false;
+            const stop = $('stopBtn');
+            stop.hidden = !on;
+            stop.setAttribute('aria-label', t('Stop every reply in this chat'));
+            stop.title = t('Stop every reply in this chat');
             this.status(turn ? turn.status : null);
-            this.renderQueue();
         },
 
         busyMark() {
@@ -2736,22 +3156,120 @@
             clearTimeout(this._typeTimer);
             const conv = this.conv;
             if (!conv) return;
-            // Stop means stop: no further leg, and nothing queued goes either.
-            const queue = this.queues.get(conv.id);
-            this.queues.delete(conv.id);
-            if (this.queueEdit && this.queueEdit.convId === conv.id) this.queueEdit = null;
-            if (queue && queue.length) {
-                this.renderQueue();
-                this.note(t('Stopped. Anything waiting behind it was not sent.'));
+            for (const turn of this.turnsIn(conv.id)) this.stopRun(turn);
+        },
+
+        stopRun(turn, opts) {
+            if (!turn || turn.stopped) return;
+            turn.stopped = true;
+            this.stopWatchingTurn(turn);
+            try { turn.controller.abort(); } catch (_) { }
+            if (turn.runId && turn.sent && !turn.waiting) {
+                const conv = Store.conversation(turn.convId);
+                if (window.NymbotRuns) window.NymbotRuns.cancel(this, conv, turn.runId, turn.signer).catch(() => { });
             }
-            const turn = this.turnOf(conv.id);
-            if (turn) {
-                turn.stopped = true;
-                this.stopWatchingTurn(turn);
-                try { turn.controller.abort(); } catch (_) { }
+            if (!(opts && opts.quiet) && !turn.quiet && turn.asked) this.runNote(turn, t('Stopped.'));
+            this.endTurn(turn);
+        },
+
+        showAsked(convId, wire) {
+            if (!this.conv || this.conv.id !== convId) return;
+            const m = Store.messages(convId).find(x => x.role === 'self' && x.wire === wire);
+            if (!m) return;
+            const node = $('messages').querySelector(`.chat-message[data-id="${m.id}"]`);
+            if (!node) return;
+            node.scrollIntoView({ block: 'center', behavior: this.reducedMotion() ? 'auto' : 'smooth' });
+            node.classList.add('is-hit');
+            setTimeout(() => node.classList.remove('is-hit'), 2200);
+        },
+
+        inflight() {
+            const held = Store.read('runs_inflight', []);
+            return Array.isArray(held) ? held.filter(x => x && x.convId && x.id && x.eventId) : [];
+        },
+
+        markInflight(convId, id, eventId, wire) {
+            const list = this.inflight().filter(x => x.id !== id);
+            list.push({ convId, id, eventId, wire: wire || null, at: Date.now() });
+            Store.write('runs_inflight', list.slice(-40));
+        },
+
+        clearInflight(id) {
+            const list = this.inflight();
+            const kept = list.filter(x => x.id !== id);
+            if (kept.length !== list.length) Store.write('runs_inflight', kept);
+        },
+
+        resumeClaims() {
+            const now = Date.now();
+            for (const rec of this.inflight()) {
+                const conv = Store.conversation(rec.convId);
+                const msgs = conv ? Store.messages(conv.id) : [];
+                const m = msgs.find(x => x.id === rec.id && x.role === 'self');
+                const live = [...this.turns.values()].some(x => x.asked === rec.id);
+                if (live) continue;
+                const end = m ? this.anchorIndex(msgs, { asked: m.id, replyTo: m.wire }) : -1;
+                const answered = m ? msgs.slice(msgs.indexOf(m) + 1, end + 1).some(x => x.role === 'bot') : true;
+                if (!m || answered || now - rec.at > 3600000) {
+                    this.clearInflight(rec.id);
+                    continue;
+                }
+                this.claimRun(conv, m, rec.eventId);
+            }
+        },
+
+        async claimRun(conv, m, eventId) {
+            const turn = this.beginTurn(conv, t('Nymbot is thinking'), { asked: m.id, runId: m.wire || null });
+            turn.eventId = eventId;
+            turn.sent = true;
+            turn.claiming = true;
+            const payer = conv.anon && Anon.forConv(conv);
+            turn.signer = payer ? Anon.signer(payer) : null;
+            this.renderCard(turn);
+            try {
+                const res = await Chat.claimStored(conv, eventId, { controller: turn.controller, msgId: m.wire || null });
+                turn.claiming = false;
+                if (turn.stopped) return;
+                await this.acceptReply(turn, Store.conversation(conv.id) || conv, res);
+            } catch (e) {
+                if (turn.stopped) return;
+                if (e && e.stopped) {
+                    this.runNote(turn, t('Stopped.'));
+                } else {
+                    const err = {
+                        id: Store.uid(),
+                        role: 'error',
+                        content: (e && e.message) || t('Something went wrong.'),
+                        retry: m.content,
+                        retryAttachments: (m.attachments || []).length ? m.attachments : null,
+                        retryQuote: m.quote || null,
+                        ts: Date.now()
+                    };
+                    this.placeMessage(conv.id, err, turn);
+                }
+            } finally {
                 this.endTurn(turn);
             }
-            Chat.abort();
+        },
+
+        stopRunById(id) {
+            if (window.NymbotRuns && String(id || '').startsWith('remote:')) {
+                return window.NymbotRuns.stopRemote(this, String(id).slice(7));
+            }
+            const turn = this.turnById(id);
+            if (turn) this.stopRun(turn);
+            return null;
+        },
+
+        steerRunById(id) {
+            if (!window.NymbotRuns) return null;
+            if (String(id || '').startsWith('remote:')) return window.NymbotRuns.steerRemote(this, String(id).slice(7));
+            const turn = this.turnById(id);
+            return turn ? window.NymbotRuns.steer(this, turn) : null;
+        },
+
+        renderRunning() {
+            if (window.NymbotRuns) window.NymbotRuns.renderCount(this);
         },
 
         bumpStats(conv, cost, pro) {
@@ -2861,7 +3379,19 @@
                     this.rememberText(text.slice(0, 400));
                     return;
                 }
+                case 'msg-cap-start':
+                case 'msg-cap-always':
+                case 'msg-cap-wait':
+                    this.capChoice(m, act.slice(8));
+                    return;
+                case 'msg-pending-edit':
+                    this.editPending(m);
+                    return;
+                case 'msg-pending-delete':
+                    this.deletePending(m);
+                    return;
                 case 'msg-retry':
+                    if (this.retryRun(m)) return;
                     if (m.retry) {
                         Store.deleteMessage(this.conv.id, m.id);
                         this.renderMessages();
@@ -2895,6 +3425,7 @@
 
         /// Edits branch by default so the original conversation is kept.
         async editMessage(m) {
+            const parent = this.conv;
             const value = await this.ask({
                 title: t('Ask this differently'),
                 area: true,
@@ -2906,18 +3437,22 @@
             });
             if (value == null || !value.trim()) return;
             const branch = this.dialogChecked;
+            const carry = this.carriedFrom(m.attachments, m.quote);
             if (branch) {
-                const msgs = Store.messages(this.conv.id);
+                const msgs = Store.messages(parent.id);
                 const at = msgs.findIndex(x => x.id === m.id);
                 const copy = this.branchFrom(msgs.slice(0, Math.max(0, at)));
-                this.open(Store.conversation(copy.id));
-                this.toast(t('Branched. The chat you had is still in the list.'));
-            } else {
-                Store.truncateFrom(this.conv.id, m.id, true);
-                this.reseed(this.conv);
-                this.renderMessages();
+                const fork = Store.conversation(copy.id);
+                this.open(fork);
+                this.toast(t('Sent in a new branch. The original chat is unchanged.'));
+                if (m.wire) carry.forkOf = { thread: parent.rootId || '', before: m.wire };
+                await this.send(value.trim(), fork, carry);
+                return;
             }
-            await this.send(value.trim(), null, this.carriedFrom(m.attachments, m.quote));
+            Store.truncateFrom(parent.id, m.id, true);
+            this.reseed(parent);
+            this.renderMessages();
+            await this.send(value.trim(), null, carry);
         },
 
         attachmentRecord(a) {
@@ -4184,6 +4719,10 @@
             const picking = pick && typeof pick.pick === 'function' ? pick : null;
             this.openModal('modalModels', { over: !!(picking && picking.over), from: picking ? picking.from : null });
             this.modelPick = picking;
+            const own = picking && picking.catalog ? picking.catalog : null;
+            $('modelFilters').hidden = !!own;
+            $('modelTools').hidden = !!own;
+            $('modelsHint').hidden = !!own;
             $('modelsTitle').textContent = this.modelPick ? this.modelPick.title : t('Nymbot Pro model');
             $('modelForChatRow').hidden = !!this.modelPick;
             $('modelOff').hidden = !!this.modelPick && !this.modelPick.none;
@@ -4192,11 +4731,16 @@
                 b.hidden = !!this.modelPick && !this.modelPick.media && MEDIA_FILTERS.includes(b.dataset.filter);
             }
             if (this.modelPick) {
-                if (!this.modelPick.media && MEDIA_FILTERS.includes(this.modelFilter)) this.setModelFilter('all');
+                if (own || (!this.modelPick.media && MEDIA_FILTERS.includes(this.modelFilter))) this.setModelFilter('all');
                 $('modelSearch').value = '';
             }
             $('modelSearchClear').hidden = !$('modelSearch').value;
             const list = $('modelList');
+            if (own) {
+                this.renderModels();
+                if (!window.matchMedia('(pointer: coarse)').matches) $('modelSearch').focus();
+                return;
+            }
             if (!this.models) {
                 list.innerHTML = '';
                 list.appendChild(el('div', 'catalog-wait'));
@@ -4334,14 +4878,16 @@
             const media = picking ? null : this.mediaModel();
             const taken = picking && picking.taken ? picking.taken : null;
             const forChat = $('modelForChat').checked;
-            const byKey = new Map(this.models.models.map(m => [m.key, m]));
+            const own = picking && picking.catalog ? picking.catalog : null;
+            const source = own || this.models;
+            const byKey = new Map(source.models.map(m => [m.key, m]));
             const shown = (group) => group.keys
                 .map(k => byKey.get(k))
                 .filter(m => m && this.modelMatchesSearch(m, terms) && this.modelMatchesFilter(m)
-                    && !(picking && !picking.media && (m.command || (m.kind || 'chat') !== 'chat')));
+                    && (own || !(picking && !picking.media && (m.command || (m.kind || 'chat') !== 'chat'))));
             const sections = [];
-            if (this.modelSort === 'provider') {
-                for (const group of this.models.groups || []) {
+            if (own || this.modelSort === 'provider') {
+                for (const group of source.groups || []) {
                     const rows = shown(group);
                     if (rows.length) sections.push({ heading: group.author, rows: rows.map(m => ({ m, group })) });
                 }
@@ -4374,7 +4920,8 @@
                     const name = el('span', 'model-name');
                     name.appendChild(el('span', 'model-title', m.label));
                     if (m.description) name.appendChild(el('span', 'model-desc', m.description));
-                    name.appendChild(el('span', 'model-cost', this.modelPrice(priced)));
+                    const cost = own ? (picking.price ? picking.price(m) : '') : this.modelPrice(priced);
+                    if (cost) name.appendChild(el('span', 'model-cost', cost));
                     if (sizes.length > 1 && !blocked) {
                         const picks = el('span', 'model-res');
                         for (const size of sizes) {
@@ -4396,10 +4943,19 @@
                         name.appendChild(picks);
                     }
                     if (m.edit) name.appendChild(el('span', 'model-edit', m.needsImage ? t('Edits a picture you send') : t('Can also edit a picture you send')));
-                    const rates = this.modelRates(m);
+                    const rates = own ? null : this.modelRates(m);
                     if (rates) name.appendChild(el('span', 'model-rates', rates));
                     if (blocked) name.appendChild(el('span', 'model-taken', taken.note));
                     row.appendChild(name);
+                    if (own) {
+                        row.addEventListener('click', () => {
+                            this.modelPick = null;
+                            if (picking.over) this.closeTop();
+                            picking.pick(m);
+                        });
+                        list.appendChild(row);
+                        continue;
+                    }
                     const on = this.favourites.includes(m.key);
                     const star = el('span', 'model-star' + (on ? ' is-on' : ''));
                     star.appendChild(Icons.node('star', { size: 13, filled: on }));
@@ -4507,12 +5063,24 @@
                     row.appendChild(mark);
                 }
                 if (r.allowWrites) row.appendChild(el('span', 'repo-writes', t('writes')));
+                if (r.allowWrites) {
+                    main.appendChild(el('span', 'repo-sub repo-jobs', GitRun.jobBranchesOn(r)
+                        ? t('Each task gets its own branch · when done: {choice}', { choice: this.whenDoneLabel(GitRun.whenDoneFor(r, this.settings)) })
+                        : t('Commits straight to the working branch, one task at a time')));
+                }
 
                 const actions = el('div', 'row-actions');
                 const edit = el('button', 'row-btn', t('Edit'));
                 edit.type = 'button';
                 edit.addEventListener('click', () => this.editRepo(r));
                 actions.appendChild(edit);
+                if (r.token && r.allowWrites && (r.nymBranches || []).length) {
+                    const sweep = el('button', 'row-btn', t('Clean up Nymbot branches'));
+                    sweep.type = 'button';
+                    sweep.dataset.role = 'repo-cleanup';
+                    sweep.addEventListener('click', () => this.cleanupRepoBranches(r, sweep));
+                    actions.appendChild(sweep);
+                }
                 if (r.token) {
                     const drop = el('button', 'row-btn', t('Disconnect'));
                     drop.type = 'button';
@@ -4567,6 +5135,9 @@
             $('gitLabel').value = repo.label || '';
             $('gitWrites').checked = !!repo.allowWrites;
             $('gitApprove').checked = !!repo.approve;
+            $('gitJobBranches').checked = GitRun.jobBranchesOn(repo);
+            $('gitWhenDone').value = GitRun.whenDoneOf(repo.whenDone);
+            this.syncJobFields();
             $('repoFormTitle').textContent = t('Edit repository');
             $('repoSaveBtn').textContent = t('Save changes');
             $('repoResetBtn').hidden = false;
@@ -4587,10 +5158,34 @@
             $('gitLabel').value = '';
             $('gitWrites').checked = false;
             $('gitApprove').checked = false;
+            $('gitJobBranches').checked = true;
+            $('gitWhenDone').value = '';
+            this.syncJobFields();
             $('repoFormTitle').textContent = t('Add a repository');
             $('repoSaveBtn').textContent = t('Add repository');
             $('repoResetBtn').hidden = true;
             this.modalStatus('gitStatus', '');
+        },
+
+        pickedWhenDone(value) {
+            const picked = GitRun.whenDoneOf(value);
+            if (!picked) return undefined;
+            if (picked === GitRun.WHEN_DONE_DEFAULT && !GitRun.whenDoneOf(this.settings.whenDone)) return undefined;
+            return picked;
+        },
+
+        whenDoneLabel(choice) {
+            if (choice === 'merge') return t('Offer a merge');
+            if (choice === 'leave') return t('Leave the branch');
+            return t('Open a pull request');
+        },
+
+        syncJobFields() {
+            const on = $('gitJobBranches').checked;
+            $('gitWhenDoneField').hidden = !on;
+            const fallback = this.whenDoneLabel(GitRun.whenDoneFor(null, this.settings));
+            const first = $('gitWhenDone').querySelector('option[value=""]');
+            if (first) first.textContent = t('Use the default in Settings ({choice})', { choice: fallback });
         },
 
         /// Asked directly from this device, so the token goes nowhere it does not already go.
@@ -4687,6 +5282,8 @@
             const host = $('gitHost').value.trim();
             const allowWrites = $('gitWrites').checked;
             const approve = $('gitApprove').checked;
+            const jobBranches = $('gitJobBranches').checked;
+            const whenDone = GitRun.whenDoneOf($('gitWhenDone').value);
             const next = new Set((this.conv.repoIds || []));
             for (const r of picked) {
                 const entry = Store.addRepo({
@@ -4696,7 +5293,9 @@
                     paths: '',
                     label: '',
                     allowWrites,
-                    approve
+                    approve,
+                    jobBranches,
+                    whenDone
                 });
                 next.add(entry.id);
             }
@@ -4781,7 +5380,9 @@
                 paths: $('gitPaths').value.trim(),
                 label: $('gitLabel').value.trim(),
                 allowWrites: $('gitWrites').checked,
-                approve: $('gitApprove').checked
+                approve: $('gitApprove').checked,
+                jobBranches: $('gitJobBranches').checked,
+                whenDone: GitRun.whenDoneOf($('gitWhenDone').value)
             };
             // Keeps where it was announced alongside the forge it lives on.
             const found = this.ngitFound;
@@ -5442,7 +6043,15 @@
             $('setRate').value = String(s.speechRate || 1);
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
+            $('setBackground').checked = s.backgroundJobs === true;
+            $('setServerSchedules').checked = s.serverSchedules === true;
+            $('setScheduleDailyCap').value = String(Background ? Background.dailyCap(this) : 50);
             $('setProgress').checked = s.showProgress !== false;
+            $('setMaxRuns').value = String(Chat.validRuns(s.maxRuns) || Api.RUN_LIMIT);
+            $('setWhenDone').value = GitRun.whenDoneFor(null, s);
+            const policy = s.policy || {};
+            $('setPolicyRead').value = policy.readOnlyTools === 'allow' ? 'allow' : 'ask';
+            $('setPolicyRuns').value = policy.serverRuns === 'allow' ? 'allow' : 'ask';
             $('setNotices').checked = s.notices !== false;
             $('setSync').checked = s.sync !== false;
             this.renderVoices();
@@ -5471,6 +6080,10 @@
 
         readAppearance() {
             const notifyWas = this.settings.replyNotify !== false;
+            const schedulesWere = this.settings.serverSchedules === true;
+            const schedulesOn = $('setServerSchedules').checked;
+            const bgWas = this.settings.backgroundJobs;
+            const bgOn = $('setBackground').checked;
             const notifyOn = $('setReplyNotify').checked;
             if (notifyOn !== notifyWas) Notify.settingChanged(notifyOn);
             if (notifyOn && Notify.permission() === 'denied') {
@@ -5500,16 +6113,50 @@
                 speechRate: Number($('setRate').value) || 1,
                 autoDeleteDays: Number($('setAutoDelete').value) || 0,
                 autoContinue: Number($('setAutoContinue').value) || 0,
+                backgroundJobs: bgOn ? true : (bgWas === true || bgWas === false ? false : bgWas),
+                serverSchedules: schedulesOn,
+                scheduleDailyCap: Number($('setScheduleDailyCap').value) || 50,
                 showProgress: $('setProgress').checked,
+                maxRuns: Chat.validRuns($('setMaxRuns').value) || Api.RUN_LIMIT,
+                whenDone: this.pickedWhenDone($('setWhenDone').value),
+                policy: {
+                    readOnlyTools: $('setPolicyRead').value === 'allow' ? 'allow' : 'ask',
+                    serverRuns: $('setPolicyRuns').value === 'allow' ? 'allow' : 'ask'
+                },
                 notices: $('setNotices').checked,
                 sync: $('setSync').checked
             });
+            if (schedulesWere && !schedulesOn) this.clearServerSchedules();
             this.refreshNotices(true);
             // Turning it off stops writing and leaves server data for other devices.
             if (this.settings.sync !== false) this.startSync();
             this.renderList();
             this.renderMessages();
             this.refreshToolbar();
+        },
+
+        openPolicy() {
+            const conv = this.conv;
+            if (!conv) return;
+            const own = conv.policy || {};
+            const pick = (v) => (v === 'allow' || v === 'ask') ? v : '';
+            $('chatPolicyRead').value = pick(own.readOnlyTools);
+            $('chatPolicyRuns').value = pick(own.serverRuns);
+            this.closeChatMenu();
+            this.openModal('modalPolicy');
+        },
+
+        savePolicy() {
+            const conv = this.conv;
+            if (!conv) return;
+            const policy = {};
+            const read = $('chatPolicyRead').value;
+            const runs = $('chatPolicyRuns').value;
+            if (read === 'allow' || read === 'ask') policy.readOnlyTools = read;
+            if (runs === 'allow' || runs === 'ask') policy.serverRuns = runs;
+            this.conv = this.patchChat(conv, { policy: Object.keys(policy).length ? policy : null }) || this.conv;
+            this.closeModals();
+            this.toast(t('Saved.'));
         },
 
         openShortcuts() {
@@ -5973,6 +6620,13 @@
             if ((mark.paths || []).length) {
                 card.appendChild(el('div', 'checkpoint-paths', mark.paths.join(', ')));
             }
+            const jobs = GitRun.jobsOf(mark);
+            for (const job of jobs) {
+                card.appendChild(GitRun.branchChip(job, {
+                    onAction: (act, button) => this.branchAction(m, job, act, button)
+                }));
+            }
+            if (jobs.length && !(mark.paths || []).length && !(mark.also || []).some(x => (x.paths || []).length)) return card;
             // A multi-repo run names the repositories it cannot put back.
             for (const other of mark.also || []) {
                 const line = [other.repo + (other.branch ? ' · ' + other.branch : '')];
@@ -6004,6 +6658,98 @@
                     t('Files only. A branch or pull request it opened is left where it is.')));
             }
             return card;
+        },
+
+        patchJob(convId, m, branch, patch) {
+            const fresh = Store.messages(convId).find(x => x.id === m.id) || m;
+            const mark = fresh.checkpoint;
+            if (!mark) return;
+            const fix = (x) => x && x.job && x.job.branch === branch ? Object.assign({}, x, { job: Object.assign({}, x.job, patch) }) : x;
+            const next = fix(mark);
+            if (Array.isArray(mark.also)) next.also = mark.also.map(fix);
+            Store.patchMessage(convId, m.id, { checkpoint: next });
+            this.replaceMessage(Store.messages(convId).find(x => x.id === m.id) || m);
+        },
+
+        async branchAction(m, job, act, button) {
+            const conv = this.conv;
+            const convId = conv.id;
+            if (act === 'branch-delete') {
+                const ok = await this.ask({
+                    title: t('Delete this branch'),
+                    body: t('Delete {branch} from {repo}? Only if it still ends at the commit Nymbot made; nothing on {base} changes.',
+                        { branch: job.branch, repo: job.repo, base: job.base }),
+                    confirm: t('Delete'),
+                    danger: true
+                });
+                if (!ok) return;
+            }
+            if (act === 'branch-merge') {
+                const ok = await this.ask({
+                    title: t('Merge this branch'),
+                    body: t('Merge {branch} into {base} in {repo} with a merge commit? Nothing is force-pushed.',
+                        { branch: job.branch, base: job.base, repo: job.repo }),
+                    confirm: t('Merge')
+                });
+                if (!ok) return;
+            }
+            const op = { 'branch-pr': 'pr', 'branch-merge': 'merge', 'branch-update': 'update', 'branch-delete': 'delete' }[act];
+            if (!op) return;
+            if (button) button.disabled = true;
+            try {
+                const res = await Chat.branchOp(conv, job.repo, op, job);
+                if (op === 'pr') {
+                    this.patchJob(convId, m, job.branch, { pull: res.pull || job.pull, merged: !!res.merged || job.merged, fallback: undefined });
+                    if (res.pull && res.pull.url) window.open(res.pull.url, '_blank', 'noopener');
+                } else if (op === 'merge') {
+                    this.patchJob(convId, m, job.branch, { merged: true, conflict: false, pull: res.pull || job.pull });
+                    this.note(t('Merged {branch} into {base}.', { branch: job.branch, base: job.base }), convId);
+                } else if (op === 'update') {
+                    this.patchJob(convId, m, job.branch, { conflict: false, sha: res.sha || job.sha });
+                    this.note(res.upToDate ? t('{branch} already has everything from {base}.', { branch: job.branch, base: job.base })
+                        : t('Updated {branch} with a merge commit from {base}.', { branch: job.branch, base: job.base }), convId);
+                } else {
+                    this.patchJob(convId, m, job.branch, { deleted: true });
+                    this.note(t('Deleted {branch}.', { branch: job.branch }), convId);
+                }
+            } catch (e) {
+                if (button) button.disabled = false;
+                if (e && e.conflict) {
+                    this.patchJob(convId, m, job.branch, { conflict: true, pull: e.pull || job.pull });
+                    this.note(t('This branch conflicts with {base}. Open the PR to resolve it, or ask Nymbot to update the branch.', { base: job.base }), convId);
+                    return;
+                }
+                if (e && e.gone) {
+                    this.patchJob(convId, m, job.branch, { deleted: true });
+                    this.note(t('That branch is already gone.'), convId);
+                    return;
+                }
+                if (e && e.moved) {
+                    this.note(t('The branch has new commits since Nymbot made it, so it was left alone.'), convId);
+                    return;
+                }
+                if (e && e.unsupported) {
+                    this.note(op === 'update'
+                        ? t('This forge cannot update the branch without rebasing. Open the PR to update it.')
+                        : t('This forge has no pull request API Nymbot can use, so the branch was left as it is.'), convId);
+                    return;
+                }
+                this.note((e && e.message) || t('The forge could not be reached.'), convId);
+            }
+        },
+
+        async cleanupRepoBranches(repo, button) {
+            if (button) button.disabled = true;
+            try {
+                const res = await Chat.cleanupBranches(repo);
+                const n = (res.deleted || []).length + (res.gone || []).length;
+                this.toast(n ? t('Cleaned up {n} Nymbot branches.', { n }) : t('No Nymbot branches were ready to clean up.'));
+            } catch (e) {
+                this.toast((e && e.message) || t('The forge could not be reached.'));
+            } finally {
+                if (button) button.disabled = false;
+                this.renderRepos();
+            }
         },
 
         stagedCard(m) {
@@ -6279,8 +7025,13 @@
                     body: t('A reply that wrote to a repository says what it touched: the repository, the branch, and every file. Undo puts them back — each path is read at the commit the branch stood on before the run and committed as it was. That is a revert, not a rewrite: what Nymbot did stays in the history, it is simply no longer the state of the branch. It costs nothing, because it touches no model. Files only: a branch or pull request it opened is left where it is, because closing somebody\'s pull request on their behalf is not an undo.')
                 },
                 {
+                    title: t('A branch for each task'),
+                    body: t('With "Each task gets its own branch" on, a repository task commits to a new branch named nymbot/ and a short id, made from the working branch when it first commits, so several tasks on one repository run side by side and nothing lands on the working branch without you. When it finishes it opens a pull request, offers a merge or leaves the branch, as you choose under When done in Settings or for each repository. The reply shows the branch with Open PR, Merge and Delete. A merge is a merge commit, and nothing is ever force-pushed. If it conflicts, open the pull request to resolve it or ask Nymbot to update the branch. Changes to CI and workflow files still wait for your review. Clean up Nymbot branches deletes the ones this account recorded whose pull request is merged or closed, or that are a week old with nothing left to merge, and never one that has moved since. Turn the option off to commit straight to the working branch, one task at a time.')
+                },
+                {
                     title: t('Long tasks, and carrying them on'),
                     body: t('A repo task runs the model in a loop — reading, searching, writing — and that loop has an allowance. When it runs out with work left, Nymbot stops and says so. Set a continuation budget in Settings and it buys another allowance instead, one leg at a time, each leg saying what it cost, until the budget is spent or the task is done. Stop cancels the rest.')
+                        + ' ' + t('Turn on "Keep long tasks going on the server while the app is closed" and, once a task runs out of room, Nymbot\'s server carries it on by itself for up to 6 hours, within the same budget, and notifies you when it finishes. It keeps the task\'s progress and settings, including repository and connector tokens, sealed with a key the server holds, and deletes them when the task ends. Stop and Add instructions still work. Never for anonymous chats or the free allowance.')
                 },
                 {
                     title: t('Asking a question differently'),
@@ -6294,16 +7045,17 @@
                 Team.helpTopic(),
                 ...(window.NymbotTasks ? [window.NymbotTasks.helpTopic()] : []),
                 {
-                    title: t('Typing while it is still writing'),
-                    body: t('You do not have to wait for a reply to land before saying the next thing. Anything typed mid-reply waits its turn, shown above the composer in the order it was typed, and goes as soon as the current one is done. Take one back out while it waits, or press Stop and nothing behind it is sent either. Commands are the exception: they are free and instant, so they run straight away rather than queueing.')
+                    title: t('Several requests at once'),
+                    body: t('You do not have to wait for a reply before asking the next thing. Every message you send starts its own run straight away, and its reply, progress and any approval it needs appear right under the message that asked. Up to 3 requests run at once across your chats; change that under Requests at once in Settings, up to 10. Anything past the limit waits for a free slot and says so. Each running request has its own Stop and Add instructions, and the Stop in the composer stops every reply in the chat. Running now, in the menu, lists what is running on all your devices.')
                 },
                 {
                     title: t('Watching it work'),
-                    body: t('While a reply is generating, Nymbot reports what it is doing under the spinner: what it routed to, what it searched for, which files it is reading, which model call it is on, and the model\'s own reasoning as each call returns. It is scoped to the key that asked — in anonymous mode that is the throwaway key, so watching reveals nothing the message did not.')
+                    body: t('While a reply is generating, Nymbot reports what it is doing under the question that asked: what it routed to, what it searched for, which files it is reading, which model call it is on, and the model\'s own reasoning as each call returns. It is scoped to the key that asked — in anonymous mode that is the throwaway key, so watching reveals nothing the message did not.')
                 },
                 {
                     title: t('Scheduled prompts'),
-                    body: t('A prompt Nymbot sends for you: once, hourly, daily or weekly. There is no server doing it — a run happens while the app is open, and a run that came due while it was shut fires once when you come back.')
+                    body: t('A prompt Nymbot sends for you: once, hourly, daily or weekly. By default it runs while the app is open, and a run that came due while it was shut fires once when you come back. Turn on server schedules in Settings and each schedule can instead notify you when it is due (the server keeps only the time), or run on Nymbot\'s server while the app is closed (the server keeps the prompt, sealed, and spends up to the cap you set per run). Turning the switch off, deleting a schedule or wiping the app deletes the server copy at once.')
+                        + ' ' + t('Notifications in this app go through your browser\'s push service (Google\'s, in Chrome). What they carry is encrypted, so the push service cannot read it.')
                 },
                 {
                     title: t('Anonymous mode'),
@@ -6591,8 +7343,55 @@
 
         openSchedules() {
             if (!this.scheduleEditing) this.resetScheduleForm();
+            this.renderScheduleServer();
             this.renderSchedules();
             this.openModal('modalSchedules');
+            if (Background && Background.schedulesOn(this)) {
+                Background.refresh(this).then((got) => { if (got) this.renderSchedules(); }).catch(() => { });
+                Background.collect(this).catch(() => { });
+            }
+        },
+
+        scheduleServerMode() {
+            const picked = document.querySelector('#scheduleServerField input[name="scheduleServer"]:checked');
+            return picked && (picked.value === 'run' || picked.value === 'notify') ? picked.value : '';
+        },
+
+        renderScheduleServer(mode, cap) {
+            const field = $('scheduleServerField');
+            const on = !!(Background && Background.schedulesOn(this));
+            field.hidden = !on;
+            if (mode !== undefined) {
+                for (const r of field.querySelectorAll('input[name="scheduleServer"]')) r.checked = r.value === (mode || '');
+            }
+            if (cap !== undefined) $('scheduleServerCap').value = String(cap || 5);
+            if (!field.dataset.wired) {
+                field.dataset.wired = '1';
+                field.addEventListener('change', () => this.renderScheduleServer());
+            }
+            const run = this.scheduleServerMode() === 'run';
+            $('scheduleRunFields').hidden = !run;
+            $('scheduleConsent').textContent = Background
+                ? Background.consentText(Number($('scheduleServerCap').value) || 5) : '';
+        },
+
+        scheduleServerLine(entry) {
+            if (!entry.server || !Background || !Background.schedulesOn(this)) return '';
+            if (entry.serverOff) return t('The server stopped running this after 3 failures in a row. Save it again to retry.');
+            if (!entry.serverSha) return entry.serverError || '';
+            const date = entry.serverExpiresAt ? this.dayLabel(entry.serverExpiresAt) : '';
+            return entry.server === 'run'
+                ? t('Runs on the server until {date}', { date })
+                : t('Notifies you when due until {date}', { date });
+        },
+
+        async clearServerSchedules() {
+            if (!Background) return;
+            const ok = await Background.clear(this);
+            this.toast(ok
+                ? t('The server\'s copies of your schedules were deleted.')
+                : t('Could not reach the server to delete its copies of your schedules. Try again from Settings.'));
+            if (!$('modalSchedules').hidden) this.renderSchedules();
         },
 
         localInputValue(ts) {
@@ -6609,6 +7408,7 @@
             $('scheduleRepeat').value = 'daily';
             $('scheduleWhen').value = this.localInputValue(Date.now() + 3600000);
             $('scheduleHere').checked = false;
+            this.renderScheduleServer('', 5);
             $('scheduleFormTitle').textContent = t('New scheduled prompt');
             this.modalStatus('scheduleStatus', '');
         },
@@ -6622,6 +7422,7 @@
             $('scheduleRepeat').value = entry.repeat || 'once';
             $('scheduleWhen').value = this.localInputValue(entry.nextAt || Date.now());
             $('scheduleHere').checked = !!entry.convId;
+            this.renderScheduleServer(entry.server || '', entry.serverCap || 5);
             $('scheduleFormTitle').textContent = t('Edit scheduled prompt');
             this.modalStatus('scheduleStatus', '');
         },
@@ -6667,6 +7468,8 @@
                         ? t('Last run {when}', { when: `${this.dayLabel(entry.lastRunAt)} ${this.timeLabel(entry.lastRunAt)}` })
                         : '';
                 main.appendChild(el('span', 'repo-sub schedule-chat', last ? `${where} · ${last}` : where));
+                const serverLine = this.scheduleServerLine(entry);
+                if (serverLine) main.appendChild(el('span', 'repo-sub schedule-server-line', serverLine));
                 row.appendChild(main);
                 const actions = el('div', 'row-actions');
                 if (chat) {
@@ -6681,10 +7484,21 @@
                 }
                 const toggle = el('button', 'row-btn', entry.enabled ? t('Pause') : t('Resume'));
                 toggle.type = 'button';
-                toggle.addEventListener('click', () => {
-                    Store.saveSchedule(Object.assign({}, entry, { enabled: !entry.enabled }));
+                toggle.addEventListener('click', async () => {
+                    const saved = Store.saveSchedule(Object.assign({}, entry, { enabled: !entry.enabled }));
                     this.renderSchedules();
                     this.refreshToolbar();
+                    if (!Background || !entry.server || !Background.schedulesOn(this)) return;
+                    if (!saved.enabled) {
+                        if (entry.serverSha) {
+                            await Background.remove(this, entry.id);
+                            Store.saveSchedule(Object.assign({}, saved, { serverSha: null, serverExpiresAt: 0 }));
+                        }
+                    } else {
+                        const got = await Background.put(this, saved, entry.server, entry.serverCap || 5);
+                        if (!got.ok) Store.saveSchedule(Object.assign({}, Store.schedule(entry.id) || saved, { serverSha: null, serverError: got.error }));
+                    }
+                    this.renderSchedules();
                 });
                 actions.appendChild(toggle);
                 const now = el('button', 'row-btn', t('Run now'));
@@ -6698,6 +7512,7 @@
                 const del = el('button', 'row-btn danger', t('Delete'));
                 del.type = 'button';
                 del.addEventListener('click', () => {
+                    if (Background && (entry.server || entry.serverSha)) Background.remove(this, entry.id).catch(() => { });
                     Store.deleteSchedule(entry.id);
                     if (this.scheduleEditing === entry.id) this.resetScheduleForm();
                     this.renderSchedules();
@@ -6709,7 +7524,7 @@
             }
         },
 
-        saveScheduleForm() {
+        async saveScheduleForm() {
             const prompt = ($('schedulePrompt').value || '').trim();
             if (!prompt) {
                 this.modalStatus('scheduleStatus', t('Give it something to ask.'), 'warn');
@@ -6722,8 +7537,20 @@
                 this.modalStatus('scheduleStatus', t('That is not a time.'), 'warn');
                 return;
             }
+            const serverOn = !!(Background && Background.schedulesOn(this));
+            const mode = serverOn ? this.scheduleServerMode() : '';
+            const cap = Number($('scheduleServerCap').value) || 5;
+            if (mode === 'run') {
+                const yes = await this.ask({
+                    title: t('Run this on the server?'),
+                    body: Background.consentText(cap),
+                    confirm: t('Run it on the server')
+                });
+                if (!yes) return;
+            }
+            if (mode === 'notify' && Notify.permission() === 'default') await Notify.ask();
             const prior = this.scheduleEditing ? Store.schedule(this.scheduleEditing) : null;
-            Store.saveSchedule(Object.assign({}, prior || {}, {
+            const saved = Store.saveSchedule(Object.assign({}, prior || {}, {
                 id: this.scheduleEditing || undefined,
                 title: ($('scheduleTitle').value || '').trim() || Chat.titleFor(prompt),
                 prompt,
@@ -6732,10 +7559,30 @@
                 convId: $('scheduleHere').checked && this.conv ? this.conv.id : null,
                 enabled: true
             }));
+            let status = t('Saved.');
+            let tone = 'ok';
+            if (serverOn && mode) {
+                const got = await Background.put(this, saved, mode, cap);
+                if (got.ok) {
+                    status = mode === 'run'
+                        ? t('Saved. The server will run it while the app is closed.')
+                        : t('Saved. The server will notify you when it is due.');
+                } else {
+                    Store.saveSchedule(Object.assign({}, Store.schedule(saved.id) || saved, {
+                        server: null, serverSha: null, serverExpiresAt: 0, serverError: ''
+                    }));
+                    if (prior && prior.serverSha) await Background.remove(this, saved.id);
+                    status = got.error;
+                    tone = 'warn';
+                }
+            } else if (prior && (prior.server || prior.serverSha)) {
+                if (Background && prior.serverSha) await Background.remove(this, saved.id);
+                Store.saveSchedule(Background ? Background.dropServer(Store.schedule(saved.id) || saved) : saved);
+            }
             this.resetScheduleForm();
             this.renderSchedules();
             this.refreshToolbar();
-            this.modalStatus('scheduleStatus', t('Saved.'), 'ok');
+            this.modalStatus('scheduleStatus', status, tone);
         },
 
         advance(entry) {
@@ -6749,10 +7596,9 @@
             });
         },
 
-        /// Runs happen in the open tab, only when no reply is pending.
         async runSchedule(id) {
             const entry = Store.schedule(id);
-            if (!entry || this.sending) return;
+            if (!entry) return;
             const target = entry.convId ? Store.conversation(entry.convId) : null;
             const conv = target || this.newConversation({ title: entry.title });
             if (!this.conv || this.conv.id !== conv.id) this.open(conv);
@@ -6761,16 +7607,26 @@
             this.renderSchedules();
             this.refreshToolbar();
             this.note(t('Running “{name}”.', { name: entry.title || t('Untitled') }));
-            await this.send(entry.prompt, null, { unattended: true });
+            await this.send(entry.prompt, Store.conversation(conv.id) || conv, { unattended: true });
         },
 
         dueSchedules() {
             const now = Date.now();
-            return Store.schedules().filter(s => s.enabled && (s.nextAt || 0) <= now);
+            return Store.schedules().filter(s => s.enabled && (s.nextAt || 0) <= now
+                && !(Background && Background.runsOnServer(this, s)));
         },
 
         async runDueSchedules() {
-            if (this.sending) return;
+            if (Background) {
+                const now = Date.now();
+                for (const s of Store.schedules()) {
+                    if (s.enabled && (s.nextAt || 0) <= now && Background.runsOnServer(this, s)) {
+                        const next = this.advance(s);
+                        Store.saveSchedule(Object.assign({}, s, { nextAt: next.nextAt, enabled: next.enabled }));
+                    }
+                }
+                Background.collect(this).catch(() => { });
+            }
             const due = this.dueSchedules();
             if (!due.length) return;
             await this.runSchedule(due[0].id);
@@ -7640,7 +8496,7 @@
         },
 
         async runCompare() {
-            if (this.sending) return;
+            if (this._compareBusy) return;
             const text = ($('comparePrompt').value || '').trim();
             if (!text) {
                 this.modalStatus('compareStatus', t('Type a prompt for both of them first.'), 'warn');
@@ -7690,7 +8546,8 @@
             try {
                 out = await Chat.compare(this.conv, text, this.settings, [a, b], {
                     seed: this.compareSeed(),
-                    maxCost
+                    maxCost,
+                    controller: turn.controller
                 });
             } catch (e) {
                 this.endTurn(turn);
@@ -8624,7 +9481,7 @@
             const icons = {
                 'menu-find': 'search', 'share-transcript': 'share',
                 'rename-chat': 'pencil', 'pin-chat': 'pin', 'archive-chat': 'archive', 'fork-chat': 'branch',
-                'open-system': 'person', 'open-tags': 'workspace', 'open-stats': 'chart', 'open-caps': 'wallet',
+                'open-system': 'person', 'open-tags': 'workspace', 'open-stats': 'chart', 'open-caps': 'wallet', 'open-policy': 'tools',
                 'export-md': 'artifacts', 'export-txt': 'terse', 'export-json': 'code',
                 'copy-transcript': 'copy', 'share-chat': 'link', 'clear-chat': 'broom', 'delete-chat': 'close'
             };
@@ -9084,6 +9941,7 @@
             input.value = (o.prompt && !isArea) ? (o.value || '') : '';
             area.value = isArea ? (o.value || '') : '';
             input.placeholder = o.placeholder || '';
+            area.placeholder = o.placeholder || '';
             $('dialogLabel').textContent = o.label || '';
             $('dialogAreaLabel').textContent = o.label || '';
             // Optional second question, read back as `dialogChecked`.
@@ -9464,6 +10322,12 @@
                 'wipe': () => this.wipe(),
                 'send': () => this.send(),
                 'stop': () => this.stop(),
+                'run-stop': (target) => this.stopRunById(target.dataset.run),
+                'run-steer': (target) => this.steerRunById(target.dataset.run),
+                'open-running': () => window.NymbotRuns && window.NymbotRuns.open(this),
+                'running-open': (target) => window.NymbotRuns && window.NymbotRuns.openRun(this, target.dataset.key),
+                'open-policy': () => this.openPolicy(),
+                'policy-save': () => this.savePolicy(),
                 'attach': () => $('filePicker').click(),
                 'save-media': (target) => this.saveMedia(target.dataset.url),
                 'cancel-quote': () => { this.quote = null; this.renderQuote(); },
@@ -9788,6 +10652,7 @@
             });
             $('promptSearch').addEventListener('input', () => this.renderPrompts());
             $('repoBrowseFilter').addEventListener('input', () => this.renderBrowsedRepos());
+            $('gitJobBranches').addEventListener('change', () => this.syncJobFields());
             $('memorySearch').addEventListener('input', () => this.renderMemories());
             $('setMemoryCapture').addEventListener('change', (e) => {
                 this.saveSettings({ memoryCapture: e.target.checked });

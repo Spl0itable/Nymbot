@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
@@ -11,6 +12,16 @@ import 'nostr/event_signer.dart';
 const String kApiBaseUrl = 'https://nymbot.ai/api/v1';
 const String kApiAnthropicBaseUrl = 'https://nymbot.ai/api';
 const String kApiDocsUrl = 'https://nymbot.ai/docs/api/';
+const String kApiDocsRoot = 'https://nymbot.ai/docs/';
+const Map<String, dynamic> kApiAutoModel = {
+  'id': 'nymbot/auto',
+  'object': 'model',
+  'type': 'chat',
+  'owned_by': 'Nymbot',
+  'name': 'Nymbot Auto',
+  'balance': 'standard',
+  'pricing': {'type': 'variable', 'currency': 'USD'},
+};
 const int kApiKeyNameMax = 40;
 const int kAutoTopupMinSats = 1000;
 const int kAutoTopupMaxSats = 1000000;
@@ -266,6 +277,8 @@ class ApiAccess {
 
   Future<String> authorization(String method, Uri url, {String? body}) async {
     final signer = _signer();
+    final rng = Random.secure();
+    final nonce = List.generate(16, (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
     final event = await signer.sign(UnsignedEvent(
       pubkey: signer.pubkey,
       createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -273,6 +286,7 @@ class ApiAccess {
       tags: [
         ['u', url.toString()],
         ['method', method],
+        ['nonce', nonce],
         if (body != null) ['payload', sha256Hex(body)],
       ],
       content: '',
@@ -281,12 +295,14 @@ class ApiAccess {
   }
 
   Future<ApiReply> send(String method, Uri url,
-      {Map<String, Object?>? body, Duration? timeout}) async {
+      {Map<String, Object?>? body, Duration? timeout, bool signed = true}) async {
     try {
       final text = body == null ? null : jsonEncode(body);
       final request = http.Request(method, url);
-      request.headers['Authorization'] =
-          await authorization(method, url, body: text);
+      if (signed) {
+        request.headers['Authorization'] =
+            await authorization(method, url, body: text);
+      }
       request.headers['User-Agent'] = NymbotConfig.userAgent;
       request.headers['Accept'] = 'application/json';
       if (text != null) {
@@ -313,6 +329,9 @@ class ApiAccess {
   }
 
   Future<ApiReply> account() => send('GET', url('/account'));
+
+  Future<ApiReply> models() =>
+      send('GET', url('/models', {'type': 'all'}), signed: false);
 
   Future<ApiReply> listKeys() =>
       send('GET', url('/keys', {'include_revoked': 'true'}));

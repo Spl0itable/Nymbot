@@ -232,6 +232,7 @@ Future<Map<String, dynamic>?> showModelChoice(
   Map<String, String> unavailable = const {},
   String? noneLabel,
   bool includeMedia = false,
+  String Function(Map<String, dynamic> model)? price,
 }) =>
     showNymSheet<Map<String, dynamic>>(
       context,
@@ -242,6 +243,7 @@ Future<Map<String, dynamic>?> showModelChoice(
         unavailable: unavailable,
         noneLabel: noneLabel,
         includeMedia: includeMedia,
+        price: price,
       ),
     );
 
@@ -367,6 +369,7 @@ class _ModelChoice extends StatelessWidget {
     required this.unavailable,
     required this.noneLabel,
     required this.includeMedia,
+    this.price,
   });
 
   final String title;
@@ -375,6 +378,7 @@ class _ModelChoice extends StatelessWidget {
   final Map<String, String> unavailable;
   final String? noneLabel;
   final bool includeMedia;
+  final String Function(Map<String, dynamic> model)? price;
 
   @override
   Widget build(BuildContext context) {
@@ -394,10 +398,13 @@ class _ModelChoice extends StatelessWidget {
               child: ModelList(
                 catalog: catalog,
                 loading: false,
-                chatOnly: !includeMedia,
-                filters: includeMedia
-                    ? ModelList.everyFilter
-                    : ModelPicker.chatFilters,
+                chatOnly: !includeMedia && price == null,
+                filters: price != null
+                    ? const []
+                    : includeMedia
+                        ? ModelList.everyFilter
+                        : ModelPicker.chatFilters,
+                price: price,
                 selectedKeys: {if (current != null) current!},
                 unavailable: unavailable,
                 scrollController: controller,
@@ -443,6 +450,7 @@ class ModelList extends StatefulWidget {
     this.footer = const [],
     this.resolutionOf,
     this.onPickResolution,
+    this.price,
   });
 
   static const double roomyHeight = 460;
@@ -472,6 +480,7 @@ class ModelList extends StatefulWidget {
   final String? Function(Map<String, dynamic> model)? resolutionOf;
   final void Function(Map<String, dynamic> model, Map<String, dynamic> group,
       String resolution)? onPickResolution;
+  final String Function(Map<String, dynamic> model)? price;
 
   @override
   State<ModelList> createState() => _ModelListState();
@@ -554,7 +563,8 @@ class _ModelListState extends State<ModelList> {
     final key = m['key'] as String;
     final starred = app.favouriteModels.contains(key);
     final desc = m['description'] as String?;
-    final rates = ModelPicker.rates(m, widget.catalog);
+    final own = widget.price;
+    final rates = own != null ? null : ModelPicker.rates(m, widget.catalog);
     final blocked = widget.unavailable[key];
     final choices = widget.onPickResolution == null
         ? const <Map<String, dynamic>>[]
@@ -563,6 +573,9 @@ class _ModelListState extends State<ModelList> {
         ? ModelPicker.resolutionFor(m, widget.resolutionOf?.call(m))
         : null;
     final priced = res == null ? m : ModelPicker.atResolution(m, res);
+    final cost = own != null
+        ? own(m)
+        : ModelPicker.turnLabel(priced, widget.catalog);
     return ListTile(
       key: ValueKey('model-$key'),
       dense: true,
@@ -584,9 +597,10 @@ class _ModelListState extends State<ModelList> {
                     fontSize: 11, fontWeight: FontWeight.w600)),
           if (desc != null && desc.isNotEmpty)
             Text(desc, maxLines: 2, overflow: TextOverflow.ellipsis),
-          Text(ModelPicker.turnLabel(priced, widget.catalog),
-              style: const TextStyle(
-                  fontSize: 12, color: NymbotColors.lightning)),
+          if (cost.isNotEmpty)
+            Text(cost,
+                style: const TextStyle(
+                    fontSize: 12, color: NymbotColors.lightning)),
           if (res != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -626,19 +640,21 @@ class _ModelListState extends State<ModelList> {
                 style: const TextStyle(fontSize: 11)),
         ],
       ),
-      trailing: IconButton(
-        visualDensity: VisualDensity.compact,
-        iconSize: 16,
-        icon: NymGlyph('star',
-            size: 16,
-            filled: starred,
-            color: starred ? NymbotColors.lightning : null),
-        tooltip: t('Star this model'),
-        onPressed: () async {
-          await app.toggleFavouriteModel(key);
-          if (mounted) setState(() {});
-        },
-      ),
+      trailing: own != null
+          ? null
+          : IconButton(
+            visualDensity: VisualDensity.compact,
+            iconSize: 16,
+            icon: NymGlyph('star',
+                size: 16,
+                filled: starred,
+                color: starred ? NymbotColors.lightning : null),
+            tooltip: t('Star this model'),
+            onPressed: () async {
+              await app.toggleFavouriteModel(key);
+              if (mounted) setState(() {});
+            },
+          ),
       onTap: () => widget.onPick(m, group),
     );
   }
@@ -737,58 +753,62 @@ class _ModelListState extends State<ModelList> {
                 onSubmitted: (_) => _submit(app),
               ),
             ),
-            const SizedBox(width: 6),
-            PopupMenuButton<String>(
-              tooltip: t('Sort'),
-              initialValue: _sort,
-              onSelected: (v) => setState(() => _sort = v),
-              itemBuilder: (_) => [
-                for (final (key, label) in _sorts)
-                  CheckedPopupMenuItem(
-                    value: key,
-                    checked: _sort == key,
-                    child: Text(label),
+            if (widget.price == null) ...[
+              const SizedBox(width: 6),
+              PopupMenuButton<String>(
+                tooltip: t('Sort'),
+                initialValue: _sort,
+                onSelected: (v) => setState(() => _sort = v),
+                itemBuilder: (_) => [
+                  for (final (key, label) in _sorts)
+                    CheckedPopupMenuItem(
+                      value: key,
+                      checked: _sort == key,
+                      child: Text(label),
+                    ),
+                ],
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      NymGlyph('terse',
+                          size: 18,
+                          color: flat ? theme.colorScheme.primary : null),
+                      const SizedBox(width: 4),
+                      Text(t('Sort'),
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: flat ? theme.colorScheme.primary : null)),
+                    ],
                   ),
-              ],
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    NymGlyph('terse',
-                        size: 18,
-                        color: flat ? theme.colorScheme.primary : null),
-                    const SizedBox(width: 4),
-                    Text(t('Sort'),
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: flat ? theme.colorScheme.primary : null)),
-                  ],
                 ),
               ),
-            ),
+            ],
           ],
         ),
         const SizedBox(height: 8),
-        SizedBox(
-          height: 34,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: [
-              for (final (key, label) in _filters)
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    label: Text(label),
-                    selected: _filter == key,
-                    onSelected: (_) => setState(() => _filter = key),
+        if (_filters.isNotEmpty) ...[
+          SizedBox(
+            height: 34,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final (key, label) in _filters)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(label),
+                      selected: _filter == key,
+                      onSelected: (_) => setState(() => _filter = key),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
+          const SizedBox(height: 8),
+        ],
         Expanded(child: _body(rows, tight)),
         if (!tight) ...widget.footer,
       ],

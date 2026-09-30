@@ -1,5 +1,5 @@
 import { BOT_IMAGE_RESERVE_TOKENS } from "./bot.js";
-import { apiChatPrepare, apiChatRun, apiStreamDraft, apiStreamRun, apiThinkSplitter, apiNymbotObject, apiUpstreamError } from "./_apichat.js";
+import { apiChatPrepare, apiChatRun, API_STOP_MAX, API_STOP_MAX_CHARS, apiStreamDraft, apiStreamRun, apiThinkSplitter, apiNymbotObject, apiUpstreamError } from "./_apichat.js";
 import { ApiError, apiBad, apiJson, apiRandomId, apiSseStream, apiErrorBody, API_TIMING } from "./_apihttp.js";
 import { apiCostHeaders } from "./_apibill.js";
 import { apiResolveModel } from "./_apimodels.js";
@@ -192,15 +192,21 @@ function translate(body, modelName, counting) {
     throw apiBad("`messages` must be a non-empty array.", "messages", "missing_required_parameter");
   }
   const messages = [];
-  const system = blockText(body.system, "system");
-  if (system) messages.push({ role: "system", content: system });
+  const systems = [];
+  const top = blockText(body.system, "system");
+  if (top) systems.push(top);
   body.messages.forEach((m, i) => {
     const at = "messages[" + i + "]";
     if (!m || typeof m !== "object") throw apiBad("Each message must be an object.", at);
     if (m.role === "user") messages.push(...userMessages(m, at));
     else if (m.role === "assistant") messages.push(assistantMessage(m, at));
-    else throw apiBad("`role` must be user or assistant; put system text in the top-level `system`.", at + ".role", "invalid_role");
+    else if (m.role === "system") {
+      const text = blockText(m.content, at + ".content");
+      if (text) systems.push(text);
+    } else throw apiBad("`role` must be user, assistant or system.", at + ".role", "invalid_role");
   });
+  if (!messages.length) throw apiBad("`messages` needs at least one user or assistant message.", "messages", "missing_required_parameter");
+  if (systems.length) messages.unshift({ role: "system", content: systems.join("\n\n") });
   const tc = translateToolChoice(body.tool_choice);
   const tools = translateTools(body.tools);
   const out = { model: modelName, messages };
@@ -215,6 +221,9 @@ function translate(body, modelName, counting) {
   if (body.stop_sequences != null) {
     if (!Array.isArray(body.stop_sequences) || body.stop_sequences.some((s) => typeof s !== "string")) {
       throw apiBad("`stop_sequences` must be an array of strings.", "stop_sequences");
+    }
+    if (body.stop_sequences.length > API_STOP_MAX || body.stop_sequences.some((s) => s.length > API_STOP_MAX_CHARS)) {
+      throw apiBad("`stop_sequences` may hold at most " + API_STOP_MAX + " strings of at most " + API_STOP_MAX_CHARS + " characters.", "stop_sequences", "invalid_value");
     }
     if (body.stop_sequences.length) out.stop = body.stop_sequences;
   }

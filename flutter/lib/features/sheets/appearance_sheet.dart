@@ -6,11 +6,14 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../models/workspace.dart';
 import '../../services/backup.dart';
+import '../../services/git_review.dart';
 import '../../services/share_file.dart';
 import '../../services/voice.dart';
+import '../background_settings.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import 'sheet.dart';
+import '../run_card.dart';
 
 Future<void> showAppearanceSheet(BuildContext context) =>
     showNymSheet<void>(
@@ -272,6 +275,8 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               style: TextStyle(
                   fontSize: 11, color: Theme.of(context).hintColor),
             ),
+            const SizedBox(height: 6),
+            const BackgroundSettings(),
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
@@ -279,6 +284,29 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               title: Text(t('Show what Nymbot is doing while it works'),
                   style: const TextStyle(fontSize: 13)),
               onChanged: app.setShowProgress,
+            ),
+            const RunSettings(),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              key: const ValueKey('when-done-default'),
+              initialValue: whenDoneFor('', s.whenDone),
+              isExpanded: true,
+              decoration: InputDecoration(
+                  labelText: t('When a task\'s branch is done')),
+              items: [
+                for (final choice in whenDoneOptions)
+                  DropdownMenuItem(
+                      value: choice, child: Text(whenDoneLabel(choice))),
+              ],
+              onChanged: (v) => app.setWhenDone(v ?? whenDoneDefault),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t('A repository task with its own branch does this when it '
+                  'finishes. Each repository can choose differently when you '
+                  'edit it.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
             ),
             const SizedBox(height: 10),
             Text(t('Your data'), style: Theme.of(context).textTheme.titleSmall),

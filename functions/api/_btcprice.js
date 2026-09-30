@@ -210,10 +210,10 @@ export async function btcPriceGet(env, opts) {
   if (!(memory.usd > 0) || now - memory.at >= BTC_PRICE_REFRESH_MS) {
     var usable = memory.usd > 0 && now - memory.at < maxAge;
     var wait = usable ? BTC_PRICE_RETRY_MS : BTC_PRICE_FAIL_RETRY_MS;
-    if (lastTry === 0 || now - lastTry >= wait || now < lastTry) {
-      if (!inflight) {
-        inflight = refresh(env, o, now).finally(function () { inflight = null; });
-      }
+    if (inflight) {
+      try { await inflight; } catch (e) { }
+    } else if (lastTry === 0 || now - lastTry >= wait || now < lastTry) {
+      inflight = refresh(env, o, now).finally(function () { inflight = null; });
       try { await inflight; } catch (e) { }
     }
   }

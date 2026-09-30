@@ -5,6 +5,9 @@
     const DEFAULT_STALL_MS = 20000;
     const MIN_STALL_MS = 1000;
     const MAX_STALL_MS = 120000;
+    const WHEN_DONE_DEFAULT = 'pr';
+    const WHEN_DONE = ['pr', 'merge', 'leave'];
+    const BRANCH_RECORDS_MAX = 50;
 
     const el = (tag, cls, text) => {
         const n = document.createElement(tag);
@@ -93,12 +96,128 @@
         return card;
     }
 
+    function whenDoneOf(raw) {
+        return WHEN_DONE.includes(raw) ? raw : '';
+    }
+
+    function whenDoneFor(repo, settings) {
+        return whenDoneOf(repo && repo.whenDone) || whenDoneOf(settings && settings.whenDone) || WHEN_DONE_DEFAULT;
+    }
+
+    function isJobBranch(name) {
+        return /^nymbot\/[0-9a-f]{8,64}$/.test(String(name || ''));
+    }
+
+    function branchSteps(list) {
+        const out = [];
+        for (const s of Array.isArray(list) ? list : []) {
+            if (!s || !isJobBranch(s.branch) || typeof s.repo !== 'string') continue;
+            const at = out.findIndex(x => x.branch === s.branch);
+            const one = { repo: s.repo, branch: s.branch, base: String(s.base || ''), sha: String(s.sha || '') };
+            if (at === -1) out.push(one); else out[at] = one;
+        }
+        return out.slice(0, 4);
+    }
+
+    function jobBranchesOn(repo) {
+        return !!repo && repo.jobBranches !== false;
+    }
+
+    function jobsOf(mark) {
+        if (!mark) return [];
+        return [mark].concat(Array.isArray(mark.also) ? mark.also : [])
+            .filter(x => x && x.job && x.job.branch)
+            .map(x => Object.assign({ repo: x.repo }, x.job));
+    }
+
+    function remember(list, job, now) {
+        const out = (Array.isArray(list) ? list : []).filter(r => r && r.branch !== job.branch);
+        out.push({
+            branch: job.branch, base: job.base || '', sha: job.sha || '',
+            pull: job.pull && job.pull.number ? { number: job.pull.number, url: job.pull.url || '' } : null,
+            at: now || Date.now()
+        });
+        return out.slice(-BRANCH_RECORDS_MAX);
+    }
+
+    function forget(list, names) {
+        const drop = new Set(names || []);
+        return (Array.isArray(list) ? list : []).filter(r => r && !drop.has(r.branch));
+    }
+
+    function branchState(job) {
+        if (job.deleted) return t('Branch deleted.');
+        if (job.ended && !job.merged && !(job.pull && job.pull.number)) return t('The task ended early. The branch keeps what it committed.');
+        if (job.merged) return t('Merged into {base}.', { base: job.base });
+        if (job.conflict) return t('This branch conflicts with {base}.', { base: job.base });
+        if (job.fallback === 'no-api') return t('This forge has no pull request API Nymbot can use, so the branch was left as it is.');
+        if (job.fallback === 'failed') return t('The pull request could not be opened, so the branch was left as it is.');
+        if (job.done === false) return t('The task is still working on this branch.');
+        if (job.pull && job.pull.number) return t('Pull request #{n} is open.', { n: job.pull.number });
+        if (job.whenDone === 'merge') return t('Ready to merge into {base}.', { base: job.base });
+        return t('Left on its own branch for you to review.');
+    }
+
+    function branchChip(job, opts) {
+        const options = opts || {};
+        const chip = el('div', 'branch-chip' + (job.merged ? ' is-merged' : '') + (job.deleted ? ' is-deleted' : '')
+            + (job.conflict ? ' is-conflict' : ''));
+        chip.dataset.branch = job.branch;
+        const name = el('div', 'branch-chip-name');
+        name.appendChild(el('code', null, job.branch));
+        if (job.base) name.appendChild(el('span', 'branch-chip-base', ' → ' + job.base));
+        chip.appendChild(name);
+        chip.appendChild(el('div', 'branch-chip-state', branchState(job)));
+        if (job.deleted) return chip;
+        const row = el('div', 'branch-chip-actions');
+        const button = (act, label, primary) => {
+            const b = el('button', 'btn btn-small ' + (primary ? 'btn-primary' : 'btn-ghost'), label);
+            b.type = 'button';
+            b.dataset.act = act;
+            if (typeof options.onAction === 'function') b.addEventListener('click', () => options.onAction(act, b, job));
+            return b;
+        };
+        const link = (label) => {
+            const a = el('a', 'btn btn-small btn-ghost', label);
+            a.href = job.pull.url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.dataset.act = 'branch-open';
+            return a;
+        };
+        const hasUrl = !!(job.pull && /^https:\/\//i.test(job.pull.url || ''));
+        if (job.conflict) {
+            row.appendChild(hasUrl ? link(t('Open the PR to resolve')) : button('branch-pr', t('Open the PR to resolve')));
+            row.appendChild(button('branch-update', t('Ask Nymbot to update the branch'), true));
+        } else if (!job.merged && job.done !== false) {
+            row.appendChild(hasUrl ? link(t('Open PR')) : button('branch-pr', t('Open PR')));
+            row.appendChild(button('branch-merge', t('Merge'), job.whenDone === 'merge'));
+        } else if (job.merged && hasUrl) {
+            row.appendChild(link(t('Open PR')));
+        }
+        if (job.done !== false) row.appendChild(button('branch-delete', t('Delete')));
+        chip.appendChild(row);
+        return chip;
+    }
+
     window.NymbotGitRun = {
         MAX_STALL_RESUMES,
         stallWait,
         stallLine,
         all,
         settled,
-        stagedCard
+        stagedCard,
+        WHEN_DONE_DEFAULT,
+        WHEN_DONE,
+        whenDoneOf,
+        whenDoneFor,
+        jobBranchesOn,
+        isJobBranch,
+        branchSteps,
+        jobsOf,
+        remember,
+        forget,
+        branchState,
+        branchChip
     };
 })();

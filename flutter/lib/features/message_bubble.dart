@@ -7,7 +7,9 @@ import '../models/conversation.dart';
 import '../models/model_maker.dart';
 import '../models/workspace.dart';
 import '../services/server_runs.dart';
+import '../services/git_review.dart';
 import 'artifact_screen.dart';
+import 'branch_chip.dart';
 import 'brand_tile.dart';
 import 'citation_cards.dart';
 import 'doc_tray.dart';
@@ -57,6 +59,7 @@ class MessageBubble extends StatefulWidget {
     this.artifacts = const [],
     this.onOpenArtifact,
     this.onUndoCheckpoint,
+    this.onBranchAction,
     this.onAllowTool,
     this.onDenyTool,
     this.onAlwaysAllowTool,
@@ -76,6 +79,7 @@ class MessageBubble extends StatefulWidget {
 
   /// Null when a repo run has nothing to revert, which hides the undo.
   final Future<void> Function()? onUndoCheckpoint;
+  final Future<void> Function(Map<String, dynamic> job, String op)? onBranchAction;
   final VoidCallback? onAllowTool;
   final VoidCallback? onDenyTool;
   final VoidCallback? onAlwaysAllowTool;
@@ -233,6 +237,13 @@ class _MessageBubbleState extends State<MessageBubble> {
             Padding(
               padding: const EdgeInsets.only(left: 5),
               child: Text(t('edited'),
+                  style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
+            ),
+          if (m.sched != null && m.role == ChatRole.self)
+            Padding(
+              padding: const EdgeInsets.only(left: 5),
+              child: Text(t('Scheduled'),
+                  key: const ValueKey('scheduled-tag'),
                   style: TextStyle(fontSize: 10.5, color: theme.hintColor)),
             ),
         ],
@@ -697,7 +708,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               color: error ? NymbotColors.danger : theme.hintColor,
             ),
           ),
-          if (error && m.retry != null)
+          if (error && (m.retry != null || m.retryEvent != null) && m.runCap == null)
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
@@ -719,6 +730,12 @@ class _MessageBubbleState extends State<MessageBubble> {
     final pulls = (mark['pulls'] as List?)?.length ?? 0;
     final undone = mark['undone'] == true;
     final undoable = mark['undoable'] == true && paths.isNotEmpty;
+    final jobs = jobsOf(mark);
+    final onlyJobs = jobs.isNotEmpty &&
+        paths.isEmpty &&
+        !((mark['also'] as List?) ?? const [])
+            .whereType<Map>()
+            .any((x) => ((x['paths'] as List?) ?? const []).isNotEmpty);
 
     final bits = <String>[
       if (paths.length == 1)
@@ -775,8 +792,12 @@ class _MessageBubbleState extends State<MessageBubble> {
                       fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
                       color: theme.hintColor)),
             ],
+            for (final job in jobs)
+              BranchChip(job: job, onAction: widget.onBranchAction),
             const SizedBox(height: 6),
-            if (undone)
+            if (onlyJobs)
+              const SizedBox.shrink()
+            else if (undone)
               Text(t('Put back.'),
                   style: TextStyle(fontSize: 11, color: theme.hintColor))
             else if (!undoable)

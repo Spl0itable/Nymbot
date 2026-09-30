@@ -76,7 +76,7 @@
                         <tr><td><code>negative_prompt</code></td><td>string</td><td>No</td><td>What to leave out.</td></tr>
                         <tr><td><code>output_format</code></td><td>string</td><td>No</td><td><code>"png"</code>, <code>"jpeg"</code> or <code>"webp"</code>.</td></tr>
                         <tr><td><code>response_format</code></td><td>string</td><td>No</td><td><code>"url"</code> (the default) or <code>"b64_json"</code>.</td></tr>
-                        <tr><td><code>image_url</code></td><td>string</td><td>No</td><td>A picture to start from: an <code>https://</code> link or a <code>data:image/&hellip;;base64</code> URL (PNG, JPEG, WebP or GIF). Only for generators with <code>edit</code>; required by those with <code>requires_image_url</code>.</td></tr>
+                        <tr><td><code>image_url</code></td><td>string</td><td>No</td><td>A picture to start from: an <code>https://</code> link of at most 4,096 characters with no user name or password in it, or a <code>data:image/&hellip;;base64</code> URL (PNG, JPEG, WebP or GIF; not SVG). Only for generators with <code>edit</code>; required by those with <code>requires_image_url</code>.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -485,7 +485,7 @@ for (const v of voices.data) console.log(v.id, v.model_id);</code></pre>
                         <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td><code>file</code></td><td>file</td><td>Yes</td><td>The recording, from 256 bytes to 25 MB and up to 30 minutes: WAV, WebM, MP4 or M4A, Ogg or Opus, MP3 and the other formats Whisper reads.</td></tr>
+                        <tr><td><code>file</code></td><td>file</td><td>Yes</td><td>The recording, from 256 bytes to 25 MB and up to 30 minutes: WAV, WebM, MP4 or M4A, Ogg or Opus, MP3 and the other formats Whisper reads. MP3 and other formats whose length cannot be read up front are limited to 1.8 MB.</td></tr>
                         <tr><td><code>model</code></td><td>string</td><td>No</td><td>Default <code>whisper</code>, which is Whisper Large v3 Turbo. <code>whisper-1</code>, <code>whisper-large-v3-turbo</code> and <code>@cf/openai/whisper-large-v3-turbo</code> mean the same.</td></tr>
                         <tr><td><code>language</code></td><td>string</td><td>No</td><td>The spoken language, such as <code>en</code>. Detected if left out.</td></tr>
                         <tr><td><code>prompt</code></td><td>string</td><td>No</td><td>Words or spellings to expect, such as names. Only the first 1,000 characters are used.</td></tr>
@@ -495,9 +495,13 @@ for (const v of voices.data) console.log(v.id, v.model_id);</code></pre>
             </div>
             <p>For WAV, WebM, MP4 and Ogg files the length is read from the file before anything runs, so a
                 recording over 30 minutes is refused up front (with 3 seconds' grace). A WAV file's length comes
-                from its sample rate, channels and sample size. For other formats it is estimated from the file
-                size; if Whisper then reports more than 30 minutes, the request is refused with
-                <code>413</code> <code>audio_too_long</code> and nothing is charged.</p>
+                from its sample rate, channels and sample size. The length of other formats, such as MP3, cannot
+                be read up front, so they are limited by size: at the lowest bitrate Nymbot assumes, 8 kbps,
+                30 minutes is 1.8 MB, and a larger file in such a format is refused with <code>413</code>
+                <code>audio_too_long</code> before anything runs. Send longer recordings as WAV, WebM, MP4 or Ogg.
+                If Whisper then reports more than 30 minutes anyway, the request is refused with
+                <code>413</code> <code>audio_too_long</code>, and since Whisper did run, 30 minutes are
+                charged.</p>
             <p>You pay for the length of the audio, rounded up to the second: the longest of the length read
                 from the file, the length Whisper reports, and the least the file's size allows, at Whisper's per-minute price
                 with the usual fee and margin, and at least 0.05 credit a request. It is paid from the standard
@@ -521,7 +525,7 @@ for (const v of voices.data) console.log(v.id, v.model_id);</code></pre>
                     <tbody>
                         <tr><td><code>400</code></td><td>No file, a file with no usable audio (<code>invalid_audio</code>), an unknown format, or a model that is not a transcription model (<code>invalid_model</code>).</td></tr>
                         <tr><td><code>402</code></td><td>Neither balance can cover it.</td></tr>
-                        <tr><td><code>413</code></td><td>The file is over 25 MB (<code>file_too_large</code>) or the recording over 30 minutes (<code>audio_too_long</code>).</td></tr>
+                        <tr><td><code>413</code></td><td>The file is over 25 MB (<code>file_too_large</code>) or the recording over 30 minutes, or, in a format whose length cannot be read up front, over 1.8 MB (<code>audio_too_long</code>).</td></tr>
                         <tr><td><code>502</code></td><td>Whisper could not process the audio. Nothing is charged.</td></tr>
                     </tbody>
                 </table>

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../services/git_review.dart';
+
 class GitRepo {
   GitRepo({
     required this.id,
@@ -16,7 +18,10 @@ class GitRepo {
     this.enabled = true,
     this.ngit,
     this.tokenAt = 0,
-  });
+    this.jobBranches = true,
+    this.whenDone = '',
+    List<Map<String, dynamic>>? nymBranches,
+  }) : nymBranches = nymBranches ?? [];
 
   final String id;
   String repo;
@@ -30,6 +35,9 @@ class GitRepo {
   bool allowWrites;
   bool approve;
   bool enabled;
+  bool jobBranches;
+  String whenDone;
+  List<Map<String, dynamic>> nymBranches;
 
   /// NIP-34 announcement this repo was added from, if any.
   NgitOrigin? ngit;
@@ -59,9 +67,12 @@ class GitRepo {
         'enabled': enabled,
         if (ngit != null) 'ngit': ngit!.toJson(),
         if (tokenAt > 0) 'tokenAt': tokenAt,
+        if (!jobBranches) 'jobBranches': false,
+        if (whenDone.isNotEmpty) 'whenDone': whenDone,
+        if (nymBranches.isNotEmpty) 'nymBranches': nymBranches,
       };
 
-  Map<String, dynamic> toPayload() => {
+  Map<String, dynamic> toPayload({String defaultWhenDone = ''}) => {
         'provider': provider,
         'host': host,
         'token': token,
@@ -69,6 +80,8 @@ class GitRepo {
         'branch': branch,
         'allowWrites': allowWrites,
         'approve': approve,
+        'jobBranches': jobBranches,
+        'whenDone': whenDoneFor(whenDone, defaultWhenDone),
         'paths': paths,
         'label': display,
         if (ngit != null) 'ngit': ngit!.toJson(),
@@ -88,6 +101,13 @@ class GitRepo {
         enabled: j['enabled'] != false,
         ngit: NgitOrigin.fromJson(j['ngit']),
         tokenAt: (j['tokenAt'] as num?)?.toInt() ?? 0,
+        jobBranches: j['jobBranches'] != false,
+        whenDone: whenDoneOf(j['whenDone']),
+        nymBranches: (j['nymBranches'] as List?)
+                ?.whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList() ??
+            [],
       );
 
   static String encodeList(List<GitRepo> list) =>
@@ -643,6 +663,13 @@ class AppSettings {
     this.defaultRepoIds = const [],
     this.nickname = '',
     this.nicknameAt = 0,
+    this.maxRuns = 0,
+    this.readOnlyTools = 'ask',
+    this.serverRunPolicy = 'ask',
+    this.whenDone = '',
+    this.backgroundJobs,
+    this.serverSchedules = false,
+    this.scheduleDailyCap = 50,
   });
 
   ChatTheme theme;
@@ -690,6 +717,14 @@ class AppSettings {
   String nickname;
   int nicknameAt;
 
+  int maxRuns;
+  String readOnlyTools;
+  String serverRunPolicy;
+  String whenDone;
+  bool? backgroundJobs;
+  bool serverSchedules;
+  int scheduleDailyCap;
+
   Map<String, dynamic> toJson() => {
         'theme': theme.name,
         'density': density.name,
@@ -727,6 +762,12 @@ class AppSettings {
         'defaultRepoIds': defaultRepoIds,
         'nickname': nickname,
         'nicknameAt': nicknameAt,
+        'maxRuns': maxRuns,
+        'policy': {'readOnlyTools': readOnlyTools, 'serverRuns': serverRunPolicy},
+        if (whenDone.isNotEmpty) 'whenDone': whenDone,
+        if (backgroundJobs != null) 'backgroundJobs': backgroundJobs,
+        'serverSchedules': serverSchedules,
+        'scheduleDailyCap': scheduleDailyCap,
       };
 
   static T _enumOf<T>(List<T> values, Object? name, T fallback) {
@@ -776,5 +817,24 @@ class AppSettings {
             (j['defaultRepoIds'] as List?)?.map((e) => '$e').toList() ?? const [],
         nickname: j['nickname'] is String ? j['nickname'] as String : '',
         nicknameAt: (j['nicknameAt'] as num?)?.toInt() ?? 0,
+        maxRuns: j['maxRuns'] is num
+            ? (j['maxRuns'] as num).toInt().clamp(0, 10)
+            : 0,
+        readOnlyTools:
+            j['policy'] is Map && (j['policy'] as Map)['readOnlyTools'] == 'allow'
+                ? 'allow'
+                : 'ask',
+        serverRunPolicy:
+            j['policy'] is Map && (j['policy'] as Map)['serverRuns'] == 'allow'
+                ? 'allow'
+                : 'ask',
+        whenDone: whenDoneOf(j['whenDone']),
+        backgroundJobs:
+            j['backgroundJobs'] is bool ? j['backgroundJobs'] as bool : null,
+        serverSchedules: j['serverSchedules'] == true,
+        scheduleDailyCap: j['scheduleDailyCap'] is num &&
+                (j['scheduleDailyCap'] as num) >= 1
+            ? (j['scheduleDailyCap'] as num).toInt().clamp(1, 10000)
+            : 50,
       );
 }

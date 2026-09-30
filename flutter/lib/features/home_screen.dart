@@ -13,12 +13,14 @@ import '../models/conversation.dart';
 import '../models/memory.dart';
 import '../models/workspace.dart';
 import '../services/attachments.dart';
+import '../services/background_jobs.dart';
 import '../services/backup.dart';
 import '../services/share_file.dart';
 import '../services/chat_engine.dart';
 import '../services/dev_contact.dart';
 import '../services/dictation.dart';
 import '../services/gifts.dart';
+import '../services/git_review.dart';
 import '../services/incoming.dart';
 import '../services/mentions.dart';
 import '../services/picture_edit.dart';
@@ -39,6 +41,7 @@ import 'sheets/compare_sheet.dart';
 import 'sheets/connectors_sheet.dart';
 import 'progress_lines.dart';
 import 'research_view.dart';
+import 'run_card.dart';
 import 'team_view.dart';
 import 'share_chat_sheet.dart';
 import 'share_target_sheet.dart';
@@ -101,7 +104,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _input = MarkdownEditingController();
   late final _inputFocus = FocusNode(onKeyEvent: _composerKey);
   final _inputScroll = ScrollController();
-  final _queueEditor = TextEditingController();
   final _scroll = ScrollController();
   final _voice = Voice();
   final _keys = <String, GlobalKey>{};
@@ -158,6 +160,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final conv = app.current;
       if (conv != null) _input.setMarkdown(app.store.draft(conv.id));
       app.onCapPrompt = _capPrompt;
+      app.onBackgroundPrompt = _backgroundPrompt;
+      app.onBuy = () {
+        if (mounted) unawaited(showCreditsSheet(context));
+      };
       unawaited(Incoming.listen(_incoming));
     });
   }
@@ -357,70 +363,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _inputFocus.requestFocus();
   }
 
-  Future<void> _saveQueued(AppController app) async {
-    if (_queueEditor.text.trim().isEmpty) {
-      final drop = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(t('Remove this message from the queue?')),
-          content: Text(t('It is empty now, so there is nothing left to send.')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: Text(t('Keep editing'))),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: Text(t('Remove it'))),
-          ],
-        ),
-      );
-      if (drop != true) return;
-    }
-    await app.saveQueued(_queueEditor.text);
-  }
-
-  Widget _queueEditorRow(BuildContext context, AppController app) {
-    final theme = Theme.of(context);
-    return Container(
-      key: const ValueKey('queue-editor'),
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: theme.colorScheme.secondary),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(t('Editing queued message'),
-              style: TextStyle(fontSize: 11, color: theme.hintColor)),
-          TextField(
-            controller: _queueEditor,
-            autofocus: true,
-            minLines: 1,
-            maxLines: 4,
-            style: const TextStyle(fontSize: 13),
-          ),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 8,
-            children: [
-              TextButton(
-                onPressed: () => app.cancelQueuedEdit(),
-                child: Text(t('Cancel')),
-              ),
-              FilledButton(
-                onPressed: () => _saveQueued(app),
-                child: Text(t('Save')),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _dictationStrip(BuildContext context) {
     final theme = Theme.of(context);
     final sending = _dictation == 'sending';
@@ -524,7 +466,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _stopLevels();
     if (_dictation != null) unawaited(Dictation.cancel());
     _input.dispose();
-    _queueEditor.dispose();
     _inputFocus.dispose();
     _inputScroll.dispose();
     _scroll.dispose();
@@ -597,11 +538,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return done.future;
   }
 
+  final Set<String> _landedIds = {};
+
   Future<void> _landed(AppController app, String? asked) async {
     final last = app.current?.id == asked && app.messages.isNotEmpty
         ? app.messages.last
         : null;
-    final reply = last != null && last.role == ChatRole.bot ? last : null;
+    final reply = last != null && last.role == ChatRole.bot && _landedIds.add(last.id)
+        ? last
+        : null;
     if (reply != null &&
         app.settings.typewriter &&
         !app.streamedReplies.contains(reply.id) &&
@@ -1350,7 +1295,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
     }
-    // A message typed mid-reply is queued, so nothing below may read a reply yet.
     final asked = app.current?.id;
     final went = await app.send(text, bare: bare);
     final back = app.takeCapReturned();
@@ -1381,10 +1325,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return choice;
   }
 
+  Future<bool?> _backgroundPrompt(double? credits) async {
+    if (!mounted) return null;
+    return showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text(BackgroundJobs.promptTitle()),
+        content: SingleChildScrollView(
+            child: Text(BackgroundJobs.promptBody(credits))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(false),
+            child: Text(BackgroundJobs.promptCancel()),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialog).pop(true),
+            child: Text(BackgroundJobs.promptConfirm()),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _followUp(ChatMessage m, String text) async {
     final app = AppScope.read(context);
-    if (_followingUp || app.sending || app.queued.isNotEmpty) return;
-    final at = followUpsAt(app.messages);
+    if (_followingUp) return;
+    final at = latestFollowUps(app.messages);
     if (at < 0 || app.messages[at].id != m.id || !m.followUps.contains(text)) return;
     unawaited(HapticFeedback.selectionClick());
     setState(() => _followingUp = true);
@@ -1457,6 +1423,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (saved != null) _sayUndo(t('Remembered.'), () => app.deleteMemory(saved.id));
         }
       case MessageAction.retry:
+        if (m.retryEvent != null) {
+          await app.retryMessage(m);
+          return;
+        }
         final again = m.retry;
         await app.deleteMessage(m);
         if (again != null) await _send(again);
@@ -1510,6 +1480,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _say(e.message);
     } catch (_) {
       _say(t('Could not put that back.'));
+    }
+  }
+
+  Future<void> _branch(ChatMessage m, Map<String, dynamic> job, String op) async {
+    final app = AppScope.read(context);
+    if (op == 'merge' || op == 'delete') {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(op == 'merge' ? t('Merge this branch') : t('Delete this branch')),
+          content: Text(op == 'merge'
+              ? t('Merge {branch} into {base} in {repo} with a merge commit? Nothing is force-pushed.',
+                  {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']})
+              : t('Delete {branch} from {repo}? Only if it still ends at the commit Nymbot made; nothing on {base} changes.',
+                  {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']})),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(t('Cancel'))),
+            FilledButton(
+              style: op == 'delete'
+                  ? FilledButton.styleFrom(backgroundColor: NymbotColors.danger)
+                  : null,
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(op == 'merge' ? t('Merge') : t('Delete')),
+            ),
+          ],
+        ),
+      );
+      if (go != true) return;
+    }
+    final said = await app.branchAction(m, job, op);
+    if (said.isNotEmpty) _say(said);
+    if (op == 'pr' && mounted) {
+      final fresh = app.messages.where((x) => x.id == m.id).firstOrNull;
+      final opened = jobsOf(fresh?.checkpoint)
+          .where((j) => j['branch'] == job['branch'])
+          .firstOrNull;
+      final pull = opened?['pull'];
+      final url = pull is Map ? '${pull['url'] ?? ''}' : '';
+      if (url.startsWith('https://') && mounted) {
+        await MarkdownBody.openLink(context, url, url);
+      }
     }
   }
 
@@ -1567,8 +1580,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     if (value == null || value.trim().isEmpty) return;
     if (branch) {
-      await app.branchBefore(m);
-      _say(t('Branched. The chat you had is still in the list.'));
+      await app.forkForEdit(m);
+      _say(t('Sent in a new branch. The original chat is unchanged.'));
     } else {
       await app.truncateFrom(m);
     }
@@ -1757,6 +1770,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _openedChat();
     }
 
+    if (app.jumpTo != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final id = app.takeJump();
+        if (id != null && mounted) _scrollToMessage(id);
+      });
+    }
     final queued = app.pendingInput;
     if (queued != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1948,19 +1967,84 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _runEntry(BuildContext context, AppController app, ChatTurn run,
+      List<ChatMessage> messages, String selfPubkey, bool latest) {
+    final Widget progress;
+    if (run.team != null) {
+      progress = TeamProgress(
+        label: run.status ?? t('Nymbot is leading a team'),
+        showAvatar: app.settings.avatars,
+        steps: run.steps,
+        workers: (run.team?['workers'] as num?)?.toInt() ?? 0,
+      );
+    } else if (run.research != null) {
+      progress = ResearchProgress(
+        label: run.status ?? t('Nymbot is researching'),
+        showAvatar: app.settings.avatars,
+        steps: run.steps,
+      );
+    } else {
+      final status = TypingIndicator(
+        label: run.status ??
+            (app.reposOf(run.conv).isNotEmpty && app.modelOf(run.conv) != null
+                ? t('Nymbot is reading your repositories')
+                : t('Nymbot is thinking')),
+        showAvatar: app.settings.avatars,
+        steps: _progressLines(run.steps),
+      );
+      final partial = run.draft?.trim() ?? '';
+      if (partial.isEmpty) {
+        progress = status;
+      } else {
+        final model = run.model ?? app.modelOf(run.conv);
+        final bubble = MessageBubble(
+          key: latest
+              ? const ValueKey('reply-draft')
+              : ValueKey('reply-draft-${run.key}'),
+          message: ChatMessage(
+            id: 'reply-draft',
+            role: ChatRole.bot,
+            content: partial,
+            pro: model != null,
+            model: model?['label'] as String?,
+          ),
+          draft: true,
+          selfPubkey: selfPubkey,
+          settings: app.settings,
+          onAction: (_, __) {},
+          grouped: false,
+          avatarGroup: 'reply-draft-${run.key}',
+          modelCatalog: app.mentionCatalog,
+        );
+        progress = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            latest ? KeyedSubtree(key: _draftKey, child: bubble) : bubble,
+            status,
+          ],
+        );
+      }
+    }
+    return Column(
+      key: ValueKey('run-card-${run.key}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [progress, RunControls(run: run)],
+    );
+  }
+
   Widget _messages(BuildContext context, AppController app) {
-    if (app.messages.isEmpty && !app.sending) return _empty(context, app);
+    final runs = app.runsIn(app.current);
+    if (app.messages.isEmpty && runs.isEmpty) return _empty(context, app);
     // Anonymous chats show the throwaway key's nym, never the published profile.
     final anonymous = app.current?.anon ?? false;
     final selfPubkey =
         anonymous ? (app.shownAnonPk ?? app.identity.pubkey) : app.identity.pubkey;
     final me = anonymous ? null : app.profiles.of(selfPubkey);
-    final offer = app.sending ||
-            app.queued.isNotEmpty ||
-            _followingUp ||
-            _revealId != null
+    final offer = _followingUp || _revealId != null
         ? -1
-        : followUpsAt(app.messages);
+        : latestFollowUps(app.messages);
     final messages = app.messages;
     if (app.mentionCatalog == null &&
         !_makerLookup &&
@@ -1978,6 +2062,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           m.at.difference(previous.at).inMinutes.abs() < 10;
       groupStart[j] = together ? groupStart[j - 1] : j;
     }
+    final before = <int, List<ChatTurn>>{};
+    for (final run in runs) {
+      final ask = run.askId == null
+          ? -1
+          : messages.indexWhere((m) => m.id == run.askId);
+      var at = messages.length;
+      if (ask != -1) {
+        final link = run.runId;
+        at = ask + 1;
+        while (at < messages.length &&
+            messages[at].role != ChatRole.self &&
+            link.isNotEmpty &&
+            messages[at].replyTo == link) {
+          at++;
+        }
+      }
+      (before[at] ??= []).add(run);
+    }
+    final entries = <Object>[];
+    for (var i = 0; i <= messages.length; i++) {
+      entries.addAll(before[i] ?? const <ChatTurn>[]);
+      if (i < messages.length) entries.add(i);
+    }
+    final latest = runs.isEmpty ? null : runs.last;
 
     _trackDraft(app);
     return StickyAvatarScope(
@@ -1988,111 +2096,76 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           physics: const AlwaysScrollableScrollPhysics(),
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-          itemCount: app.messages.length + (app.sending ? 1 : 0),
-          itemBuilder: (context, i) {
-            if (i >= app.messages.length && app.teaming) {
-              return TeamProgress(
-                label: app.status ?? t('Nymbot is leading a team'),
-                showAvatar: app.settings.avatars,
-                steps: app.progressSteps,
-                workers: app.teamWorkers,
-              );
+          itemCount: entries.length,
+          itemBuilder: (context, e) {
+            final entry = entries[e];
+            if (entry is ChatTurn) {
+              return _runEntry(context, app, entry, messages, selfPubkey,
+                  identical(entry, latest));
             }
-            if (i >= app.messages.length && app.researching) {
-              return ResearchProgress(
-                label: app.status ?? t('Nymbot is researching'),
-                showAvatar: app.settings.avatars,
-                steps: app.progressSteps,
-              );
-            }
-            if (i >= app.messages.length) {
-              final status = TypingIndicator(
-                label: app.status ??
-                    (app.activeRepos.isNotEmpty && app.activeModel != null
-                        ? t('Nymbot is reading your repositories')
-                        : t('Nymbot is thinking')),
-                showAvatar: app.settings.avatars,
-                steps: _progressLines(app.progressSteps),
-              );
-              final partial = app.progressDraft?.trim() ?? '';
-              if (partial.isEmpty) return status;
-              final model = app.activeModel;
-              final previous = messages.isEmpty ? null : messages.last;
-              final together = previous != null &&
-                  previous.role == ChatRole.bot &&
-                  DateTime.now().difference(previous.at).inMinutes.abs() < 10;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  KeyedSubtree(
-                    key: _draftKey,
-                    child: MessageBubble(
-                      key: const ValueKey('reply-draft'),
-                      message: ChatMessage(
-                        id: 'reply-draft',
-                        role: ChatRole.bot,
-                        content: partial,
-                        pro: model != null,
-                        model: model?['label'] as String?,
-                      ),
-                      draft: true,
-                      selfPubkey: selfPubkey,
-                      settings: app.settings,
-                      onAction: (_, __) {},
-                      grouped: together,
-                      avatarGroup: together
-                          ? messages[groupStart[messages.length - 1]].id
-                          : 'reply-draft',
-                      modelCatalog: app.mentionCatalog,
-                    ),
-                  ),
-                  status,
-                ],
-              );
-            }
+            final i = entry as int;
             final m = messages[i];
             final grouped = groupStart[i] != i;
             final lastInGroup =
                 i + 1 >= messages.length || groupStart[i + 1] != groupStart[i];
             final key = _keys.putIfAbsent(m.id, () => GlobalKey());
+            final bubble = MessageBubble(
+              message: m,
+              artifacts: app.artifactsOf(m.id),
+              actionsOpen: _openActions == m.id,
+              onToggleActions: () => setState(
+                  () => _openActions = _openActions == m.id ? null : m.id),
+              onOpenArtifact: (a) => showArtifact(context, a),
+              onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
+              onBranchAction: m.checkpoint == null ? null : (job, op) => _branch(m, job, op),
+              onAllowTool: m.pendingTool == null ? null : () => app.allowPendingTool(m),
+              onDenyTool: m.pendingTool == null ? null : () => app.denyPendingTool(m),
+              onAlwaysAllowTool:
+                  app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
+              onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
+              onDiscardStaged: m.staged == null ? null : () => AppScope.read(context).discardStaged(m),
+              selfPubkey: selfPubkey,
+              selfName: app.selfNameIn(app.current, me?.name),
+              selfPicture: me?.picture ?? '',
+              settings: app.settings,
+              grouped: grouped,
+              lastInGroup: lastInGroup,
+              avatarGroup: messages[groupStart[i]].id,
+            modelCatalog: app.mentionCatalog,
+              speaking: _voice.speakingId == m.id,
+              highlighted: _highlighted == m.id,
+              onAction: _messageAction,
+              followUps: i == offer ? m.followUps : const [],
+              onFollowUp: (text) => _followUp(m, text),
+              onEditFollowUp: _editFollowUp,
+              reveal: _revealId == m.id ? _revealAt : null,
+            );
+            final extra = m.pending != null
+                ? PendingActions(message: m, onEdit: _takePending)
+                : m.runCap != null
+                    ? RunCapActions(message: m)
+                    : null;
             return KeyedSubtree(
               key: key,
-              child: MessageBubble(
-                message: m,
-                artifacts: app.artifactsOf(m.id),
-                actionsOpen: _openActions == m.id,
-                onToggleActions: () => setState(
-                    () => _openActions = _openActions == m.id ? null : m.id),
-                onOpenArtifact: (a) => showArtifact(context, a),
-                onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
-                onAllowTool: m.pendingTool == null ? null : () => app.allowPendingTool(m),
-                onDenyTool: m.pendingTool == null ? null : () => app.denyPendingTool(m),
-                onAlwaysAllowTool:
-                    app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
-                onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
-                onDiscardStaged: m.staged == null ? null : () => AppScope.read(context).discardStaged(m),
-                selfPubkey: selfPubkey,
-                selfName: app.selfNameIn(app.current, me?.name),
-                selfPicture: me?.picture ?? '',
-                settings: app.settings,
-                grouped: grouped,
-                lastInGroup: lastInGroup,
-                avatarGroup: messages[groupStart[i]].id,
-              modelCatalog: app.mentionCatalog,
-                speaking: _voice.speakingId == m.id,
-                highlighted: _highlighted == m.id,
-                onAction: _messageAction,
-                followUps: i == offer ? m.followUps : const [],
-                onFollowUp: (text) => _followUp(m, text),
-                onEditFollowUp: _editFollowUp,
-                reveal: _revealId == m.id ? _revealAt : null,
-              ),
+              child: extra == null
+                  ? bubble
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [bubble, extra],
+                    ),
             );
           },
         ),
       ),
     );
+  }
+
+  void _takePending(String text) {
+    _input.setMarkdown(text);
+    _lastInput = _input.text;
+    setState(() => _hasText = text.trim().isNotEmpty);
+    _inputFocus.requestFocus();
   }
 
   Widget _supportEmpty(BuildContext context) =>
@@ -2291,60 +2364,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-            // Queued messages stay visible and can be removed while they wait.
-            for (var i = 0; i < app.queued.length; i++)
-              if (app.editingQueued == i)
-                _queueEditorRow(context, app)
-              else
-                Container(
-                  margin: const EdgeInsets.only(bottom: 4),
-                  padding: const EdgeInsets.fromLTRB(8, 0, 0, 0),
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                        color: Theme.of(context).dividerColor,
-                        style: BorderStyle.solid),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      Text('#${i + 1}',
-                          style: TextStyle(
-                              fontSize: 10,
-                              color: Theme.of(context).hintColor)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          app.queued[i],
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).hintColor),
-                        ),
-                      ),
-                      IconButton(
-                        key: ValueKey('queue-edit-$i'),
-                        icon: const NymGlyph('pencil', size: 15),
-                        tooltip: t('Edit message'),
-                        constraints:
-                            const BoxConstraints(minWidth: 48, minHeight: 48),
-                        onPressed: app.editingQueued == null
-                            ? () {
-                                _queueEditor.text = app.queued[i];
-                                app.editQueued(i);
-                              }
-                            : null,
-                      ),
-                      IconButton(
-                        icon: const NymGlyph('close', size: 15),
-                        tooltip: t('Do not send this'),
-                        constraints:
-                            const BoxConstraints(minWidth: 48, minHeight: 48),
-                        onPressed: () => app.unqueue(i),
-                      ),
-                    ],
-                  ),
-                ),
             if (app.quote != null)
               Container(
                 margin: const EdgeInsets.only(bottom: 6),
@@ -2377,13 +2396,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             if (_dictation == 'recording' || _dictation == 'sending')
               _dictationStrip(context),
-            if (app.status != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(app.status!,
-                    style:
-                        TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
-              ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -2475,8 +2487,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(width: 6),
                 if (app.sending) ...[
                   IconButton.filledTonal(
-                    onPressed: app.stop,
-                    tooltip: t('Stop'),
+                    onPressed: () => app.stop(),
+                    tooltip: t('Stop every reply in this chat'),
                     style: IconButton.styleFrom(
                       foregroundColor: NymbotColors.danger,
                       backgroundColor:
@@ -2484,20 +2496,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                     icon: const NymGlyph('stop', size: 20, filled: true),
                   ),
-                  if (_hasText) ...[
-                    const SizedBox(width: 6),
-                    IconButton.filledTonal(
-                      onPressed: () => _send(),
-                      tooltip: t('Send when this one is done'),
-                      icon: const NymGlyph('send', size: 20),
-                    ),
-                  ],
-                ] else
-                  IconButton.filledTonal(
-                    onPressed: () => _send(),
-                    tooltip: t('Send'),
-                    icon: const NymGlyph('send', size: 20),
-                  ),
+                  const SizedBox(width: 6),
+                ],
+                IconButton.filledTonal(
+                  onPressed: () => _send(),
+                  tooltip: t('Send'),
+                  icon: const NymGlyph('send', size: 20),
+                ),
               ],
             ),
             if (support)
@@ -2617,6 +2622,8 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
       if (await select() && context.mounted) await showStatsSheet(context);
     case 'caps':
       await showCapsSheet(context, conv);
+    case 'permissions':
+      await showChatPermissions(context, conv);
     case 'share-link':
       await showShareChatSheet(context, app, conv,
           elsewhere ? app.store.messages(conv.id) : app.messages);
@@ -2785,6 +2792,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         'bot' => app.bots.length,
         'artifacts' => _artifactCount,
         'scheduled' => app.schedules.where((s) => s.enabled).length,
+        'running' => app.runningCount,
         _ => null,
       };
 
@@ -3039,6 +3047,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             final went = await showSchedulesSheet(context);
             if (went != null && context.mounted) Navigator.pop(context);
           }),
+          ('running', t('Running now'), () => showRunningNow(context)),
           ('saved-messages', t('Saved messages'), () async {
             await showSavedMessagesSheet(context);
           }),
@@ -3055,7 +3064,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             key: ValueKey('drawer-menu-${entry.$1}'),
             leading: NymGlyph.has(entry.$1)
                 ? NymGlyph(entry.$1, size: 18)
-                : const Icon(Icons.keyboard_outlined, size: 18),
+                : entry.$1 == 'running'
+                    ? const NymGlyph('tasks', size: 18)
+                    : const Icon(Icons.keyboard_outlined, size: 18),
             title: Text(entry.$2, style: const TextStyle(fontSize: 13)),
             trailing: switch (_menuCount(app, entry.$1)) {
               final int n when n > 0 => Text('$n',

@@ -144,7 +144,7 @@ async function embeddings(api) {
   const estimate = counts.reduce((a, n) => a + n, 0);
   const btc = await botBtcPrice();
   const bill = await apiBillOpen(api, {
-    tier: "standard", reserveMilli: milliFor(Math.ceil(estimate * API_EMBED_RESERVE_SAFETY), m.usdPerM, btc), l402Partial: true
+    tier: "standard", reserveMilli: milliFor(Math.ceil(estimate * API_EMBED_RESERVE_SAFETY), m.usdPerM, btc), l402Partial: true, refresh: true
   });
   const size = Math.max(1, Math.min(API_EMBED_MAX_INPUTS, Math.floor(Number(m.maxBatch) || API_EMBED_MAX_INPUTS)));
   const vectors = [];

@@ -16,6 +16,13 @@ class Schedule {
     this.lastRunAt,
     this.lastConvId,
     DateTime? createdAt,
+    this.server,
+    this.serverCap = 5,
+    this.serverSha,
+    this.serverExpiresAt = 0,
+    this.serverError,
+    this.serverOff = false,
+    this.serverSeenAt = 0,
   })  : nextAt = nextAt ?? DateTime.now(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -30,6 +37,13 @@ class Schedule {
   DateTime? lastRunAt;
   String? lastConvId;
   final DateTime createdAt;
+  String? server;
+  int serverCap;
+  String? serverSha;
+  int serverExpiresAt;
+  String? serverError;
+  bool serverOff;
+  int serverSeenAt;
 
   bool get due => enabled && !nextAt.isAfter(DateTime.now());
 
@@ -69,6 +83,13 @@ class Schedule {
         'lastRunAt': lastRunAt?.millisecondsSinceEpoch,
         'lastConvId': lastConvId,
         'createdAt': createdAt.millisecondsSinceEpoch,
+        'server': server,
+        'serverCap': serverCap,
+        if (serverSha != null) 'serverSha': serverSha,
+        if (serverExpiresAt > 0) 'serverExpiresAt': serverExpiresAt,
+        if (serverError != null) 'serverError': serverError,
+        if (serverOff) 'serverOff': true,
+        if (serverSeenAt > 0) 'serverSeenAt': serverSeenAt,
       };
 
   static Schedule fromJson(Map<String, dynamic> j) => Schedule(
@@ -91,6 +112,18 @@ class Schedule {
         lastConvId: j['lastConvId'] as String?,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
+        server: j['server'] == 'notify' || j['server'] == 'run'
+            ? j['server'] as String
+            : null,
+        serverCap: j['serverCap'] is num && (j['serverCap'] as num) > 0
+            ? (j['serverCap'] as num).toInt()
+            : 5,
+        serverSha: j['serverSha'] is String ? j['serverSha'] as String : null,
+        serverExpiresAt: (j['serverExpiresAt'] as num?)?.toInt() ?? 0,
+        serverError:
+            j['serverError'] is String ? j['serverError'] as String : null,
+        serverOff: j['serverOff'] == true,
+        serverSeenAt: (j['serverSeenAt'] as num?)?.toInt() ?? 0,
       );
 
   static String encodeList(List<Schedule> list) =>

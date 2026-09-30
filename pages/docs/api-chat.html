@@ -71,15 +71,16 @@
                         <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Send the answer as it is written. See <a href="#streaming">streaming</a>.</td></tr>
                         <tr><td><code>stream_options</code></td><td>object</td><td>No</td><td><code>{"include_usage": true}</code> adds a final chunk with token counts and the cost.</td></tr>
                         <tr><td><code>max_tokens</code><br><code>max_completion_tokens</code></td><td>integer</td><td>No</td><td>The most tokens to write. Lowered to the model's maximum if higher. Also sets how much is held from your balance, so a smaller number needs less credit to start.</td></tr>
-                        <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls.</td></tr>
-                        <tr><td><code>stop</code></td><td>string or array</td><td>No</td><td>Text that ends the answer. Not used by <code>nymbot/auto</code>.</td></tr>
+                        <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls: <code>temperature</code> from 0 to 2, <code>top_p</code> from 0 to 1.</td></tr>
+                        <tr><td><code>stop</code></td><td>string or array</td><td>No</td><td>Text that ends the answer: a string or at most 4 strings, each at most 256 characters. Not used by <code>nymbot/auto</code>.</td></tr>
                         <tr><td><code>seed</code></td><td>integer</td><td>No</td><td>For repeatable sampling, where the model supports it.</td></tr>
-                        <tr><td><code>presence_penalty</code><br><code>frequency_penalty</code></td><td>number</td><td>No</td><td>Repetition controls.</td></tr>
+                        <tr><td><code>presence_penalty</code><br><code>frequency_penalty</code></td><td>number</td><td>No</td><td>Repetition controls, each from -2 to 2.</td></tr>
                         <tr><td><code>response_format</code></td><td>object</td><td>No</td><td><code>{"type": "json_object"}</code> or <code>{"type": "json_schema", "json_schema": {&hellip;}}</code>, where the model supports it. Not used by <code>nymbot/auto</code>.</td></tr>
                         <tr><td><code>tools</code><br><code>tool_choice</code><br><code>parallel_tool_calls</code></td><td>array, string or object, boolean</td><td>No</td><td>Function calling. See <a href="#tools">tool calls</a>. A <code>web_search</code> tool turns on <a href="#web-search">web search</a>. At most 128 tools and 512 KB of definitions, nested at most 64 levels deep; more is a <code>400</code>.</td></tr>
                         <tr><td><code>reasoning_effort</code><br><code>reasoning</code></td><td>string, object</td><td>No</td><td><code>"minimal"</code>, <code>"low"</code>, <code>"medium"</code> or <code>"high"</code>, or <code>{"effort": "high"}</code>. <code>"none"</code> or <code>{"enabled": false}</code> turns it off. See <a href="#reasoning">reasoning</a>.</td></tr>
                         <tr><td><code>plugins</code></td><td>array</td><td>No</td><td><code>[{"id": "web", "max_results": 5}]</code> always searches the web first. Up to 10 results.</td></tr>
                         <tr><td><code>n</code></td><td>integer</td><td>No</td><td>Only 1. Anything else returns <code>400</code>.</td></tr>
+                        <tr><td><code>logit_bias</code><br><code>user</code><br><code>metadata</code></td><td>object, string, object</td><td>No</td><td>Accepted and not sent on. <code>logit_bias</code> maps at most 300 token ids to numbers from -100 to 100; <code>user</code> is at most 256 characters; <code>metadata</code> holds at most 16 string values, keys up to 64 characters and values up to 512.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -132,7 +133,7 @@
                         <tr><th>Status</th><th>When</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td><code>400</code></td><td>No <code>model</code> or <code>messages</code> (<code>missing_required_parameter</code>); an audio or file part, or pictures for a model that cannot see them (<code>unsupported_content</code>); more than 20 pictures (<code>too_many_images</code>); a picture link that is not public (<code>invalid_image_url</code>); tools on a model that cannot call them (<code>unsupported_tool</code>); <code>n</code> other than 1; a <code>:thinking</code> suffix on a model that cannot reason (<code>model_not_found</code>); or the provider refused the request (<code>upstream_rejected</code>).</td></tr>
+                        <tr><td><code>400</code></td><td>No <code>model</code> or <code>messages</code> (<code>missing_required_parameter</code>); an audio or file part, or pictures for a model that cannot see them (<code>unsupported_content</code>); more than 20 pictures (<code>too_many_images</code>); a sampling parameter of the wrong type or out of range (<code>invalid_value</code>); a picture link that is not public (<code>invalid_image_url</code>); tools on a model that cannot call them (<code>unsupported_tool</code>); <code>n</code> other than 1; a <code>:thinking</code> suffix on a model that cannot reason (<code>model_not_found</code>); or the provider refused the request (<code>upstream_rejected</code>).</td></tr>
                         <tr><td><code>402</code></td><td>The balance the model spends cannot cover the hold.</td></tr>
                         <tr><td><code>403</code></td><td>The worst case does not fit the key's cap (<code>key_limit_reached</code>). Lower <code>max_tokens</code> or raise the cap.</td></tr>
                         <tr><td><code>404</code></td><td>No model by that name (<code>model_not_found</code>).</td></tr>
@@ -191,6 +192,11 @@ console.log(reply.usage.cost);</code></pre>
                 it. Each event is a <code>chat.completion.chunk</code> on a <code>data:</code> line, and the
                 stream ends with <code>data: [DONE]</code>. Reasoning arrives in
                 <code>delta.reasoning_content</code>, the answer in <code>delta.content</code>.</p>
+            <p>Stream anything that may take more than about 100 seconds, such as a long answer, a large
+                <code>max_tokens</code> or a reasoning model. A request that is not streamed sends nothing until
+                the answer is complete, and the network between you and Nymbot may close an idle connection
+                after about 100 seconds; the model still finishes and what it wrote is charged, but the answer
+                is lost. A stream sends keep-alives, so it stays open for as long as the model writes.</p>
             <p class="docs-note-label">Stream</p>
 <pre><code>data: {"id":"chatcmpl-5f1c0a9e27d84b3c","object":"chat.completion.chunk","created":1790726400,"model":"anthropic/claude-sonnet-5","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
 
@@ -209,8 +215,11 @@ data: [DONE]</code></pre>
                 <li>Ask for <code>"stream_options": {"include_usage": true}</code> to get the last chunk above,
                     with an empty <code>choices</code>, the token counts, the cost and the
                     <code>nymbot</code> object.</li>
-                <li>The charge settles after the stream ends. If you close the connection early, you pay for
-                    what was written up to then.</li>
+                <li>The charge settles after the stream ends. If you close the connection early, the model
+                    is not stopped: Nymbot reads the rest of the provider's stream, for up to 25 seconds, to
+                    get its token count, and you pay what the provider reports. Without that count the charge is
+                    estimated from your input and what was written, plus the whole output allowance for a
+                    model that reasons.</li>
                 <li>An error before the first chunk, such as <code>401</code> or <code>402</code>, comes back as
                     ordinary JSON with its status code, not as a stream. An error after the stream has started
                     arrives as a last <code>data: {"error": {&hellip;}}</code> event, and the stream ends without
@@ -374,7 +383,10 @@ console.log(final.choices[0].message.content);</code></pre>
             <h2 id="vision">Pictures in a request</h2>
             <p>Models with <code>capabilities.vision</code> can read pictures. Add an <code>image_url</code>
                 part to a user message, with either a public <code>https://</code> link or a
-                <code>data:image/&hellip;;base64,</code> URL. Up to 20 pictures per request.</p>
+                <code>data:image/&hellip;;base64,</code> URL. Up to 20 pictures per request. SVG pictures are
+                refused, and so is a link over 4,096 characters or one with a user name or password in it
+                (<code>400</code> <code>invalid_image_url</code>). An optional <code>detail</code> is
+                <code>auto</code>, <code>low</code> or <code>high</code>.</p>
             <p>With <code>nymbot/auto</code>, a request with a picture in it is routed to a standard model that
                 can see. A catalog model without <code>capabilities.vision</code> refuses pictures with
                 <code>400</code> <code>unsupported_content</code>. Pictures can only be in user messages. A
@@ -505,7 +517,8 @@ console.log(reply.choices[0].message.content);</code></pre>
             </div>
             <p>Any other suffix is ignored. The whole name is tried first, so a model whose id really contains a
                 colon still works; failing that, suffixes are taken off the end one at a time until a model
-                matches.</p>
+                matches. A model name may be at most 200 characters long with at most 4 suffixes; a longer
+                one is refused with <code>400</code> <code>invalid_value</code>.</p>
             <p class="docs-note-label" data-i18n-skip>cURL</p>
 <pre><code>curl https://nymbot.ai/api/v1/chat/completions \
   -H "Authorization: Bearer $NYMBOT_API_KEY" \
@@ -537,8 +550,8 @@ const reply = await client.chat.completions.create({
 console.log(reply.choices[0].message.content);</code></pre>
 
             <h2 id="web-search">Web search</h2>
-            <p>Any chat model can answer from the live web. Nymbot searches for the last user message, reads
-                the best pages and gives them to the model with the question, marked as outside content the
+            <p>Any chat model can answer from the live web. Nymbot searches for the last user message (its
+                first 2,000 characters), reads the best pages and gives them to the model with the question, marked as outside content the
                 model should not take instructions from. There are two modes:</p>
             <ul>
                 <li><strong>Always search</strong>: <code>"plugins": [{"id": "web", "max_results": 5}]</code>,
@@ -552,8 +565,9 @@ console.log(reply.choices[0].message.content);</code></pre>
             <p><code>max_results</code> is 5 by default and at most 10. The sources come back in
                 <code>nymbot.web_search.sources</code>, each with a <code>title</code>, <code>snippet</code> and
                 <code>url</code>, and as <code>url_citation</code> annotations on the message.</p>
-            <p>There is no search fee. The pages it read are input tokens, so an answer from the web costs more
-                than the same question asked cold, sometimes several times more.</p>
+            <p>Each search that runs costs $0.008, converted to sats, on top of the tokens, and it is part of
+                the hold. The pages it read are input tokens too, so an answer from the web costs more than the
+                same question asked cold, sometimes several times more.</p>
             <p class="docs-note-label">Response, in part</p>
 <pre><code>"nymbot": {
   "balance": "pro",
@@ -621,7 +635,7 @@ for (const source of reply.nymbot.web_search.sources) console.log(source.url);</
                         <tr><td><code>tools</code><br><code>tool_choice</code><br><code>parallel_tool_calls</code></td><td>array, string or object, boolean</td><td>No</td><td>Function tools, in the Responses shape (<code>{"type": "function", "name": &hellip;, "parameters": &hellip;}</code>). A <code>web_search</code> or <code>web_search_preview</code> tool turns on <a href="#web-search">web search</a> when it helps. Other built-in tools are refused.</td></tr>
                         <tr><td><code>reasoning</code></td><td>object</td><td>No</td><td><code>{"effort": "minimal" | "low" | "medium" | "high"}</code>. <code>xhigh</code> and <code>max</code> mean <code>high</code>; <code>none</code> turns it off.</td></tr>
                         <tr><td><code>text.format</code><br><code>response_format</code></td><td>object</td><td>No</td><td>Structured output, as a JSON schema or <code>json_object</code>.</td></tr>
-                        <tr><td><code>metadata</code></td><td>object</td><td>No</td><td>Returned unchanged in the response.</td></tr>
+                        <tr><td><code>metadata</code></td><td>object</td><td>No</td><td>Returned unchanged in the response. At most 16 string values, keys up to 64 characters and values up to 512.</td></tr>
                         <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Stream events as described below.</td></tr>
                         <tr><td><code>store</code></td><td>boolean</td><td>No</td><td>Ignored. Nothing is stored, and the response always says <code>"store": false</code>.</td></tr>
                         <tr><td><code>previous_response_id</code><br><code>conversation</code><br><code>background</code></td><td>string, object, boolean</td><td>No</td><td>Not supported: <code>400</code> <code>unsupported_parameter</code>. Responses are not stored, so send the whole conversation in <code>input</code> every time.</td></tr>
@@ -756,7 +770,7 @@ console.log(response.output_text);</code></pre>
                         <tr><td><code>messages</code></td><td>array</td><td>Yes</td><td><code>user</code> and <code>assistant</code> turns, with <code>text</code>, <code>image</code> (base64 or URL source), <code>tool_use</code> and <code>tool_result</code> blocks. <code>thinking</code> blocks from earlier turns are accepted and dropped.</td></tr>
                         <tr><td><code>system</code></td><td>string or array</td><td>No</td><td>System prompt, as a string or text blocks.</td></tr>
                         <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls, where the model takes them. <code>top_k</code> is accepted and dropped.</td></tr>
-                        <tr><td><code>stop_sequences</code></td><td>array of strings</td><td>No</td><td>Text that ends the answer.</td></tr>
+                        <tr><td><code>stop_sequences</code></td><td>array of strings</td><td>No</td><td>Text that ends the answer. At most 4 strings, each at most 256 characters.</td></tr>
                         <tr><td><code>tools</code><br><code>tool_choice</code></td><td>array, object</td><td>No</td><td>Tools with <code>name</code>, <code>description</code> and <code>input_schema</code>. A <code>web_search</code> server tool turns on <a href="#web-search">web search</a>; Anthropic's other built-in tools (bash, text editor, computer use) are refused with <code>unsupported_tool</code>. <code>tool_choice</code> takes <code>auto</code>, <code>any</code>, <code>tool</code> or <code>none</code>, and <code>disable_parallel_tool_use</code>.</td></tr>
                         <tr><td><code>thinking</code></td><td>object</td><td>No</td><td><code>{"type": "enabled", "budget_tokens": 8192}</code>, <code>{"type": "adaptive"}</code> or <code>{"type": "disabled"}</code>. The budget picks an effort level: under 2,048 minimal, from 2,048 low, from 8,192 medium, from 16,384 high. Adaptive uses <code>output_config.effort</code>, or high.</td></tr>
                         <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Stream in Anthropic's event format.</td></tr>

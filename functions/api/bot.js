@@ -34,7 +34,6 @@ import {
   creditsGet,
   creditsPut,
   botThreadGet,
-  botThreadPut,
   botThreadDelete,
   botWrapsGet,
   botWrapsPut,
@@ -86,6 +85,9 @@ import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
 import { noteUsage, denied } from "./_usage.js";
 import { liveNotices } from "./_notices.js";
 import { capMaxCost, capMilli, capRefusal, capClampCharge, capGuard, capStoppedReply, capNextUsage } from "./_caps.js";
+import { bgConfigured, bgDriverReady, bgSealReady, bgSeal, bgOpen, bgResumeSeal, bgResumeOpen, bgVerify, bgLegIds, bgSchedIds,
+  bgRequestOf, bgParseGrant, bgPushSend, bgDriver, schedParse, sha256Hex, BG_MAX_MS, BG_KEEP_AFTER_MS, BG_LEG_GAP_MS,
+  SCHED_FAIL_MAX } from "./_background.js";
 import { runResearch, researchEstimate, researchPublicLimits, researchCommand,
   researchWanted, researchStatedMax, researchFloor, RESEARCH_LIMITS, RESEARCH_REPORT_PROMPT } from "./_research.js";
 import { teamParse, teamModeOf, teamEstimate, teamRoomMilli, runTeamResearch, runTeamRepo,
@@ -101,11 +103,17 @@ import { gitCompactConvo, gitReadRange, gitApplyEdits, gitStageEntry, gitStagePu
   gitCommitFiles, gitArchiveUrl, gitFetchArchive, gitCiStatus, GIT_ARCHIVE_DEFAULT_MB,
   gitSafePath, gitNeedsReview, gitBranchNeedsReview, gitRefValid, gitRefNorm, gitSameBranch,
   gitStageNew, gitStageBranch, gitStageRestore, gitReservedKey, gitParsePaths, gitPathInScope, gitDirInScope,
-  gitScopeRefusal, gitScopeListing, gitScopeSnapshot, gitUntrusted } from "./_gitrun.js";
+  gitScopeRefusal, gitScopeListing, gitScopeSnapshot, gitUntrusted,
+  gitWhenDone, gitJobBranchName, gitIsJobBranch, gitJobOn, gitBranchHead, gitBranchCreate,
+  gitPullOpen, gitPullFind, gitPullMerge, gitBranchUpdate, gitBranchDelete, gitBranchCleanup } from "./_gitrun.js";
 import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_runner.js";
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
 import { l402RefundToken, l402RefundPeek, l402RefundRedeem } from "./_l402refund.js";
+import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runBatched, runRepoLockKey, runLockTake, runLockBeat, runLockDrop,
+  runTurnsRecent, runTurnsThread, runTurnsCopy, runTurnAdd, runSummaryGet, runSummaryPut, runWrapsPrune, runResultPut, runResultGet, runResultDrop, runGet, runByResume, runCountLive, runStart, runContinue,
+  runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runForget, runSweep,
+  RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS, RUN_STEER_CHARS, RUN_ROW_KEEP_MS, RUN_RESULT_KEEP_MS } from "./_runs.js";
 import { apnsSendReply } from "./_apns.js";
 import { webPushSendReply, webPushToken, webPushPublicKey, webPushConfigured } from "./_webpush.js";
 
@@ -1856,7 +1864,7 @@ function botRunnerBalanceOf(env, pubkey) {
   };
 }
 
-function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, progress, keepTurn) {
+function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, progress, keepTurn, autoRun) {
   var env = context.env;
   return {
     build: function (repos) {
@@ -1864,7 +1872,7 @@ function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, prog
       var tool = serverRunTool({
         env: env, context: context, pubkey: pubkey, settings: settings, repos: repos,
         btcUsd: btcUsd, margin: runnerMargin(env, settings), milliForUsd: botRunnerMilliForUsd,
-        capGuard: capGuardRef, progress: progress, keepTurn: keepTurn,
+        capGuard: capGuardRef, progress: progress, keepTurn: keepTurn, autoRun: autoRun === true,
         rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS,
         balanceOf: botRunnerBalanceOf(env, pubkey),
         pickRepo: function (name) { return gitPickRepo(repos, name); },
@@ -2599,6 +2607,7 @@ function proStreamSpent(err, body) {
   if (!got) return err;
   var u = got.usage ? proCallUsage({ usage: got.usage }) : null;
   var streamedOut = Math.ceil((Number(got.chars) || 0) / 4);
+  if (!got.complete && err && typeof err === "object") err.usageEstimated = true;
   if (!u && !streamedOut) return err;
   u = botUsageAdd(botUsageZero(), u);
   if (!(u.fresh || u.read || u.wrote)) {
@@ -2819,6 +2828,9 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
     } catch (e) {
       if (e && e.streamEmpty) throw e;
       var boundErr = new Error("Pro model request failed: " + String((e && e.message) || e).slice(0, 300));
+      if (e && typeof e === "object") {
+        ["clientGone", "holdLost", "usageEstimated"].forEach(function (k) { if (e[k]) boundErr[k] = e[k]; });
+      }
       throw proUsageCarry(boundErr, e && e.usage);
     }
     return proCheckedMessage(bound);
@@ -3303,6 +3315,9 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
   var usage = botUsageZero();
   var guard = opts && opts.capGuard ? opts.capGuard : null;
   var capStopped = false;
+  var effortStopped = opts && typeof opts.stopped === "function" ? opts.stopped : function () { return false; };
+  var effortChat = opts && typeof opts.chat === "function" ? opts.chat : proGatewayChat;
+  if (effort >= 2 && effortStopped()) effort = 1;
   if (effort >= 2 && guard && !guard.room(usage, 2)) {
     effort = 1;
     capStopped = true;
@@ -3324,7 +3339,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "planning" });
     var planFrom = Date.now();
-    var planned = await proGatewayChat(env, proModel,
+    var planned = await effortChat(env, proModel,
       convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
       BOT_EFFORT_PLAN_TOKENS, null, { clock: clock, cacheAt: cacheAt });
     if (clock) clock.since("plan", planFrom);
@@ -3353,6 +3368,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     effort = 2;
     capStopped = true;
   }
+  if (effort >= 3 && effortStopped()) effort = 2;
 
   if (effort >= 3 && reply) {
     calls++;
@@ -3362,7 +3378,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     var checkFrom = Date.now();
     var revised = null;
     try {
-      revised = await proGatewayChat(env, proModel,
+      revised = await effortChat(env, proModel,
         convo.concat([
           { role: "assistant", content: drafted },
           { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
@@ -3457,6 +3473,8 @@ var BOT_GIT_CONTINUE_PROMPT =
   + "tool calls. Do not repeat work already done above — build on it. When you "
   + "run out of budget again, stop with a short note saying what is left.";
 var BOT_GIT_MAX_TOOLS_PER_TURN = 12;
+var BOT_GIT_READ_ONLY_TOOLS = { read_file: true, list_files: true, search_code: true };
+var BOT_TOOL_PARALLEL = 4;
 var BOT_GIT_CALL_MULTIPLIER = 3;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
@@ -3598,7 +3616,8 @@ function parseGitConfig(raw) {
   var branch = typeof raw.branch === "string" && gitRefValid(gitRefNorm(raw.branch.trim())) ? gitRefNorm(raw.branch.trim()) : "";
   var scoped = gitParsePaths(raw.paths);
   return { provider: provider, host: host, token: token, repo: repo, branch: branch, allowWrites: !!raw.allowWrites,
-    approve: !!raw.approve, paths: scoped.paths, pathsSet: scoped.set };
+    approve: !!raw.approve, paths: scoped.paths, pathsSet: scoped.set,
+    jobBranches: raw.jobBranches === true, whenDone: gitWhenDone(raw.whenDone) };
 }
 
 var BOT_GIT_MAX_REPOS = 4;
@@ -4008,7 +4027,11 @@ async function buildGitContext(repos, options) {
   }
   lines.push("When you finish, summarize what you found or changed, naming files, branches, commits, and " + provider.prLabel + " links" + (all.length > 1 ? ", and which repository each was in." : "."));
   if (writable.length) {
-    lines.push("For multi-file or risky changes, prefer a feature branch (create_branch, then edit_file on it, then open_pull_request). Commit directly to the working branch when the user asks for that or the change is trivial. Use clear, descriptive commit messages.");
+    var jobbed = writable.filter(gitJobOn);
+    if (jobbed.length) lines.push(gitJobGuide(jobbed));
+    if (jobbed.length < writable.length) {
+      lines.push("For multi-file or risky changes, prefer a feature branch (create_branch, then edit_file on it, then open_pull_request). Commit directly to the working branch when the user asks for that or the change is trivial. Use clear, descriptive commit messages.");
+    }
   }
   for (var k = 0; k < trees.length; k++) {
     var tr = trees[k];
@@ -4026,6 +4049,24 @@ async function buildGitContext(repos, options) {
     lines.push(tr.files.join("\n") || "(no files listed — use list_files)");
   }
   return lines.join("\n");
+}
+
+var BOT_GIT_WHEN_DONE_SAID = {
+  pr: "opens a pull request from it into the working branch",
+  merge: "offers the user a merge into the working branch",
+  leave: "leaves the branch for the user to review"
+};
+
+function gitJobGuide(jobbed) {
+  return jobbed.map(function (c) {
+    var name = gitJobBranchName(c.jobId);
+    return "Each task gets its own branch in " + c.repo + ": everything you commit to the working branch '" +
+      c.resolvedBranch + "' goes to '" + name + "' instead, a branch Nymbot creates from the working branch at your first commit, " +
+      "so the working branch itself is not changed and other tasks can run beside this one. Do not create a branch or open a " +
+      GIT_PROVIDERS[c.provider].prLabel + " for this work yourself: when you finish, Nymbot " +
+      (BOT_GIT_WHEN_DONE_SAID[c.whenDone] || BOT_GIT_WHEN_DONE_SAID.pr) +
+      ". Name '" + name + "' in your summary. Use clear, descriptive commit messages.";
+  }).join(" ");
 }
 
 function gitToolGuide(all, explore) {
@@ -4194,7 +4235,106 @@ function gitToolDefs(allowWrites, repos, options) {
 
 function gitRecordNew(cfg, baseSha) {
   return { cfg: cfg, baseSha: baseSha || null, paths: [], branches: [], pulls: [],
-    stage: gitStageNew(), stageMessage: "", stageBranch: null, commits: [] };
+    stage: gitStageNew(), stageMessage: "", stageBranch: null, commits: [],
+    job: gitJobOn(cfg) ? { branch: gitJobBranchName(cfg.jobId), base: "", made: false, sha: null, title: "", info: null } : null };
+}
+
+async function gitJobEnsure(cfg, record) {
+  var job = record.job;
+  if (job.made) return "";
+  var made;
+  try {
+    made = await gitBranchCreate(cfg, gitCallFor(cfg), job.branch, cfg.resolvedBranch);
+  } catch (e) {
+    made = { ok: false, error: String((e && e.message) || e) };
+  }
+  if (!made.ok) return made.error || "the branch could not be created";
+  job.made = true;
+  job.base = cfg.resolvedBranch;
+  job.sha = made.sha || null;
+  cfg.jobState = job;
+  if (record.branches.indexOf(job.branch) === -1) record.branches.push(job.branch);
+  gitJobNote(cfg, job);
+  return "";
+}
+
+function gitJobNote(cfg, job) {
+  if (typeof cfg.jobProgress !== "function" || !job || !job.made) return;
+  try {
+    cfg.jobProgress({ kind: "branch", repo: cfg.repo, branch: job.branch, base: job.base || "", sha: job.sha || "" });
+  } catch (e) { }
+}
+
+function botJobCheckpoint(repos, ended) {
+  var marks = [];
+  (repos || []).forEach(function (cfg) {
+    var job = cfg && cfg.jobState;
+    if (!job || !job.made) return;
+    marks.push({
+      repo: cfg.repo, provider: cfg.provider, host: cfg.host || "", branch: cfg.resolvedBranch || cfg.branch || "",
+      baseSha: null, paths: [], branches: [job.branch], pulls: [], undoable: false,
+      job: { branch: job.branch, base: job.base, sha: job.sha, whenDone: "leave", done: true, ended: ended, pull: null }
+    });
+  });
+  if (!marks.length) return null;
+  if (marks.length > 1) marks[0].also = marks.slice(1);
+  return marks[0];
+}
+
+function gitJobRead(cfg, record, branch) {
+  return record && record.job && record.job.made && branch === cfg.resolvedBranch ? record.job.branch : branch;
+}
+
+async function gitJobFinish(record, final) {
+  var job = record && record.job;
+  if (!job || !job.made) return null;
+  var cfg = record.cfg;
+  var info = { branch: job.branch, base: job.base, sha: job.sha, whenDone: cfg.whenDone, done: !!final, pull: null };
+  if (final && cfg.whenDone === "pr") {
+    var opened;
+    try {
+      opened = await gitPullOpen(cfg, gitCallFor(cfg), {
+        title: job.title || ("Nymbot: " + job.branch),
+        body: "Opened by Nymbot for the task on " + job.branch + ".",
+        head: job.branch,
+        base: job.base
+      });
+    } catch (e) {
+      opened = { ok: false, error: String((e && e.message) || e) };
+    }
+    if (opened.ok) {
+      info.pull = { number: opened.number, url: opened.url };
+    } else {
+      info.whenDone = "leave";
+      info.fallback = opened.unsupported ? "no-api" : "failed";
+    }
+  }
+  job.info = info;
+  return info;
+}
+
+function gitCheckpointFor(rec) {
+  if (!rec.paths.length && !rec.branches.length && !rec.pulls.length) return null;
+  var mark = {
+    repo: rec.cfg.repo,
+    provider: rec.cfg.provider,
+    host: rec.cfg.host || "",
+    branch: rec.cfg.resolvedBranch,
+    baseSha: rec.baseSha,
+    paths: rec.paths.slice(0, 60),
+    branches: rec.branches.slice(0, 10),
+    pulls: rec.pulls.slice(0, 10),
+    undoable: !!rec.baseSha && rec.paths.length > 0
+  };
+  if (rec.job && rec.job.info) mark.job = rec.job.info;
+  return mark;
+}
+
+async function gitJobsFinish(records, final) {
+  for (var k in records) {
+    if (!Object.prototype.hasOwnProperty.call(records, k)) continue;
+    await gitJobFinish(records[k], final);
+  }
 }
 
 function gitArchiveBytes(env) {
@@ -4212,20 +4352,27 @@ function gitSkipPath(p) {
 }
 
 async function gitSnapshotFor(cfg) {
-  if (cfg._snapTried) return cfg._snap || null;
+  if (cfg._snapTried) {
+    if (cfg._snapWait) await cfg._snapWait;
+    return cfg._snap || null;
+  }
   cfg._snapTried = true;
   cfg._snap = null;
   var cap = Number(cfg.archiveBytes) || 0;
   if (cap <= 0 || !cfg.resolvedBranch) return null;
   var url = gitArchiveUrl(cfg, gitApiBase(cfg), cfg.resolvedBranch);
   if (!url) return null;
-  try {
-    var got = await gitFetchArchive(url, gitHeaders(cfg, cfg.provider === "github" ? "application/vnd.github+json" : "*/*"), cap);
-    if (!got.ok) return null;
-    cfg._snap = gitScopeSnapshot(cfg, gitSnapshotFromTar(await gitGunzip(got.bytes)));
-  } catch (e) {
-    cfg._snap = null;
-  }
+  cfg._snapWait = (async function () {
+    try {
+      var got = await gitFetchArchive(url, gitHeaders(cfg, cfg.provider === "github" ? "application/vnd.github+json" : "*/*"), cap);
+      if (!got.ok) return;
+      cfg._snap = gitScopeSnapshot(cfg, gitSnapshotFromTar(await gitGunzip(got.bytes)));
+    } catch (e) {
+      cfg._snap = null;
+    }
+  })();
+  await cfg._snapWait;
+  cfg._snapWait = null;
   return cfg._snap;
 }
 
@@ -4261,7 +4408,7 @@ async function gitReadRaw(cfg, record, branch, path) {
       if (snap.sizes[path] == null && !snap.big[path]) return { missing: true };
     }
   }
-  var raw = String(await GIT_PROVIDERS[cfg.provider].readFile(cfg, branch, path));
+  var raw = String(await GIT_PROVIDERS[cfg.provider].readFile(cfg, gitJobRead(cfg, record, branch), path));
   if (/^Error: HTTP 404/.test(raw)) return { missing: true };
   if (/^Error:/.test(raw)) return { error: raw };
   return { text: raw };
@@ -4281,25 +4428,43 @@ async function gitFlushRecord(cfg, record, onlyBranch, message) {
     var br = branches[i];
     var files = gitStageFiles(record.stage, br);
     var msg = gitCommitMessage(files, message || record.stageMessage);
+    var dest = br;
+    if (record.job && gitSameBranch(br, cfg.resolvedBranch)) {
+      var jobErr = await gitJobEnsure(cfg, record);
+      if (jobErr) {
+        lines.push("Error: creating the branch '" + record.job.branch + "' in " + cfg.repo + " failed: " + jobErr);
+        continue;
+      }
+      dest = record.job.branch;
+    }
     var res;
     try {
-      res = await gitCommitFiles(cfg, gitCallFor(cfg), br, files.map(function (f) {
+      res = await gitCommitFiles(cfg, gitCallFor(cfg), dest, files.map(function (f) {
         return { path: f.path, content: f.content, existed: f.existed };
       }), msg, GIT_PROVIDERS[cfg.provider]);
     } catch (e) {
       res = { ok: false, error: String((e && e.message) || e) };
     }
     if (!res.ok) {
-      lines.push("Error: committing to '" + br + "' in " + cfg.repo + " failed: " + res.error);
+      lines.push("Error: committing to '" + dest + "' in " + cfg.repo + " failed: " + res.error);
       continue;
     }
     var done = res.files || [];
+    if (dest !== br && done.length) {
+      var jobHead = res.sha || null;
+      if (!jobHead) {
+        try { jobHead = await gitBranchHead(cfg, gitCallFor(cfg), dest); } catch (e) { jobHead = null; }
+      }
+      if (jobHead) record.job.sha = jobHead;
+      gitJobNote(cfg, record.job);
+      if (!record.job.title) record.job.title = msg;
+    }
     // Only successful writes are undoable; the checkpoint is where the branch stood before the run.
     for (var d = 0; d < done.length; d++) {
       var entry = gitStageEntry(record.stage, br, done[d]);
       if (br === cfg.resolvedBranch) {
         gitSnapshotSet(cfg, done[d], entry ? entry.content : null);
-        if (record.paths.indexOf(done[d]) === -1) record.paths.push(done[d]);
+        if (dest === br && record.paths.indexOf(done[d]) === -1) record.paths.push(done[d]);
       }
       if (gitStageBranch(record.stage, br)) delete record.stage[br][done[d]];
     }
@@ -4307,11 +4472,11 @@ async function gitFlushRecord(cfg, record, onlyBranch, message) {
       for (var f = 0; f < res.failed.length; f++) {
         if (gitStageBranch(record.stage, br)) delete record.stage[br][res.failed[f]];
       }
-      lines.push("Error: could not commit " + res.failed.join(", ") + " to '" + br + "'.");
+      lines.push("Error: could not commit " + res.failed.join(", ") + " to '" + dest + "'.");
     }
     if (res.sha) record.commits.push(res.sha);
     if (done.length) {
-      lines.push("Committed " + done.length + " file" + (done.length === 1 ? "" : "s") + " to '" + br + "'" +
+      lines.push("Committed " + done.length + " file" + (done.length === 1 ? "" : "s") + " to '" + dest + "'" +
         (res.perFile ? " (one commit per file: this host has no multi-file commit API)" : " as one commit") +
         (res.sha ? " " + String(res.sha).slice(0, 7) : "") + ": " + msg);
     }
@@ -4377,7 +4542,7 @@ async function execGitTool(cfg, name, args, record, scope) {
     if (!gitDirInScope(cfg, dir)) return gitScopeRefusal(cfg, dir);
     var listed = await gitSnapshotFor(cfg);
     if (listed) return gitUntrusted(cfg.repo + " " + (dir || "/"), gitScopeListing(cfg, gitSnapshotList(listed, dir, gitStageBranch(record.stage, branch))));
-    return gitUntrusted(cfg.repo + " " + (dir || "/"), gitScopeListing(cfg, await provider.listDir(cfg, branch, dir)));
+    return gitUntrusted(cfg.repo + " " + (dir || "/"), gitScopeListing(cfg, await provider.listDir(cfg, gitJobRead(cfg, record, branch), dir)));
   }
 
   if (name === "read_file") {
@@ -4422,7 +4587,7 @@ async function execGitTool(cfg, name, args, record, scope) {
     if (cfg.allowWrites && !cfg.approve && gitStageFiles(record.stage, ciRef).length) {
       await gitFlushRecord(cfg, record, ciRef, "");
     }
-    return gitUntrusted(cfg.repo + " CI", await gitCiStatus(cfg, gitCallFor(cfg), ciRef));
+    return gitUntrusted(cfg.repo + " CI", await gitCiStatus(cfg, gitCallFor(cfg), gitJobRead(cfg, record, ciRef)));
   }
 
   if (!cfg.allowWrites) {
@@ -4646,6 +4811,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   var anyWrites = all.some(function (c) { return c.allowWrites; });
   var exploreOn = opts.explore != null ? !!opts.explore : gitExploreAvailable(env);
   var tools = gitToolDefs(anyWrites, all, { explore: exploreOn });
+  if (typeof opts.plan === "function") tools = tools.concat([BOT_PLAN_TOOL]);
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
@@ -4670,27 +4836,12 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       if (parked.review) gitHoldForReview(records[c.repo]);
     }
   }
-  var checkpointFor = function (rec) {
-    if (!rec.paths.length && !rec.branches.length && !rec.pulls.length) return null;
-    return {
-      repo: rec.cfg.repo,
-      provider: rec.cfg.provider,
-      host: rec.cfg.host || "",
-      branch: rec.cfg.resolvedBranch,
-      baseSha: rec.baseSha,
-      paths: rec.paths.slice(0, 60),
-      branches: rec.branches.slice(0, 10),
-      pulls: rec.pulls.slice(0, 10),
-      // Without a base commit there's nothing to read old files from, so no undo is offered.
-      undoable: !!rec.baseSha && rec.paths.length > 0
-    };
-  };
   // The client handles one checkpoint per reply; other touched repositories are listed beside it.
   var checkpointOf = function () {
     var marks = [];
     for (var k in records) {
       if (!Object.prototype.hasOwnProperty.call(records, k)) continue;
-      var mark = checkpointFor(records[k]);
+      var mark = gitCheckpointFor(records[k]);
       if (mark) marks.push(mark);
     }
     if (!marks.length) return null;
@@ -4722,6 +4873,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       }
     }
     if (notes.length) out.reply = String(out.reply || "") + "\n\n" + notes.join("\n").replace(/^Error: /gm, "Note: ");
+    await gitJobsFinish(records, !out.truncated);
     out.checkpoint = checkpointOf();
     if (reviews.length) {
       out.staged = reviews[0];
@@ -4739,7 +4891,14 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   var wantedMore = false;
   var sofar = "";
   var lastUsage = null;
+  var gitChat = typeof opts.chat === "function" ? opts.chat : proGatewayChat;
   while (true) {
+    if (calls > 0 && typeof opts.stopped === "function" && opts.stopped()) {
+      return {
+        reply: "", canceled: true, modelCalls: calls, outputTokens: outputTokens, usage: usage,
+        sideUsage: botUsageBilled(explorer.usage) && explorer.model ? [{ model: explorer.model.model, usage: explorer.usage }] : null
+      };
+    }
     if (calls > 0 && opts.capGuard && !opts.capGuard.room(usage, 1,
       capNextUsage(gitCompactConvo(convo), calls + 1 >= budget ? null : tools, botOutCeiling(proModel), lastUsage))) {
       return await finish({
@@ -4759,8 +4918,14 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     convo = gitCompactConvo(convo);
     var r;
     try {
-      r = await proGatewayChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
+      r = await gitChat(env, proModel, convo, proModel.maxTokens, lastTurn ? null : tools);
     } catch (e) {
+      if (e && e.botStopped) {
+        return {
+          reply: "", canceled: true, modelCalls: calls - 1, outputTokens: outputTokens, usage: usage,
+          sideUsage: botUsageBilled(explorer.usage) && explorer.model ? [{ model: explorer.model.model, usage: explorer.usage }] : null
+        };
+      }
       if (calls < 2 && !priorCalls) {
         if (botUsageBilled(explorer.usage) && explorer.model && e && typeof e === "object") {
           e.sideUsage = [{ model: explorer.model.model, usage: explorer.usage }];
@@ -4812,34 +4977,38 @@ async function runProGitChat(env, proModel, repos, messages, options) {
     wantedMore = true;
     if (proMessageText(msg).trim()) sofar = proMessageText(msg);
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: toolCalls });
-    for (var i = 0; i < toolCalls.length; i++) {
-      var tc = toolCalls[i];
-      var fnName = tc && tc.function && tc.function.name;
+    var toolPlan = toolCalls.map(function (tc) {
       var fnArgs = {};
-      try { fnArgs = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+      try { fnArgs = JSON.parse((tc && tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+      return { tc: tc, fnName: tc && tc.function && tc.function.name, fnArgs: fnArgs };
+    });
+    var toolOut = await runBatched(toolPlan, function (t) {
+      return Object.prototype.hasOwnProperty.call(BOT_GIT_READ_ONLY_TOOLS, t.fnName);
+    }, BOT_TOOL_PARALLEL, async function (t) {
+      var fnName = t.fnName;
+      var fnArgs = t.fnArgs;
       progress({ kind: "tool", tool: String(fnName || ""),
         target: gitToolTarget(fnName, fnArgs, all.length > 1) });
-      var result;
+      if (fnName === "plan_update" && typeof opts.plan === "function") return opts.plan(fnArgs);
       if (fnName === "explore") {
-        result = exploreOn
+        return exploreOn
           ? await gitRunExplore(env, all, records, fnArgs, explorer, progress)
           : "Error: explore is not available here — search and read directly.";
-        convo.push({ role: "tool", tool_call_id: tc && tc.id, content: String(result).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
-        continue;
       }
       var picked = gitPickRepo(all, fnArgs && fnArgs.repo);
       if (!picked) {
-        result = "Error: no repository called '" + String((fnArgs && fnArgs.repo) || "") +
+        return "Error: no repository called '" + String((fnArgs && fnArgs.repo) || "") +
           "' is connected to this chat. Connected: " +
           all.map(function (c) { return c.repo; }).join(", ") + ".";
-      } else {
-        try {
-          result = await execGitTool(picked, fnName, fnArgs, records[picked.repo]);
-        } catch (e) {
-          result = "Error: " + (e.message || String(e));
-        }
       }
-      convo.push({ role: "tool", tool_call_id: tc && tc.id, content: String(result).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
+      try {
+        return await execGitTool(picked, fnName, fnArgs, records[picked.repo]);
+      } catch (e) {
+        return "Error: " + (e.message || String(e));
+      }
+    });
+    for (var i = 0; i < toolPlan.length; i++) {
+      convo.push({ role: "tool", tool_call_id: toolPlan[i].tc && toolPlan[i].tc.id, content: String(toolOut[i]).slice(0, BOT_GIT_MAX_RESULT_CHARS) });
     }
   }
 }
@@ -4864,14 +5033,8 @@ function mcpGitAdapter(all, env, parked, serverRun) {
     var marks = [];
     for (var key in records) {
       if (!Object.prototype.hasOwnProperty.call(records, key)) continue;
-      var rec = records[key];
-      if (!rec.paths.length && !rec.branches.length && !rec.pulls.length) continue;
-      marks.push({
-        repo: rec.cfg.repo, provider: rec.cfg.provider, host: rec.cfg.host || "",
-        branch: rec.cfg.resolvedBranch, baseSha: rec.baseSha,
-        paths: rec.paths.slice(0, 60), branches: rec.branches.slice(0, 10), pulls: rec.pulls.slice(0, 10),
-        undoable: !!rec.baseSha && rec.paths.length > 0
-      });
+      var mark = gitCheckpointFor(records[key]);
+      if (mark) marks.push(mark);
     }
     if (!marks.length) return null;
     if (marks.length > 1) marks[0].also = marks.slice(1);
@@ -4935,6 +5098,7 @@ function mcpGitAdapter(all, env, parked, serverRun) {
         staged = reviews[0];
         if (reviews.length > 1) staged.also = reviews.slice(1);
       }
+      await gitJobsFinish(records, !parkIt);
       return { notes: notes, checkpoint: checkpointOf(), staged: staged, parkedStage: parkedStage };
     }
   };
@@ -5021,10 +5185,110 @@ async function gitApplyStaged(cfg, raw) {
   };
 }
 
+var BOT_BRANCH_NO_PR_API = "This forge has no pull request API Nymbot can use, so the branch stays as it is.";
+
+function gitBranchPull(p) {
+  return p ? { number: p.number, url: p.url } : null;
+}
+
+async function gitBranchEnsurePull(cfg, call, branch, base, number, title) {
+  var found = await gitPullFind(cfg, call, branch, number);
+  if (found && (found.state === "open" || found.state === "merged")) return { ok: true, pull: found };
+  var opened = await gitPullOpen(cfg, call, {
+    title: title || ("Nymbot: " + branch),
+    body: "Opened by Nymbot for the task on " + branch + ".",
+    head: branch,
+    base: base
+  });
+  if (!opened.ok) return { ok: false, unsupported: !!opened.unsupported, error: opened.error };
+  return { ok: true, pull: { number: opened.number, url: opened.url, state: "open" } };
+}
+
+async function gitBranchAction(cfg, body, now) {
+  var call = gitCallFor(cfg);
+  var op = String((body && body.op) || "");
+  try {
+    if (op === "cleanup") {
+      var swept = await gitBranchCleanup(cfg, call, Array.isArray(body.branches) ? body.branches : [], now || Date.now());
+      return { status: 200, body: swept };
+    }
+    var branch = String(body.branch || "");
+    if (!gitIsJobBranch(branch)) return { status: 400, body: { error: "That is not a branch Nymbot made." } };
+    var base = gitRefNorm(String(body.base || "").trim());
+    if (!gitRefValid(base)) return { status: 400, body: { error: "That branch has no target branch recorded." } };
+    var sha = /^[0-9a-f]{40,64}$/i.test(String(body.sha || "")) ? String(body.sha) : null;
+    var number = body.pull && Number(body.pull.number) > 0 ? Math.floor(Number(body.pull.number)) : 0;
+    var title = String(body.title || "").trim().slice(0, 200);
+    if (op === "pr") {
+      var got = await gitBranchEnsurePull(cfg, call, branch, base, number, title);
+      if (!got.ok) {
+        return got.unsupported
+          ? { status: 501, body: { unsupported: true, error: BOT_BRANCH_NO_PR_API } }
+          : { status: 502, body: { error: "The pull request could not be opened (" + got.error + ")." } };
+      }
+      return { status: 200, body: { pull: gitBranchPull(got.pull), merged: got.pull.state === "merged" || undefined } };
+    }
+    if (op === "merge" || op === "update") {
+      var head = await gitBranchHead(cfg, call, branch);
+      if (!head) return { status: 404, body: { gone: true, error: "That branch is gone." } };
+      if (sha && head.toLowerCase() !== sha.toLowerCase()) {
+        return { status: 409, body: { moved: true, sha: head,
+          error: "The branch has new commits since Nymbot made it. Open the pull request to look at them first." } };
+      }
+      if (op === "update") {
+        var up = await gitBranchUpdate(cfg, call, { branch: branch, base: base, number: number });
+        if (up.ok) return { status: 200, body: { updated: true, upToDate: !!up.upToDate || undefined, sha: up.sha || head } };
+        if (up.conflict) {
+          return { status: 409, body: { conflict: true,
+            error: "The branch cannot take in " + base + " without conflicts. Open the pull request to resolve them." } };
+        }
+        if (up.unsupported) {
+          return { status: 501, body: { unsupported: true,
+            error: "This forge cannot bring " + base + " into the branch without rebasing. Open the pull request to update it." } };
+        }
+        return { status: 502, body: { error: "The branch could not be updated (" + up.error + ")." } };
+      }
+      var pr = await gitBranchEnsurePull(cfg, call, branch, base, number, title);
+      if (!pr.ok) {
+        return pr.unsupported
+          ? { status: 501, body: { unsupported: true, error: BOT_BRANCH_NO_PR_API } }
+          : { status: 502, body: { error: "The pull request could not be opened (" + pr.error + ")." } };
+      }
+      if (pr.pull.state === "merged") return { status: 200, body: { merged: true, pull: gitBranchPull(pr.pull) } };
+      var merged = await gitPullMerge(cfg, call, { number: pr.pull.number, sha: head, title: title });
+      if (merged.ok) return { status: 200, body: { merged: true, sha: merged.sha || null, pull: gitBranchPull(pr.pull) } };
+      if (merged.conflict) {
+        return { status: 409, body: { conflict: true, pull: gitBranchPull(pr.pull),
+          error: "These changes conflict with " + base + ". Open the pull request to resolve them, or ask Nymbot to update the branch." } };
+      }
+      if (merged.moved) {
+        return { status: 409, body: { moved: true, pull: gitBranchPull(pr.pull),
+          error: "The branch has new commits since Nymbot made it. Open the pull request to look at them first." } };
+      }
+      if (merged.unsupported) return { status: 501, body: { unsupported: true, error: BOT_BRANCH_NO_PR_API } };
+      return { status: 502, body: { pull: gitBranchPull(pr.pull), error: "The merge failed (" + merged.error + ")." } };
+    }
+    if (op === "delete") {
+      var del = await gitBranchDelete(cfg, call, branch, sha);
+      if (del.ok) return { status: 200, body: { deleted: true, gone: !!del.gone || undefined } };
+      if (del.moved) {
+        return { status: 409, body: { moved: true, sha: del.sha || null,
+          error: "The branch has new commits since Nymbot made it, so it was left alone." } };
+      }
+      if (del.unsupported) return { status: 501, body: { unsupported: true, error: "This forge cannot delete branches through its API." } };
+      if (del.refused) return { status: 400, body: { error: "Only a branch Nymbot made, at the commit it recorded, can be deleted here." } };
+      return { status: 502, body: { error: "The branch could not be deleted (" + del.error + ")." } };
+    }
+  } catch (e) {
+    return { status: 502, body: { error: botFailText("The forge could not be reached.", "git-branch", e) } };
+  }
+  return { status: 400, body: { error: "Unknown branch action." } };
+}
+
 async function runPmConnectors(context, proModel, messages, ghConfig, runOpts) {
   var resume = runOpts.resume && Array.isArray(runOpts.resume.convo) && runOpts.resume.convo.length
     ? runOpts.resume : null;
-  var runtime = await mcpPrepare(runOpts.mcp || [], null, runOpts.progress);
+  var runtime = await mcpPrepare(runOpts.mcp || [], null, runOpts.progress, runOpts.policy);
   var serverRun = ghConfig && runOpts.serverRun ? runOpts.serverRun.build(ghConfig) : null;
   var git = ghConfig ? mcpGitAdapter(ghConfig, context.env, resume ? resume.stage : null, serverRun) : null;
   if (serverRun) serverRun.bind(git);
@@ -5058,14 +5322,23 @@ async function runPmConnectors(context, proModel, messages, ghConfig, runOpts) {
       : (typeof runOpts.mcpApprove === "string" ? runOpts.mcpApprove : ""),
     decline: typeof runOpts.runDecline === "string" ? runOpts.runDecline : "",
     capGuard: runOpts.capGuard || null,
+    stopped: runOpts.run ? runOpts.run.stopped : null,
+    plan: runOpts.run ? botPlanTool(runOpts.run, runOpts.progress) : null,
+    planTool: BOT_PLAN_TOOL,
     outCeiling: botOutCeiling(proModel),
     stalledReply: ghConfig ? gitStalledReply(ghConfig) : null,
     deps: {
-      proGatewayChat: proGatewayChat, proRateLimited: proRateLimited,
+      proGatewayChat: botRunChat(runOpts), proRateLimited: proRateLimited,
       proMessageReasoning: proMessageReasoning, proMessageWithThinking: proMessageWithThinking,
       proMessageText: proMessageText, botUsageZero: botUsageZero, botUsageAdd: botUsageAdd
     }
   });
+  if (out.canceled) {
+    return {
+      reply: "", canceled: true, modelCalls: out.modelCalls, outputTokens: out.outputTokens, usage: out.usage || null,
+      connectors: runtime.servers.length, serverRunMilli: serverRun ? serverRun.chargedMilli() : 0
+    };
+  }
   var park = (out.truncated || out.pendingTool) && out.convo;
   var fin = git ? await git.finish(!!park) : null;
   var said = out.reply;
@@ -5575,6 +5848,474 @@ function botTurnMsgKey(pubkey, msgId) {
   return "pm:" + String(pubkey).toLowerCase() + ":x:" + String(msgId).toLowerCase();
 }
 
+var BOT_RUN_FLUSH_MS = 1500;
+var BOT_RUN_BEAT_MS = 15000;
+var BOT_RUN_CHECK_MS = 1500;
+var BOT_RUN_STEER_MS = 2000;
+var BOT_RUN_LOCAL_MAX = 2000;
+var BOT_REPO_LOCK_WAIT_MS = 30000;
+var BOT_REPO_LOCK_POLL_MS = 2000;
+var BOT_STOPPED_TEXT = "Stopped.";
+var BOT_STEER_PASSED = "I passed that on to the running request.";
+var BOT_STEER_PREFIX = "Update from the user while you were working. Apply it from here on, and keep replying in the format asked for above:\n";
+var BOT_PENDING_TEXT = "Nymbot is still working on that message — ask again in a moment and the reply will be waiting.";
+var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*"?(R\d{1,2})"?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
+var botRunLocal = new Map();
+
+function botRunLocalEntry(pk, asked) {
+  var k = String(pk).toLowerCase() + ":" + String(asked).toLowerCase();
+  var e = botRunLocal.get(k);
+  if (!e) {
+    e = { cancel: false, steer: false };
+    botRunLocal.set(k, e);
+    if (botRunLocal.size > BOT_RUN_LOCAL_MAX) botRunLocal.delete(botRunLocal.keys().next().value);
+  }
+  return e;
+}
+
+function botRunWait(context, p) {
+  if (!p || typeof p.then !== "function") return;
+  var quiet = p.then(function () { }, function () { });
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(quiet);
+  } catch (e) { }
+}
+
+function botRunCipher(botPrivkey, userPubkey) {
+  var key = null;
+  var k = function () {
+    if (!key) key = nip44ConversationKey(botPrivkey, userPubkey);
+    return key;
+  };
+  return {
+    seal: function (text) {
+      var t = String(text || "");
+      if (!t) return "";
+      try { return nip44Encrypt(t, k()); } catch (e) { return ""; }
+    },
+    open: function (text) {
+      if (!text) return "";
+      try { return nip44Decrypt(String(text), k()); } catch (e) { return ""; }
+    }
+  };
+}
+
+function botStopError() {
+  var e = new Error(BOT_STOPPED_TEXT);
+  e.botStopped = true;
+  return e;
+}
+
+function botStoppedResult(e) {
+  var src = e && typeof e === "object" ? e : {};
+  return {
+    reply: BOT_STOPPED_TEXT,
+    canceled: true,
+    usage: src.usage || null,
+    usageParts: src.usageParts || undefined,
+    sideUsage: src.sideUsage || null,
+    modelCalls: Number(src.modelCalls) || 0,
+    outputTokens: 0,
+    team: src.team || undefined,
+    teamMilli: src.teamMilli != null ? src.teamMilli : undefined
+  };
+}
+
+function botRunChat(runOpts) {
+  var ctl = runOpts && runOpts.run;
+  if (!ctl) return proGatewayChat;
+  return async function (env, model, messages, maxTokens, tools, watch) {
+    if (ctl.stopped()) throw botStopError();
+    var sent = await ctl.inject(messages);
+    if (ctl.stopped()) throw botStopError();
+    return proGatewayChat(env, model, sent, maxTokens, tools, watch);
+  };
+}
+
+function botRunPayload(line, plan, branches, legs, bg) {
+  var o = { p: line || "" };
+  if (Array.isArray(plan) && plan.length) o.plan = plan;
+  if (Array.isArray(branches) && branches.length) o.b = branches;
+  if (Array.isArray(legs) && legs.length) o.l = legs.slice(-BOT_BG_LEGS_MAX);
+  if (Number(bg) > 0) o.bg = Number(bg);
+  return JSON.stringify(o);
+}
+
+var BOT_BG_LEGS_MAX = 40;
+var BOT_BG_INTERNAL = { "pm-bgleg": true, "pm-bgend": true, "pm-schedfire": true, "pm-schednotify": true };
+
+function botRunLegIds(raw) {
+  return (Array.isArray(raw) ? raw : []).filter(function (x) { return typeof x === "string" && /^[0-9a-f]{64}$/.test(x); }).slice(-BOT_BG_LEGS_MAX);
+}
+
+function botLegRumor(userPubkey, leg) {
+  var tags = [["x", leg.msgId]];
+  if (leg.threadRoot) tags.push(["nymthread", leg.threadRoot]);
+  return { author: userPubkey, rumor: { kind: 14, content: String(leg.message || ""), tags: tags, pubkey: userPubkey } };
+}
+
+async function botResumePut(env, id, owner, runId, state) {
+  var stored = await bgResumeSeal(env, owner, runId, state);
+  return await ledgerCall(env, { op: "resume-put", id: id, owner: owner, state: stored });
+}
+
+async function botBackgroundStart(env, userPubkey, o) {
+  var pk = String(userPubkey).toLowerCase();
+  var now = Date.now();
+  var until = now + BG_MAX_MS;
+  var envelope = {
+    v: 1, run: o.runId, thread: o.thread || "", req: o.req, resume: o.resume, legs: 1, ids: [],
+    spent: Math.max(0, Number(o.spent) || 0), next: Math.max(0, Number(o.next) || 0),
+    maxLegs: o.grant.maxLegs, maxCredits: o.grant.maxCredits, notify: o.grant.notify || null,
+    until: until, start: now
+  };
+  var blob = await bgSeal(env, pk, o.runId, envelope);
+  if (!blob) return null;
+  var put = await bgDriver(env, pk, {
+    drive: "run-put", runId: o.runId, blob: blob, leg: 2, until: until,
+    at: now + Math.max(BG_LEG_GAP_MS, Number(o.retryAfter) || 0)
+  });
+  if (!put || !put.ok) return null;
+  return { runId: o.runId, until: until };
+}
+
+function botAuthHasPayload(auth) {
+  var tags = auth && Array.isArray(auth.tags) ? auth.tags : [];
+  return tags.some(function (t) { return Array.isArray(t) && t[0] === "payload" && typeof t[1] === "string" && /^[0-9a-f]{64}$/i.test(t[1]); });
+}
+
+function botBgCapText(why, bg) {
+  var what = why === "legs"
+    ? "its limit of " + Number(bg.maxLegs) + " steps"
+    : (why === "time" ? "its 6-hour limit" : "the " + Number(bg.maxCredits) + " credits you allowed it");
+  return "I stopped here: carrying this on in the background reached " + what + ". Everything so far is saved, so carrying it on from the app picks up from exactly this point, and you were only charged for the steps that ran.";
+}
+
+var BOT_BG_PUSH_TEXT = {
+  done: "Your background task is done",
+  approval: "Your background task needs your approval",
+  paused: "Your background task paused",
+  failed: "Your background task could not finish"
+};
+
+function botRunBranches(raw) {
+  return (Array.isArray(raw) ? raw : []).filter(function (b) {
+    return b && gitIsJobBranch(b.branch) && typeof b.repo === "string";
+  }).slice(0, 4).map(function (b) {
+    return { repo: String(b.repo).slice(0, 200), branch: b.branch, base: String(b.base || "").slice(0, 100),
+      sha: /^[0-9a-f]{40,64}$/i.test(String(b.sha || "")) ? String(b.sha) : "" };
+  });
+}
+
+function botRunUnpack(cipher, raw) {
+  var text = cipher.open(raw);
+  if (!text) return { p: "", plan: [], branches: [], legs: [], bg: 0 };
+  try {
+    var o = JSON.parse(text);
+    return { p: typeof o.p === "string" ? o.p : "", plan: Array.isArray(o.plan) ? o.plan : [], branches: botRunBranches(o.b),
+      legs: botRunLegIds(o.l), bg: Number(o.bg) > 0 ? Number(o.bg) : 0 };
+  } catch (e) { return { p: "", plan: [], branches: [], legs: [], bg: 0 }; }
+}
+
+function botRunControl(env, context, pk, cipher) {
+  var db = env.DB_BOT;
+  var timer = null;
+  var ctl = {
+    asked: null, registered: false, line: "", plan: null, st: {}, dirty: false,
+    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, steerAt: 0,
+    notes: [], applied: {}, locks: [], branches: [], legs: [], bg: 0
+  };
+  var local = function () { return ctl.asked ? botRunLocalEntry(pk, ctl.asked) : null; };
+  ctl.payload = function () { return cipher.seal(botRunPayload(ctl.line, ctl.plan, ctl.branches, ctl.legs, ctl.bg)); };
+  ctl.flush = function () {
+    if (!ctl.registered) return null;
+    ctl.dirty = false;
+    ctl.lastWrite = ctl.lastBeat = Date.now();
+    var w = runBeat(db, pk, ctl.asked, ctl.payload(), ctl.lastWrite);
+    if (ctl.locks.length) w = w.then(function () { return runLockBeat(db, pk, ctl.asked); });
+    botRunWait(context, w);
+    return w;
+  };
+  ctl.note = function (step) {
+    if (step && step.kind === "branch") {
+      var got = botRunBranches([step])[0];
+      if (!got) return;
+      ctl.branches = ctl.branches.filter(function (b) { return b.branch !== got.branch; }).concat([got]);
+      ctl.dirty = true;
+      if (ctl.registered) ctl.flush();
+      return;
+    }
+    var planned = botAutoPlan(ctl, step);
+    if (planned) ctl.setPlan(planned);
+    var line = runProgressLine(ctl.st, step);
+    if (line == null || line === ctl.line) return;
+    ctl.line = line;
+    ctl.dirty = true;
+    if (ctl.registered && Date.now() - ctl.lastWrite >= BOT_RUN_FLUSH_MS) ctl.flush();
+  };
+  ctl.setPlan = function (items, quiet) {
+    ctl.plan = items;
+    ctl.planChanged = !quiet;
+    ctl.dirty = true;
+    if (ctl.registered && Date.now() - ctl.lastWrite >= BOT_RUN_FLUSH_MS) ctl.flush();
+  };
+  ctl.refresh = async function () {
+    ctl.lastCheck = Date.now();
+    var loc = local();
+    if (loc && loc.cancel) ctl.cancel = true;
+    if (ctl.cancel || !ctl.asked) return ctl.cancel;
+    if (await runCanceled(db, pk, ctl.asked)) ctl.cancel = true;
+    return ctl.cancel;
+  };
+  ctl.stopped = function () {
+    if (ctl.cancel) return true;
+    var loc = local();
+    if (loc && loc.cancel) {
+      ctl.cancel = true;
+      return true;
+    }
+    if (ctl.asked && Date.now() - ctl.lastCheck >= BOT_RUN_CHECK_MS) botRunWait(context, ctl.refresh());
+    return false;
+  };
+  ctl.inject = async function (messages) {
+    if (!ctl.asked || !Array.isArray(messages)) return messages;
+    var loc = local();
+    if ((loc && loc.steer) || Date.now() - ctl.steerAt >= BOT_RUN_STEER_MS) {
+      if (loc) loc.steer = false;
+      ctl.steerAt = Date.now();
+      var rows = await runSteerList(db, pk, ctl.asked);
+      var fresh = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (ctl.applied[r.id]) continue;
+        ctl.applied[r.id] = true;
+        var text = cipher.open(r.text);
+        if (!text) continue;
+        ctl.notes.push(text);
+        if (!Number(r.applied_at)) fresh.push(r.id);
+      }
+      if (fresh.length) {
+        await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
+        ctl.note({ kind: "steer" });
+      }
+    }
+    if (!ctl.notes.length) return messages;
+    return messages.concat([{ role: "user", content: BOT_STEER_PREFIX + ctl.notes.map(function (n) { return "- " + n; }).join("\n") }]);
+  };
+  ctl.start = function () {
+    if (timer) return;
+    timer = setInterval(function () {
+      if (ctl.dirty || Date.now() - ctl.lastBeat >= BOT_RUN_BEAT_MS) ctl.flush();
+    }, BOT_RUN_FLUSH_MS);
+  };
+  ctl.stop = function () {
+    if (timer) clearInterval(timer);
+    timer = null;
+  };
+  ctl.closePlan = function (done) {
+    if (done && ctl.autoPlan && Array.isArray(ctl.plan)) {
+      ctl.plan = ctl.plan.map(function (it) { return { text: it.text, state: it.state === "skipped" ? "skipped" : "done" }; });
+    }
+    return ctl.plan;
+  };
+  ctl.finish = async function (state, resume) {
+    ctl.stop();
+    ctl.closePlan(state === "done");
+    if (!ctl.registered) return;
+    ctl.registered = false;
+    await runEnd(db, pk, ctl.asked, state, resume, ctl.payload(), Date.now());
+    if (ctl.locks.length && state !== "parked" && state !== "waiting") {
+      ctl.locks = [];
+      await runLockDrop(db, pk, null, ctl.asked);
+    }
+  };
+  return ctl;
+}
+
+var BOT_PLAN_TOOL = {
+  type: "function",
+  function: {
+    name: "plan_update",
+    description: "Keep a short checklist of the steps of this task so the user can follow along while you work. Send the whole list each time it changes, marking each item planned, doing, done or skipped. Use it for tasks with several steps; it does nothing else.",
+    parameters: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array", maxItems: 20,
+          items: {
+            type: "object",
+            properties: {
+              text: { type: "string", description: "The step, in a few words (at most 120 characters)." },
+              state: { type: "string", enum: ["planned", "doing", "done", "skipped"] }
+            },
+            required: ["text", "state"]
+          }
+        }
+      },
+      required: ["items"]
+    }
+  }
+};
+var BOT_PLAN_STATES = { planned: true, doing: true, done: true, skipped: true };
+
+function botPlanItems(raw) {
+  var list = Array.isArray(raw) ? raw : [];
+  var out = [];
+  for (var i = 0; i < list.length && out.length < 20; i++) {
+    var it = list[i];
+    if (!it || typeof it !== "object") continue;
+    var text = String(it.text || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    if (text.length > 120) text = text.slice(0, 119) + "\u2026";
+    out.push({ text: text, state: Object.prototype.hasOwnProperty.call(BOT_PLAN_STATES, it.state) ? it.state : "planned" });
+  }
+  return out;
+}
+
+function botPlanTool(ctl, progress) {
+  return function (args) {
+    var items = botPlanItems(args && args.items);
+    if (!items.length) return "Error: the plan needs at least one item with text.";
+    ctl.setPlan(items, true);
+    if (typeof progress === "function") progress({ kind: "plan", items: items });
+    return "Plan updated.";
+  };
+}
+
+function botRunPolicy(raw) {
+  var p = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return {
+    readOnlyTools: p.readOnlyTools === "allow" ? "allow" : "ask",
+    serverRuns: p.serverRuns === "allow" ? "allow" : "ask"
+  };
+}
+
+function botAutoPlan(ctl, step) {
+  var s = step || {};
+  var cur = Array.isArray(ctl.plan) ? ctl.plan.map(function (it) { return { text: it.text, state: it.state }; }) : null;
+  if (s.kind === "research" && s.stage === "planned" && Array.isArray(s.questions) && s.questions.length) {
+    ctl.autoPlan = true;
+    return botPlanItems(s.questions.map(function (q) { return { text: q, state: "doing" }; })
+      .concat([{ text: "Write the report", state: "planned" }]));
+  }
+  if (s.kind === "research" && s.stage === "write" && ctl.autoPlan && cur) {
+    return cur.map(function (it, i) { return { text: it.text, state: i === cur.length - 1 ? "doing" : "done" }; });
+  }
+  if (s.kind === "team") {
+    var lane = Math.floor(Number(s.lane) || 0);
+    if (lane > 0 && s.stage === "assigned") {
+      ctl.autoPlan = true;
+      ctl.lanes = ctl.lanes || {};
+      var items = cur && ctl.autoPlan ? cur.filter(function (it) { return it.text !== "Review and write up"; }) : [];
+      ctl.lanes[lane] = items.length;
+      items.push({ text: String(s.text || ("Worker " + lane)), state: "planned" });
+      items.push({ text: "Review and write up", state: "planned" });
+      return botPlanItems(items);
+    }
+    if (!cur || !ctl.autoPlan) return null;
+    var map = { start: "doing", rework: "doing", done: "done", failed: "skipped", stopped: "done" };
+    if (lane > 0 && ctl.lanes && ctl.lanes[lane] != null && map[s.stage]) {
+      cur[ctl.lanes[lane]].state = map[s.stage];
+      return cur;
+    }
+    if (lane === 0 && (s.stage === "write" || s.stage === "review")) {
+      cur[cur.length - 1].state = "doing";
+      return cur;
+    }
+  }
+  return null;
+}
+
+var BOT_COMPACT_KEEP_ROWS = 20;
+var BOT_COMPACT_MIN_ROWS = 4;
+var BOT_COMPACT_MODEL = BOT_MODEL_DEFAULT;
+var BOT_COMPACT_INPUT_CHARS = 16000;
+var BOT_COMPACT_SUMMARY_CHARS = 3000;
+var BOT_COMPACT_PROMPT = "You condense a conversation between a user and Nymbot, an AI assistant, so it can continue later without the full history. " +
+  "Write a compact summary in the conversation's language: the user's goals, facts they stated about themselves or their work, decisions made, open questions, and anything Nymbot promised. " +
+  "Keep names, numbers and specifics. No preamble. If an earlier summary is given, fold the new messages into it and return one updated summary. At most 2500 characters.";
+
+async function botCompact(env, prior, lines) {
+  var body = (prior ? "EARLIER SUMMARY:\n" + prior + "\n\n" : "") + "MESSAGES TO FOLD IN:\n" + lines.join("\n");
+  var res = await aiRun(env.AI, BOT_COMPACT_MODEL, {
+    messages: [{ role: "system", content: BOT_COMPACT_PROMPT }, { role: "user", content: truncateText(body, BOT_COMPACT_INPUT_CHARS) }],
+    max_tokens: 900
+  });
+  var text = res && res.response ? sanitizeBotResponse(String(res.response), false).trim() : "";
+  return { text: truncateText(text, BOT_COMPACT_SUMMARY_CHARS), usage: proCallUsage(res), model: BOT_COMPACT_MODEL };
+}
+
+function botRunAge(ms) {
+  var min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  var h = Math.round(min / 60);
+  return h + (h === 1 ? " hour ago" : " hours ago");
+}
+
+async function botRunOthers(db, pk, thread, exclude, cipher) {
+  var rows = await runLive(db, pk, thread, exclude, Date.now(), 8);
+  var now = Date.now();
+  return rows.map(function (r, i) {
+    var got = botRunUnpack(cipher, r.progress);
+    return {
+      handle: "R" + (i + 1),
+      asked: r.asked,
+      kind: r.kind || "chat",
+      state: r.state,
+      label: runLabel(cipher.open(r.label)),
+      progress: got.p,
+      plan: got.plan,
+      age: botRunAge(now - (Number(r.started_at) || now))
+    };
+  });
+}
+
+function botRunOthersBlock(others) {
+  var lines = others.map(function (o) {
+    var bits = [o.kind + ", started " + o.age];
+    var now = o.state === "waiting" ? "waiting for the user's approval" : (o.state === "parked" ? "paused, carries on next" : o.progress);
+    var plan = Array.isArray(o.plan) && o.plan.length
+      ? "; plan: " + o.plan.filter(function (p) { return p && p.state === "done"; }).length + " of " + o.plan.length + " steps done"
+      : "";
+    return "[" + o.handle + "] (" + bits.join("") + ") \"" + String(o.label || "").replace(/"/g, "'") + "\"" +
+      (now ? " — now: " + now : "") + plan;
+  });
+  return "OTHER REQUESTS STILL RUNNING IN THIS CHAT: the user sent these earlier and they are still being worked on separately; their answers will arrive on their own.\n" +
+    lines.join("\n") +
+    "\nDo not redo or repeat these requests in this reply. If the user asks about them, say they are still in progress; you may report the progress shown here, but never invent their results." +
+    "\nTo pass the user's instruction to one of them (for example \"for that research, also cover X\"), write on its own line <steer_run id=\"R1\">the instruction</steer_run> using its id from the list, and tell the user briefly that you passed it on. Only do this when the message is clearly meant for that running request; if it is unclear which one, ask. The line is removed before the user sees your reply.";
+}
+
+function botSteerTags(text) {
+  var out = [];
+  var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
+  var m;
+  while ((m = re.exec(String(text || ""))) && out.length < 3) {
+    var said = String(m[2] || "").trim();
+    if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+  }
+  var rest = String(text || "").replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "")
+    .replace(/\n{3,}/g, "\n\n").trim();
+  return { steers: out, text: rest };
+}
+
+async function botEarlyClaim(env, pk, eventId, json) {
+  var key = botTurnKey(pk, eventId);
+  var p = null;
+  try { p = await ledgerCall(env, { op: "turn-poll", key: key }); } catch (e) { p = null; }
+  if (p && p.state === "done" && p.result && p.result.body) return json(p.result.body, p.result.status || 200);
+  if (p && p.state === "running") {
+    var waited = await botTurnWait(env, key);
+    if (waited.result) return json(waited.result.body, waited.result.status);
+    if (waited.pending) return json({ pending: true, message: BOT_PENDING_TEXT }, 202);
+    return null;
+  }
+  var stored = await runResultGet(env.DB_BOT, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
+  if (stored && stored.body) return json(stored.body, stored.status || 200);
+  return null;
+}
+
 var BOT_DRAFT_EVERY_MS = 450;
 var BOT_DRAFT_MAX_CHARS = 32000;
 var BOT_HISTORY_SUPPLIED_MAX = 8;
@@ -5613,6 +6354,8 @@ function botDraftText(raw) {
   if (typeof text !== "string") return "";
   var open = new RegExp(BOT_FOLLOW_UP_OPEN, "i").exec(text);
   if (open) text = text.slice(0, open.index);
+  var steerAt = text.search(/<steer_run\b/i);
+  if (steerAt !== -1) text = text.slice(0, steerAt);
   text = text.replace(/(?:\\?<|&lt;)[ \t]*\/?[A-Za-z_-]{0,12}$/, "");
   text = text.trim();
   if (text.length > BOT_DRAFT_MAX_CHARS) text = text.slice(0, BOT_DRAFT_MAX_CHARS);
@@ -5725,7 +6468,38 @@ function suppliedHistoryWraps(body, wantIds) {
   return out;
 }
 
-async function botReadSse(body, onData) {
+var BOT_STREAM_TIMING = { drainMs: 25000 };
+
+function botReadBefore(reader, until) {
+  var wait = until - Date.now();
+  if (wait <= 0) return Promise.resolve(null);
+  var timer = null;
+  var late = new Promise(function (resolve) { timer = setTimeout(function () { resolve(null); }, wait); });
+  return Promise.race([reader.read(), late]).finally(function () { clearTimeout(timer); });
+}
+
+function botStreamWatch(onText, onDelta) {
+  var w = { gone: null, until: 0 };
+  var guard = function (fn) {
+    if (!fn) return null;
+    return function (a, b) {
+      if (w.gone) return;
+      try {
+        fn(a, b);
+      } catch (e) {
+        if (!e || !e.clientGone) throw e;
+        w.gone = e;
+        w.until = Date.now() + Math.max(1, Number(BOT_STREAM_TIMING.drainMs) || 0);
+      }
+    };
+  };
+  w.onText = guard(onText);
+  w.onDelta = guard(onDelta);
+  w.deadline = function () { return w.until; };
+  return w;
+}
+
+async function botReadSse(body, onData, deadline) {
   var reader = body.getReader();
   var dec = new TextDecoder();
   var buf = "";
@@ -5740,9 +6514,16 @@ async function botReadSse(body, onData) {
     try { obj = JSON.parse(data); } catch (e) { return; }
     onData(obj, event);
   };
+  var finished = true;
   try {
     while (true) {
-      var chunk = await reader.read();
+      var until = deadline ? deadline() : 0;
+      var chunk = until ? await botReadBefore(reader, until) : await reader.read();
+      if (!chunk) {
+        finished = false;
+        try { reader.cancel(); } catch (x) { }
+        break;
+      }
       if (chunk.done) break;
       buf += typeof chunk.value === "string" ? chunk.value : dec.decode(chunk.value, { stream: true });
       var nl;
@@ -5753,13 +6534,14 @@ async function botReadSse(body, onData) {
       }
     }
     buf += dec.decode();
-    if (buf) handle(buf.replace(/\r$/, ""));
+    if (buf && finished) handle(buf.replace(/\r$/, ""));
   } catch (e) {
-    if (e && e.clientGone) {
+    if (e && (e.clientGone || e.abortUpstream)) {
       try { reader.cancel(); } catch (x) { }
     }
     throw e;
   }
+  return finished;
 }
 
 function botIsStream(x) {
@@ -5775,9 +6557,9 @@ function botStreamError(obj) {
   return err;
 }
 
-function botStreamCut(err, chars, usage) {
+function botStreamCut(err, chars, usage, complete) {
   if (!err || typeof err !== "object") err = new Error("Pro model request failed: " + String(err));
-  err.streamed = { chars: chars, usage: usage && typeof usage === "object" && Object.keys(usage).length ? usage : null };
+  err.streamed = { chars: chars, usage: usage && typeof usage === "object" && Object.keys(usage).length ? usage : null, complete: complete === true };
   return err;
 }
 
@@ -5786,8 +6568,12 @@ async function botCollectChatStream(body, onText, onDelta) {
   var reasoning = "";
   var usage = null;
   var failure = null;
+  var watch = botStreamWatch(onText, onDelta);
+  onText = watch.onText;
+  onDelta = watch.onDelta;
+  var finished = false;
   try {
-    await botReadSse(body, function (obj) {
+    finished = await botReadSse(body, function (obj) {
       if (failure) return;
       failure = botStreamError(obj);
       if (failure) return;
@@ -5809,11 +6595,12 @@ async function botCollectChatStream(body, onText, onDelta) {
         if (onText) onText(text);
         if (onDelta) onDelta("text", piece);
       }
-    });
+    }, watch.deadline);
   } catch (e) {
     throw botStreamCut(e, text.length + reasoning.length, usage);
   }
   if (failure) throw botStreamCut(failure, text.length + reasoning.length, usage);
+  if (watch.gone) throw botStreamCut(watch.gone, text.length + reasoning.length, usage, finished && !!usage);
   return { text: text, reasoning: reasoning, usage: usage };
 }
 
@@ -5824,6 +6611,10 @@ async function botCollectAnthropicStream(body, onText, onDelta) {
   var stop = null;
   var model = "";
   var failure = null;
+  var watch = botStreamWatch(onText, onDelta);
+  onText = watch.onText;
+  onDelta = watch.onDelta;
+  var finished = false;
   var reading = botReadSse(body, function (obj, event) {
     if (failure) return;
     var type = obj.type || event;
@@ -5848,13 +6639,14 @@ async function botCollectAnthropicStream(body, onText, onDelta) {
       if (obj.delta && obj.delta.stop_reason) stop = obj.delta.stop_reason;
       if (obj.usage) Object.assign(usage, obj.usage);
     }
-  });
+  }, watch.deadline);
   try {
-    await reading;
+    finished = await reading;
   } catch (e) {
     throw botStreamCut(e, text.length + thinking.length, usage);
   }
   if (failure) throw botStreamCut(failure, text.length + thinking.length, usage);
+  if (watch.gone) throw botStreamCut(watch.gone, text.length + thinking.length, usage, finished && stop != null);
   var content = [];
   if (thinking) content.push({ type: "thinking", thinking: thinking });
   content.push({ type: "text", text: text });
@@ -5879,6 +6671,9 @@ async function botTurnFinish(env, key, body, status, context) {
 
 function botTurnNotify(context, env, r) {
   if (!r || !r.notify) return;
+  var notice = context && context._botRunNotice;
+  if (notice && notice.state === "background") return;
+  if (notice && notice.asked) r.notify = Object.assign({}, r.notify, { asked: notice.asked, state: notice.state });
   var work = (r.notify.env === "web" ? webPushSendReply(env, r.notify) : apnsSendReply(env, r.notify))
     .then(function () { }, function () { });
   if (context && typeof context.waitUntil === "function") {
@@ -5956,12 +6751,6 @@ var BOT_THREAD_MAX = 40;
 async function botGetThread(env, pubkey) {
   var ids = await botThreadGet(env.DB_BOT, pubkey);
   return ids.filter(isHex64);
-}
-async function botPutThread(env, pubkey, ids) {
-  var trimmed = ids.filter(isHex64);
-  if (trimmed.length > BOT_THREAD_MAX) trimmed = trimmed.slice(-BOT_THREAD_MAX);
-  await botThreadPut(env.DB_BOT, pubkey, trimmed);
-  return trimmed;
 }
 
 function suppliedWraps(body) {
@@ -6058,6 +6847,7 @@ function maybeSweepBotWraps(context, env) {
   if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
   botWrapSweepLastMs = now;
   var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
+    .then(function () { return runSweep(env.DB_BOT, now, BOT_WRAP_SWEEP_MAX); })
     .catch(function () { return 0; });
   try {
     if (context && typeof context.waitUntil === "function") context.waitUntil(work);
@@ -6209,7 +6999,7 @@ async function botResearchTurn(env, proModel, question, history, runOpts) {
   var budget = runOpts.researchBudget || null;
   var result = await runResearch({
     chat: async function (messages, maxTokens) {
-      var r = await proGatewayChat(env, proModel, messages, maxTokens, null, botReportWatch(runOpts, messages, null));
+      var r = await botRunChat(runOpts)(env, proModel, messages, maxTokens, null, botReportWatch(runOpts, messages, null));
       return { text: proMessageText(r.msg), usage: r.usage, outputTokens: r.outputTokens };
     },
     search: function (query, kind) { return botResearchSearch(env, query, kind); },
@@ -6259,7 +7049,7 @@ function botReportWatch(runOpts, messages, tools) {
 
 function botTeamChat(env, runOpts) {
   return async function (model, messages, maxTokens, tools) {
-    var r = await proGatewayChat(env, model, messages, maxTokens, tools || null, botReportWatch(runOpts, messages, tools));
+    var r = await botRunChat(runOpts)(env, model, messages, maxTokens, tools || null, botReportWatch(runOpts, messages, tools));
     return { text: proMessageText(r.msg), msg: r.msg, usage: r.usage, outputTokens: r.outputTokens };
   };
 }
@@ -6286,7 +7076,7 @@ async function botTeamLeadTools(runOpts, serverRun) {
   var team = runOpts.team;
   if (!team || !team.leadTools) return { lead: null, runtime: null };
   var servers = Array.isArray(runOpts.mcp) ? runOpts.mcp.map(function (s) { return Object.assign({}, s, { autoAllow: null }); }) : [];
-  var runtime = servers.length ? await mcpPrepare(servers, null, runOpts.progress) : null;
+  var runtime = servers.length ? await mcpPrepare(servers, null, runOpts.progress, runOpts.policy) : null;
   var tools = [];
   if (serverRun) tools.push(serverRun.tool);
   if (runtime) tools = tools.concat(runtime.tools);
@@ -6561,6 +7351,9 @@ async function botRefundAction(env, body, userPubkey, json) {
       } });
     }
   } else {
+    if (await denied(env, userPubkey)) {
+      return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
+    }
     res = await l402RefundRedeem(env, userPubkey, body.code, "standard", BOT_SATS_PER_CREDIT);
     if (res && res.ok) {
       return json({ ok: true, credited: res.credited, tier: res.tier, balance: res.balance, refund: true, remainingSats: res.remainingSats });
@@ -6690,6 +7483,12 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // Which replies another model wrote; empty in single-model chats.
   var voicesBlock = modelVoicesBlock(keptTurns, nowVoice);
   if (voicesBlock) messages.push({ role: "system", content: voicesBlock });
+  if (Array.isArray(runOpts.others) && runOpts.others.length) {
+    messages.push({ role: "system", content: botRunOthersBlock(runOpts.others) });
+  }
+  if (typeof runOpts.summary === "string" && runOpts.summary && !freshOnly) {
+    messages.splice(1, 0, { role: "system", content: "EARLIER IN THIS CHAT (a summary of older messages that no longer fit; the full recent messages follow):\n" + runOpts.summary });
+  }
 
   var pmSearchResults = [];
   var pmCitations = [];
@@ -6825,11 +7624,18 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         ghMessages = messages;
       }
       var ghResult = await runProGitChat(context.env, proModel, ghConfig, ghMessages, {
+        chat: botRunChat(runOpts),
+        stopped: runOpts.run ? runOpts.run.stopped : null,
+        plan: runOpts.run ? botPlanTool(runOpts.run, runOpts.progress) : null,
         progress: runOpts.progress,
         priorCalls: runOpts.resume ? (runOpts.resume.calls || 0) : 0,
         capGuard: runOpts.capGuard || null,
         stage: runOpts.resume ? runOpts.resume.stage : null
       });
+      if (ghResult.canceled) {
+        ghResult.taskType = taskType;
+        return ghResult;
+      }
       return {
         reply: sanitizeBotResponse(ghResult.reply, true),
         taskType: taskType,
@@ -6853,6 +7659,8 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     var effort = botEffortLevel(runOpts.effort);
     var proWatch = { draft: runOpts.draft || null, clock: runOpts.clock || null };
     var wrapped = await runProEffort(context.env, proModel, messages, effort, {
+      chat: botRunChat(runOpts),
+      stopped: runOpts.run ? runOpts.run.stopped : null,
       progress: runOpts.progress,
       extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0,
       capGuard: runOpts.capGuard || null,
@@ -7006,7 +7814,7 @@ async function handleBotPMAction(context, body, botPrivkey, botPubkey) {
 }
 
 async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
-  if (body && body.action === "pm" && botKeepTurnAlive(context)) {
+  if (body && (body.action === "pm" || body.action === "pm-bgleg" || body.action === "pm-schedfire") && botKeepTurnAlive(context)) {
     var kept = handleBotPMAction(context, body, botPrivkey, botPubkey);
     try {
       context.waitUntil(kept.then(function () { }, function () { return botReleaseStrandedTurn(context); }));
@@ -7220,8 +8028,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json({ error: "Invalid pubkey" }, 400);
   }
   // The WebSocket's pinned pubkey replaces per-request signatures; the Ledger DO still enforces money invariants.
+  var bgInternal = BOT_BG_INTERNAL[body.action] === true;
+  if (bgInternal && !(await bgVerify(env, body))) return json({ error: "Authentication failed", fatal: true }, 401);
   var wsAuthed = context._wsAuthedPubkey && context._wsAuthedPubkey === userPubkey;
-  if (!wsAuthed) {
+  if (!wsAuthed && !bgInternal) {
     if (!verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body })) {
       return json({ error: "Authentication failed" }, 401);
     }
@@ -7262,13 +8072,18 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   function botSelfKem() {
     return botPq ? { pk: botPq.kemPk, fmt: "pq2" } : null;
   }
+  var replyLink = null;
+  var replySched = null;
+  var runCipher = botRunCipher(botPrivkey, userPubkey);
   // `threadRoot` files the reply in the user's thread; `model` is omitted for replies no model wrote.
   async function wrapReplyPair(text, threadRoot, model) {
     var opts = null;
-    if (threadRoot || model) {
+    if (threadRoot || model || replyLink || replySched) {
       opts = {};
       if (threadRoot) opts.threadRoot = threadRoot;
       if (model) opts.model = model;
+      if (replyLink) opts.replyTo = replyLink;
+      if (replySched) opts.sched = replySched;
     }
     return buildPqGiftWrappedDMPair(
       text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(), opts);
@@ -7285,10 +8100,99 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     });
     if (!progRead || progRead._noLedger) return json({ steps: [] });
     var progOut = { steps: Array.isArray(progRead.steps) ? progRead.steps : [] };
+    for (var pgi = progOut.steps.length - 1; pgi >= 0; pgi--) {
+      var pgs = progOut.steps[pgi];
+      if (pgs && pgs.kind === "plan" && Array.isArray(pgs.items)) { progOut.plan = pgs.items; break; }
+    }
     if (progRead.draft && typeof progRead.draft.text === "string") {
       progOut.draft = { text: progRead.draft.text, seq: Number(progRead.draft.seq) || 0 };
     }
     return json(progOut);
+  }
+
+  if (body.action === "pm-claim") {
+    if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
+    var claimKey = botTurnKey(userPubkey, body.eventId);
+    var claimPoll = null;
+    try { claimPoll = await ledgerCall(env, { op: "turn-poll", key: claimKey }); } catch (e) { claimPoll = null; }
+    if (claimPoll && claimPoll.state === "done" && claimPoll.result && claimPoll.result.body) {
+      return json(claimPoll.result.body, claimPoll.result.status || 200);
+    }
+    if (claimPoll && claimPoll.state === "running") return json({ pending: true, state: "running" }, 202);
+    var claimStored = await runResultGet(env.DB_BOT, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
+    if (claimStored && claimStored.body) return json(claimStored.body, claimStored.status || 200);
+    return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
+  }
+
+  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-done-since") {
+    var ctlPk = String(userPubkey).toLowerCase();
+    if (!(await botRateOk("runctl", ctlPk, 60, 60000))) {
+      return json({ error: "Slow down \u2014 too many requests. Try again in a minute." }, 429);
+    }
+    if (body.action === "pm-done-since") {
+      var sinceNow = Date.now();
+      var since = Math.max(Number(body.since) || 0, sinceNow - RUN_ROW_KEEP_MS);
+      var ended = await runListSince(env.DB_BOT, ctlPk, since, 50);
+      return json({ now: sinceNow, runs: ended.map(function (r) {
+        var got = botRunUnpack(runCipher, r.progress);
+        return {
+          replyTo: r.asked, thread: r.thread || "", kind: r.kind || "chat",
+          state: r.cancel ? "stopped" : r.state, finishedAt: Number(r.beat_at) || 0,
+          background: got.bg ? true : undefined, legs: got.legs.length ? got.legs : undefined
+        };
+      }) });
+    }
+    if (body.action === "pm-runs") {
+      var listed = await runListRecent(env.DB_BOT, ctlPk, Date.now(), 20);
+      var listNow = Date.now();
+      var wantThread = typeof body.thread === "string" ? body.thread : null;
+      return json({ runs: listed.filter(function (r) {
+        if (wantThread != null && r.thread !== wantThread) return false;
+        return !(r.state === "running" && Number(r.beat_at) <= listNow - RUN_LIVE_MS) && !r.cancel;
+      }).map(function (r) {
+        var got = botRunUnpack(runCipher, r.progress);
+        return {
+          replyTo: r.asked, thread: r.thread || "", kind: r.kind || "chat",
+          label: runLabel(runCipher.open(r.label)), progress: got.p, plan: got.plan,
+          branches: got.branches.length ? got.branches : undefined,
+          background: got.bg ? true : undefined, until: got.bg || undefined,
+          legs: got.legs.length ? got.legs : undefined,
+          state: r.state, startedAt: Number(r.started_at) || 0, updatedAt: Number(r.beat_at) || 0
+        };
+      }) });
+    }
+    var ctlAsked = isHex64(body.replyTo) ? String(body.replyTo).toLowerCase() : "";
+    if (!ctlAsked) return json({ error: "Missing the id of the message that started the request." }, 400);
+    if (body.action === "pm-cancel") {
+      botRunLocalEntry(ctlPk, ctlAsked).cancel = true;
+      var cancelState = await runCancelFlag(env.DB_BOT, ctlPk, ctlAsked, Date.now());
+      await bgDriver(env, ctlPk, { drive: "run-cancel", runId: ctlAsked });
+      return json({ ok: true, state: cancelState || "pending" });
+    }
+    var steerText = typeof body.text === "string" ? body.text.trim() : "";
+    if (!steerText) return json({ error: "There is nothing to pass on." }, 400);
+    if (steerText.length > RUN_STEER_CHARS) return json({ error: "That update is too long; keep it under " + RUN_STEER_CHARS + " characters." }, 413);
+    var steerRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
+    if (!steerRow || steerRow.state === "pending") {
+      return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
+    }
+    var steerNow = Date.now();
+    var steerBeat = Number(steerRow.beat_at) || 0;
+    var steerLive = !steerRow.cancel && (
+      (steerRow.state === "running" && steerBeat > steerNow - RUN_LIVE_MS) ||
+      (steerRow.state === "parked" && steerBeat > steerNow - RUN_PARKED_MS) ||
+      (steerRow.state === "waiting" && steerBeat > steerNow - RUN_WAITING_MS));
+    if (!steerLive) {
+      return json({
+        error: "That request has already finished. Send this as a new message instead.", finished: true,
+        state: steerRow.cancel ? "stopped" : (steerRow.state === "running" ? "failed" : steerRow.state)
+      }, 409);
+    }
+    var steerId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
+    var steered = await runSteerAdd(env.DB_BOT, ctlPk, ctlAsked, steerId, runCipher.seal(steerText), steerNow);
+    if (!steered) return json({ error: "Updates can't be passed on right now." }, 503);
+    botRunLocalEntry(ctlPk, ctlAsked).steer = true;
+    return json({ ok: true, state: steerRow.state, id: steerId });
   }
 
   if (body.action === "notify-turn") {
@@ -7464,6 +8368,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json(applied.body, applied.status);
   }
 
+  if (body.action === "git-branch") {
+    var branchCfg = parseGitConfig(body.git);
+    if (!branchCfg) return json({ error: gitConfigRefused(body) || "That repository is not connected." }, 400);
+    if (!branchCfg.allowWrites) return json({ error: "Writes are off for that repository." }, 400);
+    var branchDid = await gitBranchAction(branchCfg, body);
+    return json(branchDid.body, branchDid.status);
+  }
+
   if (body.action === "runner-run") {
     if (await denied(env, userPubkey)) {
       return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
@@ -7492,13 +8404,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     });
     var dust = await ledgerCall(env, { op: "dust-peek", pubkey: userPubkey });
     var owed = dust && dust.ok ? dust : { standard: 0, pro: 0 };
+    var debt = owed.debt || { standard: 0, pro: 0 };
     return json({
       balance: rec.balance, totalPurchased: rec.totalPurchased, totalUsed: rec.totalUsed,
       proBalance: prec.balance, proTotalPurchased: prec.totalPurchased, proTotalUsed: prec.totalUsed,
-      balanceCredits: botCreditFigure(rec.balance, -(owed.standard || 0)),
-      proBalanceCredits: botCreditFigure(prec.balance, -(owed.pro || 0)),
+      balanceCredits: botCreditFigure(rec.balance, -((owed.standard || 0) + (debt.standard || 0))),
+      proBalanceCredits: botCreditFigure(prec.balance, -((owed.pro || 0) + (debt.pro || 0))),
       dustMilli: owed.standard || 0,
       proDustMilli: owed.pro || 0,
+      debtMilli: debt.standard || 0,
+      proDebtMilli: debt.pro || 0,
       free: (peek && peek.ok) ? {
         used: peek.used, limit: peek.limit, left: peek.left, resetsAt: peek.resetsAt,
         // Set when the address rather than this key ran out.
@@ -7641,13 +8556,25 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json({ credited: credits, balance: isGift ? undefined : crec.balance, recipient: creditTo, gift: isGift, tier: claimTier, giftEvent: giftEvent });
   }
 
-  if (body.action === "pm") {
+  var botRunLeg = async function (body, leg) {
     if (await denied(env, userPubkey)) {
       return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
     }
     var usageT0 = Date.now();
     var clock = botClock();
+    if (isHex64(body.eventId)) {
+      var earlyFrom = Date.now();
+      var early = await botEarlyClaim(env, userPubkey, body.eventId, json);
+      clock.since("claim", earlyFrom);
+      if (early) return early;
+    }
     var maxCost = capMaxCost(body);
+    var bgAsk = null;
+    if (!leg && body.background != null && body.background !== false) {
+      var bgParsed = bgParseGrant(body.background, isPrivateHostUrl);
+      if (bgParsed.error) return json({ error: bgParsed.error, background: true, push: bgParsed.push || undefined }, 400);
+      bgAsk = bgParsed.grant;
+    }
     var capGuardFor = null;
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
     var proModel = null;
@@ -7785,6 +8712,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       freeReturned = true;
       try { await ledgerCall(env, { op: "free-return", pubkey: userPubkey, net: freeNet }); } catch (e) { }
     };
+    if (leg && !proModel && record.balance <= 0) {
+      return json({ noCredits: true, balance: 0, error: "This needs credits: runs Nymbot starts on its own never use the free daily allowance. Type ?buy to top up." }, 402);
+    }
     if (!proModel && record.balance <= 0) {
       freeNet = await botFreeNetId(context.request, env);
       var claim = await ledgerCall(env, {
@@ -7830,9 +8760,22 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       try { context._botTurnRelease = fn; } catch (e) { }
     };
     var holdId = null;
+    var runCtl = null;
+    var runPk = String(userPubkey).toLowerCase();
+    var runNotice = function (state) {
+      try { context._botRunNotice = replyLink ? { asked: replyLink[0], state: state } : null; } catch (e) { }
+    };
+    var runLinked = function (obj) {
+      if (replyLink && obj && typeof obj === "object") {
+        if (!obj.replyTo) obj.replyTo = replyLink[0];
+        if (!obj.askedId) obj.askedId = replyLink[1];
+      }
+      return obj;
+    };
     var turnRelease = async function () {
       turnArmRelease(null);
       turnStopHeartbeat();
+      if (runCtl) runCtl.stop();
       if (holdId) {
         var dropHold = holdId;
         holdId = null;
@@ -7843,6 +8786,13 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i], context);
     };
     var turnFail = async function (obj, status) {
+      runLinked(obj);
+      if (obj && typeof obj === "object" && !obj.checkpoint) {
+        var failMark = botJobCheckpoint(ghConfig, "failed");
+        if (failMark) obj.checkpoint = failMark;
+      }
+      runNotice("failed");
+      if (runCtl) await runCtl.finish("failed", null);
       await turnRelease();
       await freeGiveBack();
       if (draft) draft.close();
@@ -7857,6 +8807,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var turnDone = async function (obj, status) {
       turnArmRelease(null);
       turnStopHeartbeat();
+      runLinked(obj);
+      var runBg = !!(obj && obj.background && obj.background.runId);
+      var runState = obj && obj.stopped ? "stopped" : (obj && obj.pendingTool ? "waiting" : (obj && (obj.resumeToken || runBg) ? "parked" : "done"));
+      runNotice(runBg && runState === "parked" ? "background" : (runState === "parked" ? "paused" : (runState === "waiting" ? "approval" : runState)));
+      if (runCtl) await runCtl.finish(runState, obj && obj.resumeToken ? obj.resumeToken : null);
+      var storeKeys = ["e:" + String(currentId).toLowerCase()];
+      if (typeof msgId === "string" && isHex64(msgId)) storeKeys.push("x:" + msgId.toLowerCase());
+      await runResultPut(env.DB_BOT, runPk, storeKeys, { body: obj, status: status || 200 }, leg && leg.keepAt ? leg.keepAt : Date.now());
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status, context);
@@ -7886,6 +8844,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
     var threadRead = botGetThread(env, userPubkey);
     threadRead.catch(function () { });
+    var turnRowsRead = runTurnsRecent(env.DB_BOT, runPk, 120);
+    turnRowsRead.catch(function () { });
     var claimFrom = Date.now();
     var wrapClaimed = await turnAcquire(botTurnKey(userPubkey, currentId));
     clock.since("claim", claimFrom);
@@ -7897,21 +8857,30 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
     // Progress writes are best-effort and advisory; set up before the slow relay fetch.
     var progressKey = turnKeys.length ? turnKeys[0] : null;
-    var pushProgress = function (step) {
+    var sendProgress = function (step) {
       if (!progressKey) return;
       try {
         var p = ledgerCall(env, { op: "progress-push", key: progressKey, step: step });
         if (p && typeof p.then === "function") p.then(function () { }, function () { });
       } catch (e) { }
     };
+    var pushProgress = function (step) {
+      if (runCtl) runCtl.note(step);
+      sendProgress(step);
+      if (runCtl && runCtl.planChanged && Array.isArray(runCtl.plan)) {
+        runCtl.planChanged = false;
+        sendProgress({ kind: "plan", items: runCtl.plan });
+      }
+    };
     var draft = body.draft === true ? botDraftSink(env, progressKey, clock) : null;
 
     var thread = await clock.time("thread", threadRead);
+    var turnRows = await turnRowsRead;
     // A continued run carries its own conversation, so skip re-fetching the thread.
-    var continuing = typeof body.resume === "string" && !!body.resume;
+    var continuing = (typeof body.resume === "string" && !!body.resume) || !!(leg && leg.bg);
     var historyIds = (fresh || continuing)
       ? []
-      : thread.filter(function (id) { return id !== currentId; });
+      : runHistoryPlan(thread, turnRows, null, BOT_THREAD_MAX + 8).filter(function (id) { return id !== currentId; });
 
     // A long question arrives in several wraps; `eventId` is still the last one.
     var partIds = [];
@@ -7948,7 +8917,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       heldHistoryRead.catch(function () { });
     }
     var askFrom = Date.now();
-    var askMissing = askIds.filter(function (id) { return !fetched[id]; });
+    var askMissing = leg ? [] : askIds.filter(function (id) { return !fetched[id]; });
     if (askMissing.length) {
       var askCached = (await botCachedWraps(env, userPubkey, askMissing)).rows;
       for (var ak in askCached) {
@@ -7964,13 +8933,13 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       for (var apk in askPulled) { if (!fetched[apk]) fetched[apk] = askPulled[apk]; }
     }
     clock.since("ask", askFrom);
-    var currentWrap = fetched[currentId];
-    if (!currentWrap) {
+    var currentWrap = leg ? null : fetched[currentId];
+    if (!currentWrap && !leg) {
       return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
     }
     pushProgress({ kind: "stage", stage: "opening" });
     var openFrom = Date.now();
-    var currentUnwrapped = unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
+    var currentUnwrapped = leg ? botLegRumor(userPubkey, leg) : unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
     if (!currentUnwrapped) return await turnFail({ error: "Could not decrypt your message." }, 400);
     // The current message must be authored by the authenticated user.
     if (currentUnwrapped.author !== userPubkey) {
@@ -8001,7 +8970,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     clock.since("open", openFrom);
     if (!message) return await turnFail({ error: "Empty message" }, 400);
     // Every event the question traveled in, so the next turn replays all of it.
-    var askedIds = partIds.length > 1 ? partIds.slice() : [currentId];
+    var askedIds = leg ? [] : (partIds.length > 1 ? partIds.slice() : [currentId]);
     // Claim the message id too: two wraps of one rumor must buy one answer.
     var msgId = rumorTagValue(currentUnwrapped.rumor, "x");
     if (isHex64(msgId)) {
@@ -8017,6 +8986,62 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     message = canonicalizeBotText(message, body && body.cmdAlias);
     // A thread reply carries the root's id in its rumor; the answer and context are scoped to that thread.
     var threadRoot = rumorTagValue(currentUnwrapped.rumor, "nymthread");
+    var threadKey = threadRoot ? String(threadRoot) : "";
+    var askX = isHex64(msgId) ? msgId.toLowerCase() : String(currentId).toLowerCase();
+    var runRoot = askX;
+    if (leg && leg.runId) {
+      runRoot = leg.runId;
+    } else if (continuing) {
+      var legRow = await runByResume(env.DB_BOT, runPk, body.resume);
+      if (legRow && legRow.asked) runRoot = legRow.asked;
+    }
+    replyLink = [runRoot, askX];
+    if (leg && leg.sched) replySched = [leg.sched.id, String(leg.sched.firedAt)];
+    runCtl = botRunControl(env, context, runPk, runCipher);
+    runCtl.asked = runRoot;
+    if (leg && leg.bg) {
+      runCtl.legs = leg.legIds.slice();
+      runCtl.bg = leg.until;
+    }
+    if (await runCtl.refresh()) {
+      await freeGiveBack();
+      var stopPair = await wrapReplyPair(BOT_STOPPED_TEXT, threadRoot);
+      return await turnDone({
+        event: stopPair.event, selfEvent: stopPair.selfEvent, stopped: true,
+        balance: (proModel ? proRecord : record).balance || 0, cost: 0, costCredits: 0,
+        taskType: "general", pro: !!proModel
+      });
+    }
+    var runRegister = async function (kind, reserveCredits, pro) {
+      var label = runCipher.seal(runLabel(stripStandingContext(parseBotPMRequest(message).question || message)));
+      if (!runCtl.line) runCtl.line = continuing ? "carrying on" : "started";
+      var run = { asked: runRoot, thread: threadKey, kind: kind, label: label, progress: runCtl.payload() };
+      var limit = freeTurn ? RUN_FREE : runMaxRuns(body.maxRuns);
+      var got = continuing
+        ? await runContinue(env.DB_BOT, runPk, run, Date.now())
+        : await runStart(env.DB_BOT, runPk, run, limit, Date.now());
+      if (!got.ok) {
+        var running = await runCountLive(env.DB_BOT, runPk, Date.now());
+        if (freeTurn) {
+          return {
+            error: "A free reply is already being written. Wait for it to finish, or type ?buy for credits to run up to 3 requests at once.",
+            runCap: true, free: true, running: running, limit: RUN_FREE, ceiling: RUN_FREE, noCredits: true, balance: 0
+          };
+        }
+        return {
+          error: running + (running === 1 ? " request is" : " requests are") + " already running. Wait for one to finish.",
+          runCap: true, running: running, limit: limit, ceiling: RUN_CEILING,
+          reserve: { credits: Math.max(0, Math.ceil(Number(reserveCredits) || 0)), pro: !!pro }
+        };
+      }
+      if (!got.unavailable) {
+        runCtl.registered = true;
+        runCtl.lastBeat = Date.now();
+        runCtl.lastWrite = 0;
+        runCtl.start();
+      }
+      return null;
+    };
     var earlyMedia = parseBotMediaCommand(message)
       || mediaEditIntent(message, botExtractImageUrls(message).length)
       || parseBotMediaIntent(message);
@@ -8026,10 +9051,46 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
     // Drop cached wraps labelled for other conversations unread; unlabelled rows go through the filter below.
     var cacheWant = 0, cacheHit = 0, cacheMiss = 0, cacheGone = 0, cacheDown = false;
+    var extraHistoryRead = null;
+    var rowScoped = {};
+    var forkOf = body.forkOf && typeof body.forkOf === "object" && !Array.isArray(body.forkOf) ? body.forkOf : null;
+    if (forkOf && threadKey && !fresh && !continuing) {
+      var forkParent = typeof forkOf.thread === "string" && (forkOf.thread === "" || isHex64(forkOf.thread)) ? forkOf.thread : null;
+      var forkBefore = isHex64(forkOf.before) ? String(forkOf.before).toLowerCase() : "";
+      var forkHas = turnRows.some(function (r) { return r.thread === threadKey; });
+      if (forkParent != null && forkParent !== threadKey && !forkHas) {
+        var forkRows = await runTurnsThread(env.DB_BOT, runPk, forkParent, 200);
+        var forkCut = forkRows.filter(function (r) { return r.asked === forkBefore; })[0];
+        var forkCopies = forkRows.filter(function (r) { return !forkCut || r.at < forkCut.at; }).map(function (r) {
+          return { asked: (threadKey + ":" + r.asked).slice(0, 200), thread: threadKey, ids: r.ids, at: r.at };
+        });
+        if (forkCopies.length) {
+          await runTurnsCopy(env.DB_BOT, runPk, forkCopies);
+          turnRows = turnRows.concat(forkCopies);
+        }
+      }
+    }
+    if (!(fresh || continuing) && turnRows.length) {
+      var prefetched = {};
+      historyIds.forEach(function (id) { prefetched[id] = true; });
+      turnRows.forEach(function (r) {
+        if (threadKey ? (r.thread === threadKey || r.asked === threadKey) : !r.thread) {
+          runHistoryPlan([], [r], null, 400).forEach(function (id) { rowScoped[id] = true; });
+        }
+      });
+      historyIds = runHistoryPlan(thread, turnRows, threadKey, BOT_THREAD_MAX).filter(function (id) { return id !== currentId; });
+      var extraIds = historyIds.filter(function (id) { return !prefetched[id] && !fetched[id]; });
+      if (extraIds.length) extraHistoryRead = botCachedWraps(env, userPubkey, extraIds);
+      if (historyIds.length && !heldHistoryRead) heldHistoryRead = Promise.resolve({ ok: true, rows: {} });
+    }
     if (historyIds.length) {
       var wantHistory = historyIds.filter(function (id) { return !fetched[id]; });
       cacheWant = wantHistory.length;
       var heldHistory = await heldHistoryRead;
+      if (extraHistoryRead) {
+        var moreHistory = await extraHistoryRead;
+        if (moreHistory && moreHistory.ok) Object.assign(heldHistory.rows, moreHistory.rows);
+      }
       // Only an unreachable store sends this turn to a relay.
       var storeDown = !heldHistory.ok;
       cacheDown = storeDown;
@@ -8048,7 +9109,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         }
         if (row) {
           cacheHit++;
-          if (row.labelled && !scopeLabelInThread(row, threadRoot)) continue;
+          if (row.labelled && !scopeLabelInThread(row, threadRoot) && !rowScoped[hid]) continue;
           fetched[hid] = row.event;
           scopeOf[hid] = row;
           keepHistory.push(hid);
@@ -8081,7 +9142,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (!hu || !hu.rumor || !hu.rumor.content) continue;
       var isBotTurn = hu.author === botPubkey;
       if (!isBotTurn && hu.author !== userPubkey) continue;
-      if (!rumorInThreadScope(hu.rumor, threadRoot)) continue;
+      if (!rumorInThreadScope(hu.rumor, threadRoot) && !rowScoped[historyIds[hk]]) continue;
       var hText = String(hu.rumor.content);
       // Old reasoning blocks are for the user's eyes, not model context.
       if (isBotTurn) hText = hText.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "");
@@ -8105,6 +9166,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     }
     clock.since("histDec", histDecFrom);
 
+    var recordTurn = async function (selfEvent, remember) {
+      var keep = thread.slice();
+      if (remember) await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.concat([selfEvent.id]), usageT0);
+      await botCacheWraps(env, userPubkey,
+        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf), null);
+      await runWrapsPrune(env.DB_BOT, userPubkey, runPk, keep, Date.now());
+    };
+
     // Media is billed per generation rather than per output token.
     var media = earlyMedia;
     if (media && freeTurn) {
@@ -8112,13 +9181,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       var noMedia = await wrapReplyPair(
         "Pictures, videos and voice clips need credits \u2014 they cost real money to generate, so they are not part of the free daily allowance. Type ?buy to top up; " +
         BOT_FREE_DAILY + " free replies a day stay free.", threadRoot);
-      var noMediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-      noMediaThread.push.apply(noMediaThread, askedIds);
-      noMediaThread.push(noMedia.selfEvent.id);
-      var noMediaKeep = noMediaThread;
-      try { noMediaKeep = await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
-      await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [noMedia.selfEvent], botPrivkey, botPq, scopeOf), noMediaKeep);
+      await recordTurn(noMedia.selfEvent, true);
       return await turnDone({
         event: noMedia.event, selfEvent: noMedia.selfEvent,
         balance: 0, cost: 0, taskType: "general", pro: false,
@@ -8157,13 +9220,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
               + BOT_MEDIA_COSTS.image.standard + " credits. Editing a picture you send needs Pro.";
         }
         var listPair = await wrapReplyPair(listText, threadRoot);
-        var listThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-        listThread.push.apply(listThread, askedIds);
-        listThread.push(listPair.selfEvent.id);
-        var listKeep = listThread;
-        try { listKeep = await botPutThread(env, userPubkey, listThread); } catch (e) { }
-        await botCacheWraps(env, userPubkey,
-          wrapsToCache(fetched, [listPair.selfEvent], botPrivkey, botPq, scopeOf), listKeep);
+        await recordTurn(listPair.selfEvent, true);
         var listBody = {
           event: listPair.event,
           selfEvent: listPair.selfEvent,
@@ -8273,6 +9330,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
             (mediaRecord.balance || 0) + ". Type ?buy for more."
         });
       }
+      var mediaCapNo = await runRegister("media", mediaCost, !!proModel);
+      if (mediaCapNo) return await turnFail(mediaCapNo, 429);
       var mediaHoldTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
       var mediaHeld = await ledgerCall(env, {
         op: "credit-hold", id: mediaHoldTry, pubkey: userPubkey, tier: mediaTier,
@@ -8333,13 +9392,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           + "` to be explicit, or just say so if you meant something else._";
       }
       var mediaPair = await wrapReplyPair(mediaReply, threadRoot);
-      var mediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-      mediaThread.push.apply(mediaThread, askedIds);
-      mediaThread.push(mediaPair.selfEvent.id);
-      var mediaKeep = mediaThread;
-      try { mediaKeep = await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
-      await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [mediaPair.selfEvent], botPrivkey, botPq, scopeOf), mediaKeep);
+      await recordTurn(mediaPair.selfEvent, true);
       var mediaBody = {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
@@ -8443,8 +9496,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var resumeHeld = null;
     if (typeof body.resume === "string" && body.resume) {
       var took = await ledgerCall(env, { op: "resume-take", id: body.resume, owner: userPubkey });
-      if (took && took.ok && took.state) {
-        resumeState = took.state;
+      var tookOpen = took && took.ok && took.state ? await bgResumeOpen(env, userPubkey, took.state) : null;
+      if (tookOpen && tookOpen.state) {
+        resumeState = tookOpen.state;
         resumeHeld = body.resume;
       } else if (!took || !took._noLedger) {
         return await turnFail({
@@ -8452,13 +9506,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           resumeExpired: true
         }, 410);
       }
+    } else if (leg && leg.bg && leg.resumeState) {
+      resumeState = leg.resumeState;
+      resumeHeld = leg.resumeToken;
     }
 
     var resumeGiveBack = async function () {
       if (!resumeHeld || !resumeState) return null;
       var id = resumeHeld;
       resumeHeld = null;
-      var back = await ledgerCall(env, { op: "resume-put", id: id, owner: userPubkey, state: resumeState });
+      var back = await botResumePut(env, id, userPubkey, runRoot, resumeState);
       return back && back.ok ? id : null;
     };
     var turnFailResumable = async function (obj, status) {
@@ -8678,6 +9735,50 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       }
     }
 
+    var compactSummary = "";
+    var compactSide = null;
+    if (!fresh && !continuing && !freeTurn && !teamRun && !researchRun && turnRows.length) {
+      var sumRow = await runSummaryGet(env.DB_BOT, runPk, threadKey);
+      compactSummary = sumRow ? runCipher.open(sumRow.text) : "";
+      var sumUpto = sumRow ? Number(sumRow.upto_at) || 0 : 0;
+      var sumRows = turnRows.filter(function (r) {
+        var inScope = threadKey ? (r.thread === threadKey || r.asked === threadKey) : !r.thread;
+        return inScope && (Number(r.at) || 0) > sumUpto;
+      }).sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+      var overflow = sumRows.slice(0, Math.max(0, sumRows.length - BOT_COMPACT_KEEP_ROWS));
+      if (overflow.length >= BOT_COMPACT_MIN_ROWS && env.AI) {
+        pushProgress({ kind: "stage", stage: "compacting" });
+        try {
+          var foldIds = runHistoryPlan([], overflow, null, 400);
+          var foldHeld = (await botCachedWraps(env, userPubkey, foldIds)).rows;
+          var foldLines = [];
+          for (var fi = 0; fi < foldIds.length; fi++) {
+            var fw = fetched[foldIds[fi]] || (foldHeld[foldIds[fi]] && foldHeld[foldIds[fi]].event);
+            var fu = fw ? unwrapBotGiftWrap(fw, botPrivkey, botPq) : null;
+            if (!fu || !fu.rumor || !fu.rumor.content) continue;
+            if (fu.author !== botPubkey && fu.author !== userPubkey) continue;
+            var ftext = String(fu.rumor.content).replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "");
+            if (fu.author !== botPubkey) ftext = stripStandingContext(ftext);
+            foldLines.push((fu.author === botPubkey ? "Nymbot: " : "User: ") + truncateText(ftext, 800));
+          }
+          if (foldLines.length) {
+            var folded = await botCompact(env, compactSummary, foldLines);
+            if (folded.text) {
+              compactSummary = folded.text;
+              await runSummaryPut(env.DB_BOT, runPk, threadKey, runCipher.seal(folded.text), Number(overflow[overflow.length - 1].at) || 0, Date.now());
+              if (botUsageBilled(folded.usage)) compactSide = [{ model: folded.model, usage: folded.usage }];
+            }
+          }
+        } catch (e) { }
+      }
+    }
+
+    var runKind = teamRun ? "team" : (researchRun ? "research" : (ghConfig && serverRunSettings ? "server-run"
+      : (ghConfig ? "repo" : (mcpConfig ? "connector" : (body.runKind === "compare" ? "compare" : "chat")))));
+    var runCapNo = await runRegister(runKind, freeTurn ? 0 : (proModel ? proRequired : stdRequired), !!proModel);
+    if (runCapNo) return await turnFailResumable(runCapNo, 429);
+    var runOthers = fresh ? [] : await botRunOthers(env.DB_BOT, runPk, threadKey, runRoot, runCipher);
+
     if (!freeTurn) {
       var holdAmount = proModel ? proRequired : stdRequired;
       var holdTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
@@ -8705,9 +9806,43 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
 
     var turnGuard = capGuardFor ? capGuardFor() : null;
+    var runPolicy = botRunPolicy(body.policy);
+    var repoReadOnly = [];
+    if (ghConfig) {
+      for (var jb = 0; jb < ghConfig.length; jb++) {
+        if (ghConfig[jb].jobBranches && !ghConfig[jb].approve) {
+          ghConfig[jb].jobId = runRoot;
+          ghConfig[jb].jobProgress = pushProgress;
+        }
+      }
+    }
+    if (ghConfig && runCtl && runCtl.registered) {
+      var lockWait = Number(env.BOT_REPO_LOCK_WAIT_MS);
+      var lockUntil = Date.now() + (Number.isFinite(lockWait) && lockWait >= 0 ? lockWait : BOT_REPO_LOCK_WAIT_MS);
+      for (var lk = 0; lk < ghConfig.length; lk++) {
+        var lockCfg = ghConfig[lk];
+        if (!lockCfg.allowWrites || gitJobOn(lockCfg)) continue;
+        var lockKey = runRepoLockKey(lockCfg);
+        var locked = await runLockTake(env.DB_BOT, runPk, lockKey, runRoot, Date.now());
+        var waitedLock = false;
+        while (!locked.ok && Date.now() < lockUntil && !runCtl.stopped()) {
+          if (!waitedLock) pushProgress({ kind: "waiting-repo", repo: lockCfg.repo });
+          waitedLock = true;
+          await new Promise(function (r) { setTimeout(r, Math.max(1, Math.min(BOT_REPO_LOCK_POLL_MS, lockUntil - Date.now()))); });
+          locked = await runLockTake(env.DB_BOT, runPk, lockKey, runRoot, Date.now());
+        }
+        if (locked.ok) {
+          runCtl.locks.push(lockKey);
+        } else {
+          lockCfg.allowWrites = false;
+          repoReadOnly.push(lockCfg.repo + (lockCfg.branch ? " (" + lockCfg.branch + ")" : ""));
+        }
+      }
+    }
     var serverRunOpt = serverRunSettings && ghConfig && proModel
       ? botServerRunOption(context, userPubkey, serverRunSettings, await botBtcPrice(), turnGuard, pushProgress,
-        function (timeoutSec) { return botTurnKeepAlive(env, turnKeys.slice(), serverRunKeepAliveMs(timeoutSec)); })
+        function (timeoutSec) { return botTurnKeepAlive(env, turnKeys.slice(), serverRunKeepAliveMs(timeoutSec)); },
+        runPolicy.serverRuns === "allow")
       : null;
     var chatResult;
     try {
@@ -8736,12 +9871,49 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         runApprove: serverRunOpt && typeof body.runApprove === "string" ? body.runApprove.slice(0, 128) : "",
         runDecline: typeof body.runDecline === "string" ? body.runDecline.slice(0, 128) : "",
         draft: draft,
-        clock: clock
+        clock: clock,
+        run: runCtl,
+        others: runOthers,
+        policy: runPolicy,
+        summary: compactSummary
       });
     } catch (e) {
-      return await turnFailSpent(e, { error: botFailText("Nymbot error: something went wrong while answering. Please try again.", "chat", e) }, 500);
+      if (!(e && e.botStopped) && !(runCtl && runCtl.cancel)) {
+        return await turnFailSpent(e, { error: botFailText("Nymbot error: something went wrong while answering. Please try again.", "chat", e) }, 500);
+      }
+      chatResult = botStoppedResult(e);
     }
     if (draft) await draft.close();
+    if (compactSide && chatResult) {
+      if (proModel) chatResult.sideUsage = (Array.isArray(chatResult.sideUsage) ? chatResult.sideUsage : []).concat(compactSide);
+      else if (Array.isArray(chatResult.usageParts)) chatResult.usageParts = chatResult.usageParts.concat(compactSide);
+    }
+    var runStopped = !!(chatResult && chatResult.canceled) || (runCtl ? await runCtl.refresh() : false);
+    if (runStopped) {
+      chatResult.reply = BOT_STOPPED_TEXT;
+      chatResult.canceled = true;
+      chatResult.truncated = false;
+      chatResult.pendingTool = null;
+      chatResult.resumeState = null;
+      chatResult.staged = null;
+      chatResult.stalled = false;
+      if (!chatResult.checkpoint) chatResult.checkpoint = botJobCheckpoint(ghConfig, "stopped");
+    } else if (chatResult && typeof chatResult.reply === "string" && /steer_run/i.test(chatResult.reply)) {
+      var steerSaid = botSteerTags(chatResult.reply);
+      for (var sti = 0; sti < steerSaid.steers.length; sti++) {
+        var steerTo = runOthers.filter(function (o) { return o.handle === steerSaid.steers[sti].handle; })[0];
+        if (!steerTo) continue;
+        var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
+        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) {
+          botRunLocalEntry(runPk, steerTo.asked).steer = true;
+        }
+      }
+      chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+    }
+    if (repoReadOnly.length && !runStopped && chatResult && chatResult.reply) {
+      chatResult.reply = String(chatResult.reply) + "\n\n_Another task was changing " + repoReadOnly.join(", ") +
+        ", so this run only read it. Ask again once that task has finished to make changes._";
+    }
     var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
     var reply = taken.text;
     if (!reply) return await turnFailSpent(chatResult, { error: "Nymbot returned an empty response." }, 500);
@@ -8838,6 +10010,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var resumeToken = null;
     var resumeExpiresIn = 0;
     var researchNext = 0;
+    var bgPark = null;
     if ((chatResult.truncated || chatResult.pendingTool) && chatResult.resumeState) {
       if (teamRun && chatResult.resumeState.team) {
         var parkedTeam = chatResult.resumeState.team;
@@ -8856,13 +10029,33 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         researchNext = Math.max(1, Math.ceil(Math.max(0,
           researchCeiling - chatResult.resumeState.research.chargedMilli) / BOT_MILLI_PER_CREDIT));
       }
-      var token = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-      var parked = await ledgerCall(env, {
-        op: "resume-put", id: token, owner: userPubkey, state: chatResult.resumeState
-      });
-      if (parked && parked.ok) {
-        resumeToken = token;
-        resumeExpiresIn = parked.expiresIn || 0;
+      var bgWanted = !chatResult.pendingTool && (leg && leg.bg ? true
+        : !!(bgAsk && !freeTurn && body.anon !== true && bgDriverReady(env) && (bgAsk.maxCredits != null || researchRun || teamRun)));
+      if (bgWanted) {
+        var bgSpent = (costMilli > 0 ? costMilli : cost * BOT_MILLI_PER_CREDIT) + runMilli;
+        var bgNextReserve = researchNext || (proModel ? proRequired : stdRequired);
+        var bgRetry = chatResult.stalled ? Math.max(0, Number(chatResult.retryAfterMs) || 0) : 0;
+        if (leg && leg.bg) {
+          leg.nextResume = chatResult.resumeState;
+          leg.nextReserve = bgNextReserve;
+          leg.spentMilli = bgSpent;
+          leg.retryAfter = bgRetry;
+          bgPark = { runId: runRoot, until: leg.until };
+        } else {
+          bgPark = await botBackgroundStart(env, userPubkey, {
+            runId: runRoot, thread: threadKey, req: bgRequestOf(body), resume: chatResult.resumeState,
+            spent: bgSpent, next: bgNextReserve, grant: bgAsk, retryAfter: bgRetry
+          });
+        }
+        if (bgPark && runCtl) runCtl.bg = bgPark.until;
+      }
+      if (!bgPark) {
+        var token = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+        var parked = await botResumePut(env, token, userPubkey, runRoot, chatResult.resumeState);
+        if (parked && parked.ok) {
+          resumeToken = token;
+          resumeExpiresIn = parked.expiresIn || 0;
+        }
       }
     }
 
@@ -8874,16 +10067,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var pair = await wrapReplyPair(reply, threadRoot, botReplyVoice(proModel, freeTurn));
     clock.since("seal", sealFrom);
     var storeFrom = Date.now();
-    var updatedThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
     // A '!' question stays out of the model's future context, though the device still shows it.
-    if (!fresh) {
-      updatedThread.push.apply(updatedThread, askedIds);
-      updatedThread.push(pair.selfEvent.id);
-    }
-    var updatedKeep = updatedThread;
-    try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
-    await botCacheWraps(env, userPubkey,
-      wrapsToCache(fetched, [pair.selfEvent], botPrivkey, botPq, scopeOf), updatedKeep);
+    await recordTurn(pair.selfEvent, leg && leg.remember != null ? !!leg.remember : !fresh);
     clock.since("store", storeFrom);
     var wrapStatus = botWrapsStatus();
     var chatBody = {
@@ -8928,10 +10113,15 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       capStopped: chatResult.capStopped ? true : undefined,
       resumeToken: resumeToken || undefined,
       resumeExpiresIn: resumeToken ? resumeExpiresIn : undefined,
+      background: bgPark || undefined,
       // What one more leg would reserve, so the client can decide against a budget.
       nextReserve: resumeToken && proModel ? (researchNext || proRequired) : undefined,
       research: researchRun || (teamRun && teamRun.mode === "research") || undefined,
       team: teamRun && chatResult.team ? chatResult.team : undefined,
+      stopped: runStopped || undefined,
+      compacted: compactSide ? true : undefined,
+      plan: runCtl && Array.isArray(runCtl.plan) && runCtl.plan.length
+        ? runCtl.closePlan(!runStopped && !resumeToken && !(chatResult.pendingTool && resumeToken)) : undefined,
       lowBalance: !freeTurn && spendRecord.balance <= 3
     };
     // If the socket is gone, the client's HTTP retry reads the reply back from the ledger.
@@ -8946,11 +10136,285 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       stages: clock.stages()
     });
     return await turnDone(chatBody);
+  };
+
+  var botBgPublish = async function (obj) {
+    if (!obj || typeof obj !== "object") return;
+    var evs = [obj.event, obj.selfEvent].filter(function (e) { return e && typeof e === "object" && e.id; });
+    for (var i = 0; i < evs.length; i++) {
+      try { await publishEventToRelays(evs[i]); } catch (e) { }
+    }
+  };
+  var botBgNotify = async function (reg, fields) {
+    if (!reg) return;
+    try { await bgPushSend(env, reg, fields); } catch (e) { }
+  };
+  var botBgRepack = async function (pk, runId, legs, state, token) {
+    var row = await runGet(env.DB_BOT, pk, runId);
+    var got = row ? botRunUnpack(runCipher, row.progress) : { p: "", plan: [], branches: [], legs: [], bg: 0 };
+    var payload = runCipher.seal(botRunPayload(got.p, got.plan, got.branches, legs, got.bg));
+    await runEnd(env.DB_BOT, pk, runId, state, token || null, payload, Date.now());
+  };
+  var botLegResult = async function (res) {
+    var obj = null;
+    try { obj = await res.json(); } catch (e) { obj = null; }
+    return { status: res.status, obj: obj && typeof obj === "object" ? obj : null };
+  };
+
+  var botBackgroundLeg = async function () {
+    var bgPk = String(userPubkey).toLowerCase();
+    var bgRun = String(body.runId || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(bgRun)) return json({ error: "That run cannot be carried on.", fatal: true }, 400);
+    var bgEnv = await bgOpen(env, bgPk, bgRun, body.blob);
+    if (!bgEnv || bgEnv.run !== bgRun) return json({ error: "That run cannot be carried on.", fatal: true }, 400);
+    var bgFields = function (state) {
+      return {
+        asked: bgRun, state: state, chat: bgEnv.notify ? bgEnv.notify.chat : undefined,
+        text: (bgEnv.notify && bgEnv.notify.text) || BOT_BG_PUSH_TEXT[state]
+      };
+    };
+    if (body.action === "pm-bgend") {
+      var endKey = "b:" + bgRun + ":end";
+      var endStored = await runResultGet(env.DB_BOT, bgPk, endKey);
+      if (endStored && endStored.body) return json(endStored.body);
+      await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":");
+      await botBgRepack(bgPk, bgRun, botRunLegIds(bgEnv.ids), "failed", null);
+      await botBgNotify(bgEnv.notify, bgFields("failed"));
+      var endBody = { ok: true, end: "failed" };
+      await runResultPut(env.DB_BOT, bgPk, [endKey], { body: endBody, status: 200 }, Date.now());
+      return json(endBody);
+    }
+    var bgN = Math.floor(Number(bgEnv.legs) || 0) + 1;
+    if (String(body.leg) !== String(bgN)) return json({ error: "That step is not the next one.", fatal: true }, 409);
+    var bgIds = await bgLegIds(bgRun, bgN);
+    var bgCtlKey = "b:" + bgRun + ":" + bgN;
+    var bgStored = await runResultGet(env.DB_BOT, bgPk, bgCtlKey);
+    if (bgStored && bgStored.body) return json(bgStored.body);
+    if (bgN > 2) await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":" + (bgN - 1));
+    var bgPoll = null;
+    try { bgPoll = await ledgerCall(env, { op: "turn-poll", key: botTurnKey(bgPk, bgIds.eventId) }); } catch (e) { bgPoll = null; }
+    if (bgPoll && bgPoll.state === "running") return json({ pending: true }, 202);
+    var bgKeepAt = Number(bgEnv.until) + BG_KEEP_AFTER_MS - RUN_RESULT_KEEP_MS;
+    var bgLegList = botRunLegIds(bgEnv.ids).concat([bgIds.eventId]);
+    var bgEnd = async function (control, state) {
+      if (state && state !== "stopped") await botBgNotify(bgEnv.notify, bgFields(state));
+      if (control.end) await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":");
+      await runResultPut(env.DB_BOT, bgPk, [bgCtlKey], { body: control, status: 200 }, Date.now());
+      return json(control);
+    };
+    var bgNow = Date.now();
+    var bgLeft = bgEnv.maxCredits != null ? Number(bgEnv.maxCredits) * BOT_MILLI_PER_CREDIT - (Number(bgEnv.spent) || 0) : null;
+    var capWhy = null;
+    if (bgN > Number(bgEnv.maxLegs)) capWhy = "legs";
+    else if (bgNow >= Number(bgEnv.until)) capWhy = "time";
+    else if (bgLeft != null && (bgLeft <= 0 || (Number(bgEnv.next) > 0 && Number(bgEnv.next) * BOT_MILLI_PER_CREDIT > bgLeft))) capWhy = "credits";
+    if (capWhy) {
+      replyLink = [bgRun, bgIds.msgId];
+      var capPair = await wrapReplyPair(botBgCapText(capWhy, bgEnv), bgEnv.thread || null);
+      var capToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      var capPut = await botResumePut(env, capToken, bgPk, bgRun, bgEnv.resume);
+      var capOk = !!(capPut && capPut.ok);
+      var capBody = {
+        event: capPair.event, selfEvent: capPair.selfEvent, capStopped: true, truncated: true,
+        cost: 0, costCredits: 0, pro: !!(bgEnv.req && bgEnv.req.proModel),
+        background: { state: "paused", reason: capWhy },
+        resumeToken: capOk ? capToken : undefined, resumeExpiresIn: capOk ? capPut.expiresIn || 0 : undefined,
+        resumable: capOk || undefined, replyTo: bgRun, askedId: bgIds.msgId
+      };
+      await runResultPut(env.DB_BOT, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: capBody, status: 200 }, bgKeepAt);
+      await botBgRepack(bgPk, bgRun, bgLegList, "parked", capOk ? capToken : null);
+      await botBgPublish(capBody);
+      return await bgEnd({ ok: true, end: "paused", reason: capWhy }, "paused");
+    }
+    var legBody = Object.assign({}, bgEnv.req || {}, { action: "pm", pubkey: bgPk, eventId: bgIds.eventId });
+    if (bgLeft != null) {
+      var legCap = Math.floor(bgLeft) / BOT_MILLI_PER_CREDIT;
+      var legUserCap = capMaxCost(legBody);
+      legBody.maxCost = legUserCap != null ? Math.min(legUserCap, legCap) : legCap;
+    }
+    var legRun = {
+      bg: true, runId: bgRun, n: bgN, until: Number(bgEnv.until), legIds: bgLegList, resumeState: bgEnv.resume,
+      resumeToken: bytesToHex(crypto.getRandomValues(new Uint8Array(16))), message: "Continue.", msgId: bgIds.msgId,
+      threadRoot: bgEnv.thread || null, keepAt: bgKeepAt
+    };
+    var legOut = await botLegResult(await botRunLeg(legBody, legRun));
+    var legObj = legOut.obj;
+    if (legObj && (legObj.event || legObj.selfEvent)) await botBgPublish(legObj);
+    if (legOut.status === 200 && legObj && legObj.background && legRun.nextResume) {
+      var nextEnv = Object.assign({}, bgEnv, {
+        resume: legRun.nextResume, legs: bgN, ids: bgLegList,
+        spent: (Number(bgEnv.spent) || 0) + (Number(legRun.spentMilli) || 0), next: Number(legRun.nextReserve) || 0
+      });
+      var nextBlob = await bgSeal(env, bgPk, bgRun, nextEnv);
+      if (nextBlob) {
+        return await bgEnd({ ok: true, next: { blob: nextBlob, at: Date.now() + Math.max(BG_LEG_GAP_MS, Number(legRun.retryAfter) || 0) } }, null);
+      }
+      var lostToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      var lostPut = await botResumePut(env, lostToken, bgPk, bgRun, legRun.nextResume);
+      await botBgRepack(bgPk, bgRun, bgLegList, "parked", lostPut && lostPut.ok ? lostToken : null);
+      return await bgEnd({ ok: true, end: "paused" }, "paused");
+    }
+    if (legObj && (legObj.noCredits || (legOut.status === 200 && (!legObj.event || (legObj.background && !legRun.nextResume))))) {
+      var pauseBody = Object.assign({}, legObj, { replyTo: bgRun, askedId: bgIds.msgId });
+      if (!pauseBody.resumeToken) {
+        var pauseToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+        var pausePut = await botResumePut(env, pauseToken, bgPk, bgRun, bgEnv.resume);
+        if (pausePut && pausePut.ok) {
+          pauseBody.resumeToken = pauseToken;
+          pauseBody.resumable = true;
+        }
+      }
+      await runResultPut(env.DB_BOT, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: pauseBody, status: legObj.noCredits ? 402 : 200 }, bgKeepAt);
+      await botBgRepack(bgPk, bgRun, bgLegList, "parked", pauseBody.resumeToken || null);
+      return await bgEnd({ ok: true, end: "paused", reason: legObj.noCredits ? "credits" : "cap" }, "paused");
+    }
+    if (legOut.status === 200 && legObj) {
+      var fin = legObj.stopped ? "stopped" : (legObj.pendingTool ? "approval" : (legObj.resumeToken ? "paused" : "done"));
+      return await bgEnd({ ok: true, end: fin }, fin);
+    }
+    if (!legObj || legOut.status >= 500 || (legOut.status === 429 && !legObj.runCap) || legOut.status === 202) {
+      return json({ error: (legObj && legObj.error) || "That step could not run.", retry: true }, 503);
+    }
+    await botBgRepack(bgPk, bgRun, bgLegList, "failed", null);
+    return await bgEnd({ ok: true, end: "failed" }, "failed");
+  };
+
+  var botScheduleFire = async function () {
+    var sPk = String(userPubkey).toLowerCase();
+    var sRun = String(body.runId || "");
+    var sId = sRun.slice(2);
+    var sLeg = String(body.leg || "");
+    var sKind = body.action === "pm-schednotify" ? "n:" : "f:";
+    if (sRun.indexOf("s:") !== 0 || !/^[A-Za-z0-9_-]{1,64}$/.test(sId)) return json({ error: "Unknown schedule.", fatal: true }, 400);
+    if (sLeg.indexOf(sKind) !== 0 || !/^[0-9]{1,16}$/.test(sLeg.slice(2))) return json({ error: "Unknown time.", fatal: true }, 400);
+    var firedAt = Number(sLeg.slice(2));
+    var sealed = await bgOpen(env, sPk, sRun, body.blob);
+    if (!sealed || sealed.id !== sId) return json({ ok: true, expired: true });
+    var sNow = Date.now();
+    if (!(Number(sealed.expiresAt) > sNow)) return json({ ok: true, expired: true });
+    var sKey = "s:" + sId + ":" + sLeg;
+    var sStored = await runResultGet(env.DB_BOT, sPk, sKey);
+    if (sStored && sStored.body) return json(sStored.body);
+    var sKeep = async function (control) {
+      await runResultPut(env.DB_BOT, sPk, [sKey], { body: control, status: 200 }, Date.now());
+      return json(control);
+    };
+    var sPush = sealed.push || null;
+    if (body.action === "pm-schednotify") {
+      if (!sPush) return json({ ok: true, expired: true });
+      await botBgNotify(sPush, { state: "due", schedule: sId, chat: sPush.chat, text: sPush.text || "A scheduled prompt is due" });
+      return await sKeep({ ok: true, state: "notified" });
+    }
+    var sDay = body.day && typeof body.day === "object" ? body.day : {};
+    if ((Number(sDay.runs) || 0) >= Number(sealed.maxRunsPerDay)) return json({ ok: true, skipped: "runs" });
+    if ((Number(sDay.credits) || 0) + Number(sealed.maxCreditsPerRun) > Number(sealed.dailyCap)) return json({ ok: true, skipped: "credits" });
+    var sIds = await bgSchedIds(sId, firedAt);
+    var sBody = { action: "pm", pubkey: sPk, eventId: sIds.eventId, fresh: true, maxCost: Number(sealed.maxCreditsPerRun) };
+    if (sealed.tier === "pro" && sealed.model) sBody.proModel = sealed.model;
+    var sLegRun = {
+      sched: { id: sId, firedAt: firedAt }, message: String(sealed.prompt || ""), msgId: sIds.msgId,
+      threadRoot: sealed.thread || null, remember: true, keepAt: sNow + BG_KEEP_AFTER_MS - RUN_RESULT_KEEP_MS
+    };
+    var sOut = await botLegResult(await botRunLeg(sBody, sLegRun));
+    var sObj = sOut.obj;
+    if (sObj && (sObj.event || sObj.selfEvent)) await botBgPublish(sObj);
+    var sText = sealed.title ? String(sealed.title).slice(0, 80) : "Your scheduled prompt ran";
+    if (sOut.status === 200 && sObj && sObj.event && !sObj.noCredits) {
+      var sCredits = Number(sObj.costCredits != null ? sObj.costCredits : sObj.cost) || 0;
+      await botBgNotify(sPush, { state: sObj.stopped ? "stopped" : "done", asked: sIds.msgId, schedule: sId,
+        chat: sPush ? sPush.chat : undefined, text: sText });
+      return await sKeep({ ok: true, state: "done", credits: sCredits, asked: sIds.msgId });
+    }
+    if (sOut.status === 429 && sObj && sObj.runCap) return json({ ok: true, retry: true });
+    var sFails = (Number(body.fails) || 0) + 1;
+    var sOff = sFails >= SCHED_FAIL_MAX;
+    if (sOff) {
+      await botBgNotify(sPush, { state: "disabled", schedule: sId, chat: sPush ? sPush.chat : undefined,
+        text: "A scheduled prompt failed " + SCHED_FAIL_MAX + " times and was turned off" });
+    }
+    return await sKeep({ ok: true, failed: true, disable: sOff, reason: sObj && sObj.noCredits ? "credits" : "error" });
+  };
+
+  var botScheduleAction = async function () {
+    var aPk = String(userPubkey).toLowerCase();
+    if (!bgConfigured(env) || !env.RUN_DRIVER) {
+      return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+    }
+    if (!(await botRateOk("sched", aPk, 30, 60000))) {
+      return json({ error: "Slow down — too many requests. Try again in a minute." }, 429);
+    }
+    if (body.action !== "schedule-list" && !wsAuthed) {
+      var sRp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+      if (!sRp.ok) return json({ error: sRp.error }, sRp.status);
+    }
+    if (body.action === "schedule-list") {
+      var sList = await bgDriver(env, aPk, { drive: "sched-list" });
+      if (!sList) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+      return json({ schedules: Array.isArray(sList.schedules) ? sList.schedules : [], day: sList.day || null });
+    }
+    if (body.action === "schedule-clear") {
+      var sCleared = await bgDriver(env, aPk, { drive: "sched-clear" });
+      if (!sCleared) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+      return json({ ok: true, deleted: Number(sCleared.deleted) || 0 });
+    }
+    if (body.action === "schedule-delete") {
+      if (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(body.id)) return json({ error: "Invalid schedule id." }, 400);
+      var sGone = await bgDriver(env, aPk, { drive: "sched-delete", id: body.id });
+      if (!sGone) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+      return json({ ok: true, deleted: Number(sGone.deleted) || 0 });
+    }
+    if (!wsAuthed && !botAuthHasPayload(body.auth)) {
+      return json({ error: "Sign the schedule together with its contents." }, 401);
+    }
+    var sParsed = schedParse(body.schedule, Date.now(), isPrivateHostUrl);
+    if (sParsed.error) return json({ error: sParsed.error, push: sParsed.push || undefined, expired: sParsed.expired || undefined }, 400);
+    var sc = sParsed.sched;
+    if ((await sha256Hex(body.schedule.payload)) !== sc.sha256) {
+      return json({ error: "The schedule does not match the hash it was signed with." }, 400);
+    }
+    if (sc.mode === "run" && sc.tier === "pro") {
+      var sPick = botProPick(await botProCatalog(env), sc.model);
+      if (!sPick) return json({ error: "Unknown Pro model. Type ?model to see the available models." }, 400);
+      sc.model = sPick.key;
+    }
+    var sSealed = sc.mode === "notify"
+      ? { v: 1, id: sc.id, mode: "notify", push: sc.push, expiresAt: sc.expiresAt }
+      : {
+        v: 1, id: sc.id, mode: "run", prompt: sc.prompt, title: sc.title, thread: sc.thread, tier: sc.tier, model: sc.model,
+        maxCreditsPerRun: sc.maxCreditsPerRun, maxRunsPerDay: sc.maxRunsPerDay, dailyCap: sc.dailyCap,
+        expiresAt: sc.expiresAt, repeat: sc.repeat, push: sc.push
+      };
+    var sBlob = await bgSeal(env, aPk, "s:" + sc.id, sSealed);
+    if (!sBlob) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+    var sPut = await bgDriver(env, aPk, {
+      drive: "sched-put", id: sc.id, mode: sc.mode, sha: sc.sha256, blob: sBlob, nextAt: sc.nextAt, step: sc.step,
+      expiresAt: sc.expiresAt, dailyCap: sc.mode === "run" ? sc.dailyCap : undefined
+    });
+    if (!sPut) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
+    if (sPut.limit) return json({ error: "You can keep up to " + sPut.limit + " schedules on the server.", limit: sPut.limit }, 409);
+    if (!sPut.ok) return json({ error: "That schedule could not be saved." }, 400);
+    return json({ ok: true, id: sc.id, nextAt: sPut.nextAt, expiresAt: sPut.expiresAt });
+  };
+
+  if (body.action === "pm") return await botRunLeg(body, null);
+
+  if (body.action === "pm-bgleg" || body.action === "pm-bgend") {
+    return await botBackgroundLeg();
+  }
+
+  if (body.action === "pm-schedfire" || body.action === "pm-schednotify") {
+    return await botScheduleFire();
+  }
+
+  if (body.action === "schedule-put" || body.action === "schedule-delete" || body.action === "schedule-clear" || body.action === "schedule-list") {
+    return await botScheduleAction();
   }
 
   if (body.action === "clear-history") {
     try { await botThreadDelete(env.DB_BOT, userPubkey); } catch (e) { }
+    try { await runForget(env.DB_BOT, String(userPubkey).toLowerCase()); } catch (e) { }
     try { await botWrapsDelete(env.DB_BOT, userPubkey); } catch (e) { }
+    try { await bgDriver(env, userPubkey, { drive: "clear" }); } catch (e) { }
     return json({ cleared: true });
   }
 
@@ -9057,7 +10521,7 @@ async function onRequest(context) {
     });
   }
 
-  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "push-key" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn")) {
+  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "push-key" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "git-branch" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn" || body.action === "pm-done-since" || body.action === "pm-bgleg" || body.action === "pm-bgend" || body.action === "pm-schedfire" || body.action === "pm-schednotify" || body.action === "schedule-put" || body.action === "schedule-delete" || body.action === "schedule-clear" || body.action === "schedule-list")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -9878,10 +11342,23 @@ var BOT_THINKING_MAX_CHARS = 4000;
 function sanitizeBotResponse(text, keepThinking, keepMentions) {
   if (typeof text !== "string") return text;
   var thinking = "";
-  text = text.replace(/<think>([\s\S]*?)<\/think>/gi, function (_, inner) {
+  var openRe = /<think>/gi;
+  var closeRe = /<\/think>/gi;
+  var kept = "";
+  var from = 0;
+  for (;;) {
+    openRe.lastIndex = from;
+    var opened = openRe.exec(text);
+    if (!opened) break;
+    closeRe.lastIndex = opened.index + opened[0].length;
+    var closed = closeRe.exec(text);
+    if (!closed) break;
+    var inner = text.slice(opened.index + opened[0].length, closed.index);
     if (keepThinking && inner.trim()) thinking += (thinking ? "\n\n" : "") + inner.trim();
-    return "";
-  });
+    kept += text.slice(from, opened.index);
+    from = closed.index + closed[0].length;
+  }
+  text = kept + text.slice(from);
   // An unclosed <think> means the output was cut mid-reasoning; drop it.
   var thinkOpen = text.search(/<think>/i);
   if (thinkOpen !== -1) text = text.slice(0, thinkOpen);
@@ -10844,6 +12321,8 @@ var WEB_SEARCH_DEADLINE = 6000;
 var WEB_SEARCH_MAX_RESULTS = 6;
 // No single source may fill the whole block.
 var WEB_SEARCH_MAX_PER_SOURCE = 3;
+var WEB_QUERY_MAX_CHARS = 2000;
+var WEB_QUERY_MAX_TERMS = 32;
 
 // Runs every source and logs each outcome so a dead source is visible in `wrangler tail`.
 async function runSearchSources(sources) {
@@ -10852,9 +12331,9 @@ async function runSearchSources(sources) {
     // Promise.resolve().then keeps a synchronously throwing source from taking down the fan-out.
     return Promise.resolve().then(source.run).then(function (results) {
       collected[i] = Array.isArray(results) ? results : [];
-      if (!collected[i].length) console.warn("nymbot web search: " + source.name + " returned no results");
+      if (!collected[i].length) console.warn("nymbot web search: " + source.name.split(":")[0] + " returned no results");
     }, function (e) {
-      console.warn("nymbot web search: " + source.name + " failed — " + ((e && e.message) || e));
+      console.warn("nymbot web search: " + source.name.split(":")[0] + " failed — " + (/^(?:HTTP \d{3}|blocked)\b/.exec(String((e && e.message) || "")) || [/^(?:Abort|Timeout)Error$/.test(String(e && e.name)) ? "timeout" : "error"])[0]);
     });
   });
   var deadline;
@@ -10867,9 +12346,10 @@ async function runSearchSources(sources) {
 }
 
 async function webSearch(query, geohash, env, opts) {
+  query = String(query || "").slice(0, WEB_QUERY_MAX_CHARS);
   if (/\b(weather|forecast|temperature)\b/i.test(query)) {
     var weatherResults = await searchWeather(query, geohash).catch(function (e) {
-      console.warn("nymbot web search: weather failed — " + ((e && e.message) || e));
+      console.warn("nymbot web search: weather failed — " + (/^(?:HTTP \d{3}|blocked)\b/.exec(String((e && e.message) || "")) || [/^(?:Abort|Timeout)Error$/.test(String(e && e.name)) ? "timeout" : "error"])[0]);
       return [];
     });
     if (weatherResults.length > 0) return weatherResults;
@@ -10891,7 +12371,7 @@ async function webSearch(query, geohash, env, opts) {
     sources.push({ name: "mojeek:" + narrow, run: function () { return searchMojeek(narrow); } });
   }
   var collected = await runSearchSources(sources);
-  var queryTerms = searchTerms(query);
+  var queryTerms = searchTerms(query).slice(0, WEB_QUERY_MAX_TERMS);
   var merged = [];
   var used = [];
   var seen = {};
@@ -10920,8 +12400,7 @@ async function webSearch(query, geohash, env, opts) {
   }
   if (dropped) console.warn("nymbot web search: dropped " + dropped + " off-topic results");
   if (!merged.length) {
-    console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty") +
-      (narrow ? " (narrow: " + narrow + ")" : ""));
+    console.warn("nymbot web search: " + (reachable ? "nothing on topic" : "every source came back empty"));
     if (!reachable && !(env && env.BRAVE_SEARCH_API_KEY)) {
       // Scraped engines block datacenter egress, so without a search API key nothing works.
       console.warn("nymbot web search: no BRAVE_SEARCH_API_KEY is set, and the " +
@@ -10994,7 +12473,9 @@ function resultMatchesQuery(line, terms) {
   var words = queryTokens(String(line || "").replace(/[-\u2013\u2014]/g, " "))
     .map(function (w) { return w.toLowerCase(); });
   var hits = 0;
-  for (var i = 0; i < terms.length; i++) {
+  var need = terms.length < 3 ? 1 : 2;
+  var limit = Math.min(terms.length, WEB_QUERY_MAX_TERMS);
+  for (var i = 0; i < limit && hits < need; i++) {
     var term = terms[i].toLowerCase().replace(/[-\u2013\u2014]/g, "");
     if (term.length < 3) continue;
     for (var j = 0; j < words.length; j++) {
@@ -11005,7 +12486,7 @@ function resultMatchesQuery(line, terms) {
       }
     }
   }
-  return terms.length < 3 ? hits >= 1 : hits >= 2;
+  return hits >= need;
 }
 
 var PAGE_FETCH_CHARS = 2000;
@@ -11138,7 +12619,7 @@ function pageQueryTerms(query, snippet) {
     seen[stem] = out.length;
     out.push({ stem: stem, weight: weight, asked: !!asked });
   }
-  var asked = searchTerms(String(query || "").replace(/https?:\/\/\S+/g, " "));
+  var asked = searchTerms(String(query || "").slice(0, WEB_QUERY_MAX_CHARS).replace(/https?:\/\/\S+/g, " ")).slice(0, WEB_QUERY_MAX_TERMS);
   for (var i = 0; i < asked.length; i++) add(asked[i], /^[A-Z]/.test(asked[i]) ? 4 : 3, true);
   var hinted = searchTerms(String(snippet || "").replace(/https?:\/\/\S+/g, " "));
   for (var j = 0; j < hinted.length && j < 30; j++) add(hinted[j], 1, false);
@@ -11371,7 +12852,7 @@ function botExtractPageUrls(text) {
   return out;
 }
 
-var BOT_OWN_DOMAINS = ["nymbot.ai", "nymbot.pages.dev"];
+var BOT_OWN_DOMAINS = ["nymbot.ai", "nymbot.pages.dev", "nymchat.app", "nymchat.pages.dev"];
 
 function botHostUnder(host, list) {
   for (var i = 0; i < list.length; i++) {
@@ -11387,8 +12868,17 @@ function isPrivateHostUrl(raw) {
   var host = u.hostname.toLowerCase().replace(/\.+$/, "");
   if (!host) return true;
   if (mcpHostBlocked(host) !== "") return true;
-  if (botHostUnder(host, BOT_OWN_DOMAINS) && /^\/api(\/|$)/i.test(u.pathname)) return true;
+  if (botHostUnder(host, BOT_OWN_DOMAINS)) return !botPublicDocsUrl(u, host);
   return false;
+}
+
+var BOT_DOCS_HOSTS = ["nymbot.ai", "nymchat.app"];
+var BOT_DOCS_PATH = /^(\/[a-z]{2}(-[a-z]{2,4})?)?\/docs(\.md|\/([a-z0-9_-]+(\.[a-z0-9]+)?\/)*([a-z0-9_-]+(\.[a-z0-9]+)?)?)?$/i;
+
+function botPublicDocsUrl(u, host) {
+  if (BOT_DOCS_HOSTS.indexOf(host) === -1) return false;
+  if (u.protocol !== "https:" || u.port || u.username || u.password) return false;
+  return BOT_DOCS_PATH.test(u.pathname);
 }
 
 async function botReadLinkedPages(question, progress, perPage) {
@@ -11465,7 +12955,7 @@ async function attachPageContent(results, opts) {
     return fetchPageDocument(pick.url, PAGE_READ_CHARS, { parts: true }).then(function (doc) {
       docs[k] = doc;
     }, function (e) {
-      console.warn("nymbot page read failed — " + ((e && e.message) || e));
+      console.warn("nymbot page read failed — " + (/^(?:HTTP \d{3}|blocked)\b/.exec(String((e && e.message) || "")) || [/^(?:Abort|Timeout)Error$/.test(String(e && e.name)) ? "timeout" : "error"])[0]);
       if (/HTTP 4\d\d/.test(String((e && e.message) || ""))) dead[pick.url] = true;
     });
   });
@@ -11553,7 +13043,7 @@ function narrowSearchTerm(text) {
 
 // A follow-up lacks its own subject, so borrow it from the previous user turn.
 function searchQueryFor(question, conversation) {
-  var q = String(question || "").trim();
+  var q = String(question || "").slice(0, WEB_QUERY_MAX_CHARS).trim();
   var stripped = q.replace(FOLLOW_UP_LEAD, "").trim() || q;
   // Opening with "but"/"ok"/"no" marks a continuation even when the turn has its own subject words.
   var leansOnThread = FOLLOW_UP_LEAD.test(q) || contentWordCount(stripped) < 2 ||
@@ -12894,6 +14384,7 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  BOT_STREAM_TIMING,
   botCreditInvoice,
   botCreditsForSatsTier,
   BOT_BULK_BONUS,
@@ -13013,6 +14504,7 @@ export {
   gitStalledReply,
   gitApplyStaged,
   gitResumeState,
+  gitBranchAction,
   mcpGitAdapter,
   fetchPageDocument,
   isPrivateHostUrl,

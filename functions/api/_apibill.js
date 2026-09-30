@@ -1,6 +1,6 @@
 import { ledgerCall } from "./_ledger.js";
 import { creditsGet, hasD1 } from "./_d1.js";
-import { noteUsage } from "./_usage.js";
+import { noteUsage, USAGE_KEEP_DAYS } from "./_usage.js";
 import { bytesToHex, randomBytes } from "./_shared.js";
 import {
   botBtcPrice, botCreditFigure, botFailedSpendMilli, BOT_HOLD_TTL_S, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT
@@ -9,7 +9,8 @@ import { ApiError, apiBad, apiIso, apiJson, apiRound, apiParseTime } from "./_ap
 import { apiKeyLimitError } from "./_apiauth.js";
 import { apiL402Open, apiL402Settle, apiL402Cost, apiL402Usage } from "./_apil402.js";
 
-export const API_HISTORY_DAYS = 90;
+export const API_HISTORY_DAYS = USAGE_KEEP_DAYS;
+export const API_HISTORY_MAX_PAGE = 1000;
 export const API_BILL_TIMING = { refreshMs: 300000, refreshMaxMs: 7200000 };
 export const API_HISTORY_TYPES = ["chat", "responses", "messages", "image", "video", "speech", "transcription", "embedding"];
 
@@ -49,13 +50,29 @@ async function debtDb(env) {
   return db;
 }
 
-export async function apiDebtOf(env, pubkey, tier) {
+async function pendingDebtOf(env, pubkey, tier) {
   const db = await debtDb(env);
   if (!db) return 0;
   try {
     const row = await db.prepare("SELECT milli FROM api_debt WHERE pubkey = ? AND tier = ?").bind(pubkey, tier === "pro" ? "pro" : "standard").first();
     return row ? Math.max(0, Number(row.milli) || 0) : 0;
   } catch (e) { return 0; }
+}
+
+async function ledgerDebts(env, pubkey) {
+  let peek = null;
+  try { peek = await ledgerCall(env, { op: "dust-peek", pubkey }); } catch (e) { peek = null; }
+  const ok = !!(peek && peek.ok);
+  const debt = ok && peek.debt ? peek.debt : {};
+  return {
+    dust: { standard: ok ? Number(peek.standard) || 0 : 0, pro: ok ? Number(peek.pro) || 0 : 0 },
+    debt: { standard: Number(debt.standard) || 0, pro: Number(debt.pro) || 0 }
+  };
+}
+
+export async function apiDebtOf(env, pubkey, tier) {
+  const t = tier === "pro" ? "pro" : "standard";
+  return (await ledgerDebts(env, pubkey)).debt[t] + await pendingDebtOf(env, pubkey, t);
 }
 
 async function debtAdd(env, pubkey, tier, milli) {
@@ -81,24 +98,16 @@ async function debtTake(env, pubkey, tier) {
 }
 
 async function consumeOp(env, pubkey, tier, milli, hold) {
-  const op = { op: "consume-credits", pubkey, cost: 0, tier, milli };
+  const op = { op: "consume-credits", pubkey, cost: 0, tier, milli, owe: true };
   if (hold) op.hold = hold;
   try { return await ledgerCall(env, op); } catch (e) { return { _noLedger: true }; }
 }
 
-async function chargeUpTo(env, pubkey, tier, milli, hold, floorMilli) {
-  let took = await consumeOp(env, pubkey, tier, milli, hold);
-  if (took && took.ok) return { charged: milli, took };
-  if (!took || took._noLedger || took.error) return { charged: 0, took: null };
-  const whole = Math.floor(Math.max(0, Number(took.balance) || 0)) * 1000;
-  const tries = [...new Set([whole, whole - 1000, whole >= milli ? milli - 1000 : 0, Number(floorMilli) || 0])]
-    .filter((m) => m > 0 && m < milli).sort((x, y) => y - x);
-  for (const m of tries) {
-    took = await consumeOp(env, pubkey, tier, m, null);
-    if (took && took.ok) return { charged: m, took };
-    if (!took || took._noLedger || took.error) break;
-  }
-  return { charged: 0, took: null };
+async function chargeOwing(env, pubkey, tier, milli, hold) {
+  const took = await consumeOp(env, pubkey, tier, milli, hold);
+  if (!took || !took.ok) return { charged: 0, owed: milli, took: null };
+  const owed = Math.max(0, Math.min(milli, Math.ceil(Number(took.owedMilli) || 0)));
+  return { charged: milli - owed, owed, took };
 }
 
 function insufficient(tier, needCredits, freeCredits, heldByOthers, owedMilli) {
@@ -134,9 +143,12 @@ export async function apiBillPrecheck(api, tierIn) {
 export async function apiBalances(env, pubkey) {
   const std = await creditsGet(env.DB_CREDITS, pubkey);
   const pro = await creditsGet(env.DB_CREDITS, pubkey + "#pro");
-  const dust = await ledgerCall(env, { op: "dust-peek", pubkey });
-  const owed = dust && dust.ok ? dust : { standard: 0, pro: 0 };
-  const debt = { standard: await apiDebtOf(env, pubkey, "standard"), pro: await apiDebtOf(env, pubkey, "pro") };
+  const held = await ledgerDebts(env, pubkey);
+  const owed = held.dust;
+  const debt = {
+    standard: held.debt.standard + await pendingDebtOf(env, pubkey, "standard"),
+    pro: held.debt.pro + await pendingDebtOf(env, pubkey, "pro")
+  };
   const credits = {
     standard: botCreditFigure(std.balance || 0, -((owed.standard || 0) + debt.standard)),
     pro: botCreditFigure(pro.balance || 0, -((owed.pro || 0) + debt.pro))
@@ -175,11 +187,7 @@ export async function apiBillOpen(api, o) {
     if (!kr || !kr.ok) throw ledgerDown();
     bill.keyOpen = true;
   }
-  const unpaid = await apiDebtCollect(api.env, bill.pubkey, tier);
-  if (unpaid > 0) {
-    await apiKeyClose(api, bill, 0);
-    throw insufficient(tier, holdCredits, 0, false, unpaid);
-  }
+  await apiDebtCollect(api.env, bill.pubkey, tier);
   const held = await holdOp(api.env, bill);
   if (held && held.ok) {
     if (o.refresh) startRefresh(api, bill);
@@ -188,6 +196,7 @@ export async function apiBillOpen(api, o) {
   await apiKeyClose(api, bill, 0);
   if (held && held._noLedger) throw ledgerDown();
   if (held && held.rateLimited) throw new ApiError(429, "rate_limit_error", "Too many requests.", { code: "rate_limit_exceeded", headers: { "Retry-After": "10" } });
+  if (held && held.debt > 0) throw insufficient(tier, holdCredits, 0, false, held.debt);
   const free = held ? Math.max(0, (Number(held.balance) || 0) - (Number(held.held) || 0)) : 0;
   throw insufficient(tier, holdCredits, free, !!(held && held.held), 0);
 }
@@ -201,10 +210,11 @@ function holdOp(env, bill) {
 export async function apiDebtCollect(env, pubkey, tier) {
   const owed = await debtTake(env, pubkey, tier);
   if (owed <= 0) return 0;
-  const got = await chargeUpTo(env, pubkey, tier, owed, null, 0);
-  const left = owed - got.charged;
-  if (left > 0) await debtAdd(env, pubkey, tier, left);
-  return left;
+  let moved = null;
+  try { moved = await ledgerCall(env, { op: "debt-add", pubkey, tier, milli: owed }); } catch (e) { moved = null; }
+  if (moved && moved.ok) return Math.max(0, Number(moved.debt) || 0);
+  await debtAdd(env, pubkey, tier, owed);
+  return owed;
 }
 
 function startRefresh(api, bill) {
@@ -232,10 +242,18 @@ async function refreshHold(api, bill) {
     });
   }
   if (bill.done) return;
-  await ledgerCall(env, { op: "credit-release", id: bill.id });
-  if (bill.done) return;
-  const held = await holdOp(env, bill);
-  bill.holdLost = !(held && held.ok);
+  let held = null;
+  try {
+    held = await ledgerCall(env, {
+      op: "credit-extend", id: bill.id, pubkey: bill.pubkey, tier: bill.tier, amount: bill.holdCredits, ttl: BOT_HOLD_TTL_S
+    });
+  } catch (e) { held = null; }
+  if (!(held && held.ok) && !bill.done) {
+    bill.holdLost = true;
+    if (typeof bill.onHoldLost === "function") {
+      try { bill.onHoldLost(); } catch (e) { }
+    }
+  }
 }
 
 async function stopRefresh(bill) {
@@ -272,15 +290,16 @@ export async function apiBillSettle(api, bill, milliIn, opts) {
   bill.done = true;
   await stopRefresh(bill);
   const env = api.env;
-  const got = await chargeUpTo(env, bill.pubkey, bill.tier, milli, bill.id, bill.holdCredits * 1000);
-  let owed = milli - got.charged;
-  if (owed > 0 && !(await debtAdd(env, bill.pubkey, bill.tier, owed))) owed = 0;
+  const got = await chargeOwing(env, bill.pubkey, bill.tier, milli, bill.id);
+  let owed = got.owed;
+  if (owed > 0 && !got.took && !(await debtAdd(env, bill.pubkey, bill.tier, owed))) owed = 0;
   const billed = got.charged + owed;
   await apiKeyClose(api, bill, billed * bill.satsPer / 1000);
   const took = got.took;
   const settled = {
     chargedMilli: billed, owedMilli: owed,
-    balance: took && owed <= 0 ? took.balance : null, dust: took && owed <= 0 ? (took.dust || 0) : null
+    balance: took ? took.balance : null, dust: took ? (took.dust || 0) : null,
+    debtMilli: took ? Math.max(0, Number(took.debt) || 0) : null
   };
   if (billed > 0) apiRunSettleHooks(api, bill, settled);
   return settled;
@@ -310,7 +329,7 @@ export async function apiCostObject(api, bill, settled, btcUsd) {
   if (bill.l402) return apiL402Cost(api, bill, settled, (sats) => apiUsd(sats, btcUsd));
   const milli = settled.chargedMilli || 0;
   let balanceCredits;
-  if (settled.balance != null) balanceCredits = botCreditFigure(settled.balance, -(settled.dust || 0));
+  if (settled.balance != null) balanceCredits = botCreditFigure(settled.balance, -((settled.dust || 0) + (settled.debtMilli || 0)));
   else balanceCredits = (await apiBalances(api.env, bill.pubkey))[bill.tier].credits;
   const chargedSats = apiMilliSats(milli, bill.tier);
   const out = {
@@ -423,6 +442,7 @@ function flag(v) {
 async function historyHandler(api) {
   const q = api.url.searchParams;
   const page = Math.max(1, Math.floor(Number(q.get("page")) || 1));
+  if (page > API_HISTORY_MAX_PAGE) throw apiBad("`page` must be at most " + API_HISTORY_MAX_PAGE + ".", "page", "invalid_value");
   const pageCount = Math.min(100, Math.max(1, Math.floor(Number(q.get("page_count")) || 20)));
   const start = apiParseTime(q.get("start_date"), "start_date");
   const end = apiParseTime(q.get("end_date"), "end_date");

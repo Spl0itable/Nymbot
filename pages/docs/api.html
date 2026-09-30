@@ -85,7 +85,7 @@
                     </thead>
                     <tbody>
                         <tr><td>OpenAI SDKs and OpenAI-compatible tools</td><td><code>https://nymbot.ai/api/v1</code></td></tr>
-                        <tr><td>Anthropic SDKs and Claude Code</td><td><code>https://nymbot.ai/api</code> (the SDK adds <code>/v1/messages</code> itself)</td></tr>
+                        <tr><td>Anthropic SDKs and <a href="/docs/api-tools/#claude-code">Claude Code</a></td><td><code>https://nymbot.ai/api</code> (the SDK adds <code>/v1/messages</code> itself)</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -93,7 +93,13 @@
                 known path called with the wrong method returns <code>405</code>, both as JSON.</p>
             <p>The API answers cross-origin requests from any site, so a browser page can call it. Anything
                 you ship to a browser can be read by whoever opens it, though, so only do that with a key that
-                has a small <a href="#keys">cap</a>.</p>
+                has a small <a href="#keys">cap</a>. The endpoints signed with your nym (keys, the account
+                summary, NWC auto-top-up and refund redemption) are the exception: in a browser they answer
+                only Nymbot's own sites. See <a href="/docs/api-account/#nip98">signing account requests</a>.</p>
+            <p>Send every JSON body with <code>Content-Type: application/json</code>. Any other type is
+                refused with <code>415</code>, so a plain HTML form or a <code>text/plain</code> request from
+                another site cannot reach the API. With cURL, pass
+                <code>-H "Content-Type: application/json"</code> along with <code>-d</code>.</p>
 
             <h2 id="keys">API keys</h2>
             <p>Keys are made in the app. Open <strong>API</strong> in the sidebar of the web app, or in the
@@ -226,13 +232,16 @@ console.log(reply.choices[0].message.content);</code></pre>
                     not rounded up each time.</li>
                 <li><strong>Hold, then settle.</strong> Before a request runs, the most it could cost is held
                     from your balance, based on what you sent and the most tokens it may write. Text outside
-                    plain ASCII is sized from its UTF-8 bytes, so text in any script is held for in full. The hold is in
+                    plain ASCII is sized from its UTF-8 bytes, and ASCII digits and punctuation count as a token each, so text in any script, code and numbers are held for in full. The hold is in
                     whole credits, at least one, so any request needs at least 10 sats free on the standard
                     balance or 100 sats on Pro to start. Only the actual cost is charged; the rest is released
-                    when it finishes. A long request keeps its hold for as long as it runs. If the actual cost
+                    when it finishes. A long request keeps its hold for as long as it runs; if the held credits
+                    stop being available anyway, a stream stops with a <code>402</code>
+                    <code>insufficient_balance</code> error event, and what was generated is charged. If the actual cost
                     is more than the balance can pay, the whole balance is taken, the rest is owed
-                    (<code>owed_sats</code> in the <code>nymbot</code> object, and a negative balance), and it is
-                    collected before your next request runs.</li>
+                    (<code>owed_sats</code> in the <code>nymbot</code> object, and a negative balance). What is owed
+                    is paid first out of the next credits that reach that balance. Until it is paid, nothing on that
+                    balance can be spent: not by the API, replies in the app, a transfer or a gift.</li>
                 <li><strong>Not enough credit.</strong> If the balance cannot cover the hold, the request is
                     refused with <code>402</code> before anything runs. The error says which balance is short,
                     how many sats the request needs and how many are free. A smaller
@@ -240,11 +249,14 @@ console.log(reply.choices[0].message.content);</code></pre>
                 <li><strong>Failures.</strong> A request that fails costs nothing, unless the provider billed
                     for the work it did before failing, or a web search or the <code>nymbot/auto</code> task
                     check had already run; then that is what you pay, at least 0.05 credit. A stream you cut
-                    off is charged for what was generated up to that point, and a request whose connection
-                    drops still finishes and is charged.</li>
-                <li><strong>Web search</strong> has no fee of its own when the request succeeds. The pages it
-                    reads are sent to the model as input, so it costs the tokens they add. If the model then
-                    fails, the search is charged on its own.</li>
+                    off is charged for the tokens the provider reports: Nymbot keeps reading the provider's
+                    stream for up to 25 seconds after you leave to get that count. If it does not arrive, the
+                    charge is estimated from what you sent and what was written, and for a model that reasons
+                    it includes the whole output allowance of the hold. A request whose connection drops
+                    still finishes and is charged.</li>
+                <li><strong>Web search</strong> costs $0.008 a search, converted to sats, whenever a search
+                    ran, whether the model then answers or fails. The pages it reads are also sent to the
+                    model as input, so they add their tokens.</li>
             </ul>
             <p>Every response says what it cost. JSON responses carry a <code>nymbot</code> object with the
                 balance it was paid from, the charge in credits and sats, and what is left:</p>
@@ -304,8 +316,9 @@ console.log(reply.choices[0].message.content);</code></pre>
                         <tr><td><code>404</code> <code>not_found_error</code></td><td>An unknown path (<code>unknown_endpoint</code>), a model that does not exist (<code>model_not_found</code>), or an unknown key, invoice or video.</td></tr>
                         <tr><td><code>405</code></td><td>The path exists but not with that method (<code>method_not_allowed</code>). The <code>Allow</code> header lists the methods it takes.</td></tr>
                         <tr><td><code>413</code></td><td>The body or file is too large (<code>payload_too_large</code>, <code>file_too_large</code>), or a recording is too long (<code>audio_too_long</code>). See <a href="#limits">limits</a>.</td></tr>
+                        <tr><td><code>415</code> <code>invalid_request_error</code></td><td>The body is not sent as <code>application/json</code> (or, for the upload endpoints, <code>multipart/form-data</code>): <code>unsupported_media_type</code>.</td></tr>
                         <tr><td><code>422</code></td><td>A voice and language that do not go together in text to speech (<code>voice_language_mismatch</code>, <code>unsupported_language</code>).</td></tr>
-                        <tr><td><code>429</code> <code>rate_limit_error</code></td><td>Too many requests on this key (<code>rate_limit_exceeded</code>), or the provider is rate-limiting (<code>upstream_rate_limited</code>). Wait for the seconds in <code>Retry-After</code>.</td></tr>
+                        <tr><td><code>429</code> <code>rate_limit_error</code></td><td>Too many requests on this key, from this address, or with credentials that failed to verify (<code>rate_limit_exceeded</code>), or the provider is rate-limiting (<code>upstream_rate_limited</code>). Wait for the seconds in <code>Retry-After</code>.</td></tr>
                         <tr><td><code>500</code> <code>api_error</code></td><td>Something went wrong on Nymbot's side (<code>internal_error</code>).</td></tr>
                         <tr><td><code>502</code> <code>api_error</code></td><td>The provider did not return an answer (<code>upstream_error</code>), or a Lightning invoice could not be made (<code>invoice_unavailable</code>).</td></tr>
                         <tr><td><code>503</code> <code>api_error</code></td><td>The provider is overloaded (<code>upstream_overloaded</code>), the Bitcoin price cannot be read (<code>price_unavailable</code>), or a part of the service is down (<code>service_unavailable</code>, <code>media_hosting_unavailable</code>). <code>Retry-After</code> says when to try again, where it is known.</td></tr>
@@ -338,10 +351,14 @@ console.log(reply.choices[0].message.content);</code></pre>
                     <tbody>
                         <tr><td>Requests per key</td><td>120 a minute. Above that, <code>429</code> with <code>Retry-After</code>.</td></tr>
                         <tr><td>Requests without a key</td><td>120 a minute per address, for the model, audio and payment method listings, refund token checks, and paid endpoints called without a key or payment. Above that, <code>429</code> with <code>Retry-After</code>.</td></tr>
+                        <tr><td>Failed authentication</td><td>30 a minute per address for keys, signatures, payment credentials and refund tokens that do not verify. Above that, every request from the address that carries a credential gets <code>429</code> with <code>Retry-After</code> until the minute is over. Credentials are checked before the body is read.</td></tr>
                         <tr><td>New keys</td><td>60 an hour per nym and 120 an hour per address.</td></tr>
                         <tr><td>Top-up invoices</td><td>60 an hour per nym and 120 an hour per address.</td></tr>
-                        <tr><td>JSON request body</td><td>4 MB</td></tr>
-                        <tr><td>Multipart request body (uploads)</td><td>32 MB. A picture to edit can be up to 20 MB, an audio file up to 25 MB.</td></tr>
+                        <tr><td>NWC wallet connections</td><td>10 an hour per nym and 30 an hour per address. The wallet relay has to use <code>wss://</code> on the standard port.</td></tr>
+                        <tr><td>Refund tokens</td><td>60 requests a minute per token.</td></tr>
+                        <tr><td>Addresses</td><td>An IPv6 address counts as its whole /64 in every per-address limit, and an IPv4-mapped IPv6 address as its IPv4 address.</td></tr>
+                        <tr><td>JSON request body</td><td>4 MB; 64 KB for requests signed with your nym.</td></tr>
+                        <tr><td>Multipart request body (uploads)</td><td>32 MB. A picture to edit can be up to 20 MB, an audio file up to 25 MB. At most 64 parts, each with at most 8 KB of part headers, and a boundary of 1 to 70 characters; otherwise <code>400</code> <code>invalid_multipart</code>.</td></tr>
                         <tr><td>Pictures in one chat request</td><td>20. Each is an <code>https://</code> or <code>http://</code> link to a public host, or a <code>data:image/&hellip;</code> URL.</td></tr>
                         <tr><td>Images per generation request</td><td>1 to 4 (<code>n</code>)</td></tr>
                         <tr><td>Output tokens</td><td>Capped at the model's own maximum. A larger <code>max_tokens</code> is lowered to it, not refused.</td></tr>
@@ -354,8 +371,8 @@ console.log(reply.choices[0].message.content);</code></pre>
                     </tbody>
                 </table>
             </div>
-            <p>A link to a picture must point to a public host: an address on a private or local network is
-                refused. Provider pacing that applies in the app applies here too, so a burst of requests to
+            <p>A link to a picture must point to a public host: an address on a private or local network, or
+                on Nymbot's own sites, is refused. Provider pacing that applies in the app applies here too, so a burst of requests to
                 one provider can be slowed down rather than failed.</p>
 
             <h2 id="privacy">What the API can see</h2>
@@ -368,7 +385,22 @@ console.log(reply.choices[0].message.content);</code></pre>
                 <li><strong>Prompts and replies are not stored.</strong> They pass through to the model and the
                     answer passes back. What is kept is the bill: for each request the time, model, kind,
                     token counts, cost, balance, key and whether it succeeded, for 90 days, which is what
-                    <a href="/docs/api-account/#history">query history</a> shows you.</li>
+                    <a href="/docs/api-account/#history">query history</a> shows you. A usage record of the
+                    same request (time, kind, model, token counts, cost, duration and whether it used web
+                    search or succeeded) is also kept for 90 days, alongside the app's own.</li>
+                <li><strong>Everything else held for a nym is small and listed here.</strong>
+                    <a href="/docs/api-account/#key-endpoints">API keys</a> are stored as a hash, never the key, with
+                    their name, a short hint, spending cap, reset period, expiry and when they were made and
+                    last used; only the newest 50 revoked keys are kept. An
+                    <a href="/docs/api-account/#nwc">automatic top-up</a> wallet connection is stored
+                    encrypted, with its threshold, amount and the result of the last top-up. Video jobs are
+                    kept for 24 hours. Requests paid per call leave only a Lightning payment hash for 7 days
+                    and a hashed refund token for 30 days, linked to no nym. Charges a balance could not
+                    cover are kept as owed until a top-up pays them.</li>
+                <li><strong>Wiping the app deletes it.</strong> A
+                    <a href="/docs/identity/#panic">device wipe</a> revokes and deletes every API key, and
+                    deletes the query history, usage records, wallet connection and video jobs. The balance
+                    and any charges still owed remain on the nym.</li>
                 <li><strong>The model's provider sees your request</strong>, as it does from the app. Catalog
                     models run at their makers; standard routes and embeddings run on Cloudflare.</li>
                 <li><strong>Generated media is public.</strong> Pictures and video delivered as links are
@@ -422,7 +454,8 @@ console.log(reply.choices[0].message.content);</code></pre>
             </div>
             <p>&ldquo;Nym&rdquo; means a request signed by your Nostr key, described in
                 <a href="/docs/api-account/#nip98">signing account requests</a>. For tools that already speak
-                these formats, see <a href="/docs/api-integrations/">tools and SDKs</a>.</p>
+                these formats, see <a href="/docs/api-integrations/">tools and SDKs</a>, and for coding agents such as
+                Claude Code, Codex and Cline, see <a href="/docs/api-tools/">coding tools</a>.</p>
         <!--DOCS-PAGER-->
         </main>
         <!--DOCS-TOC-->

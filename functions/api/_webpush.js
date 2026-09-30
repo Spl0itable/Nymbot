@@ -1,3 +1,4 @@
+import { runNoticeFields } from "./_apns.js";
 export const WEBPUSH_TTL_S = 900;
 export const WEBPUSH_RECORD_SIZE = 4096;
 export const WEBPUSH_JWT_MAX_AGE_S = 12 * 60 * 60;
@@ -153,9 +154,9 @@ export async function webPushEncrypt(sub, payload, opts) {
   return concat(head, asPublic, sealed);
 }
 
-export function webPushReplyPayload(chat, text) {
+export function webPushReplyPayload(chat, text, extra) {
   const body = typeof text === "string" && text.trim() ? text.trim().slice(0, 80) : WEBPUSH_DEFAULT_TEXT;
-  return { title: "Nymbot", body: body, chat: chat };
+  return Object.assign({ title: "Nymbot", body: body, chat: chat }, runNoticeFields(extra));
 }
 
 export async function webPushSendReply(env, reg, fetchFn) {
@@ -166,7 +167,7 @@ export async function webPushSendReply(env, reg, fetchFn) {
   let jwt, body;
   try {
     jwt = await webPushVapidToken(env, new URL(sub.endpoint).origin, Math.floor(Date.now() / 1000));
-    body = await webPushEncrypt(sub, JSON.stringify(webPushReplyPayload(reg.chat, reg.text)));
+    body = await webPushEncrypt(sub, JSON.stringify(webPushReplyPayload(reg.chat, reg.text, reg)));
   } catch (e) {
     return { status: 0, reason: "key" };
   }
@@ -188,5 +189,54 @@ export async function webPushSendReply(env, reg, fetchFn) {
     return { status: 0, reason: "network" };
   }
   if (res.status === 401 || res.status === 403) webPushForget();
+  return { status: res.status };
+}
+
+export const UNIFIEDPUSH_MAX_ENDPOINT = 800;
+
+export function unifiedPushParse(raw, isPrivate) {
+  if (!raw || typeof raw !== "object") return null;
+  const endpoint = raw.endpoint;
+  if (typeof endpoint !== "string" || !endpoint || endpoint.length > UNIFIEDPUSH_MAX_ENDPOINT || /["\\\s]/.test(endpoint)) return null;
+  let u;
+  try { u = new URL(endpoint); } catch (e) { return null; }
+  if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443")) return null;
+  if (typeof isPrivate !== "function" || isPrivate(endpoint)) return null;
+  const k = raw.keys || {};
+  const p256dh = unb64url(k.p256dh);
+  const auth = unb64url(k.auth);
+  if (!p256dh || p256dh.length !== 65 || p256dh[0] !== 4) return null;
+  if (!auth || auth.length !== 16) return null;
+  return { endpoint: u.href, keys: { p256dh: b64url(p256dh), auth: b64url(auth) } };
+}
+
+export async function unifiedPushSend(env, reg, fetchFn) {
+  if (!reg || typeof reg.token !== "string") return { skipped: true };
+  let sub;
+  try { sub = JSON.parse(reg.token); } catch (e) { return { skipped: true }; }
+  if (!sub || typeof sub.endpoint !== "string" || !sub.keys) return { skipped: true };
+  const send = fetchFn || fetch;
+  let body;
+  const headers = {
+    "content-encoding": "aes128gcm",
+    "content-type": "application/octet-stream",
+    "ttl": String(WEBPUSH_TTL_S),
+    "urgency": "high"
+  };
+  try {
+    body = await webPushEncrypt(sub, JSON.stringify(webPushReplyPayload(reg.chat, reg.text, reg)));
+    if (webPushConfigured(env)) {
+      const jwt = await webPushVapidToken(env, new URL(sub.endpoint).origin, Math.floor(Date.now() / 1000));
+      headers.authorization = "vapid t=" + jwt + ", k=" + webPushPublicKey(env);
+    }
+  } catch (e) {
+    return { status: 0, reason: "key" };
+  }
+  let res;
+  try {
+    res = await send(sub.endpoint, { method: "POST", headers: headers, body: body, redirect: "manual" });
+  } catch (e) {
+    return { status: 0, reason: "network" };
+  }
   return { status: res.status };
 }

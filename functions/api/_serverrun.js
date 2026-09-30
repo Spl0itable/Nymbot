@@ -592,14 +592,19 @@ export function serverRunTool(o) {
       run.staged = stagedNow.fingerprint;
       run.unreviewed = stagedNow.unreviewed;
     }
+    var roomLeft = null;
     if (o.capGuard && typeof o.capGuard.left === "function") {
       var left = o.capGuard.left(usage || {});
+      roomLeft = left;
       if (run.maxMilli > left) {
         return {
           refuse: "Error: run_command was not run. It could cost up to " + runnerCredits(run.maxMilli) +
             " Pro credits, more than the " + runnerCredits(left) + " left under this chat's spending cap for this reply. Nothing ran and nothing was charged. Tell the user; they can raise the cap, or you can use a shorter timeoutSec."
         };
       }
+    }
+    if (o.autoRun === true && roomLeft != null && run.maxMilli <= roomLeft && !stagedNow.unreviewed && !run.unreviewed) {
+      return { allowed: true };
     }
     var pending = {
       kind: "server-run", id: item.id, image: run.image, command: run.command,

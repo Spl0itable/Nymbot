@@ -469,6 +469,7 @@ class _ShortcutsSheet extends StatelessWidget {
 }
 
 const Set<String> _botOnlyChoices = {
+  'permissions',
   'rename',
   'duplicate',
   'system',
@@ -504,6 +505,8 @@ Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
                     t('Chat statistics')),
                 ('caps', const NymGlyph('wallet', size: 19),
                     t('Spending caps')),
+                ('permissions', const NymGlyph('tools', size: 19),
+                    t('Standing permissions')),
                 ('share-link', const NymGlyph('link', size: 19),
                     t('Share a link')),
                 ('share', const Icon(Icons.ios_share, size: 19),

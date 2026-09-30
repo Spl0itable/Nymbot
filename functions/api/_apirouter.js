@@ -1,9 +1,12 @@
 import { botBtcPriceBind } from "./bot.js";
 import {
-  ApiError, apiErrorFrom, apiErrorResponse, apiFinish, apiPreflightHeaders, apiReadBody, apiRequestId, apiIpRateLimit,
-  API_JSON_MAX_BYTES, API_MULTIPART_MAX_BYTES
+  ApiError, apiErrorFrom, apiErrorResponse, apiFinish, apiPreflightHeaders, apiCorsHeaders, apiReadBody, apiRequestId, apiIpRateLimit,
+  apiRequireContentType, apiAuthFailGate, apiAuthFailed, apiBufferMultipart, API_JSON_MAX_BYTES, API_MULTIPART_MAX_BYTES, API_NOSTR_MAX_BYTES,
+  API_EMPTY_BODY_SHA256
 } from "./_apihttp.js";
-import { apiAuthKey, apiAuthNostr, apiAuthKeyOrNostr } from "./_apiauth.js";
+import { bytesToHex, sha256 } from "./_shared.js";
+import { apiAuthKey, apiAuthNostr, apiAuthKeyOrNostr, apiNostrEvent, apiNostrFinish } from "./_apiauth.js";
+import { apiCheckNesting } from "./_apichat.js";
 import { apiAuthPaid, apiAuthKeyOrSigned, apiL402Finish, apiL402Failed, apiL402Limit } from "./_apil402.js";
 
 export const API_BASE_PATH = "/api/v1";
@@ -65,12 +68,15 @@ export class ApiRouter {
     const waitUntil = (p) => {
       try { if (typeof context.waitUntil === "function") context.waitUntil(Promise.resolve(p).catch(() => { })); } catch (e) { }
     };
-    if (method === "OPTIONS") {
-      return apiFinish(new Response(null, { status: 204, headers: apiPreflightHeaders(request) }), requestId, apiPreflightHeaders(request));
-    }
     let path = url.pathname.startsWith(API_BASE_PATH + "/") ? url.pathname.slice(API_BASE_PATH.length) : "";
     if (path.length > 1) path = path.replace(/\/+$/, "");
     const hits = path ? this.match(path) : [];
+    const account = hits.some((h) => h.route.opts.auth === "nostr");
+    if (method === "OPTIONS") {
+      const pre = apiPreflightHeaders(request, account);
+      return apiFinish(new Response(null, { status: 204 }), requestId, pre);
+    }
+    const cors = apiCorsHeaders(request, account);
     const pick = hits.find((h) => h.route.method === method) || (method === "HEAD" ? hits.find((h) => h.route.method === "GET") : null);
     let format = pick ? pick.route.opts.format : (hits[0] ? hits[0].route.opts.format : "openai");
     let api = null;
@@ -87,28 +93,43 @@ export class ApiRouter {
         throw new ApiError(400, "invalid_request_error", "The request path holds a malformed percent-encoded escape.", { code: "invalid_request" });
       }
       const route = pick.route;
-      api = { request, env, context, url, params: pick.params, requestId, route, waitUntil, auth: null, rawBytes: new Uint8Array(0), raw: "", body: null };
-      if (route.opts.auth === "none" || (route.opts.auth === "paid" && anonymous(request))) {
+      api = { request, env, context, url, params: pick.params, requestId, route, waitUntil, auth: null, bodyHex: API_EMPTY_BODY_SHA256, raw: "", body: null };
+      const kind = route.opts.auth;
+      const anon = anonymous(request);
+      if (kind === "none" || (kind === "paid" && anon)) {
         await apiIpRateLimit(api, "unauthIp", "requests from this address");
       }
-      if (route.opts.auth === "paid" && anonymous(request)) await apiL402Limit(api);
-      if (route.opts.body === "json") {
-        api.rawBytes = await apiReadBody(request, route.opts.maxBytes || API_JSON_MAX_BYTES);
-        api.raw = new TextDecoder().decode(api.rawBytes);
-      } else if (route.opts.body === "multipart") {
+      if (kind === "paid" && anon) await apiL402Limit(api);
+      if (route.opts.body === "json" || route.opts.body === "multipart") apiRequireContentType(request, route.opts.body);
+      if (route.opts.body === "multipart") {
         const declared = Number(request.headers.get("Content-Length"));
         const max = route.opts.maxBytes || API_MULTIPART_MAX_BYTES;
         if (Number.isFinite(declared) && declared > max) {
           throw new ApiError(413, "invalid_request_error", "The request body is larger than the " + Math.round(max / 1024 / 1024) + " MB this endpoint accepts.", { code: "payload_too_large" });
         }
       }
-      const auth = AUTH[route.opts.auth];
-      if (auth) await auth(api);
-      if (route.opts.body === "multipart" && api.request === request) {
-        const bytes = await apiReadBody(request, route.opts.maxBytes || API_MULTIPART_MAX_BYTES);
-        api.rawBytes = bytes;
-        api.request = new Request(request.url, { method: request.method, headers: request.headers, body: bytes });
+      const nostr = kind === "nostr" || (kind === "key-or-nostr" && /^\s*Nostr\s/i.test(request.headers.get("Authorization") || ""));
+      const guard = async (step) => {
+        try { return await step(); } catch (e) {
+          if (e instanceof ApiError && e.status === 401 && !anon) {
+            const limited = await apiAuthFailed(api);
+            if (limited) throw limited;
+          }
+          throw e;
+        }
+      };
+      if (kind !== "none" && !anon) await apiAuthFailGate(api);
+      let event = null;
+      if (nostr) event = await guard(() => apiNostrEvent(api));
+      else if (AUTH[kind]) await guard(() => AUTH[kind](api));
+      if (route.opts.body === "json") {
+        const bytes = await apiReadBody(request, route.opts.maxBytes || (nostr ? API_NOSTR_MAX_BYTES : API_JSON_MAX_BYTES));
+        if (nostr || (api.auth && api.auth.via === "l402")) api.bodyHex = bytesToHex(sha256(bytes));
+        api.raw = new TextDecoder().decode(bytes);
+      } else if (route.opts.body === "multipart" && api.request === request) {
+        await apiBufferMultipart(api, route.opts.maxBytes || API_MULTIPART_MAX_BYTES, nostr);
       }
+      if (event) await guard(() => apiNostrFinish(api, event));
       if (route.opts.body === "json") {
         if (!api.raw.trim()) api.body = {};
         else {
@@ -118,15 +139,16 @@ export class ApiRouter {
           if (!api.body || typeof api.body !== "object" || Array.isArray(api.body)) {
             throw new ApiError(400, "invalid_request_error", "The request body must be a JSON object.", { code: "invalid_json" });
           }
+          apiCheckNesting(api.body);
         }
       }
       let res = await route.handler(api);
       if (api.l402) res = await apiL402Finish(api, res);
-      return apiFinish(res, requestId);
+      return apiFinish(res, requestId, cors);
     } catch (e) {
       let err = apiErrorFrom(e);
       if (api && api.l402) err = await apiL402Failed(api, err);
-      return apiFinish(apiErrorResponse(err, format), requestId);
+      return apiFinish(apiErrorResponse(err, format), requestId, cors);
     }
   }
 }

@@ -10,8 +10,12 @@ const DDL = [
   "expires_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, redeem_seq INTEGER NOT NULL DEFAULT 0, redeem_pending TEXT)",
   "CREATE INDEX IF NOT EXISTS api_l402_refunds_exp ON api_l402_refunds (expires_at)",
   "ALTER TABLE api_l402_refunds ADD COLUMN redeem_seq INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE api_l402_refunds ADD COLUMN redeem_pending TEXT"
+  "ALTER TABLE api_l402_refunds ADD COLUMN redeem_pending TEXT",
+  "CREATE TABLE IF NOT EXISTS api_l402_issued (hash TEXT PRIMARY KEY, sats INTEGER NOT NULL, created_at INTEGER NOT NULL, " +
+  "expires_at INTEGER NOT NULL, used_at INTEGER)",
+  "CREATE INDEX IF NOT EXISTS api_l402_issued_created ON api_l402_issued (created_at)"
 ];
+export const L402_ISSUED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const CLAIM_TRIES = 2;
 const ready = new WeakSet();
 
@@ -38,20 +42,53 @@ export async function l402RefundDb(env) {
   return db;
 }
 
-export async function l402RefundMint(env, sats, fixedToken) {
+export async function l402RefundMintHash(env, hash, sats) {
   const amount = Math.floor(Number(sats) || 0);
-  if (amount <= 0) return null;
+  if (amount <= 0 || !/^[0-9a-f]{64}$/.test(String(hash || ""))) return null;
   const db = await l402RefundDb(env);
   if (!db) return null;
-  const token = fixedToken ? l402RefundToken(fixedToken) : l402RefundNew();
   const now = Date.now();
   await db.prepare("INSERT OR IGNORE INTO api_l402_refunds (hash, sats, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(l402RefundHash(token), amount, now, now + L402_REFUND_TTL_MS, now).run();
-  const row = await db.prepare("SELECT * FROM api_l402_refunds WHERE hash = ?").bind(l402RefundHash(token)).first();
+    .bind(hash, amount, now, now + L402_REFUND_TTL_MS, now).run();
+  const row = await db.prepare("SELECT * FROM api_l402_refunds WHERE hash = ?").bind(hash).first();
   if (Math.random() < 0.02) {
     try { await db.prepare("DELETE FROM api_l402_refunds WHERE expires_at < ?").bind(now - 86400000).run(); } catch (e) { }
   }
-  return { token, sats: row ? Number(row.sats) : amount, expiresAt: row ? Number(row.expires_at) : now + L402_REFUND_TTL_MS };
+  return { sats: row ? Number(row.sats) : amount, expiresAt: row ? Number(row.expires_at) : now + L402_REFUND_TTL_MS };
+}
+
+export async function l402RefundMint(env, sats, fixedToken) {
+  const token = fixedToken ? l402RefundToken(fixedToken) : l402RefundNew();
+  const got = await l402RefundMintHash(env, l402RefundHash(token), sats);
+  return got ? { token, sats: got.sats, expiresAt: got.expiresAt } : null;
+}
+
+export async function l402IssuedPut(env, hash, sats, expiresAt) {
+  const db = await l402RefundDb(env);
+  if (!db) return false;
+  const now = Date.now();
+  await db.prepare("INSERT OR IGNORE INTO api_l402_issued (hash, sats, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)")
+    .bind(hash, Math.floor(Number(sats) || 0), now, Math.floor(Number(expiresAt) || now)).run();
+  if (Math.random() < 0.01) {
+    try { await db.prepare("DELETE FROM api_l402_issued WHERE created_at < ?").bind(now - L402_ISSUED_KEEP_MS).run(); } catch (e) { }
+  }
+  return true;
+}
+
+export async function l402IssuedGet(env, hash) {
+  const db = await l402RefundDb(env);
+  if (!db) return { unavailable: true };
+  const row = await db.prepare("SELECT * FROM api_l402_issued WHERE hash = ? AND created_at > ?").bind(String(hash), Date.now() - L402_ISSUED_KEEP_MS).first();
+  return row ? { ok: true, sats: Number(row.sats) || 0, used: !!row.used_at } : { unknown: true };
+}
+
+export async function l402IssuedUse(env, hash, undo) {
+  const db = await l402RefundDb(env);
+  if (!db) return null;
+  const r = undo
+    ? await db.prepare("UPDATE api_l402_issued SET used_at = NULL WHERE hash = ?").bind(String(hash)).run()
+    : await db.prepare("UPDATE api_l402_issued SET used_at = ? WHERE hash = ? AND used_at IS NULL").bind(Date.now(), String(hash)).run();
+  return !!(r && r.meta && r.meta.changes === 1);
 }
 
 export async function l402RefundGet(env, token) {

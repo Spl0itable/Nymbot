@@ -1,4 +1,4 @@
-const CACHE = 'nymbot-shell-v77';
+const CACHE = 'nymbot-shell-v79';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -62,6 +62,8 @@ const SHELL = [
     '/app/js/research.js',
     '/app/js/team.js',
     '/app/js/tasks.js',
+    '/app/js/runs.js',
+    '/app/js/background.js',
     '/app/js/gift.js',
     '/app/js/connectors.js',
     '/app/js/gitrun.js',
@@ -73,7 +75,7 @@ const SHELL = [
     '/app/icons/nymbot-maskable-512.png'
 ];
 const NETWORK_WAIT_MS = 4000;
-const STATIC = /\.(?:js|css|png|svg|ico|webp|woff2?)$/;
+const STATIC = /\.(?:png|svg|ico|webp|woff2?)$/;
 const MEDIA_CACHE = 'nymbot-media-v1';
 const MEDIA_MAX_ENTRIES = 600;
 const MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -419,7 +421,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
     e.waitUntil(caches.keys()
-        .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== MEDIA_CACHE && k !== SHARE_CACHE).map(k => caches.delete(k))))
+        .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== MEDIA_CACHE && k !== SHARE_CACHE && k !== NOTIFY_CACHE).map(k => caches.delete(k))))
         .then(() => {
             mediaStartupPruned = true;
             return trimMedia();
@@ -435,6 +437,19 @@ self.addEventListener('message', (e) => {
 });
 
 const CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const ASKED_RE = /^[0-9a-f]{64}$/;
+const NOTIFY_CACHE = 'nymbot-notify';
+const NOTIFY_TEXT = '/app/notify-text.json';
+const RUN_STATES = ['paused', 'approval', 'stopped', 'failed', 'due', 'disabled'];
+
+function stateText(state) {
+    if (!RUN_STATES.includes(state)) return Promise.resolve('');
+    return caches.open(NOTIFY_CACHE)
+        .then(c => c.match(NOTIFY_TEXT))
+        .then(r => (r ? r.json() : null))
+        .then(words => (words && typeof words[state] === 'string' ? words[state].slice(0, 120) : ''))
+        .catch(() => '');
+}
 
 function appClients() {
     return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
@@ -445,31 +460,34 @@ self.addEventListener('push', (e) => {
     let data = {};
     try { data = e.data ? e.data.json() : {}; } catch (_) { data = {}; }
     const chat = typeof data.chat === 'string' && CHAT_RE.test(data.chat) ? data.chat : '';
+    const asked = typeof data.asked === 'string' && ASKED_RE.test(data.asked) ? data.asked : '';
     const title = typeof data.title === 'string' && data.title ? data.title.slice(0, 60) : 'Nymbot';
-    const body = typeof data.body === 'string' && data.body ? data.body.slice(0, 120) : '';
+    const sent = typeof data.body === 'string' && data.body ? data.body.slice(0, 120) : '';
+    const state = typeof data.state === 'string' ? data.state : '';
     e.waitUntil(appClients().then((list) => {
         if (list.some(c => c.focused && c.visibilityState === 'visible')) return undefined;
-        return self.registration.showNotification(title, {
-            body,
-            tag: chat ? 'reply-' + chat : 'reply',
-            data: { chat },
+        return stateText(state).then(said => self.registration.showNotification(title, {
+            body: said || sent,
+            tag: chat ? 'reply-' + chat + (asked ? '-' + asked.slice(0, 16) : '') : 'reply',
+            data: asked ? { chat, asked } : { chat },
             icon: '/app/icons/nymbot-192.png',
             badge: '/app/icons/nymbot-192.png'
-        });
+        }));
     }));
 });
 
 self.addEventListener('notificationclick', (e) => {
-    const chat = e.notification && e.notification.data && CHAT_RE.test(e.notification.data.chat || '')
-        ? e.notification.data.chat : '';
+    const data = (e.notification && e.notification.data) || {};
+    const chat = CHAT_RE.test(data.chat || '') ? data.chat : '';
+    const asked = chat && ASKED_RE.test(data.asked || '') ? data.asked : '';
     e.notification.close();
     e.waitUntil(appClients().then((list) => {
         const open = list[0];
         if (open) {
-            if (chat) open.postMessage({ type: 'open-chat', chat });
+            if (chat) open.postMessage(asked ? { type: 'open-chat', chat, asked } : { type: 'open-chat', chat });
             return open.focus ? open.focus() : undefined;
         }
-        return self.clients.openWindow('/app/' + (chat ? '#chat=' + chat : ''));
+        return self.clients.openWindow('/app/' + (chat ? '#chat=' + chat + (asked ? '&asked=' + asked : '') : ''));
     }));
 });
 

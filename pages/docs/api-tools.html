@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coding tools - Nymbot Knowledge Base</title>
+    <meta name="description" content="Setting up Claude Code (CLI and VS Code), Codex CLI, Cline, Kilo Code, Roo Code and Continue to run on the Nymbot API: base URLs, keys, model ids and settings.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Coding tools - Nymbot Knowledge Base">
+    <meta property="og:description" content="Setting up Claude Code (CLI and VS Code), Codex CLI, Cline, Kilo Code, Roo Code and Continue to run on the Nymbot API: base URLs, keys, model ids and settings.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api-tools/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="Coding tools - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Setting up Claude Code (CLI and VS Code), Codex CLI, Cline, Kilo Code, Roo Code and Continue to run on the Nymbot API: base URLs, keys, model ids and settings.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api-tools/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Coding tools</h1>
+            <p class="docs-lede">Coding agents that let you choose where their model requests go can run on
+                Nymbot. Each one needs a base URL, a key and a model id; this page gives the exact settings for
+                each.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="before-you-start">Before you start</h2>
+            <p>You need an API key, made in the app's <strong>API</strong> menu (see
+                <a href="/docs/api/#keys">API keys</a>). Each tool speaks one of the API's three formats, and
+                that decides its base URL:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Tool</th><th>Format</th><th>Base URL</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Claude Code</td><td><a href="/docs/api-chat/#messages">Anthropic Messages</a></td><td><code>https://nymbot.ai/api</code></td></tr>
+                        <tr><td>Codex CLI</td><td><a href="/docs/api-chat/#responses">Responses</a></td><td><code>https://nymbot.ai/api/v1</code></td></tr>
+                        <tr><td>Cline, Kilo Code, Roo Code, Continue</td><td><a href="/docs/api-chat/#chat-completions">Chat Completions</a></td><td><code>https://nymbot.ai/api/v1</code></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Model ids come from <a href="/docs/api-chat/#models">the model list</a>,
+                <code>GET https://nymbot.ai/api/v1/models</code>, which needs no key. The examples below use
+                <code>anthropic/claude-sonnet-5</code> and, for a model from another maker,
+                <code>moonshotai/kimi-k3</code>. Check that the model you pick is still listed.</p>
+            <ul>
+                <li><strong>Pick a model that can call tools.</strong> These agents read files, edit them and run
+                    commands by calling tools, on every step. Use a model whose entry has
+                    <code>capabilities.tools</code> set to <code>true</code>. <code>nymbot/auto</code> refuses any
+                    request with tools (<code>400</code> <code>unsupported_tool</code>), so it does not work with
+                    any of them.</li>
+                <li><strong>Copy the model's limits into the tool.</strong> Most tools ask for a context window
+                    and a maximum output. Take them from <code>context_length</code> and
+                    <code>max_output_tokens</code> in the model list. A tool that asks for more output than the
+                    model allows is not refused; the request is lowered to the model's maximum.</li>
+                <li><strong>Steps arrive whole.</strong> A request with tools runs in one piece and is then sent
+                    back as a stream, with keep-alive pings while the model works. Streaming works in every tool
+                    below, but each step appears at once rather than word by word.</li>
+            </ul>
+            <div class="docs-note is-tip">
+                <span class="docs-note-label">Give each tool its own key</span>
+                <p>Make a separate key for each tool, with a daily cap. A coding agent makes many model calls
+                    for one task, each carrying the conversation so far, so a single task can cost far more than
+                    a chat message. A cap on the key is the simplest way to know the most a tool can spend, and
+                    revoking it stops that tool alone.</p>
+            </div>
+
+            <h2 id="claude-code">Claude Code</h2>
+            <p>Claude Code talks to Nymbot through its gateway settings. Set these in the shell you start it
+                from:</p>
+            <p class="docs-note-label" data-i18n-skip>Shell</p>
+<pre><code>export ANTHROPIC_BASE_URL=https://nymbot.ai/api
+export ANTHROPIC_AUTH_TOKEN=sk-nymbot-...
+export ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/claude-opus-5
+export ANTHROPIC_DEFAULT_SONNET_MODEL=anthropic/claude-sonnet-5
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5
+claude</code></pre>
+            <ul>
+                <li>The base URL is exactly <code>https://nymbot.ai/api</code>: no <code>/v1</code> and no
+                    slash at the end, since Claude Code adds <code>/v1/messages</code> itself.</li>
+                <li>The key goes in <code>ANTHROPIC_AUTH_TOKEN</code>, which Claude Code sends as
+                    <code>Authorization: Bearer</code>. While it is set, a saved claude.ai login is not used for
+                    these requests and your subscription's limits do not apply.</li>
+                <li>Pin the model slots. By default Claude Code asks for Anthropic's newest model names, and
+                    Nymbot answers a Claude name only with the same or a newer version from its catalog, never an
+                    older one; a version the catalog does not carry yet returns <code>404</code>. Pointing
+                    <code>opus</code>, <code>sonnet</code> and <code>haiku</code> at catalog ids avoids that. If
+                    you use the <code>fable</code> alias, set <code>ANTHROPIC_DEFAULT_FABLE_MODEL</code> the
+                    same way.</li>
+                <li>Pinning the Haiku slot also moves Claude Code's background work, such as session titles,
+                    to that cheaper model. Without it, that work runs on your main model.</li>
+            </ul>
+            <p>Start Claude Code and run <code>/status</code>. The <strong>Status</strong> tab should show an
+                <code>Anthropic base URL</code> line with <code>https://nymbot.ai/api</code> and an
+                <code>Auth token</code> line naming <code>ANTHROPIC_AUTH_TOKEN</code>.</p>
+            <p>To keep the settings for every session, put them in the <code>env</code> block of
+                <code>~/.claude/settings.json</code> (<code>%USERPROFILE%\.claude\settings.json</code> on
+                Windows) instead. Never put the key in a project's <code>.claude/settings.json</code>, which is
+                committed with the project.</p>
+            <p class="docs-note-label" data-i18n-skip>settings.json</p>
+<pre><code>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://nymbot.ai/api",
+    "ANTHROPIC_AUTH_TOKEN": "sk-nymbot-...",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic/claude-opus-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic/claude-sonnet-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-haiku-4.5"
+  }
+}</code></pre>
+            <p>A few more settings are worth knowing:</p>
+            <ul>
+                <li><strong>Output length.</strong> Set <code>CLAUDE_CODE_MAX_OUTPUT_TOKENS</code> to the
+                    model's <code>max_output_tokens</code>, so Claude Code plans its replies for the limit the
+                    model really has.</li>
+                <li><strong>The model picker.</strong> With
+                    <code>CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1</code>, Claude Code reads Nymbot's model
+                    list at startup and adds the Claude models in it to <code>/model</code>.</li>
+                <li><strong>Leave the advisor off.</strong> Claude Code's advisor is a tool that runs on
+                    Anthropic's own servers, which Nymbot cannot run, and a request carrying it is refused. Don't
+                    turn it on with <code>/advisor</code>, or set <code>CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1</code>
+                    to remove it entirely.</li>
+                <li><strong>Leave MCP tool search off.</strong> Claude Code turns it off for a custom base URL,
+                    and Nymbot cannot take the tool references it sends, so don't set
+                    <code>ENABLE_TOOL_SEARCH=true</code>. MCP tools still work; they are loaded up front
+                    instead.</li>
+            </ul>
+            <p>Claude Code can also run on a model that is not Claude: point the model slots at another catalog
+                id, such as <code>moonshotai/kimi-k3</code>, and set <code>CLAUDE_CODE_MAX_CONTEXT_TOKENS</code>
+                to that model's <code>context_length</code>, since Claude Code cannot know it. Anthropic does not
+                support Claude Code on other models, so expect rough edges.</p>
+
+            <h2 id="claude-code-vscode">Claude Code in VS Code</h2>
+            <p>The VS Code extension runs the same Claude Code, but checks for credentials before it starts, so
+                give it the settings in VS Code's own user settings. Run <strong>Preferences: Open User Settings
+                (JSON)</strong> and add:</p>
+            <p class="docs-note-label" data-i18n-skip>settings.json</p>
+<pre><code>{
+  "claudeCode.disableLoginPrompt": true,
+  "claudeCode.environmentVariables": [
+    { "name": "ANTHROPIC_BASE_URL", "value": "https://nymbot.ai/api" },
+    { "name": "ANTHROPIC_AUTH_TOKEN", "value": "sk-nymbot-..." },
+    { "name": "ANTHROPIC_DEFAULT_OPUS_MODEL", "value": "anthropic/claude-opus-5" },
+    { "name": "ANTHROPIC_DEFAULT_SONNET_MODEL", "value": "anthropic/claude-sonnet-5" },
+    { "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "value": "anthropic/claude-haiku-4.5" }
+  ]
+}</code></pre>
+            <p><strong>Disable Login Prompt</strong> stops the extension asking you to sign in to Anthropic.
+                Everything in <a href="#claude-code">Claude Code</a> above applies to the extension too; settings
+                in <code>~/.claude/settings.json</code> reach it as well, but the extension's login check reads
+                only its own setting.</p>
+
+            <h2 id="codex">Codex CLI</h2>
+            <p>Codex uses the Responses API. Add Nymbot as a provider in <code>~/.codex/config.toml</code>:</p>
+            <p class="docs-note-label" data-i18n-skip>config.toml</p>
+<pre><code>model = "anthropic/claude-sonnet-5"
+model_provider = "nymbot"
+model_context_window = 1000000
+
+[model_providers.nymbot]
+name = "Nymbot"
+base_url = "https://nymbot.ai/api/v1"
+env_key = "NYMBOT_API_KEY"
+wire_api = "responses"
+
+[features]
+multi_agent = false</code></pre>
+            <p>Then set <code>NYMBOT_API_KEY</code> in your environment and run <code>codex</code>.</p>
+            <ul>
+                <li><strong><code>multi_agent = false</code> is required.</strong> Codex's multi-agent tools
+                    come as a group of tools that Nymbot cannot take, and while they are on every request is
+                    refused with <code>400</code> <code>unsupported_tool</code>. Nymbot takes function tools and
+                    web search only; if Codex reports <code>unsupported_tool</code>, a feature or MCP server that
+                    adds another kind of tool is on.</li>
+                <li><strong>Pick a model that is not one of OpenAI's own.</strong> For model ids it recognizes
+                    as OpenAI's, such as <code>openai/gpt-5.6-sol</code>, Codex switches to a request format
+                    Nymbot cannot read, and the request is refused. Claude, Kimi and the other catalog models
+                    work.</li>
+                <li><code>model_context_window</code> tells Codex the model's context size, from
+                    <code>context_length</code> in the model list; otherwise it assumes 272,000 tokens.</li>
+                <li>Codex offers the model a web search tool, which Nymbot runs with its own
+                    <a href="/docs/api-chat/#web-search">web search</a> when the question needs it. Set
+                    <code>web_search = "disabled"</code> at the top of the file to turn it off.</li>
+                <li>Nymbot does not store responses. Codex already sends the whole conversation each time, so
+                    nothing needs to change.</li>
+            </ul>
+
+            <h2 id="cline">Cline</h2>
+            <p>In Cline's settings in VS Code:</p>
+            <ol>
+                <li>Set <strong>API Provider</strong> to <strong>OpenAI Compatible</strong>.</li>
+                <li>Set <strong>Base URL</strong> to <code>https://nymbot.ai/api/v1</code>.</li>
+                <li>Paste your key into <strong>OpenAI Compatible API Key</strong>.</li>
+                <li>Pick the model under <strong>Model ID</strong>. Cline loads the list from Nymbot once the
+                    URL and key are in; you can also type an id such as
+                    <code>anthropic/claude-sonnet-5</code>.</li>
+            </ol>
+            <p>Open <strong>Model Configuration</strong> and fill in <strong>Context Window Size</strong> and
+                <strong>Max Output Tokens</strong> from the model list, and tick <strong>Supports
+                Images</strong> if the model has <code>capabilities.vision</code>, so Cline manages its context
+                correctly.</p>
+
+            <h2 id="kilo-code">Kilo Code</h2>
+            <p>In the VS Code extension, open <strong>Settings</strong>, go to the <strong>Providers</strong>
+                tab, scroll to the bottom and click <strong>Custom provider</strong>. Fill in:</p>
+            <ul>
+                <li><strong>Provider ID</strong>: <code>nymbot</code></li>
+                <li><strong>Display name</strong>: <code>Nymbot</code></li>
+                <li><strong>Provider API</strong>: <strong>OpenAI Compatible</strong></li>
+                <li><strong>Base URL</strong>: <code>https://nymbot.ai/api/v1</code></li>
+                <li><strong>API key</strong>: your key</li>
+                <li><strong>Models</strong>: pick them from the list Kilo loads from Nymbot</li>
+            </ul>
+            <p>Click <strong>Submit</strong>, and the models appear in the model picker. For the CLI, or to set
+                a model's limits and tool support, define the provider in <code>~/.config/kilo/kilo.json</code>
+                instead:</p>
+            <p class="docs-note-label" data-i18n-skip>kilo.json</p>
+<pre><code>{
+  "provider": {
+    "nymbot": {
+      "npm": "@ai-sdk/openai-compatible",
+      "env": ["NYMBOT_API_KEY"],
+      "options": {
+        "baseURL": "https://nymbot.ai/api/v1"
+      },
+      "models": {
+        "claude-sonnet-5": {
+          "id": "anthropic/claude-sonnet-5",
+          "name": "Claude Sonnet 5",
+          "tool_call": true,
+          "limit": { "context": 1000000, "output": 64000 }
+        }
+      }
+    }
+  },
+  "model": "nymbot/claude-sonnet-5"
+}</code></pre>
+            <p><code>id</code> is the Nymbot model id and the key above it is Kilo's own name for it, used in
+                <code>"model"</code> as <code>nymbot/&hellip;</code>. Take <code>limit</code> from the model
+                list; without it Kilo cannot manage the context.</p>
+
+            <h2 id="roo-code">Roo Code</h2>
+            <p>Roo Code was discontinued on May 15, 2026. If you still have it installed, it works with Nymbot
+                like this: set <strong>API Provider</strong> to <strong>OpenAI Compatible</strong>,
+                <strong>Base URL</strong> to <code>https://nymbot.ai/api/v1</code>, put your key in
+                <strong>API Key</strong> and a model id in <strong>Model</strong>. Roo Code only works through
+                tool calls, so the model must have <code>capabilities.tools</code>. Under the model
+                configuration, set <strong>Max Output Tokens</strong>, <strong>Context Window</strong> and
+                <strong>Image Support</strong> from the model list.</p>
+
+            <h2 id="continue">Continue</h2>
+            <p>Continue's final release is 2.0.0 and it is no longer maintained, but the extension and its CLI
+                still work. Add Nymbot models to <code>~/.continue/config.yaml</code>
+                (<code>%USERPROFILE%\.continue\config.yaml</code> on Windows):</p>
+            <p class="docs-note-label" data-i18n-skip>config.yaml</p>
+<pre><code>name: My Config
+version: 0.0.1
+schema: v1
+models:
+  - name: Claude Sonnet 5 (Nymbot)
+    provider: openai
+    model: anthropic/claude-sonnet-5
+    apiBase: https://nymbot.ai/api/v1
+    apiKey: sk-nymbot-...
+    roles:
+      - chat
+      - edit
+      - apply
+    capabilities:
+      - tool_use
+      - image_input
+    defaultCompletionOptions:
+      contextLength: 1000000
+      maxTokens: 64000
+  - name: Nymbot embeddings
+    provider: openai
+    model: "@cf/baai/bge-m3"
+    apiBase: https://nymbot.ai/api/v1
+    apiKey: sk-nymbot-...
+    roles:
+      - embed</code></pre>
+            <ul>
+                <li><code>capabilities</code> tells Continue what the model can do, since it cannot tell from a
+                    Nymbot id. <code>tool_use</code> is what Agent mode needs; leave out
+                    <code>image_input</code> for a model without <code>capabilities.vision</code>.</li>
+                <li>The second entry uses a Nymbot <a href="/docs/api-media/#embeddings">embedding model</a> for
+                    Continue's codebase search.</li>
+            </ul>
+
+            <h2 id="privacy">What the tools send</h2>
+            <p>A coding agent sends the model whatever it works with: your instructions, the files it opens,
+                the output of the commands it runs. Through Nymbot, all of that is an ordinary API request, with
+                the protections and limits described in <a href="/docs/api/#privacy">what the API can see</a>:
+                it is not end-to-end encrypted, Nymbot does not store it, and the model's provider sees it.</p>
+            <ul>
+                <li>The tools keep their own histories on your machine, and some talk to their makers besides.
+                    Claude Code, for one, still sends its telemetry to Anthropic when it runs on Nymbot; set
+                    <code>CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1</code> to stop that and its other background
+                    traffic. Its WebFetch tool still checks each domain with Anthropic unless you set
+                    <code>skipWebFetchPreflight</code> to <code>true</code> in its settings.</li>
+                <li>Keys in settings files are only as safe as the file. Keep them out of anything you commit,
+                    and read them from the environment where the tool allows it.</li>
+            </ul>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

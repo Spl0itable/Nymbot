@@ -12,6 +12,8 @@
     const Attach = () => window.NymbotAttach;
     const Hex = window.NymbotHex;
 
+    const CLEANUP_EVERY_MS = 6 * 60 * 60 * 1000;
+
     function splitThinking(text) {
         const patterns = [
             /^\s*<think>([\s\S]*?)<\/think>\s*/i,
@@ -229,6 +231,8 @@
             branch: repo.branch || '',
             allowWrites: !!repo.allowWrites,
             approve: !!repo.approve,
+            jobBranches: window.NymbotGitRun.jobBranchesOn(repo),
+            whenDone: window.NymbotGitRun.whenDoneFor(repo, Store.settings()),
             paths: repo.paths || '',
             label: repo.label || repo.repo,
             ...(repo.ngit ? {
@@ -319,6 +323,39 @@
     const EFFORT = { normal: 1, careful: 2, deep: 3 };
 
     const BUSY_WAITS = [4000, 9000, 16000];
+    const CLAIM_MS = 60 * 60 * 1000;
+    const HEX64 = /^[0-9a-f]{64}$/;
+
+    function validRuns(n) {
+        const v = Number(n);
+        return Number.isInteger(v) && v >= 1 ? Math.min(10, v) : null;
+    }
+
+    function policyFor(conv, settings) {
+        const own = (conv && conv.policy) || {};
+        const base = (settings && settings.policy) || {};
+        const pick = (mine, fallback) => (mine === 'allow' || mine === 'ask') ? mine : (fallback === 'allow' ? 'allow' : 'ask');
+        return {
+            readOnlyTools: pick(own.readOnlyTools, base.readOnlyTools),
+            serverRuns: pick(own.serverRuns, base.serverRuns)
+        };
+    }
+
+    function linkOf(rumor, data) {
+        const tag = rumor && Array.isArray(rumor.tags) ? rumor.tags.find(x => Array.isArray(x) && x[0] === 'nymreply') : null;
+        const run = tag && HEX64.test(String(tag[1] || '')) ? String(tag[1]) : (data && HEX64.test(String(data.replyTo || '')) ? String(data.replyTo) : null);
+        const leg = tag && HEX64.test(String(tag[2] || '')) ? String(tag[2]) : (data && HEX64.test(String(data.askedId || '')) ? String(data.askedId) : null);
+        return { replyTo: run, askedId: leg };
+    }
+
+    function planOf(raw) {
+        if (!Array.isArray(raw)) return null;
+        const states = new Set(['planned', 'doing', 'done', 'skipped']);
+        const out = raw.filter(x => x && typeof x.text === 'string' && x.text.trim())
+            .slice(0, 20)
+            .map(x => ({ text: x.text.replace(/\s+/g, ' ').trim().slice(0, 120), state: states.has(x.state) ? x.state : 'planned' }));
+        return out;
+    }
 
     const HELD_MAX = 8;
     const HELD_SEND = 4;
@@ -652,36 +689,154 @@
                 if (typeof opts.onStatus === 'function') opts.onStatus(line);
                 else this._say(line);
             };
-            if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
-
             const anon = !!conv.anon;
             const payer = anon ? Anon.bind(conv) : null;
             if (anon && !payer) {
                 throw new Error(t('This chat is anonymous, but no throwaway key could be used on this device, so nothing was sent.'));
             }
+            const signer = anon ? Anon.signer(payer) : null;
+            const repos = reposFor(conv);
+            if (repos.length && !opts.replay) this.cleanupSoon(conv);
+            const ghost = !!conv.ephemeral;
+            let prepared = opts.replay && opts.replay.extra ? opts.replay : null;
+            if (!prepared) prepared = await this.prepare(conv, text, settings, opts, { anon, payer, repos, ghost });
+            const extra = Object.assign({}, prepared.extra);
+            const runs = validRuns(opts.maxRuns != null ? opts.maxRuns : settings && settings.maxRuns);
+            if (runs) extra.maxRuns = runs;
+            else delete extra.maxRuns;
+            const replay = { extra: Object.assign({}, extra), msgId: prepared.msgId, isFresh: prepared.isFresh, partWraps: prepared.partWraps };
+            if (typeof opts.onTurn === 'function') {
+                try { opts.onTurn(extra.eventId, signer, { msgId: prepared.msgId, replay }); } catch (_) { }
+            }
+
+            const controller = opts.controller || new AbortController();
+            const ownsController = !opts.controller;
+            if (ownsController) this.controller = controller;
+            const stoppedErr = () => {
+                const err = new Error(t('Stopped.'));
+                err.name = 'AbortError';
+                err.stopped = true;
+                return err;
+            };
+            const fail = (err, data) => {
+                if (data && data.checkpoint) {
+                    try { this.rememberBranches(conv, data.checkpoint); } catch (_) { }
+                    err.checkpoint = data.checkpoint;
+                }
+                err.eventId = extra.eventId;
+                err.msgId = prepared.msgId;
+                err.replay = replay;
+                if (data && HEX64.test(String(data.replyTo || ''))) err.replyTo = data.replyTo;
+                return err;
+            };
+            let status, data;
+            try {
+                let waited = 0;
+                let late = false;
+                for (;;) {
+                    let res = await Api.call('pm', extra, {
+                        timeout: C.pmTimeoutMs,
+                        signer,
+                        controller,
+                        onSlot: opts.onSlot
+                    });
+                    if (res.aborted || controller.signal.aborted) throw fail(stoppedErr());
+                    if ((res.data && res.data.pending) || res.timedOut) {
+                        late = true;
+                        say(t('Still working on that one…'));
+                        if (typeof opts.onClaiming === 'function') { try { opts.onClaiming(true); } catch (_) { } }
+                        res = await this.claim(extra, { signer, controller, onSlot: opts.onSlot });
+                        if (controller.signal.aborted) throw fail(stoppedErr());
+                        if (typeof opts.onClaiming === 'function') { try { opts.onClaiming(false); } catch (_) { } }
+                    }
+                    ({ status, data } = res);
+                    if (data && data.lost) {
+                        const err = fail(new Error(t('Nymbot could not finish that one. Try again; it will not be charged twice.')));
+                        err.late = true;
+                        throw err;
+                    }
+                    if (data && data.runCap === true) break;
+                    const failed = status >= 400 || !data || !!data.error;
+                    if (!late && failed && !(data && data.noCredits) && waited < BUSY_WAITS.length
+                        && Api.busy(status, data) && !controller.signal.aborted) {
+                        const wait = BUSY_WAITS[waited++];
+                        say(t('Too many requests just now — waiting {n} seconds rather than asking again straight away.',
+                            { n: Math.round(wait / 1000) }));
+                        await pause(wait, controller.signal);
+                        if (controller.signal.aborted) throw fail(stoppedErr());
+                        continue;
+                    }
+                    break;
+                }
+            } finally {
+                if (ownsController && this.controller === controller) this.controller = null;
+            }
+
+            if (data && data.runCap === true) {
+                const err = fail(new Error(data.error || t('The request failed.')), data);
+                err.runCap = true;
+                err.freeCap = data.free === true;
+                err.running = Number(data.running) || 0;
+                err.limit = Number(data.limit) || 0;
+                err.ceiling = Number(data.ceiling) || 0;
+                err.reserve = data.reserve && typeof data.reserve === 'object' ? data.reserve : null;
+                err.balance = Number(data.balance) || 0;
+                throw err;
+            }
+            if (data && data.noCredits) {
+                const err = fail(new Error(data.error
+                    || (data.pro ? t('You are out of Pro credits.') : t('You are out of credits.'))), data);
+                err.noCredits = true;
+                err.pro = !!data.pro;
+                err.balance = data.balanceCredits != null
+                    ? data.balanceCredits : (data.balance || 0);
+                err.balanceCredits = data.balanceCredits;
+                err.free = data.free || null;
+                err.team = !!data.team;
+                err.required = Number(data.required) || 0;
+                throw err;
+            }
+            if (status >= 400 || !data || data.error) {
+                const err = fail(new Error((data && data.error) || t('The request failed.')), data);
+                if (!status && data && data.offline) err.offline = true;
+                if (data && data.team) err.team = true;
+                if (data && data.capExceeded) {
+                    err.capExceeded = true;
+                    err.required = Number(data.required) || 0;
+                    err.pro = !!data.pro;
+                }
+                if (data && data.resumable && data.resumeToken) {
+                    err.resumeToken = data.resumeToken;
+                    err.resumable = true;
+                }
+                if (data && data.retryable) err.retryable = true;
+                if (data && data.priceUnavailable) err.priceUnavailable = true;
+                throw err;
+            }
+            return this.settle(conv, data, {
+                anon, payer, ghost, repos, isFresh: prepared.isFresh, eventId: extra.eventId,
+                msgId: prepared.msgId, partWraps: prepared.partWraps || []
+            });
+        },
+
+        async prepare(conv, text, settings, opts, ctx) {
+            if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
+            const { anon, payer, repos, ghost } = ctx;
             const sender = anon ? Anon.sender(payer) : null;
             const senderPubkey = anon ? sender.pubkey : Identity.pubkey;
             const payerKem = anon ? Anon.kem(payer) : null;
             const selfKemPk = anon
                 ? (payerKem ? payerKem.publicKey : null)
                 : (Identity.rootLocked || !Identity._kem ? null : Identity.kemPk);
-
-            const repos = reposFor(conv);
             const attachments = opts.attachments || [];
-            // A '!' question is answered outside the conversation.
             const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
             const wireText = wireTextFor(conv, text, opts);
-            // NIP-44 caps each plaintext, so a long message splits across wraps sharing one id; the part count stays capped.
             const bodies = Wire.split(wireText);
             if (bodies.length > Wire.PARTS_MAX) {
                 throw new Error(overLimitMessage(wireText));
             }
-
             const botKem = PQ.botKey ? PQ.botKey.pk : null;
-            // A continued leg needs its own id, or the de-duplicator replays the previous answer.
             const msgId = Wire.sharedId();
-            // A ghost chat skips the archive copy and reply re-publish, which exist only for restoring conversations.
-            const ghost = !!conv.ephemeral;
             if (typeof opts.onStep === 'function') {
                 try { opts.onStep({ kind: 'stage', stage: 'encrypting', local: true }); } catch (_) { }
             }
@@ -705,10 +860,6 @@
 
             const model = conv.proModel || settings.proModel;
             const media = conv.mediaModel || settings.mediaModel;
-            if (typeof opts.onTurn === 'function') {
-                try { opts.onTurn(wrap.id, anon ? Anon.signer(payer) : null); } catch (_) { }
-            }
-
             const extra = {
                 eventId: wrap.id,
                 wrap,
@@ -720,13 +871,13 @@
                 const handed = heldHistory(conv.id, Store.thread(conv.id));
                 if (handed.length) extra.history = handed;
             }
-            // The last id is `eventId`, which older workers still answer from.
             if (partIds.length > 1) {
                 extra.parts = partIds;
                 extra.wraps = partWraps;
             }
-            // The resume token is single-use and redeemable only by the key that made it.
             if (opts.resume) extra.resume = opts.resume;
+            if (anon) extra.anon = true;
+            else if (opts.background && typeof opts.background === 'object') extra.background = opts.background;
             if (Number(opts.maxCost) > 0) extra.maxCost = Number(opts.maxCost);
             const proTurn = !!(model || (media && media.proKey));
             const connectors = window.NymbotConnectors && !conv.anon && proTurn && (!opts.research || opts.team)
@@ -747,7 +898,6 @@
             if (!model && media && media.proKey) extra.proModel = media.proKey;
             if (model) {
                 extra.proModel = model.key;
-                // Only meaningful on Pro and outside repo tasks, which loop and are charged on their own.
                 const effort = effortOf(conv);
                 if (effort !== 'normal' && !repos.length && !connectors.length) extra.effort = effort;
                 if (repos.length) {
@@ -760,102 +910,78 @@
                 if (opts.research) extra.research = opts.research;
                 if (opts.team) extra.team = opts.team;
             }
+            extra.policy = policyFor(conv, settings);
+            if (opts.forkOf && typeof opts.forkOf === 'object' && HEX64.test(String(opts.forkOf.before || ''))) {
+                extra.forkOf = { thread: String(opts.forkOf.thread || ''), before: String(opts.forkOf.before) };
+            }
+            if (opts.runKind === 'compare') extra.runKind = 'compare';
+            return { extra, msgId, isFresh, partWraps };
+        },
 
-            const controller = opts.controller || new AbortController();
-            const ownsController = !opts.controller;
-            if (ownsController) this.controller = controller;
-            let status, data;
-            try {
-                let held = 0;
-                let waited = 0;
-                for (;;) {
-                    ({ status, data } = await Api.call('pm', extra, {
-                        timeout: C.pmTimeoutMs,
-                        signer: anon ? Anon.signer(payer) : null,
-                        controller
-                    }));
-                    if (data && data.pending && held < 5 && !controller.signal.aborted) {
-                        held++;
-                        say(t('Still working on that one…'));
-                        await pause(3000, controller.signal);
-                        continue;
-                    }
-                    const failed = status >= 400 || !data || !!data.error;
-                    if (failed && !(data && data.noCredits) && waited < BUSY_WAITS.length
-                        && Api.busy(status, data) && !controller.signal.aborted) {
-                        const wait = BUSY_WAITS[waited++];
-                        say(t('Too many requests just now — waiting {n} seconds rather than asking again straight away.',
-                            { n: Math.round(wait / 1000) }));
-                        await pause(wait, controller.signal);
-                        continue;
-                    }
-                    break;
+        async claim(extra, opts) {
+            const options = opts || {};
+            const controller = options.controller;
+            const waits = Array.isArray(this.CLAIM_WAITS) && this.CLAIM_WAITS.length ? this.CLAIM_WAITS : [3000];
+            const began = Date.now();
+            let step = 0;
+            let resent = false;
+            while (!(controller && controller.signal.aborted) && Date.now() - began < CLAIM_MS) {
+                const base = waits[Math.min(step, waits.length - 1)];
+                const wait = step < waits.length ? base : Math.min(60000, base * Math.pow(2, step - waits.length + 1));
+                step++;
+                await pause(wait, controller ? controller.signal : null);
+                if (controller && controller.signal.aborted) break;
+                const res = await Api.claimRun(extra.eventId, { signer: options.signer, controller });
+                if (res.aborted) break;
+                if (res.status === 200 && res.data && !res.data.pending && !res.data.unknown) return res;
+                if (res.status === 202 || (res.data && res.data.pending)) continue;
+                if (res.status === 404 && res.data && res.data.unknown) return { status: 0, data: { lost: true } };
+                if (res.status === 0 && !res.timedOut) continue;
+                if (res.status === 400 || res.status === 403 || res.status === 405) {
+                    if (resent) continue;
+                    const again = await Api.call('pm', extra, { timeout: C.pmTimeoutMs, signer: options.signer, controller, onSlot: options.onSlot });
+                    if (again.aborted) break;
+                    if (again.data && again.data.pending) { resent = true; continue; }
+                    if (again.timedOut) continue;
+                    return again;
                 }
-            } finally {
-                if (ownsController) this.controller = null;
+                if (res.status >= 400) return res;
             }
+            if (controller && controller.signal.aborted) return { status: 0, aborted: true, data: { error: t('Stopped.') } };
+            return { status: 0, data: { lost: true } };
+        },
 
-            if (data && data.pending) {
-                throw new Error(data.message
-                    || t('Nymbot is still working on that message — its reply will arrive shortly.'));
-            }
-            if (data && data.noCredits) {
-                const err = new Error(data.error
-                    || (data.pro ? t('You are out of Pro credits.') : t('You are out of credits.')));
-                err.noCredits = true;
-                err.pro = !!data.pro;
-                err.balance = data.balanceCredits != null
-                    ? data.balanceCredits : (data.balance || 0);
-                err.balanceCredits = data.balanceCredits;
-                // Set when the free daily allowance ran out rather than a balance.
-                err.free = data.free || null;
-                err.team = !!data.team;
-                err.required = Number(data.required) || 0;
-                throw err;
-            }
-            if (status >= 400 || !data || data.error) {
-                const err = new Error((data && data.error) || t('The request failed.'));
-                if (!status && data && data.offline) err.offline = true;
-                if (data && data.team) err.team = true;
-                if (data && data.capExceeded) {
-                    err.capExceeded = true;
-                    err.required = Number(data.required) || 0;
-                    err.pro = !!data.pro;
-                }
-                if (data && data.resumable && data.resumeToken) {
-                    err.resumeToken = data.resumeToken;
-                    err.resumable = true;
-                }
-                if (data && data.retryable) err.retryable = true;
-                if (data && data.priceUnavailable) err.priceUnavailable = true;
-                throw err;
-            }
+        async settle(conv, data, ctx) {
+            const { anon, payer, ghost } = ctx;
             if (!data.event) throw new Error(t('Nymbot sent no reply.'));
-
             if (!ghost) {
                 Relays.publish(data.event, 3000);
                 if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
                     Relays.publish(data.selfEvent, 3000);
                 }
             }
-
             const opened = anon
                 ? await this.openReply(data.event, payer)
                 : await Wire.unwrap(data.event, null, { from: C.botPubkey });
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
-            // A '!' question stays out of the conversation on both sides, though the chat still shows it.
-            if (!isFresh) {
+            if (!ctx.isFresh && ctx.eventId) {
                 const ids = Store.thread(conv.id);
-                ids.push(wrap.id);
-                if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
-                Store.setThread(conv.id, ids);
-                holdWraps(conv.id, partWraps.concat(data.selfEvent ? [data.selfEvent] : []));
+                if (!ids.includes(ctx.eventId)) {
+                    ids.push(ctx.eventId);
+                    if (data.selfEvent && data.selfEvent.id) ids.push(data.selfEvent.id);
+                    Store.setThread(conv.id, ids);
+                }
+                holdWraps(conv.id, (ctx.partWraps || []).concat(data.selfEvent ? [data.selfEvent] : []));
             }
 
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });
 
             const split = splitThinking(opened.rumor.content || '');
+            const link = linkOf(opened.rumor, data);
+            if (data.checkpoint) {
+                try { this.rememberBranches(conv, data.checkpoint); } catch (_) { }
+            }
             return {
                 reply: split.body,
                 thinking: split.thinking,
@@ -867,7 +993,6 @@
                 pro: !!data.pro,
                 modelCalls: data.modelCalls || 1,
                 lowBalance: !!data.lowBalance,
-                // The token buys one more leg; the client decides whether to spend it.
                 truncated: !!data.truncated,
                 capStopped: !!data.capStopped,
                 checkpoint: data.checkpoint || null,
@@ -877,6 +1002,8 @@
                 retryAfterMs: Number(data.retryAfterMs) || 0,
                 resumeToken: data.resumeToken || null,
                 nextReserve: data.nextReserve || 0,
+                background: data.background && typeof data.background === 'object' && HEX64.test(String(data.background.runId || ''))
+                    ? { runId: String(data.background.runId), until: Number(data.background.until) || 0 } : null,
                 research: !!data.research,
                 taskType: data.taskType || null,
                 modelLabel: data.modelLabel || null,
@@ -887,9 +1014,38 @@
                 serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
                 serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
                 free: data.free || null,
-                repos: repos.map(r => r.repo),
-                eventId: wrap.id
+                repos: (ctx.repos || []).map(r => r.repo),
+                stopped: data.stopped === true,
+                plan: planOf(data.plan),
+                replyTo: link.replyTo,
+                askedId: link.askedId,
+                msgId: ctx.msgId || null,
+                eventId: ctx.eventId
             };
+        },
+
+        async claimStored(conv, eventId, opts) {
+            const options = opts || {};
+            const anon = !!conv.anon;
+            const payer = anon ? Anon.forConv(conv) : null;
+            const signer = payer ? Anon.signer(payer) : null;
+            const res = await this.claim({ eventId }, { signer, controller: options.controller });
+            if (res.aborted) {
+                const err = new Error(t('Stopped.'));
+                err.name = 'AbortError';
+                err.stopped = true;
+                throw err;
+            }
+            if (!res.data || res.data.lost || res.status !== 200) {
+                const err = new Error(t('Nymbot could not finish that one. Try again; it will not be charged twice.'));
+                err.late = true;
+                err.eventId = eventId;
+                throw err;
+            }
+            return this.settle(conv, res.data, {
+                anon, payer, ghost: !!conv.ephemeral, repos: reposFor(conv), isFresh: !!options.isFresh,
+                eventId, msgId: options.msgId || null, partWraps: []
+            });
         },
 
         /// Each model runs on its own thread so neither sees the other; two replies, two charges.
@@ -906,8 +1062,8 @@
             }));
             if (runs.length < 2) throw new Error(t('Pick two models to compare.'));
 
-            const controller = new AbortController();
-            this.controller = controller;
+            const controller = opts.controller || new AbortController();
+            if (!opts.controller) this.controller = controller;
             let settled;
             try {
                 settled = await Promise.allSettled(runs.map(r => this.send(
@@ -915,12 +1071,12 @@
                     {
                         attachments: opts.attachments || [], quote: opts.quote, controller,
                         maxCost: opts.maxCost || null,
-                        // Neither run touches the conversation's stored thread.
+                        runKind: 'compare',
                         fresh: true
                     }
                 )));
             } finally {
-                this.controller = null;
+                if (this.controller === controller) this.controller = null;
                 for (const r of runs) Store.dropThread(r.scratch.id);
             }
 
@@ -946,6 +1102,8 @@
                     && Number(draft.seq) > 0) {
                     options.onDraft({ text: draft.text, seq: Number(draft.seq) });
                 }
+                const plan = planOf(data && data.plan);
+                if (typeof options.onPlan === 'function' && plan) options.onPlan(plan);
                 return Array.isArray(data && data.steps) ? data.steps : [];
             } catch (_) {
                 return [];
@@ -954,6 +1112,11 @@
 
         titleFor,
         splitThinking,
+        policyFor,
+        planOf,
+        linkOf,
+        validRuns,
+        CLAIM_WAITS: [3000, 6000, 12000, 24000, 48000, 60000],
         followUpsOf,
         reposFor,
         connectorsFor,
@@ -996,6 +1159,103 @@
                 throw new Error((data && data.error) || t('Could not put that back.'));
             }
             return data;
+        },
+
+        rememberBranches(conv, mark) {
+            const GitRun = window.NymbotGitRun;
+            const jobs = GitRun.jobsOf(mark);
+            if (!jobs.length) return 0;
+            const repos = reposFor(conv);
+            let n = 0;
+            for (const job of jobs) {
+                const repo = repos.find(r => r.repo === job.repo);
+                if (!repo || !job.sha) continue;
+                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(repo.nymBranches, job) });
+                n++;
+            }
+            return n;
+        },
+
+        rememberBranchStep(step, conv) {
+            const GitRun = window.NymbotGitRun;
+            if (!step || !GitRun.isJobBranch(step.branch) || !/^[0-9a-f]{40,64}$/i.test(String(step.sha || ''))) return false;
+            const pool = conv ? reposFor(conv) : Store.repos();
+            const repo = pool.find(r => r.repo === step.repo && r.allowWrites);
+            if (!repo) return false;
+            const fresh = Store.repo(repo.id) || repo;
+            const had = (fresh.nymBranches || []).find(r => r.branch === step.branch);
+            if (had && had.sha === step.sha) return false;
+            Store.updateRepo(repo.id, {
+                nymBranches: GitRun.remember(fresh.nymBranches, {
+                    branch: step.branch, base: step.base || (had && had.base) || '', sha: step.sha,
+                    pull: had ? had.pull : null
+                }, had ? had.at : undefined)
+            });
+            return true;
+        },
+
+        async branchOp(conv, repoName, op, job) {
+            const repo = reposFor(conv).find(r => r.repo === repoName);
+            if (!repo) throw new Error(t('That repository is no longer connected.'));
+            if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
+            const anon = !!conv.anon;
+            const signer = anon ? Anon.signer(Anon.forConv(conv)) : null;
+            const { status, data } = await Api.call('git-branch', {
+                git: repoPayload(repo),
+                op,
+                branch: job.branch,
+                base: job.base || '',
+                sha: job.sha || '',
+                pull: job.pull && job.pull.number ? { number: job.pull.number } : null
+            }, { signer });
+            const out = data || {};
+            if (status >= 400 || out.error) {
+                const err = new Error(out.error || t('The forge could not be reached.'));
+                err.conflict = !!out.conflict;
+                err.moved = !!out.moved;
+                err.gone = !!out.gone;
+                err.unsupported = !!out.unsupported;
+                err.pull = out.pull || null;
+                throw err;
+            }
+            const GitRun = window.NymbotGitRun;
+            const fresh = Store.repo(repo.id) || repo;
+            if (op === 'delete') {
+                Store.updateRepo(repo.id, { nymBranches: GitRun.forget(fresh.nymBranches, [job.branch]) });
+            } else if (out.sha && op === 'update') {
+                Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, job, { sha: out.sha, pull: out.pull || job.pull })) });
+            } else if (out.pull) {
+                const had = (fresh.nymBranches || []).find(r => r.branch === job.branch);
+                if (had) Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, had, { pull: out.pull })) });
+            }
+            return out;
+        },
+
+        async cleanupBranches(repo, opts) {
+            const options = opts || {};
+            const list = (repo && Array.isArray(repo.nymBranches)) ? repo.nymBranches.slice(-20) : [];
+            if (!repo || !repo.allowWrites || !repo.token || !list.length) return { deleted: [], gone: [], kept: [] };
+            const { status, data } = await Api.call('git-branch', {
+                git: repoPayload(repo),
+                op: 'cleanup',
+                branches: list.map(r => ({ branch: r.branch, sha: r.sha, base: r.base, pull: r.pull, at: r.at }))
+            }, { signer: options.signer || null });
+            if (status >= 400 || !data || data.error) throw new Error((data && data.error) || t('The forge could not be reached.'));
+            const done = (data.deleted || []).concat(data.gone || []);
+            const fresh = Store.repo(repo.id) || repo;
+            if (done.length) Store.updateRepo(repo.id, { nymBranches: window.NymbotGitRun.forget(fresh.nymBranches, done) });
+            return data;
+        },
+
+        cleanupSoon(conv) {
+            const now = Date.now();
+            this._cleaned = this._cleaned || {};
+            for (const repo of reposFor(conv)) {
+                if (!repo.allowWrites || conv.anon || !(repo.nymBranches || []).length) continue;
+                if (now - (this._cleaned[repo.id] || 0) < CLEANUP_EVERY_MS) continue;
+                this._cleaned[repo.id] = now;
+                this.cleanupBranches(repo).catch(() => { });
+            }
         },
 
         async applyStaged(conv, staged) {

@@ -13,6 +13,8 @@ const USAGE_DDL = [
   "ALTER TABLE bot_usage ADD COLUMN stages TEXT"
 ];
 
+export const USAGE_KEEP_DAYS = 90;
+
 const STAGE_KEY = /^[A-Za-z]{1,16}$/;
 const STAGE_MAX = 32;
 
@@ -73,13 +75,17 @@ export function noteUsage(context, row) {
       ];
       const cols = "at, pubkey, kind, tier, task, model, calls, tok_in, tok_out, tok_cached, cost_milli, ms, client, git, web, ok, err";
       const marks = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+      let stored = false;
       if (stages) {
         try {
           await db.prepare("INSERT INTO bot_usage (" + cols + ", stages) VALUES (" + marks + ", ?)").bind(...values, stages).run();
-          return;
+          stored = true;
         } catch (e) { }
       }
-      await db.prepare("INSERT INTO bot_usage (" + cols + ") VALUES (" + marks + ")").bind(...values).run();
+      if (!stored) await db.prepare("INSERT INTO bot_usage (" + cols + ") VALUES (" + marks + ")").bind(...values).run();
+      if (Math.random() < 0.02) {
+        await db.prepare("DELETE FROM bot_usage WHERE at < ?").bind(Date.now() - USAGE_KEEP_DAYS * 86400000).run();
+      }
     } catch (e) { /* a lost usage row is not a lost reply */ }
   })();
   try {
@@ -87,7 +93,7 @@ export function noteUsage(context, row) {
   } catch (e) {}
 }
 
-let denyCache = { at: 0, set: new Set() };
+let denyCache = { at: 0, set: new Set(), ok: false };
 
 export async function denied(env, pubkey) {
   const db = env && env.DB_NOPE;
@@ -96,10 +102,16 @@ export async function denied(env, pubkey) {
   if (now - denyCache.at > 60000) {
     try {
       const rs = await replica(db).prepare("SELECT value FROM nope WHERE kind = 'pubkey' AND (expires_at = 0 OR expires_at > ?)").bind(now).all();
-      denyCache = { at: now, set: new Set(((rs && rs.results) || []).map((r) => String(r.value).toLowerCase())) };
+      denyCache = { at: now, set: new Set(((rs && rs.results) || []).map((r) => String(r.value).toLowerCase())), ok: true };
     } catch (e) {
-      denyCache = { at: now, set: denyCache.set };
+      denyCache = { at: now, set: denyCache.set, ok: denyCache.ok };
     }
   }
   return denyCache.set.has(pubkey.toLowerCase());
+}
+
+export async function deniedStrict(env, pubkey) {
+  const no = await denied(env, pubkey);
+  if (!no && hasD1(env && env.DB_NOPE) && !denyCache.ok) throw new Error("The deny list is unavailable.");
+  return no;
 }

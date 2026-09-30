@@ -64,11 +64,19 @@
         return 'chat';
     }
 
+    function planOf(raw) {
+        const Chat = window.NymbotChat;
+        const list = Chat && Chat.planOf ? Chat.planOf(raw) : null;
+        return list && list.length ? list : null;
+    }
+
     function record(turn, end) {
         const steps = bounded((turn && turn.tasksLog) || []);
         const mode = modeOf(turn, steps);
-        if (!steps.length && mode === 'chat') return null;
+        const plan = planOf(turn && turn.plan);
+        if (!steps.length && mode === 'chat' && !plan) return null;
         const out = { v: 1, mode, end, steps };
+        if (plan) out.plan = plan;
         const workers = turn && turn.team && Number(turn.team.workers);
         if (workers > 0) out.workers = Math.min(MAX_WORKERS, Math.floor(workers));
         return out;
@@ -80,7 +88,10 @@
         const end = ['done', 'stopped', 'failed'].includes(raw.end) ? raw.end : 'done';
         const steps = bounded(raw.steps.map(compact).filter(Boolean));
         const workers = Math.min(MAX_WORKERS, Math.max(0, Math.floor(Number(raw.workers) || 0)));
-        return { v: 1, mode, end, steps, workers };
+        const out = { v: 1, mode, end, steps, workers };
+        const plan = planOf(raw.plan);
+        if (plan) out.plan = plan;
+        return out;
     }
 
     function stageOf(step) {
@@ -356,7 +367,16 @@
                 card: '.staged-card'
             }));
         } else if (m.checkpoint && m.checkpoint.repo) {
-            out.push(item(t('Changes committed to {repo}', { repo: m.checkpoint.repo }), 'done', { card: '.checkpoint-card' }));
+            const jobs = window.NymbotGitRun ? window.NymbotGitRun.jobsOf(m.checkpoint) : [];
+            if (!jobs.length) {
+                out.push(item(t('Changes committed to {repo}', { repo: m.checkpoint.repo }), 'done', { card: '.checkpoint-card' }));
+            }
+            for (const job of jobs) {
+                out.push(item(t('Changes committed to branch {branch}', { branch: job.branch }), job.conflict ? 'waiting' : 'done', {
+                    detail: job.repo + ' · ' + window.NymbotGitRun.branchState(job),
+                    card: '.checkpoint-card'
+                }));
+            }
         }
         const p = m.pendingTool;
         if (p && typeof p === 'object') {
@@ -400,6 +420,12 @@
     }
 
     function askedBefore(list, i) {
+        const m = list[i];
+        const link = m && (m.askedBy || m.replyTo);
+        if (link) {
+            const q = list.find(x => x.role === 'self' && (x.id === m.askedBy || (m.replyTo && x.wire === m.replyTo)));
+            if (q) return clip(q.content, 90);
+        }
         for (let j = i; j >= 0; j--) {
             if (list[j].role === 'self') return clip(list[j].content, 90);
         }
@@ -428,25 +454,56 @@
         return {
             id: m.id, messageId: m.id, mode, live: false,
             title: askedBefore(list, i) || modeLabel(mode),
-            state: groupState(items, false, end), items, ts: m.ts || 0
+            state: groupState(items, false, end), items, ts: m.ts || 0,
+            plan: rec && rec.plan ? rec.plan : null
         };
     }
 
-    function liveGroup(ui, conv) {
-        const turn = ui.turnOf && ui.turnOf(conv.id);
-        if (!turn || turn.quiet) return null;
-        const steps = turn.tasksLog || [];
-        const mode = modeOf(turn, steps);
-        const workers = turn.team && Number(turn.team.workers) > 0 ? Number(turn.team.workers) : 0;
-        let items = mode === 'chat' && !steps.length ? [] : itemsFor(ui, mode, steps, null, true, '', workers);
-        if (!items.length) items = [item(turn.status || turn.label || t('Nymbot is thinking'), 'active')];
+    function branchItems(list) {
+        const Git = window.NymbotGitRun;
+        if (!Git) return [];
+        return Git.branchSteps(list).map(b => item(t('Working on branch {branch}', { branch: b.branch }), 'active', { detail: b.repo }));
+    }
+
+    function liveGroups(ui, conv) {
+        const turns = ui.turnsIn ? ui.turnsIn(conv.id).filter(x => !x.quiet) : [];
         const list = Store().messages(conv.id);
-        return {
-            id: 'live', messageId: 'live', mode, live: true,
-            title: turn.label || t('Nymbot is thinking'),
-            asked: askedBefore(list, list.length - 1),
-            state: 'running', items, ts: Date.now()
-        };
+        const out = turns.map((turn) => {
+            const steps = turn.tasksLog || [];
+            const mode = modeOf(turn, steps);
+            const workers = turn.team && Number(turn.team.workers) > 0 ? Number(turn.team.workers) : 0;
+            let items = mode === 'chat' && !steps.length ? [] : itemsFor(ui, mode, steps, null, true, '', workers);
+            const label = ui.cardLabel ? ui.cardLabel(turn) : (turn.label || t('Nymbot is thinking'));
+            if (!items.length) items = [item(turn.status || label, 'active')];
+            items = items.concat(branchItems(turn.branches));
+            const q = list.find(x => x.id === turn.asked);
+            return {
+                id: 'live-' + turn.id, messageId: turn.asked || 'live', run: turn.id, mode, live: true,
+                background: !!turn.background,
+                title: label,
+                asked: q ? clip(q.content, 90) : askedBefore(list, list.length - 1),
+                steer: !!(turn.runId && turn.sent && !turn.slot && !turn.waiting),
+                state: 'running', items, ts: turn.startedAt || Date.now(),
+                plan: planOf(turn.plan)
+            };
+        }).reverse();
+        const Runs = window.NymbotRuns;
+        const remote = Runs ? Runs.forConv(ui, conv) : [];
+        for (const r of remote) {
+            const q = list.find(x => x.role === 'self' && x.wire === r.replyTo);
+            out.push({
+                id: 'remote-' + r.replyTo, messageId: q ? q.id : 'live', run: 'remote:' + r.replyTo,
+                mode: r.kind === 'team' ? 'team' : (r.kind === 'research' ? 'research' : (r.kind === 'repo' ? 'repo' : 'chat')),
+                live: true, remote: true, steer: true, background: !!r.background,
+                title: r.label || t('Nymbot is thinking'),
+                asked: r.label || '',
+                progress: r.progress || '',
+                state: 'running', items: (r.progress ? [item(r.progress, 'active')] : []).concat(branchItems(r.branches)),
+                ts: r.startedAt || Date.now(),
+                plan: planOf(r.plan)
+            });
+        }
+        return out;
     }
 
     function outline(ui, conv) {
@@ -454,8 +511,7 @@
         if (!c) return [];
         const list = Store().messages(c.id);
         const groups = [];
-        const live = liveGroup(ui, c);
-        if (live) groups.push(live);
+        for (const live of liveGroups(ui, c)) groups.push(live);
         for (let i = list.length - 1; i >= 0; i--) {
             const m = list[i];
             if (m.role !== 'bot' && !(m.role === 'self' && m.tasks)) continue;
@@ -487,6 +543,14 @@
 
     function targetOf(turn) {
         const list = Store().messages(turn.convId);
+        if (turn.lastReplyId) {
+            const hit = list.find(m => m.id === turn.lastReplyId);
+            if (hit) return hit;
+        }
+        if (turn.asked) {
+            const q = list.find(m => m.id === turn.asked);
+            return q && !q.tasks ? q : null;
+        }
         const since = turn.tasksAt || 0;
         for (let i = list.length - 1; i >= 0; i--) {
             const m = list[i];
@@ -505,7 +569,7 @@
         if (!turn || turn.tasksKept) return;
         turn.tasksKept = true;
         const log = turn.tasksLog || [];
-        if (log.length || turn.team || turn.research) {
+        if (log.length || turn.team || turn.research || planOf(turn.plan)) {
             const m = targetOf(turn);
             if (m) {
                 const end = turn.stopped ? 'stopped' : (m.role === 'bot' ? 'done' : 'failed');
@@ -548,7 +612,8 @@
         const btn = $('tasksBtn');
         if (!btn) return;
         const conv = ui.conv;
-        const live = groups && groups[0] && groups[0].live ? groups[0] : null;
+        const lives = (groups || []).filter(g => g.live);
+        const live = lives[0] || null;
         const waiting = conv ? waitingCount(ui, conv) : 0;
         btn.classList.toggle('is-running', !!live);
         btn.classList.toggle('is-waiting', !live && waiting > 0);
@@ -557,7 +622,10 @@
         const badge = btn.querySelector('.tasks-badge');
         let text = '';
         let label = t('Tasks');
-        if (live) {
+        if (lives.length > 1) {
+            text = String(lives.length);
+            label = t('Tasks: work is running');
+        } else if (live) {
             const top = live.items.filter(x => !x.depth);
             const done = top.filter(x => x.state === 'done' || x.state === 'skipped').length;
             text = top.length > 1 ? done + '/' + top.length : '';
@@ -634,8 +702,16 @@
         return li;
     }
 
+    function planNode(plan) {
+        const list = el('ol', 'run-plan');
+        list.setAttribute('aria-label', t('Plan'));
+        const ui = window.NymbotUI;
+        if (ui && ui.fillPlan) ui.fillPlan(list, plan);
+        return list;
+    }
+
     function groupNode(ui, g) {
-        const section = el('section', 'task-group is-' + g.state + (g.live ? ' is-live' : ''));
+        const section = el('section', 'task-group is-' + g.state + (g.live ? ' is-live' : '') + (g.remote ? ' is-remote' : ''));
         section.dataset.group = g.id;
         const head = el('div', 'task-group-head');
         const jumpBtn = el('button', 'task-group-title task-focus');
@@ -644,6 +720,8 @@
         jumpBtn.dataset.message = g.messageId;
         jumpBtn.appendChild(el('span', 'task-group-name', g.live && g.asked ? g.asked : g.title));
         const meta = [modeLabel(g.mode)];
+        if (g.background) meta.push(t('In the background'));
+        else if (g.remote) meta.push(t('On another device'));
         if (g.live) meta.push(t('running'));
         else if (g.state === 'waiting') meta.push(t('waiting for you'));
         else if (g.state === 'stopped') meta.push(t('stopped'));
@@ -653,14 +731,24 @@
         jumpBtn.appendChild(el('span', 'task-group-meta', meta.join(' · ')));
         jumpBtn.addEventListener('click', () => jump(ui, g.messageId, ''));
         head.appendChild(jumpBtn);
+        if (g.live && g.steer) {
+            const steer = el('button', 'btn btn-small btn-ghost task-steer task-focus', t('Add instructions'));
+            steer.type = 'button';
+            steer.tabIndex = -1;
+            steer.dataset.act = 'run-steer';
+            steer.dataset.run = g.run || '';
+            head.appendChild(steer);
+        }
         if (g.live) {
             const stop = el('button', 'btn btn-small btn-ghost task-stop task-focus', t('Stop'));
             stop.type = 'button';
             stop.tabIndex = -1;
-            stop.dataset.act = 'stop';
+            stop.dataset.act = g.run ? 'run-stop' : 'stop';
+            if (g.run) stop.dataset.run = g.run;
             head.appendChild(stop);
         }
         section.appendChild(head);
+        if (g.plan && g.plan.length) section.appendChild(planNode(g.plan));
         const list = el('ol', 'task-list');
         for (const it of g.items) list.appendChild(itemNode(ui, g, it));
         section.appendChild(list);
@@ -682,7 +770,7 @@
         }
         for (const g of groups) body.appendChild(groupNode(ui, g));
         roving(body, had);
-        const live = groups[0] && groups[0].live ? groups[0] : null;
+        const live = groups[0] && groups[0].live && !groups[0].remote ? groups[0] : null;
         if (live) {
             const current = live.items.filter(x => x.state === 'active').pop() || live.items[live.items.length - 1];
             if (current) speak(current.label);
@@ -776,6 +864,7 @@
         document.querySelector('.shell').classList.add('has-tasks');
         spoken = '';
         render(ui);
+        if (window.NymbotRuns) window.NymbotRuns.follow(ui, 'tasks', true);
         const first = $('tasksBody').querySelector('.task-focus[tabindex="0"]') || $('tasksClose');
         if (first) first.focus({ preventScroll: true });
     }
@@ -785,6 +874,7 @@
         if (!panel || !isOpen) return;
         isOpen = false;
         panel.hidden = true;
+        if (window.NymbotRuns) window.NymbotRuns.follow(ui, 'tasks', false);
         document.querySelector('.shell').classList.remove('has-tasks');
         clearTimeout(speakTimer);
         if (ui) renderButton(ui, ui.conv ? outline(ui, ui.conv) : []);
@@ -814,7 +904,7 @@
     function helpTopic() {
         return {
             title: t('Tasks'),
-            body: t('The checklist button at the top of a chat opens its Tasks pane: an outline of the multi-step work the chat has done, newest first. Research shows its plan, searches, the sources it read and the report; Team mode shows the lead\'s plan, each worker\'s part with its model, cost and status, and the lead\'s review; repository work shows its steps, server runs and staged changes. Anything waiting for your approval can be allowed or declined from there, and every step jumps to its place in the chat. The outline is kept with the chat\'s messages, so it is still there after the work finishes and on your other devices.')
+            body: t('The checklist button at the top of a chat opens its Tasks pane: an outline of the multi-step work the chat has done, newest first, with every request still running at the top, each with its own plan, Stop and Add instructions, including ones started on your other devices. Research shows its plan, searches, the sources it read and the report; Team mode shows the lead\'s plan, each worker\'s part with its model, cost and status, and the lead\'s review; repository work shows its steps, server runs and staged changes. Anything waiting for your approval can be allowed or declined from there, and every step jumps to its place in the chat. The outline is kept with the chat\'s messages, so it is still there after the work finishes and on your other devices.')
         };
     }
 

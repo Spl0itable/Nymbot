@@ -1,4 +1,4 @@
-import { apiChatPrepare, apiChatRun, apiStreamDraft, apiStreamRun, apiThinkSplitter, apiNymbotObject, apiUpstreamError, apiOpenAiUsage } from "./_apichat.js";
+import { apiChatPrepare, apiCheckSampling, apiChatRun, apiStreamDraft, apiStreamRun, apiThinkSplitter, apiNymbotObject, apiUpstreamError, apiOpenAiUsage } from "./_apichat.js";
 import { apiBad, apiJson, apiRandomId, apiSseStream, apiErrorBody } from "./_apihttp.js";
 import { apiCostHeaders } from "./_apibill.js";
 
@@ -8,8 +8,8 @@ const REFUSED = {
   background: "`background` is not supported: Nymbot answers synchronously or by streaming."
 };
 const WEB_TOOL = /^web_search(?:_preview)?(?:_[0-9_]+)?$/;
-const SKIPPED_ITEMS = { reasoning: 1, web_search_call: 1 };
-const EFFORT_ALIASES = { xhigh: "high", max: "high" };
+const SKIPPED_ITEMS = Object.assign(Object.create(null), { reasoning: 1, web_search_call: 1 });
+const EFFORT_ALIASES = Object.assign(Object.create(null), { xhigh: "high", max: "high" });
 
 function contentPart(p, where, role) {
   if (!p || typeof p !== "object") throw apiBad("Each content part must be an object.", where);
@@ -110,6 +110,19 @@ function translateTools(tools) {
   });
 }
 
+function echoTools(tools) {
+  if (!Array.isArray(tools)) return [];
+  return tools.map((t) => {
+    if (t.type !== "function") return { type: t.type };
+    const src = t.function && typeof t.function === "object" ? t.function : t;
+    const out = { type: "function", name: src.name };
+    if (typeof src.description === "string") out.description = src.description;
+    if (src.parameters !== undefined) out.parameters = src.parameters;
+    if (typeof src.strict === "boolean") out.strict = src.strict;
+    return out;
+  });
+}
+
 function translateToolChoice(tc) {
   if (tc == null || typeof tc === "string") return tc;
   if (tc.type === "function" && typeof tc.name === "string") return { type: "function", function: { name: tc.name } };
@@ -202,12 +215,12 @@ function responseObject(ctx, fields) {
     output_text: text,
     parallel_tool_calls: typeof body.parallel_tool_calls === "boolean" ? body.parallel_tool_calls : true,
     previous_response_id: null,
-    reasoning: { effort: ctx.effort || null, summary: body.reasoning && body.reasoning.summary ? body.reasoning.summary : null },
+    reasoning: { effort: ctx.effort || null, summary: body.reasoning && typeof body.reasoning.summary === "string" ? body.reasoning.summary : null },
     store: false,
     temperature: typeof body.temperature === "number" ? body.temperature : null,
-    text: { format: body.text && body.text.format ? body.text.format : { type: "text" } },
+    text: { format: body.text && body.text.format && typeof body.text.format === "object" && typeof body.text.format.type === "string" ? body.text.format : { type: "text" } },
     tool_choice: body.tool_choice == null ? "auto" : body.tool_choice,
-    tools: Array.isArray(body.tools) ? body.tools : [],
+    tools: ctx.tools,
     top_p: typeof body.top_p === "number" ? body.top_p : null,
     truncation: "disabled",
     usage: fields.usage || null,
@@ -342,11 +355,12 @@ function responsesWriter(sse, ctx) {
 async function responses(api) {
   const body = api.body;
   if (typeof body.model !== "string" || !body.model.trim()) throw apiBad("`model` is required.", "model", "missing_required_parameter");
+  apiCheckSampling(body);
   const req = await apiChatPrepare(api, translate(body));
   req.type = "responses";
   req.stream = body.stream === true;
   req.completionId = apiRandomId("resp_", 24);
-  const ctx = { id: req.completionId, created: req.created, model: req.resolved.id, effort: req.effort, body };
+  const ctx = { id: req.completionId, created: req.created, model: req.resolved.id, effort: req.effort, body, tools: echoTools(body.tools) };
   if (!req.stream) {
     const out = await apiChatRun(api, req, null);
     const st = statusOf(out.finish).status;

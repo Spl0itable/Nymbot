@@ -69,6 +69,68 @@ CREATE TABLE IF NOT EXISTS botpm_wraps (
 CREATE INDEX IF NOT EXISTS botpm_wraps_pubkey ON botpm_wraps (pubkey);
 CREATE INDEX IF NOT EXISTS botpm_wraps_root ON botpm_wraps (pubkey, root);
 
+CREATE TABLE IF NOT EXISTS botpm_turns (
+  pubkey TEXT NOT NULL,
+  asked TEXT NOT NULL,
+  thread TEXT NOT NULL DEFAULT '',
+  ids TEXT NOT NULL DEFAULT '[]',
+  at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, asked)
+);
+CREATE INDEX IF NOT EXISTS botpm_turns_at ON botpm_turns (pubkey, at);
+
+CREATE TABLE IF NOT EXISTS botpm_runs (
+  pubkey TEXT NOT NULL,
+  asked TEXT NOT NULL,
+  thread TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'chat',
+  label TEXT NOT NULL DEFAULT '',
+  progress TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'running',
+  cancel INTEGER NOT NULL DEFAULT 0,
+  resume TEXT,
+  started_at INTEGER NOT NULL DEFAULT 0,
+  beat_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, asked)
+);
+CREATE INDEX IF NOT EXISTS botpm_runs_live ON botpm_runs (pubkey, state, beat_at);
+
+CREATE TABLE IF NOT EXISTS botpm_results (
+  pubkey TEXT NOT NULL,
+  id TEXT NOT NULL,
+  result TEXT NOT NULL,
+  at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, id)
+);
+CREATE INDEX IF NOT EXISTS botpm_results_at ON botpm_results (at);
+
+CREATE TABLE IF NOT EXISTS botpm_steer (
+  pubkey TEXT NOT NULL,
+  asked TEXT NOT NULL,
+  id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  at INTEGER NOT NULL DEFAULT 0,
+  applied_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, asked, id)
+);
+
+CREATE TABLE IF NOT EXISTS botpm_locks (
+  pubkey TEXT NOT NULL,
+  lock TEXT NOT NULL,
+  asked TEXT NOT NULL,
+  beat_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, lock)
+);
+
+CREATE TABLE IF NOT EXISTS botpm_summary (
+  pubkey TEXT NOT NULL,
+  thread TEXT NOT NULL,
+  text TEXT NOT NULL,
+  upto_at INTEGER NOT NULL DEFAULT 0,
+  at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (pubkey, thread)
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   channel TEXT,

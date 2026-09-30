@@ -1,13 +1,13 @@
 import { ledgerCall } from "./_ledger.js";
 import { hasD1, invoiceGet } from "./_d1.js";
 import {
-  sha256, bytesToHex, utf8ToBytes, randomBytes, botBase64Encode, botBase64Decode, parseNwcUri,
+  sha256, bytesToHex, utf8ToBytes, randomBytes, botBase64Encode, botBase64Decode, parseNwcUri, secp256k1,
   nwcGetInfo, nwcPayInvoice, bolt11ExpiresAt, invoicePaymentConfirmed
 } from "./_shared.js";
 import {
   botBtcPrice, botCreditInvoice, botCreditsForSatsTier, botCreditFigure, isPrivateHostUrl, BOT_BULK_BONUS, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT
 } from "./bot.js";
-import { ApiError, apiBad, apiIso, apiJson, apiRateLimit, apiClientIp } from "./_apihttp.js";
+import { ApiError, apiBad, apiIso, apiJson, apiRateLimit, apiIpBucket } from "./_apihttp.js";
 import { apiBalances, apiSatsPer, apiAddSettleHook } from "./_apibill.js";
 import { apiAddAccountField } from "./_apikeys.js";
 
@@ -19,7 +19,7 @@ export const API_NWC_MIN_SATS = 1000;
 export const API_NWC_MAX_TOPUP_SATS = 1000000;
 export const API_NWC_TIMING = { infoMs: 8000, payMs: 20000, infoWaitMs: 1500, lockTtlS: 300 };
 
-const OWN_HOST_RE = /(^|\.)(nymbot\.ai|nymbot\.pages\.dev)$/;
+const OWN_HOST_RE = /(^|\.)(nymbot\.ai|nymbot\.pages\.dev|nymchat\.app|nymchat\.pages\.dev)$/;
 const TIER_MIN_SATS = { standard: BOT_SATS_PER_CREDIT, pro: BOT_PRO_SATS_PER_CREDIT };
 const INVOICE_ID_RE = /^[0-9a-f]{64}$/;
 
@@ -86,6 +86,11 @@ export function apiNwcLockId(pubkey, tier) {
   return bytesToHex(sha256(utf8ToBytes("api-nwc-topup/" + pubkey + "/" + tier)));
 }
 
+export function apiNwcErrorText(v) {
+  const s = String(v == null ? "" : v).replace(/\s+/g, " ").replace(/\p{C}/gu, "").trim();
+  return s ? Array.from(s).slice(0, 200).join("") : null;
+}
+
 function nwcObject(row) {
   if (!row) {
     return { connected: false, threshold_sats: null, topup_sats: null, tier: null, last_topup_at: null, last_topup_sats: null, last_error: null };
@@ -97,7 +102,7 @@ function nwcObject(row) {
     tier: row.tier === "standard" ? "standard" : "pro",
     last_topup_at: apiIso(row.last_topup_at),
     last_topup_sats: row.last_topup_sats == null ? null : Number(row.last_topup_sats),
-    last_error: row.last_error || null
+    last_error: apiNwcErrorText(row.last_error)
   };
 }
 
@@ -108,6 +113,7 @@ export function apiNwcRelayProblem(uri) {
   try { u = new URL(cfg.relay); } catch (e) { return "The wallet relay is not a valid URL."; }
   if (u.protocol !== "wss:") return "The wallet relay must use wss://.";
   if (u.username || u.password) return "The wallet relay URL must not carry credentials.";
+  if (u.port && u.port !== "443") return "The wallet relay must use the standard port 443.";
   const host = u.hostname.toLowerCase().replace(/\.+$/, "");
   if (!host || isPrivateHostUrl(cfg.relay) || OWN_HOST_RE.test(host)) return "The wallet relay points at a private, local or reserved address.";
   return null;
@@ -141,13 +147,19 @@ async function nwcConnect(api) {
   const b = api.body || {};
   const uri = typeof b.nwc_url === "string" ? b.nwc_url.trim() : "";
   if (!uri) throw apiBad("`nwc_url` is required: a nostr+walletconnect:// connection string.", "nwc_url");
-  if (!parseNwcUri(uri)) throw apiBad("`nwc_url` is not a valid nostr+walletconnect:// connection string (it needs the wallet pubkey, a relay and a secret).", "nwc_url", "invalid_nwc_url");
+  const parsed = parseNwcUri(uri);
+  if (!parsed) throw apiBad("`nwc_url` is not a valid nostr+walletconnect:// connection string (it needs the wallet pubkey, a relay and a secret).", "nwc_url", "invalid_nwc_url");
+  let onCurve = false;
+  try { secp256k1.ProjectivePoint.fromHex("02" + parsed.walletPubkey); onCurve = true; } catch (e) { onCurve = false; }
+  if (!onCurve) throw apiBad("`nwc_url` holds a wallet pubkey that is not a valid secp256k1 public key.", "nwc_url", "invalid_nwc_url");
   const relayProblem = apiNwcRelayProblem(uri);
   if (relayProblem) throw apiBad("`nwc_url` cannot be used: " + relayProblem, "nwc_url", "invalid_nwc_relay");
   const threshold = wholeSats(b.threshold_sats, "threshold_sats", API_NWC_MIN_SATS, 1e12);
   const topup = wholeSats(b.topup_sats, "topup_sats", API_NWC_MIN_SATS, API_NWC_MAX_TOPUP_SATS);
   const tier = tierOf(b.tier, "tier");
   const db = await nwcDbOrFail(api.env);
+  await apiRateLimit(api, "nwcIp", apiIpBucket(api), "wallet connection attempts from this address");
+  await apiRateLimit(api, "nwcPubkey", api.auth.pubkey, "wallet connection attempts for this account");
   const info = await nwcGetInfo(uri, { timeoutMs: API_NWC_TIMING.infoMs, infoWaitMs: API_NWC_TIMING.infoWaitMs });
   if (!info.ok) {
     const answered = info.error !== "The wallet did not answer.";
@@ -223,7 +235,7 @@ export async function apiNwcTopup(env, row) {
     if (db) await nwcNote(db, row.pubkey, { last_topup_at: Date.now(), last_topup_sats: Number(row.topup_sats), last_error: null, last_attempt_at: started });
     return { ok: true, invoiceId, credits: claim.credits };
   } catch (e) {
-    const message = String((e && e.message) || "The top-up failed.").slice(0, 500);
+    const message = apiNwcErrorText((e && e.message) || "") || "The top-up failed.";
     if (db) await nwcNote(db, row.pubkey, { last_error: message, last_attempt_at: started });
     return { ok: false, invoiceId, error: message };
   }
@@ -236,7 +248,7 @@ async function nwcAfterSettle(api, bill, settled) {
   if (!db) return;
   const row = await nwcRow(db, bill.pubkey);
   if (!row || row.tier !== bill.tier) return;
-  const sats = botCreditFigure(settled.balance, -(settled.dust || 0)) * apiSatsPer(bill.tier);
+  const sats = botCreditFigure(settled.balance, -((settled.dust || 0) + (settled.debtMilli || 0))) * apiSatsPer(bill.tier);
   if (sats >= Number(row.threshold_sats)) return;
   await apiNwcTopup(env, row);
 }
@@ -298,7 +310,7 @@ async function topupCreate(api) {
   if (api.params.method !== API_TOPUP_METHOD) {
     throw apiBad("Unsupported top-up method `" + api.params.method + "`. Nymbot accepts " + API_TOPUP_METHOD + " only.", "method", "unsupported_method");
   }
-  await apiRateLimit(api, "topupIp", apiClientIp(api), "top-up invoices from this address");
+  await apiRateLimit(api, "topupIp", apiIpBucket(api), "top-up invoices from this address");
   await apiRateLimit(api, "topupPubkey", api.auth.pubkey, "top-up invoices for this account");
   const b = api.body || {};
   const tier = tierOf(b.tier, "tier");

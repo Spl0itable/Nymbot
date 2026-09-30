@@ -34,6 +34,8 @@ class Conversation {
     this.team,
     this.support = false,
     this.unread = 0,
+    this.policy,
+    this.forkOf,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : tags = tags ?? [],
@@ -76,6 +78,8 @@ class Conversation {
   Map<String, dynamic>? team;
   final bool support;
   int unread;
+  Map<String, String>? policy;
+  Map<String, String>? forkOf;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -109,6 +113,8 @@ class Conversation {
         'team': team,
         if (support) 'support': true,
         if (unread > 0) 'unread': unread,
+        if (policy != null && policy!.isNotEmpty) 'policy': policy,
+        if (forkOf != null) 'forkOf': forkOf,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
@@ -145,6 +151,15 @@ class Conversation {
         unread: j['unread'] is num && (j['unread'] as num) > 0
             ? (j['unread'] as num).toInt()
             : 0,
+        policy: policyOf(j['policy']),
+        forkOf: j['forkOf'] is Map &&
+                (j['forkOf'] as Map)['thread'] is String &&
+                (j['forkOf'] as Map)['before'] is String
+            ? {
+                'thread': (j['forkOf'] as Map)['thread'] as String,
+                'before': (j['forkOf'] as Map)['before'] as String,
+              }
+            : null,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
@@ -153,6 +168,15 @@ class Conversation {
 
   static int? _sats(Object? v) =>
       v is num && v > 0 ? v.floor() : null;
+
+  static Map<String, String>? policyOf(Object? raw) {
+    if (raw is! Map) return null;
+    final out = <String, String>{
+      for (final key in const ['readOnlyTools', 'serverRuns'])
+        if (raw[key] == 'allow' || raw[key] == 'ask') key: raw[key] as String,
+    };
+    return out.isEmpty ? null : out;
+  }
 
   static String encodeList(List<Conversation> list) =>
       jsonEncode(list.map((c) => c.toJson()).toList());
@@ -203,6 +227,12 @@ class ChatMessage {
     this.tasks,
     this.updatedAt,
     this.support = false,
+    this.wire,
+    this.replyTo,
+    this.pending,
+    this.retryEvent,
+    this.runCap,
+    this.sched,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
@@ -246,6 +276,12 @@ class ChatMessage {
   final Map<String, dynamic>? tasks;
   final DateTime? updatedAt;
   final bool support;
+  final String? wire;
+  final String? replyTo;
+  final String? pending;
+  final String? retryEvent;
+  final Map<String, dynamic>? runCap;
+  final String? sched;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -255,7 +291,9 @@ class ChatMessage {
           Map<String, dynamic>? pendingTool,
           Map<String, dynamic>? staged,
           Map<String, dynamic>? tasks,
-          DateTime? updatedAt}) =>
+          DateTime? updatedAt,
+          String? wire,
+          bool sent = false}) =>
       ChatMessage(
         id: id,
         role: role,
@@ -287,6 +325,12 @@ class ChatMessage {
         tasks: tasks ?? this.tasks,
         updatedAt: updatedAt ?? DateTime.now(),
         support: support,
+        wire: wire ?? this.wire,
+        replyTo: replyTo,
+        pending: sent ? null : pending,
+        retryEvent: retryEvent,
+        runCap: runCap,
+        sched: sched,
         at: at,
       );
 
@@ -321,6 +365,12 @@ class ChatMessage {
         if (tasks != null) 'tasks': tasks,
         if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
         if (support) 'support': true,
+        if (wire != null) 'wire': wire,
+        if (replyTo != null) 'replyTo': replyTo,
+        if (pending != null) 'pending': pending,
+        if (retryEvent != null) 'retryEvent': retryEvent,
+        if (runCap != null) 'runCap': runCap,
+        if (sched != null) 'sched': sched,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -363,6 +413,12 @@ class ChatMessage {
             ? DateTime.fromMillisecondsSinceEpoch((j['updatedAt'] as num).toInt())
             : null,
         support: j['support'] == true,
+        wire: j['wire'] is String ? j['wire'] as String : null,
+        replyTo: j['replyTo'] is String ? j['replyTo'] as String : null,
+        pending: j['pending'] is String ? j['pending'] as String : null,
+        retryEvent: j['retryEvent'] is String ? j['retryEvent'] as String : null,
+        runCap: j['runCap'] is Map ? (j['runCap'] as Map).cast<String, dynamic>() : null,
+        sched: j['sched'] is String ? j['sched'] as String : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
 
@@ -403,6 +459,15 @@ int followUpsAt(List<ChatMessage> messages) {
     final role = messages[i].role;
     if (role == ChatRole.self) return -1;
     if (role == ChatRole.bot) return messages[i].followUps.isEmpty ? -1 : i;
+  }
+  return -1;
+}
+
+int latestFollowUps(List<ChatMessage> messages) {
+  for (var i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role == ChatRole.bot) {
+      return messages[i].followUps.isEmpty ? -1 : i;
+    }
   }
   return -1;
 }

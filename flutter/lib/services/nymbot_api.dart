@@ -27,11 +27,13 @@ class NymbotApi {
     'voucher-redeem',
     'pm-revert',
     'git-apply',
+    'git-branch',
     'mcp-probe',
     'runner-run',
     'gift-create',
     'gift-redeem',
     'gift-cancel',
+    'schedule-put',
   };
 
   final http.Client _client;
@@ -39,8 +41,6 @@ class NymbotApi {
   http.Client get client => _client;
 
   final Map<String, NostrEvent> _authCache = {};
-
-  static const _serial = {'pm'};
 
   static const _busyStatus = {429, 503, 529};
   static final _busyText = RegExp(
@@ -63,13 +63,9 @@ class NymbotApi {
     return {...data, 'error': priceUnavailableText(), 'retryable': true};
   }
 
-  Future<void> _gate = Future<void>.value();
+  bool offline = false;
 
-  Future<ApiResult> _queued(Future<ApiResult> Function() run) {
-    final mine = _gate.then((_) => run(), onError: (_) => run());
-    _gate = mine.then((_) {}, onError: (_) {});
-    return mine;
-  }
+  static const aborted = <String, dynamic>{'error': 'aborted', 'aborted': true};
 
   static bool signsFresh(String action) => _money.contains(action);
 
@@ -153,30 +149,32 @@ class NymbotApi {
     EventSigner signer, {
     Map<String, dynamic> extra = const {},
     Duration? timeout,
-  }) {
-    Future<ApiResult> attempt() =>
-        _call(action, signer, extra: extra, timeout: timeout);
-    return _serial.contains(action) ? _queued(attempt) : attempt();
-  }
-
-  Future<ApiResult> _call(
-    String action,
-    EventSigner signer, {
-    Map<String, dynamic> extra = const {},
-    Duration? timeout,
+    Future<void>? abort,
   }) async {
+    var stopped = false;
+    unawaited(abort?.whenComplete(() => stopped = true));
     try {
       final body = await signedBody(action, signer, extra);
-      final resp = await _client
-          .post(
-            Uri.parse(NymbotConfig.botUrl),
-            headers: {
-              'Content-Type': 'application/json',
-              'User-Agent': NymbotConfig.userAgent,
-            },
-            body: body,
-          )
-          .timeout(timeout ?? const Duration(seconds: 30));
+      if (stopped) return (status: -1, data: {...aborted});
+      final request = abort == null
+          ? http.Request('POST', Uri.parse(NymbotConfig.botUrl))
+          : http.AbortableRequest('POST', Uri.parse(NymbotConfig.botUrl),
+              abortTrigger: abort);
+      request
+        ..headers['Content-Type'] = 'application/json'
+        ..headers['User-Agent'] = NymbotConfig.userAgent
+        ..body = body;
+      Future<http.Response> post() async =>
+          http.Response.fromStream(await _client.send(request));
+      final sent = post().timeout(timeout ?? const Duration(seconds: 30));
+      final resp = abort == null
+          ? await sent
+          : await Future.any([
+              sent,
+              abort.then<http.Response>(
+                  (_) => throw http.RequestAbortedException(request.url)),
+            ]);
+      offline = false;
       final decoded = jsonDecode(resp.body);
       return (
         status: resp.statusCode,
@@ -184,11 +182,55 @@ class NymbotApi {
             decoded is Map<String, dynamic> ? decoded : <String, dynamic>{})
       );
     } on TimeoutException {
-      return (status: 0, data: {'error': 'timed out'});
+      if (stopped) return (status: -1, data: {...aborted});
+      return (status: 0, data: {'error': 'timed out', 'timedOut': true});
+    } on http.RequestAbortedException {
+      return (status: -1, data: {...aborted});
+    } on FormatException {
+      return (status: 0, data: {'error': 'network error'});
     } catch (_) {
+      if (stopped) return (status: -1, data: {...aborted});
+      offline = true;
       return (status: 0, data: {'error': 'network error'});
     }
   }
+
+  Future<ApiResult> cancelRun(EventSigner signer, String runId) =>
+      call('pm-cancel', signer,
+          extra: {'replyTo': runId}, timeout: const Duration(seconds: 10));
+
+  Future<ApiResult> steerRun(EventSigner signer, String runId, String text) =>
+      call('pm-steer', signer,
+          extra: {'replyTo': runId, 'text': text},
+          timeout: const Duration(seconds: 15));
+
+  Future<ApiResult> claimRun(EventSigner signer, String eventId) =>
+      call('pm-claim', signer,
+          extra: {'eventId': eventId}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> liveRuns(EventSigner signer, {String? thread}) =>
+      call('pm-runs', signer,
+          extra: {if (thread != null) 'thread': thread},
+          timeout: const Duration(seconds: 15));
+
+  Future<ApiResult> doneSince(EventSigner signer, int since) =>
+      call('pm-done-since', signer,
+          extra: {'since': since}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> schedulePut(
+          EventSigner signer, Map<String, dynamic> schedule) =>
+      call('schedule-put', signer,
+          extra: {'schedule': schedule}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> scheduleDelete(EventSigner signer, String id) =>
+      call('schedule-delete', signer,
+          extra: {'id': id}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> scheduleClear(EventSigner signer) =>
+      call('schedule-clear', signer, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> scheduleList(EventSigner signer) =>
+      call('schedule-list', signer, timeout: const Duration(seconds: 20));
 
   Future<ApiResult> balance(EventSigner signer) => call('balance', signer);
 

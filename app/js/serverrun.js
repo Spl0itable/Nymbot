@@ -726,16 +726,17 @@
         const K = window.NymbotConnectors;
         if (!U.conv) return;
         const conv = U.conv;
-        if (U.sendingIn(conv.id)) return;
+        if (U.turnsIn(conv.id).some(x => x.approving === m.id)) return;
         const p = m.pendingTool;
+        const link = { convId: conv.id, asked: m.askedBy || null, runId: m.replyTo || null };
         if (!p || !p.token) {
             K.settle(U, conv.id, m, 'denied');
-            U.note(t('That request has expired. Ask again and Nymbot will start it fresh.'), conv.id);
+            U.runNote(link, t('That request has expired. Ask again and Nymbot will start it fresh.'));
             return;
         }
         const capStop = U.capStopsLeg(conv);
         if (capStop) {
-            U.note(capStop, conv.id);
+            U.runNote(link, capStop);
             return;
         }
         const leg = Caps ? Caps.maxCost(conv, true, U.models) : null;
@@ -745,7 +746,8 @@
         K.settle(U, conv.id, m, approve ? 'allowed' : 'denied');
         const turn = U.beginTurn(conv, approve
             ? t('Running the command on a Nymbot server')
-            : t('Carrying on without the server run'));
+            : t('Carrying on without the server run'), { asked: m.askedBy || null, runId: m.replyTo || null, resumed: true });
+        turn.approving = m.id;
         if (p.team) {
             turn.team = {};
             U.renderProgress(turn);
@@ -757,16 +759,28 @@
                 maxCost,
                 controller: turn.controller,
                 onStatus: (text) => U.turnStatus(turn, text),
-                onTurn: (eventId, signer) => U.watchTurn(turn, eventId, signer)
+                onSlot: (waiting) => U.turnState(turn, { slot: waiting }),
+                onClaiming: (on) => U.turnState(turn, { claiming: on }),
+                onTurn: (eventId, signer, info) => {
+                    U.bindRun(turn, conv.id, null, eventId, signer, info);
+                    U.watchTurn(turn, eventId, signer);
+                }
             };
             if (approve) opts.runApprove = p.id;
             else opts.runDecline = p.id;
             const res = await Chat.send(conv, t('Continue.'), U.settings, opts);
             U.stopWatchingTurn(turn);
+            if (turn.stopped) return;
+            if (res.stopped) {
+                U.runNote(turn, t('Stopped.'));
+                return;
+            }
             const reply = K.replyFrom(conv, U.settings, res);
-            Store.addMessage(conv.id, reply);
+            reply.replyTo = res.replyTo || turn.runId || null;
+            reply.askedBy = turn.asked || null;
+            U.placeMessage(conv.id, reply, turn);
+            turn.lastReplyId = reply.id;
             if (window.NymbotArtifacts) window.NymbotArtifacts.harvest(conv.id, reply);
-            U.showMessage(conv.id, reply);
             const total = totalCost(reply);
             Store.recordUsage(total, true);
             U.bumpStats(conv, total, true);
@@ -774,15 +788,18 @@
             if (res.truncated) await U.continueRun(turn, res);
         } catch (e) {
             U.stopWatchingTurn(turn);
-            if (e && e.capExceeded) {
+            if (turn.stopped) return;
+            if (e && e.stopped) {
+                U.runNote(turn, t('Stopped.'));
+            } else if (e && e.capExceeded) {
                 K.settle(U, conv.id, m, 'waiting');
-                U.note(t('Stopped: carrying on could go past this chat\'s spending cap.'), conv.id);
+                U.runNote(turn, t('Stopped: carrying on could go past this chat\'s spending cap.'));
             } else if (e && e.noCredits) {
                 K.settle(U, conv.id, m, 'waiting');
-                U.note(e.message, conv.id);
+                U.runNote(turn, e.message);
                 outOfPro(U, conv, { balance: e.balance, balanceCredits: e.balanceCredits });
             } else {
-                U.note((e && e.message) || t('Could not carry on from there.'), conv.id);
+                U.runNote(turn, (e && e.message) || t('Could not carry on from there.'));
             }
         } finally {
             U.endTurn(turn);

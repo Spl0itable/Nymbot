@@ -10,6 +10,7 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
   private var waiting: [FlutterResult] = []
   private var viewing: String?
   private var pendingChat: String?
+  private var pendingAsked: String?
   private var tasks: [Int: UIBackgroundTaskIdentifier] = [:]
   private var nextTask = 1
 
@@ -49,8 +50,14 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
       result(nil)
     case "initial":
       let chat = pendingChat
+      let asked = pendingAsked
       pendingChat = nil
-      result(chat)
+      pendingAsked = nil
+      if let chat = chat, let asked = asked {
+        result(["chat": chat, "asked": asked])
+      } else {
+        result(chat)
+      }
     case "beginBackground":
       result(beginBackground())
     case "endBackground":
@@ -102,8 +109,10 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
     content.body = args["body"] as? String ?? ""
     content.sound = .default
     content.threadIdentifier = chat
-    content.userInfo = ["chat": chat]
-    let request = UNNotificationRequest(identifier: "reply-" + chat, content: content, trigger: nil)
+    let asked = args["asked"] as? String
+    content.userInfo = asked == nil ? ["chat": chat] : ["chat": chat, "asked": asked!]
+    let request = UNNotificationRequest(
+      identifier: "reply-" + chat + (asked.map { "-" + $0 } ?? ""), content: content, trigger: nil)
     UNUserNotificationCenter.current().add(request) { error in
       DispatchQueue.main.async { result(error == nil) }
     }
@@ -137,13 +146,18 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
     UIApplication.shared.endBackgroundTask(task)
   }
 
-  private func open(_ chat: String) {
+  private func open(_ chat: String, asked: String? = nil) {
     pendingChat = chat
-    channel.invokeMethod("open", arguments: chat) { [weak self] reply in
+    pendingAsked = asked
+    let arguments: Any = asked == nil ? chat : ["chat": chat, "asked": asked!]
+    channel.invokeMethod("open", arguments: arguments) { [weak self] reply in
       guard let self = self else { return }
       if reply is FlutterError { return }
       if let r = reply as? NSObject, r === FlutterMethodNotImplemented { return }
-      if self.pendingChat == chat { self.pendingChat = nil }
+      if self.pendingChat == chat {
+        self.pendingChat = nil
+        self.pendingAsked = nil
+      }
     }
   }
 
@@ -180,8 +194,9 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    if let chat = response.notification.request.content.userInfo["chat"] as? String {
-      open(chat)
+    let info = response.notification.request.content.userInfo
+    if let chat = info["chat"] as? String {
+      open(chat, asked: info["asked"] as? String)
     }
     completionHandler()
   }

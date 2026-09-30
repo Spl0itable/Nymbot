@@ -1,16 +1,15 @@
 import { sha256, hmac, bytesToHex, hexToBytes, utf8ToBytes, randomBytes, bolt11PaymentHash, bolt11ExpiresAt } from "./_shared.js";
-import { ledgerCall } from "./_ledger.js";
 import { noteUsage } from "./_usage.js";
 import { botCreditInvoice, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT, BOT_MIN_CHARGE_MILLI } from "./bot.js";
-import { ApiError, apiBad, apiIso, apiJson, apiReadBody, apiRound, API_MULTIPART_MAX_BYTES } from "./_apihttp.js";
+import { ApiError, apiBad, apiIso, apiJson, apiRound, apiRateHit, apiRateLimit, apiIpBucket, apiBufferMultipart, API_MULTIPART_MAX_BYTES, API_EMPTY_BODY_SHA256 } from "./_apihttp.js";
 import { apiAuthKey } from "./_apiauth.js";
 import {
-  l402RefundToken, l402RefundMint, l402RefundSpend, l402RefundCredit, l402RefundPeek, l402RefundRedeem
+  l402RefundToken, l402RefundHash, l402RefundNew, l402RefundMint, l402RefundMintHash, l402RefundSpend, l402RefundCredit, l402RefundPeek,
+  l402RefundRedeem, l402RefundGet, l402IssuedPut, l402IssuedGet, l402IssuedUse
 } from "./_l402refund.js";
 
 export const API_L402_REALM = "nymbot";
 export const API_L402_TTL_MS = 15 * 60 * 1000;
-export const API_L402_REPLAY_TTL_S = 7200;
 export const API_L402_LIMITS = { perIp: 30, noIp: 10, global: 600, windowMs: 60000 };
 export const API_L402_CHALLENGE_LIMIT = API_L402_LIMITS.perIp;
 export const API_L402_CHALLENGE_WINDOW_MS = API_L402_LIMITS.windowMs;
@@ -21,17 +20,49 @@ const PAYMENT_RE = /(?:^|,)\s*Payment\s+([A-Za-z0-9_-]+={0,2})\s*(?=$|,)/i;
 const CAVEATS = ["nymbot_endpoint", "nymbot_body_sha256", "nymbot_content_type", "nymbot_amount_sats", "nymbot_valid_until"];
 const CONTENT_TYPE_MAX = 200;
 
+export const API_L402_SECRET_MIN_BYTES = 32;
+const weakNoted = new Set();
+
+export function apiL402SecretStrong(raw) {
+  const t = typeof raw === "string" ? raw.trim() : "";
+  let bytes = 0;
+  if (/^[0-9a-fA-F]+$/.test(t)) bytes = Math.floor(t.length / 2);
+  else if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(t)) bytes = Math.floor(t.replace(/=+$/, "").length * 3 / 4);
+  return bytes >= API_L402_SECRET_MIN_BYTES && new Set(t.toLowerCase()).size >= 10;
+}
+
+function strongOf(env, name) {
+  const raw = env && env[name];
+  const t = typeof raw === "string" ? raw.trim() : "";
+  if (!t) return null;
+  if (apiL402SecretStrong(t)) return t;
+  if (!weakNoted.has(name)) {
+    weakNoted.add(name);
+    try {
+      console.error(name + " is too weak: it needs at least " + API_L402_SECRET_MIN_BYTES + " random bytes as hex or base64 " +
+        "(generate one with `openssl rand -hex 32`). " + (name === "API_L402_SECRET" ? "L402 payments are disabled." : "It is ignored."));
+    } catch (e) { }
+  }
+  return null;
+}
+
 function secretOf(env) {
-  const s = env && env.API_L402_SECRET;
-  return typeof s === "string" && s.trim() ? s.trim() : null;
+  return strongOf(env, "API_L402_SECRET");
+}
+
+function secretsOf(env) {
+  const now = secretOf(env);
+  if (!now) return [];
+  const before = strongOf(env, "API_L402_SECRET_PREVIOUS");
+  return before && before !== now ? [now, before] : [now];
 }
 
 export function apiL402Enabled(env) {
   return !!secretOf(env);
 }
 
-function keyFor(env, purpose) {
-  return hmac(sha256, utf8ToBytes(secretOf(env)), utf8ToBytes("nymbot-l402:" + purpose));
+function keyFor(env, purpose, secret) {
+  return hmac(sha256, utf8ToBytes(secret || secretOf(env)), utf8ToBytes("nymbot-l402:" + purpose));
 }
 
 function b64url(bytes) {
@@ -117,8 +148,8 @@ function macField(out, type, data) {
   for (let i = 0; i < data.length; i++) out.push(data[i]);
 }
 
-function macSig(env, id, caveats) {
-  const root = hmac(sha256, utf8ToBytes("macaroons-key-generator"), keyFor(env, "macaroon"));
+function macSig(env, id, caveats, secret) {
+  const root = hmac(sha256, utf8ToBytes("macaroons-key-generator"), keyFor(env, "macaroon", secret));
   let sig = hmac(sha256, root, id);
   for (const c of caveats) sig = hmac(sha256, sig, utf8ToBytes(c));
   return sig;
@@ -193,55 +224,21 @@ function networkOf(pr) {
   return "mainnet";
 }
 
-function paymentId(env, p) {
+function paymentId(env, p, secret) {
   const input = [p.realm, p.method, p.intent, p.request, p.expires || "", p.digest || ""];
   if (p.header !== undefined) input.push(p.header);
   input.push(p.opaque || "");
-  return b64url(hmac(sha256, keyFor(env, "payment"), utf8ToBytes(input.join("|"))));
+  return b64url(hmac(sha256, keyFor(env, "payment", secret), utf8ToBytes(input.join("|"))));
 }
 
 function quote(v) {
   return "\"" + String(v).replace(/[\\"]/g, "\\$&") + "\"";
 }
 
-function ipv6Groups(s) {
-  let text = s;
-  const tail = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
-  if (tail) {
-    const o = tail.slice(1).map(Number);
-    if (o.some((x) => x > 255)) return null;
-    text = text.slice(0, tail.index) + (o[0] * 256 + o[1]).toString(16) + ":" + (o[2] * 256 + o[3]).toString(16);
-  }
-  const halves = text.split("::");
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(":") : [];
-  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
-  if (halves.length === 2 && fill < 1) return null;
-  const groups = head.concat(new Array(Math.max(0, fill)).fill("0"), rest);
-  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
-  return groups.map((g) => parseInt(g, 16));
-}
-
-function ipBucket(api) {
-  const raw = String(api.request.headers.get("CF-Connecting-IP") || "").trim().toLowerCase();
-  if (!raw || raw.length > 64) return null;
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(raw);
-  if (v4) return v4.slice(1).every((x) => Number(x) <= 255) ? "4:" + v4.slice(1).map(Number).join(".") : null;
-  if (!/^[0-9a-f:.]+$/.test(raw)) return null;
-  const g = ipv6Groups(raw);
-  if (!g) return null;
-  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return "4:" + [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".");
-  return "6:" + g.slice(0, 4).map((x) => x.toString(16)).join(":") + "::/64";
-}
-
 async function rateHit(env, bucket, limit) {
-  const keyId = bytesToHex(hmac(sha256, keyFor(env, "ip"), utf8ToBytes(bucket))).slice(0, 16);
-  const r = await ledgerCall(env, {
-    op: "key-reserve", keyId, sats: 0, now: Date.now(), rateLimit: limit, rateWindowMs: API_L402_LIMITS.windowMs
-  });
-  if (r && r._noLedger) throw ledgerDown();
-  return r && r.rateLimited ? Math.max(1, Math.ceil((Number(r.retryAfterMs) || 1000) / 1000)) : 0;
+  const wait = await apiRateHit(env, "l402", bucket, { limit, windowMs: API_L402_LIMITS.windowMs });
+  if (wait < 0) throw ledgerDown();
+  return wait > 0 ? Math.max(1, Math.ceil(wait / 1000)) : 0;
 }
 
 function tooMany(secs, message) {
@@ -252,7 +249,7 @@ function tooMany(secs, message) {
 async function challengeLimit(api) {
   if (api.l402Limited) return;
   api.l402Limited = true;
-  const ip = ipBucket(api);
+  const ip = apiIpBucket(api);
   const limit = ip ? API_L402_LIMITS.perIp : API_L402_LIMITS.noIp;
   const own = await rateHit(api.env, ip ? "ip/" + ip : "noip", limit);
   if (own) {
@@ -260,6 +257,9 @@ async function challengeLimit(api) {
       ? "Too many payment challenges from this address: " + limit + " a minute."
       : "Too many payment challenges from clients without a known address: " + limit + " a minute, shared.");
   }
+}
+
+async function globalLimit(api) {
   const all = await rateHit(api.env, "global", API_L402_LIMITS.global);
   if (all) throw tooMany(all, "Nymbot is issuing too many payment challenges right now.");
 }
@@ -271,6 +271,7 @@ export async function apiL402Limit(api) {
 
 async function challenge(api, q) {
   await challengeLimit(api);
+  await globalLimit(api);
   const made = await botCreditInvoice(api.env, null, q.sats, q.tier, { store: false });
   if (!made || made.error || !made.pr) {
     throw new ApiError(502, "api_error", "Could not create a Lightning invoice right now. Try again shortly, or use an API key.",
@@ -282,6 +283,9 @@ async function challenge(api, q) {
   const now = Date.now();
   const invoiceExp = bolt11ExpiresAt(pr);
   const until = Math.min(now + API_L402_TTL_MS, invoiceExp || now + API_L402_TTL_MS);
+  let stored = false;
+  try { stored = await l402IssuedPut(api.env, hash, q.sats, until); } catch (e) { stored = false; }
+  if (!stored) throw ledgerDown();
   const expires = new Date(until).toISOString();
   const macaroon = macMint(api.env, hash, [
     "nymbot_endpoint=" + q.endpoint, "nymbot_body_sha256=" + q.bodyHex, "nymbot_content_type=" + q.contentType,
@@ -342,31 +346,32 @@ function checkPreimage(preimage, hash) {
   if (bytesToHex(sha256(hexToBytes(preimage.toLowerCase()))) !== hash) throw badPreimage();
 }
 
-function verifyL402(api, pay, q) {
+function authenticL402(env, pay) {
   const m = macParse(pay.macaroon);
   if (!m || m.id.length !== 66 || m.id[0] !== 0 || m.id[1] !== 0) throw badCredential();
-  if (!sameBytes(macSig(api.env, m.id, m.caveats), m.sig)) throw badCredential();
+  if (!secretsOf(env).some((s) => sameBytes(macSig(env, m.id, m.caveats, s), m.sig))) throw badCredential();
   const cav = parseCaveats(m.caveats);
   if (!cav || m.caveats.length < CAVEATS.length || CAVEATS.some((k, i) => !m.caveats[i].startsWith(k + "="))) throw badCredential();
   const sats = Number(cav.nymbot_amount_sats[0]);
   if (!Number.isSafeInteger(sats) || sats <= 0 || cav.nymbot_amount_sats.some((v) => v !== cav.nymbot_amount_sats[0])) throw badCredential();
   const hash = bytesToHex(m.id.subarray(2, 34));
   checkPreimage(pay.preimage, hash);
-  const now = Date.now();
-  if (cav.nymbot_valid_until.some((v) => !(Number(v) * 1000 > now))) throw expired();
-  if (cav.nymbot_endpoint.some((v) => v !== q.endpoint) || cav.nymbot_body_sha256.some((v) => v !== q.bodyHex) ||
-    cav.nymbot_content_type.some((v) => v !== q.contentType)) throw mismatch();
-  return { kind: "l402", sats, hash, challengeId: null };
+  return {
+    kind: "l402", sats, hash, challengeId: null,
+    late: () => cav.nymbot_valid_until.some((v) => !(Number(v) * 1000 > Date.now())),
+    bound: (q) => !(cav.nymbot_endpoint.some((v) => v !== q.endpoint) || cav.nymbot_body_sha256.some((v) => v !== q.bodyHex) ||
+      cav.nymbot_content_type.some((v) => v !== q.contentType))
+  };
 }
 
-function verifyPayment(api, pay, q) {
+function authenticPayment(env, pay) {
   let cred;
   try { cred = JSON.parse(new TextDecoder().decode(fromB64(pay.token))); } catch (e) { throw badCredential(); }
   const ch = cred && typeof cred === "object" ? cred.challenge : null;
   if (!ch || typeof ch !== "object") throw badCredential();
   for (const k of ["id", "realm", "method", "intent", "request"]) if (typeof ch[k] !== "string" || !ch[k]) throw badCredential();
   for (const k of ["expires", "digest", "opaque", "header"]) if (ch[k] !== undefined && typeof ch[k] !== "string") throw badCredential();
-  if (!sameText(paymentId(api.env, ch), ch.id)) throw badCredential();
+  if (!secretsOf(env).some((s) => sameText(paymentId(env, ch, s), ch.id))) throw badCredential();
   if (ch.realm !== API_L402_REALM || ch.method !== "lightning" || ch.intent !== "charge") throw badCredential();
   let req, opaque;
   try {
@@ -379,11 +384,48 @@ function verifyPayment(api, pay, q) {
   const payload = cred.payload && typeof cred.payload === "object" ? cred.payload : null;
   if (!payload || typeof payload.preimage !== "string") throw badCredential();
   checkPreimage(payload.preimage, hash);
-  const exp = Date.parse(ch.expires || "");
-  if (!(exp > Date.now())) throw expired();
-  const digest = "sha-256=:" + b64std(hexToBytes(q.bodyHex)) + ":";
-  if (!opaque || opaque.endpoint !== q.endpoint || opaque.content_type !== q.contentType || ch.digest !== digest) throw mismatch();
-  return { kind: "payment", sats, hash, challengeId: ch.id };
+  return {
+    kind: "payment", sats, hash, challengeId: ch.id,
+    late: () => !(Date.parse(ch.expires || "") > Date.now()),
+    bound: (q) => !!opaque && opaque.endpoint === q.endpoint && opaque.content_type === q.contentType &&
+      ch.digest === "sha-256=:" + b64std(hexToBytes(q.bodyHex)) + ":"
+  };
+}
+
+async function authenticPaid(env, pay) {
+  const paid = pay.kind === "l402" ? authenticL402(env, pay) : authenticPayment(env, pay);
+  const issued = await l402IssuedGet(env, paid.hash);
+  if (issued.unavailable) throw ledgerDown();
+  if (!issued.ok) throw badCredential();
+  return paid;
+}
+
+export const apiL402RefundHooks = [];
+
+async function refundHooks(api, hash) {
+  let pending = false;
+  for (const fn of apiL402RefundHooks) {
+    try { if (await fn(api, hash)) pending = true; } catch (e) { }
+  }
+  return pending;
+}
+
+async function refundTokenCheck(api, token) {
+  const hash = l402RefundHash(token);
+  const wait = await apiRateHit(api.env, "refundToken", hash);
+  if (wait > 0) {
+    const secs = Math.max(1, Math.ceil(wait / 1000));
+    throw new ApiError(429, "rate_limit_error", "Too many requests with this refund token: at most 60 a minute. Retry in " + secs + " s.",
+      { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
+  }
+  let row = await l402RefundGet(api.env, token);
+  if (!row) {
+    await refundHooks(api, hash);
+    row = await l402RefundGet(api.env, token);
+  }
+  if (!row) throw unauth("invalid_refund_token", "Unknown refund token.");
+  if (Number(row.expires_at) <= Date.now()) throw unauth("refund_token_expired", "This refund token expired.");
+  return row;
 }
 
 function credentialOf(header) {
@@ -414,11 +456,9 @@ export async function apiAuthPaid(api) {
     if (pay.kind === "bad") throw badCredential();
   }
   if (!pay) await challengeLimit(api);
-  if (api.route.opts.body === "multipart") {
-    const bytes = await apiReadBody(api.request, api.route.opts.maxBytes || API_MULTIPART_MAX_BYTES);
-    api.rawBytes = bytes;
-    api.request = new Request(api.request.url, { method: api.request.method, headers: api.request.headers, body: bytes });
-  }
+  else if (pay.kind === "refund") await refundTokenCheck(api, pay.token);
+  else pay.paid = await authenticPaid(env, pay);
+  if (api.route.opts.body === "multipart") await apiBufferMultipart(api, api.route.opts.maxBytes || API_MULTIPART_MAX_BYTES, true);
   api.auth = { via: "l402", pubkey: null, keyId: null, key: null, pay };
   api.l402 = { bill: null, refund: null, receipt: null };
   return api.auth;
@@ -428,7 +468,7 @@ export async function apiL402Open(api, o) {
   const tier = o.tier === "pro" ? "pro" : "standard";
   const satsPer = tier === "pro" ? BOT_PRO_SATS_PER_CREDIT : BOT_SATS_PER_CREDIT;
   const price = apiL402Sats(o.l402Milli != null ? o.l402Milli : o.reserveMilli, tier);
-  const bound = { endpoint: endpointOf(api), bodyHex: bytesToHex(sha256(api.rawBytes || new Uint8Array(0))), contentType: contentTypeOf(api.request) };
+  const bound = { endpoint: endpointOf(api), bodyHex: api.bodyHex || API_EMPTY_BODY_SHA256, contentType: contentTypeOf(api.request) };
   const ask = (extra) => challenge(api, Object.assign({ sats: price, tier }, bound, extra || {}));
   const pay = api.auth.pay;
   if (!pay) throw await ask();
@@ -446,10 +486,18 @@ export async function apiL402Open(api, o) {
     paid = { kind: "refund", sats: price, token: pay.token, left: spent.left, expiresAt: spent.expiresAt };
   } else {
     try {
-      paid = pay.kind === "l402" ? verifyL402(api, pay, bound) : verifyPayment(api, pay, bound);
-      const rp = await ledgerCall(api.env, { op: "replay", id: paid.hash, ttl: API_L402_REPLAY_TTL_S });
-      if (rp && rp._noLedger) throw ledgerDown();
-      if (!rp || !rp.fresh) throw used();
+      paid = pay.paid || await authenticPaid(api.env, pay);
+      const late = paid.late();
+      if (!late && !paid.bound(bound)) throw mismatch();
+      const fresh = await l402IssuedUse(api.env, paid.hash);
+      if (fresh == null) throw ledgerDown();
+      if (!fresh) throw used();
+      if (late) {
+        const gone = expired();
+        gone.refundSats = paid.sats;
+        gone.refundHash = paid.hash;
+        throw gone;
+      }
       if (paid.sats < price) {
         const short = underpaid(paid.sats, price);
         short.refundSats = paid.sats;
@@ -460,6 +508,10 @@ export async function apiL402Open(api, o) {
       let refund = null;
       if (e.refundSats) {
         try { refund = await l402RefundMint(api.env, e.refundSats); } catch (x) { refund = null; }
+        if (!refund && e.refundHash) {
+          try { await l402IssuedUse(api.env, e.refundHash, true); } catch (x) { }
+          throw ledgerDown();
+        }
       }
       let fresh;
       try { fresh = await ask({ reason: { code: e.code, message: e.message }, refund }); } catch (x) {
@@ -560,8 +612,8 @@ export async function apiL402Failed(api, err) {
   });
 }
 
-function statusSig(env, id, exp) {
-  return b64url(hmac(sha256, keyFor(env, "status"), utf8ToBytes(id + "." + exp)));
+function statusSig(env, id, exp, secret) {
+  return b64url(hmac(sha256, keyFor(env, "status", secret), utf8ToBytes(id + "." + exp)));
 }
 
 export function apiL402StatusUrl(api, id, expiresAt) {
@@ -578,7 +630,7 @@ export async function apiAuthKeyOrSigned(api) {
   const exp = Number(q.get("exp"));
   const bad = unauth("invalid_status_url", "This status URL is invalid or expired. Status URLs last 24 hours.");
   if (!apiL402Enabled(api.env) || !Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) throw bad;
-  if (!sameText(statusSig(api.env, id, exp), q.get("sig") || "")) throw bad;
+  if (!secretsOf(api.env).some((s) => sameText(statusSig(api.env, id, exp, s), q.get("sig") || ""))) throw bad;
   api.auth = { via: "signed", pubkey: null, keyId: null, key: null, videoId: id };
   return api.auth;
 }
@@ -588,7 +640,13 @@ export function apiL402VideoToken(env, id) {
   return "REFUND-" + bytesToHex(hmac(sha256, keyFor(env, "refund"), utf8ToBytes("video/" + id))).toUpperCase();
 }
 
-export async function apiL402VideoRefund(env, id, sats) {
+export function apiL402VideoRefundToken() {
+  const token = l402RefundNew();
+  return { token, hash: l402RefundHash(token) };
+}
+
+export async function apiL402VideoRefund(env, id, sats, hash) {
+  if (hash) return l402RefundMintHash(env, hash, sats);
   const token = apiL402VideoToken(env, id);
   if (!token) return null;
   return l402RefundMint(env, sats, token);
@@ -602,7 +660,10 @@ function refundFrom(api) {
 }
 
 async function refundGet(api) {
-  const peek = await l402RefundPeek(api.env, refundFrom(api));
+  const token = refundFrom(api);
+  const pending = await refundHooks(api, l402RefundHash(token));
+  const peek = await l402RefundPeek(api.env, token);
+  if (!peek.ok && pending) return apiJson({ object: "refund_token", sats: 0, status: "pending", created_at: null, expires_at: null });
   if (!peek.ok) throw unauth("invalid_refund_token", "Unknown refund token.");
   return apiJson({ object: "refund_token", sats: peek.sats, status: peek.state, created_at: apiIso(peek.createdAt), expires_at: apiIso(peek.expiresAt) });
 }
@@ -614,6 +675,8 @@ async function refundRedeem(api) {
   const tier = b.balance == null ? "standard" : b.balance;
   if (tier !== "standard" && tier !== "pro") throw apiBad("`balance` must be standard or pro.", "balance", "invalid_value");
   const per = tier === "pro" ? BOT_PRO_SATS_PER_CREDIT : BOT_SATS_PER_CREDIT;
+  await apiRateLimit(api, "refundToken", l402RefundHash(token), "requests with this refund token");
+  await refundHooks(api, l402RefundHash(token));
   const r = await l402RefundRedeem(api.env, api.auth.pubkey, token, tier, per);
   if (r.ok) return apiJson({ data: { credited: r.credited, tier: r.tier, balance_credits: r.balance, remaining_sats: r.remainingSats } });
   if (r.unknown) throw new ApiError(404, "not_found_error", r.error, { code: "refund_not_found", param: "refund_token" });

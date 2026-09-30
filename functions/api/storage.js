@@ -1,6 +1,8 @@
 // D1-backed user storage: flair shop, encrypted settings, profile mirror, PM wrap archive, channel archive.
 
 import { ledgerCall } from "./_ledger.js";
+import { apiDebtCollect } from "./_apibill.js";
+import { bgDriver } from "./_background.js";
 export { NymLedger } from "./_ledger.js";
 import {
   botPqSelfFromEnv,
@@ -642,6 +644,31 @@ async function handleSettingsAction(context, body) {
       } catch (e) { }
     }
     var updatedAt = Date.now();
+    var baseHash = typeof body.baseHash === "string" && (body.baseHash === "" || /^[0-9a-f]{64}$/i.test(body.baseHash))
+      ? body.baseHash.toLowerCase() : null;
+    if (baseHash != null) {
+      var swapped = baseHash === ""
+        ? await env.DB_SETTINGS.prepare(
+          "INSERT INTO settings (pubkey, category, blob, content_hash, updated_at) VALUES (?, ?, ?, ?, ?) " +
+          "ON CONFLICT(pubkey, category) DO NOTHING"
+        ).bind(userPubkey, cat, body.blob, contentHash, updatedAt).run()
+        : await env.DB_SETTINGS.prepare(
+          "UPDATE settings SET blob = ?, content_hash = ?, updated_at = ? WHERE pubkey = ? AND category = ? AND content_hash = ?"
+        ).bind(body.blob, contentHash, updatedAt, userPubkey, cat, baseHash).run();
+      if (!(swapped && swapped.meta && Number(swapped.meta.changes) > 0)) {
+        var nowDoc = null;
+        try {
+          nowDoc = await env.DB_SETTINGS.prepare("SELECT content_hash, updated_at FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, cat).first();
+        } catch (e) { }
+        return json({
+          error: "These settings changed on another device. Fetch them, merge, and save again.",
+          conflict: true, category: cat,
+          contentHash: nowDoc ? (nowDoc.content_hash || null) : null,
+          updatedAt: nowDoc ? (nowDoc.updated_at || 0) : 0
+        }, 409);
+      }
+      return json({ ok: true, category: cat, updatedAt: updatedAt });
+    }
     await env.DB_SETTINGS.prepare(
       "INSERT INTO settings (pubkey, category, blob, content_hash, updated_at) VALUES (?, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey, category) DO UPDATE SET blob = excluded.blob, content_hash = excluded.content_hash, updated_at = excluded.updated_at"
@@ -682,6 +709,27 @@ async function handleAccountAction(context, body) {
         : "DELETE FROM settings WHERE pubkey = ? AND category NOT LIKE 'nymbot-%'";
       removed.settings = changes(await env.DB_SETTINGS.prepare(sql).bind(userPubkey).run());
     } catch (e) { }
+  }
+
+  if (app === "nymbot") {
+    var purgeRows = async function (db, table) {
+      if (!hasD1(db)) return 0;
+      try { return changes(await db.prepare("DELETE FROM " + table + " WHERE pubkey = ?").bind(userPubkey).run()); } catch (e) { return 0; }
+    };
+    removed.apiKeys = await purgeRows(env.DB_CREDITS, "api_keys");
+    removed.apiNwc = await purgeRows(env.DB_CREDITS, "api_nwc");
+    removed.apiQueries = await purgeRows(env.DB_BOT, "api_queries");
+    removed.apiVideoJobs = await purgeRows(env.DB_BOT, "api_video_jobs");
+    removed.usage = await purgeRows(env.DB_BOT, "bot_usage");
+    try {
+      var bgCleared = await bgDriver(env, userPubkey, { drive: "clear" });
+      if (bgCleared) removed.schedules = Number(bgCleared.deleted) || 0;
+    } catch (e) { }
+    if (hasD1(env.DB_CREDITS)) {
+      for (var tier of ["standard", "pro"]) {
+        try { await apiDebtCollect(env, userPubkey, tier); } catch (e) { }
+      }
+    }
   }
 
   if (app === "nymchat") {
