@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/i18n.dart';
+import 'about_sheet.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
 
@@ -327,6 +328,16 @@ class _HelpSheetState extends State<_HelpSheet> {
             ),
             const SizedBox(height: 10),
             FilledButton.icon(
+              icon: const NymGlyph('send', size: 18),
+              label: Text(t('Message support')),
+              onPressed: () {
+                final nav = Navigator.of(context);
+                nav.pop();
+                showAboutSheet(nav.context, contact: true);
+              },
+            ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
               icon: const Icon(Icons.mail_outline, size: 18),
               label: Text(t('Email {address}', {'address': supportEmail})),
               onPressed: () => launchUrl(Uri.parse('mailto:$supportEmail')),

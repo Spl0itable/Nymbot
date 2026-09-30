@@ -204,7 +204,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     final bot = m.role == ChatRole.bot;
     final published = widget.selfName;
     final name = bot
-        ? 'Nymbot'
+        ? (m.support ? t('Nymbot support') : 'Nymbot')
         : (published != null && published.isNotEmpty)
             ? published
             : NymIdentity.name(widget.selfPubkey);
@@ -221,8 +221,8 @@ class _MessageBubbleState extends State<MessageBubble> {
               color: bot ? theme.colorScheme.primary : NymIdentity.colour(widget.selfPubkey),
             ),
           ),
-          if (bot) _tierBadge(theme, m),
-          if (bot && m.model != null)
+          if (bot && !m.support) _tierBadge(theme, m),
+          if (bot && !m.support && m.model != null)
             Flexible(
               child: Padding(
                 padding: const EdgeInsets.only(left: 5),
@@ -423,7 +423,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                 wrapCode: settings.codeWrap,
                 lineNumbers: settings.lineNumbers,
                 media: m.task,
-                runnable: m.role == ChatRole.bot && !widget.draft,
+                runnable: m.role == ChatRole.bot && !m.support && !widget.draft,
               )
             else
               Text(
@@ -841,7 +841,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     }
 
     add('copy', t('Copy'), MessageAction.copy);
-    if (bot) {
+    if (bot && !m.support) {
       add('refresh', t('Ask again'), MessageAction.regenerate);
       add(widget.speaking ? 'mute' : 'speaker', t('Read aloud'),
           MessageAction.speak, on: widget.speaking);
@@ -852,13 +852,15 @@ class _MessageBubbleState extends State<MessageBubble> {
       add('thumbDown', t('Poor reply'), MessageAction.rateDown,
           on: m.rating == -1, solid: m.rating == -1);
     }
-    if (self) {
+    if (self && !m.support) {
       add('pencil', t('Ask this differently'), MessageAction.edit);
       add('sendAgain', t('Send again'), MessageAction.resend);
     }
-    add('star', t('Save this message'), MessageAction.pin,
-        on: m.pinned, solid: m.pinned);
-    add('memory', t('Remember this'), MessageAction.remember);
+    if (!m.support) {
+      add('star', t('Save this message'), MessageAction.pin,
+          on: m.pinned, solid: m.pinned);
+      add('memory', t('Remember this'), MessageAction.remember);
+    }
     buttons.add(const SizedBox(width: 16));
     add('close', t('Delete'), MessageAction.delete);
 

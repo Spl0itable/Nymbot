@@ -35,6 +35,9 @@ class NymbotApi {
   };
 
   final http.Client _client;
+
+  http.Client get client => _client;
+
   final Map<String, NostrEvent> _authCache = {};
 
   static const _serial = {'pm'};

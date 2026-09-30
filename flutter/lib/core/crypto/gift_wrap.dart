@@ -344,6 +344,7 @@ Future<NostrEvent> sealAndWrap({
   required String recipientPubkey,
   Uint8List? recipientKemPublicKey,
   int? expiration,
+  List<List<String>> extraTags = const [],
 }) async {
   final senderPub = signer.pubkey;
   final rumorJson = jsonEncode(_buildRumorMap(rumor, senderPub));
@@ -365,6 +366,7 @@ Future<NostrEvent> sealAndWrap({
   final tags = <List<String>>[
     ['p', recipientPubkey],
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
+    ...extraTags,
   ];
   final sealJson = jsonEncode(seal.toJson());
   return finalizeEvent(

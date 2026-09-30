@@ -145,7 +145,7 @@ class _ShareTargetSheetState extends State<ShareTargetSheet> {
                       dense: true,
                       selected: conv.id == app.current?.id,
                       leading: conv.pinned
-                          ? const NymGlyph('star',
+                          ? const NymGlyph('pin',
                               size: 15,
                               filled: true,
                               color: NymbotColors.lightning)

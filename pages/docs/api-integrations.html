@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tools and SDKs - Nymbot Knowledge Base</title>
+    <meta name="description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Tools and SDKs - Nymbot Knowledge Base">
+    <meta property="og:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api-integrations/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="Tools and SDKs - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Using the Nymbot API from the OpenAI and Anthropic SDKs, Claude Code, Codex, Cline, Aider, Open WebUI, Continue, Goose and plain HTTP.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api-integrations/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Tools and SDKs</h1>
+            <p class="docs-lede">Anything that can talk to OpenAI or Anthropic can talk to Nymbot. In almost
+                every case it is a base URL, a key and a model name.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+            <p>Every setup below needs an API key, made in the app's <strong>API</strong> menu (see
+                <a href="/docs/api/#keys">API keys</a>), and a model id from
+                <a href="/docs/api-chat/#models">the model list</a>. The examples use
+                <code>anthropic/claude-sonnet-5</code> on the Pro balance. <code>nymbot/auto</code> is the
+                cheaper choice on the standard balance for plain chat, but it cannot call tools, which Claude
+                Code, Codex, Cline and Goose all need; for those, pick a catalog model with
+                <code>capabilities.tools</code>.</p>
+            <div class="docs-note is-tip">
+                <span class="docs-note-label">Give each tool its own key</span>
+                <p>Make a separate key for each tool, with a cap. Coding agents make many
+                    model calls for one task, and a cap on the key is the simplest way to know the most a
+                    tool can spend. If a tool misbehaves, revoke its key and nothing else is affected.</p>
+            </div>
+
+            <h2 id="openai-sdk">OpenAI SDK</h2>
+            <p>The official Python and JavaScript libraries work unchanged. Point <code>base_url</code> at
+                Nymbot and pass your key. Chat Completions, Responses, images, audio and embeddings all work
+                through them.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anthropic/claude-sonnet-5", "messages": [{"role": "user", "content": "Hello"}]}'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code># pip install openai
+import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(reply.choices[0].message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>// npm install openai
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(reply.choices[0].message.content);</code></pre>
+            <p>Nymbot's own fields, such as <code>plugins</code> for web search, go in <code>extra_body</code>
+                in Python and straight into the request object in JavaScript. The <code>nymbot</code> cost
+                object in a response is <code>reply.model_extra["nymbot"]</code> in Python and
+                <code>reply.nymbot</code> in JavaScript. Libraries that read the <code>OPENAI_BASE_URL</code>
+                and <code>OPENAI_API_KEY</code> environment variables can be pointed at Nymbot with those
+                alone.</p>
+
+            <h2 id="anthropic-sdk">Anthropic SDK</h2>
+            <p>The Anthropic libraries use <code>https://nymbot.ai/api</code> as the base URL, without
+                <code>/v1</code>, because they add <code>/v1/messages</code> themselves. Any catalog model
+                works, not only Claude.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/messages \
+  -H "x-api-key: $NYMBOT_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "claude-sonnet-5", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code># pip install anthropic
+import os
+import anthropic
+
+client = anthropic.Anthropic(base_url="https://nymbot.ai/api", api_key=os.environ["NYMBOT_API_KEY"])
+
+message = client.messages.create(
+    model="claude-sonnet-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(message.content[0].text)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>// npm install @anthropic-ai/sdk
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "https://nymbot.ai/api", apiKey: process.env.NYMBOT_API_KEY });
+
+const message = await client.messages.create({
+  model: "claude-sonnet-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(message.content[0].text);</code></pre>
+
+            <h2 id="claude-code">Claude Code</h2>
+            <p>Claude Code runs on the Nymbot API with three environment variables. Set them in the shell you
+                start it from, or in your shell profile:</p>
+            <p class="docs-note-label" data-i18n-skip>Shell</p>
+<pre><code>export ANTHROPIC_BASE_URL=https://nymbot.ai/api
+export ANTHROPIC_AUTH_TOKEN=sk-nymbot-...
+export ANTHROPIC_API_KEY=""
+claude</code></pre>
+            <ul>
+                <li>The base URL is exactly <code>https://nymbot.ai/api</code>: no <code>/v1</code> and no
+                    slash at the end.</li>
+                <li>The key goes in <code>ANTHROPIC_AUTH_TOKEN</code>. <code>ANTHROPIC_API_KEY</code> is set
+                    empty so Claude Code does not try to use an Anthropic account instead.</li>
+                <li>Claude Code's own model names, such as <code>claude-opus-5</code> and
+                    <code>claude-sonnet-5</code>, dated or not, are matched to the catalog, so
+                    <code>/model</code> works as usual. See
+                    <a href="/docs/api-chat/#messages">Anthropic Messages</a> for the rules.</li>
+                <li>Extended thinking works, but is left off on the step that follows a tool result, since
+                    Nymbot cannot hand back the signed thinking Anthropic needs to resume it.</li>
+            </ul>
+            <p>To run it on a model that is not Claude, point its model slots at catalog ids:</p>
+            <p class="docs-note-label" data-i18n-skip>Shell</p>
+<pre><code>export ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/claude-opus-5
+export ANTHROPIC_DEFAULT_SONNET_MODEL=moonshotai/kimi-k3
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5</code></pre>
+            <p>Every request Claude Code makes is a Pro request, and it makes a great many: a single task can be
+                dozens of model calls, each carrying the conversation so far. Give it a key with a daily cap.</p>
+
+            <h2 id="codex">Codex</h2>
+            <p>Codex uses the Responses API. Add Nymbot as a provider in <code>~/.codex/config.toml</code>:</p>
+            <p class="docs-note-label" data-i18n-skip>config.toml</p>
+<pre><code>model = "openai/gpt-5.6-sol"
+model_provider = "nymbot"
+
+[model_providers.nymbot]
+name = "Nymbot"
+base_url = "https://nymbot.ai/api/v1"
+env_key = "NYMBOT_API_KEY"
+wire_api = "responses"</code></pre>
+            <p>Then set <code>NYMBOT_API_KEY</code> in your environment and run <code>codex</code>. The
+                <code>wire_api = "responses"</code> line matters: without it Codex uses an older format.</p>
+            <p>Nymbot passes function tools and web search to the model, and refuses other built-in tool
+                types with <code>400</code> <code>unsupported_tool</code>. If Codex reports that, turn off the
+                Codex features that add other tool types in <code>config.toml</code>. Use a model with
+                <code>capabilities.tools</code>; the few models that run on OpenAI's Responses transport cannot
+                take tools through Nymbot, and <code>nymbot/auto</code> cannot either. Nymbot does not store
+                responses, so Codex has to send the whole conversation each turn, which it does by
+                default.</p>
+
+            <h2 id="cline">Cline</h2>
+            <p>In Cline's settings in VS Code:</p>
+            <ol>
+                <li>Set <strong>API Provider</strong> to <strong>OpenAI Compatible</strong>.</li>
+                <li>Set <strong>Base URL</strong> to <code>https://nymbot.ai/api/v1</code>.</li>
+                <li>Paste your key into <strong>API Key</strong>.</li>
+                <li>Set <strong>Model ID</strong> to a catalog id such as
+                    <code>anthropic/claude-sonnet-5</code>.</li>
+            </ol>
+            <p>Under the model's settings you can enter its context window and whether it takes images, from
+                <code>context_length</code> and <code>capabilities.vision</code> in the model list, so Cline
+                manages its context correctly.</p>
+
+            <h2 id="aider">Aider</h2>
+            <p>Aider talks to any OpenAI-compatible server. Set the base URL and key, and put
+                <code>openai/</code> in front of the model id so Aider knows which kind of server it is:</p>
+            <p class="docs-note-label" data-i18n-skip>Shell</p>
+<pre><code>export OPENAI_API_BASE=https://nymbot.ai/api/v1
+export OPENAI_API_KEY=sk-nymbot-...
+aider --model openai/anthropic/claude-sonnet-5</code></pre>
+            <p>Aider may warn that it does not know the model's context size or price. The warning is harmless;
+                <code>--no-show-model-warnings</code> hides it.</p>
+
+            <h2 id="openwebui">Open WebUI</h2>
+            <p>In Open WebUI, open <strong>Admin Panel</strong>, then <strong>Settings</strong>, then
+                <strong>Connections</strong>, and add an OpenAI API connection:</p>
+            <ul>
+                <li>URL: <code>https://nymbot.ai/api/v1</code></li>
+                <li>Key: your API key</li>
+            </ul>
+            <p>Open WebUI reads the model list from the API, so every chat model appears in its picker. When
+                running it in Docker, the same can be set with the environment variables
+                <code>OPENAI_API_BASE_URL</code> and <code>OPENAI_API_KEY</code>.</p>
+            <p>Open WebUI keeps your conversations on its own server. Nymbot does not store them, but Open WebUI
+                does, wherever you run it.</p>
+
+            <h2 id="continue">Continue</h2>
+            <p>Add a model to Continue's <code>config.yaml</code>:</p>
+            <p class="docs-note-label" data-i18n-skip>config.yaml</p>
+<pre><code>models:
+  - name: Claude Sonnet 5 (Nymbot)
+    provider: openai
+    model: anthropic/claude-sonnet-5
+    apiBase: https://nymbot.ai/api/v1
+    apiKey: sk-nymbot-...
+    roles:
+      - chat
+      - edit
+      - apply
+  - name: Nymbot embeddings
+    provider: openai
+    model: "@cf/baai/bge-m3"
+    apiBase: https://nymbot.ai/api/v1
+    apiKey: sk-nymbot-...
+    roles:
+      - embed</code></pre>
+            <p>The second entry uses a Nymbot <a href="/docs/api-media/#embeddings">embedding model</a> for
+                Continue's codebase search.</p>
+
+            <h2 id="goose">Goose</h2>
+            <p>Run <code>goose configure</code>, choose <strong>Configure Providers</strong>, pick
+                <strong>OpenAI</strong>, and give it these values when asked. The same can be set in the
+                environment:</p>
+            <p class="docs-note-label" data-i18n-skip>Shell</p>
+<pre><code>export GOOSE_PROVIDER=openai
+export OPENAI_HOST=https://nymbot.ai/api
+export OPENAI_BASE_PATH=v1/chat/completions
+export OPENAI_API_KEY=sk-nymbot-...
+export GOOSE_MODEL=anthropic/claude-sonnet-5
+goose session</code></pre>
+            <p>Goose calls tools on almost every step, so pick a model with <code>capabilities.tools</code> in the
+                model list; <code>nymbot/auto</code> refuses tools.</p>
+
+            <h2 id="curl">Plain HTTP</h2>
+            <p>Nothing needs an SDK. Every endpoint is JSON over HTTPS, apart from the file uploads, which are
+                multipart forms. Any language or tool that can make an HTTP request can use the API:</p>
+            <ul>
+                <li>Send the key as <code>Authorization: Bearer sk-nymbot-&hellip;</code>.</li>
+                <li>Send JSON bodies with <code>Content-Type: application/json</code>.</li>
+                <li>For streaming, read the response as server-sent events; with cURL, add <code>-N</code> so
+                    it prints them as they arrive.</li>
+                <li>Read the cost from the <code>X-Nymbot-Cost-Sats</code> header, and keep the
+                    <code>X-Request-Id</code> header if you might need to ask about a request.</li>
+            </ul>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl -i https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "nymbot/auto", "messages": [{"role": "user", "content": "Hello"}]}'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import requests
+
+res = requests.post(
+    "https://nymbot.ai/api/v1/chat/completions",
+    headers={"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]},
+    json={"model": "nymbot/auto", "messages": [{"role": "user", "content": "Hello"}]},
+)
+print(res.headers["X-Nymbot-Cost-Sats"], res.headers["X-Request-Id"])
+print(res.json()["choices"][0]["message"]["content"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/chat/completions", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer " + process.env.NYMBOT_API_KEY,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ model: "nymbot/auto", messages: [{ role: "user", content: "Hello" }] }),
+});
+console.log(res.headers.get("X-Nymbot-Cost-Sats"), res.headers.get("X-Request-Id"));
+console.log((await res.json()).choices[0].message.content);</code></pre>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

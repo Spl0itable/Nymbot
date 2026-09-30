@@ -24,8 +24,10 @@ import '../models/notice.dart';
 import '../models/workspace.dart';
 import '../services/account_sync.dart';
 import '../services/anon.dart';
+import '../services/api_access.dart';
 import '../services/backup.dart';
 import '../services/blossom.dart';
+import '../services/canary.dart';
 import '../services/chat_engine.dart';
 import '../services/connectors.dart';
 import '../services/dev_contact.dart';
@@ -51,6 +53,7 @@ import '../services/research.dart';
 import '../services/server_runs.dart';
 import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
+import '../services/support_thread.dart';
 import '../services/tasks.dart';
 import '../services/team.dart';
 import 'identity.dart';
@@ -140,6 +143,9 @@ class AppController extends ChangeNotifier {
   late final Profiles profiles;
 
   late final Blossom blossom;
+
+  late final ApiAccess apiAccess =
+      ApiAccess(client: api.client, signer: () => identity.signer);
 
   late final UploadLedger uploads = UploadLedger(
     readRecords: () => store.secret('uploads'),
@@ -731,17 +737,201 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  DevContact developerContact({ContactPublish? publish, ContactKem? kem}) =>
+  late SupportRelays supportRelays = SupportRelays.pool(relays);
+
+  String supportDeveloper = kDeveloperPubkey;
+
+  void Function()? _supportSub;
+  Future<void> _supportChain = Future<void>.value();
+  final Set<String> _supportWraps = {};
+  Set<String>? _supportSeen;
+
+  bool get supportListening => _supportSub != null;
+
+  Conversation? get supportChat => _conversationById(kSupportChatId);
+
+  List<String> get supportTokens => SupportTokens.of(store);
+
+  Future<String> ensureSupportToken() => SupportTokens.ensure(store);
+
+  DevContact developerContact(
+          {ContactPublish? publish, ContactKem? kem, String? token}) =>
       DevContact(
         signer: identity.signer,
-        publish: publish ?? relays.publish,
+        publish: publish ?? supportRelays.publish,
         kem: kem ??
             (pubkey) async => (await pq.resolve(pubkey, viaProxy: true))?.pk,
+        recipient: supportDeveloper,
+        token: token,
+        selfKem: identity.rootLocked ? null : identity.kemPublicKey,
       );
 
   Future<ContactOutcome> contactDeveloper(String topic, String message,
-          {ContactPublish? publish, ContactKem? kem}) =>
-      developerContact(publish: publish, kem: kem).send(topic, message);
+      {ContactPublish? publish, ContactKem? kem}) async {
+    final contact = developerContact(
+        publish: publish, kem: kem, token: await ensureSupportToken());
+    final outcome = await contact.send(topic, message);
+    final sent = contact.lastSent;
+    if (outcome == ContactOutcome.sent && sent != null) {
+      await _landSupport(sent);
+    }
+    return outcome;
+  }
+
+  Future<ContactOutcome> sendSupport(String text,
+      {ContactPublish? publish, ContactKem? kem}) async {
+    final contact = developerContact(
+        publish: publish, kem: kem, token: await ensureSupportToken());
+    final outcome = await contact.reply(text);
+    final sent = contact.lastSent;
+    if (outcome == ContactOutcome.sent && sent != null) {
+      await _landSupport(sent);
+    }
+    return outcome;
+  }
+
+  Set<String> _seenSupport() {
+    final held = _supportSeen;
+    if (held != null) return held;
+    final out = <String>{};
+    try {
+      final raw = store.getString(kSupportSeenKey);
+      if (raw != null) out.addAll((jsonDecode(raw) as List).whereType<String>());
+    } catch (_) {}
+    for (final m in store.messages(kSupportChatId)) {
+      out.add(m.id);
+    }
+    return _supportSeen = out;
+  }
+
+  Future<void> _noteSeen(String id) async {
+    final seen = _seenSupport()..add(id);
+    final list = seen.toList();
+    final kept = list.length > kSupportSeenMax
+        ? list.sublist(list.length - kSupportSeenMax)
+        : list;
+    if (kept.length != list.length) _supportSeen = kept.toSet();
+    await store.setString(kSupportSeenKey, jsonEncode(kept));
+  }
+
+  Future<bool> _landSupport(SupportMessage m) async {
+    if (_seenSupport().contains(m.id)) return false;
+    await _noteSeen(m.id);
+    var conv = supportChat;
+    if (conv == null) {
+      conv = Conversation(
+        id: kSupportChatId,
+        rootId: kSupportChatId,
+        title: 'Support',
+        support: true,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(m.at),
+        updatedAt: DateTime.fromMillisecondsSinceEpoch(m.at),
+      );
+      conversations.insert(0, conv);
+    }
+    final message = ChatMessage(
+      id: m.id,
+      role: m.mine ? ChatRole.self : ChatRole.bot,
+      content: m.content,
+      support: true,
+      at: DateTime.fromMillisecondsSinceEpoch(m.at),
+    );
+    final open = conv.id == current?.id;
+    final list = [
+      ...(open ? messages : store.messages(conv.id)),
+      message,
+    ]..sort((a, b) => a.at.compareTo(b.at));
+    if (open) messages = list;
+    await store.saveMessages(conv.id, list);
+    if (message.at.isAfter(conv.updatedAt)) conv.updatedAt = message.at;
+    if (!m.mine && !open) conv.unread++;
+    await store.saveConversations(conversations);
+    notifyListeners();
+    if (!m.mine) {
+      unawaited(replyNotify.incoming(conv.id,
+          title: t('Nymbot support replied'),
+          body: t('Open the chat to read it.')));
+    }
+    _startSupport();
+    return true;
+  }
+
+  int _supportSince() {
+    final cursor = store.getInt(kSupportCursorKey);
+    if (cursor > 0) return cursor - kSupportSlackSeconds;
+    final thread = store.messages(kSupportChatId);
+    final first = thread.isEmpty
+        ? (supportChat?.createdAt ?? DateTime.now())
+        : thread.map((m) => m.at).reduce((a, b) => a.isBefore(b) ? a : b);
+    return first.millisecondsSinceEpoch ~/ 1000 - kSupportSlackSeconds;
+  }
+
+  Map<String, dynamic>? _supportFilter() {
+    final tokens = supportTokens;
+    if (supportChat == null || tokens.isEmpty || identity.pubkey.isEmpty) {
+      return null;
+    }
+    return supportFilter(identity.pubkey, tokens, _supportSince());
+  }
+
+  void _startSupport({bool restart = false}) {
+    if (_supportSub != null && !restart) return;
+    final filter = _supportFilter();
+    if (filter == null) return;
+    _stopSupport();
+    _supportSub = supportRelays.subscribe(filter, (e) {
+      unawaited(receiveSupportWrap(e));
+    });
+    unawaited(fetchSupport());
+  }
+
+  void _stopSupport() {
+    final stop = _supportSub;
+    _supportSub = null;
+    if (stop != null) stop();
+  }
+
+  Future<void> fetchSupport() async {
+    if (_supportSub == null) return;
+    final filter = _supportFilter();
+    if (filter == null) return;
+    List<NostrEvent> found;
+    try {
+      found = await supportRelays.fetch(filter,
+          timeout: const Duration(seconds: 6));
+    } catch (_) {
+      return;
+    }
+    for (final e in found) {
+      unawaited(receiveSupportWrap(e));
+    }
+    await _supportChain;
+  }
+
+  Future<void> receiveSupportWrap(NostrEvent wrap) {
+    final next = _supportChain.then((_) => _takeSupportWrap(wrap));
+    _supportChain = next.catchError((_) {});
+    return _supportChain;
+  }
+
+  Future<void> _takeSupportWrap(NostrEvent wrap) async {
+    if (wrap.kind != 1059 || identity.pubkey.isEmpty) return;
+    if (!_supportWraps.add(wrap.id)) return;
+    final opened = await openSupportWrap(
+      wrap,
+      signer: identity.signer,
+      kems: identity.kemCandidates(),
+      tokens: supportTokens,
+      developer: supportDeveloper,
+    );
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final seen = wrap.createdAt > now ? now : wrap.createdAt;
+    if (opened != null && seen > store.getInt(kSupportCursorKey)) {
+      await store.setInt(kSupportCursorKey, seen);
+    }
+    if (opened == null) return;
+    await _landSupport(opened);
+  }
 
   Future<void> setAnonEnabled(bool on) async {
     await anon.setEnabled(on);
@@ -2220,6 +2410,7 @@ class AppController extends ChangeNotifier {
     await openStartingChat();
     notifyListeners();
     unawaited(replyNotify.attach());
+    _startSupport();
 
     sync.onChange = _afterSync;
     sync.follow();
@@ -2290,11 +2481,14 @@ class AppController extends ChangeNotifier {
     if (open != null && touched.contains('arts-${open.id}')) {
       artifacts = store.artifacts(open.id);
     }
+    if (touched.contains('chat-$kSupportChatId')) _supportSeen = null;
+    _startSupport(restart: touched.contains('supportTokens'));
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _stopSupport();
     replyNotify.detach();
     _bootWork?.cancel();
     _syncTimer?.cancel();
@@ -2355,6 +2549,10 @@ class AppController extends ChangeNotifier {
     artifacts = store.artifacts(conv.id);
     attachments = [];
     quote = null;
+    if (conv.unread > 0) {
+      conv.unread = 0;
+      await store.saveConversations(conversations);
+    }
     notifyListeners();
     await store.setString(_viewChatKey, conv.id);
   }
@@ -3096,6 +3294,9 @@ class AppController extends ChangeNotifier {
       {Conversation? target, bool bare = false, bool unattended = false}) async {
     final conv = target ?? current;
     if (conv == null || text.trim().isEmpty) return false;
+    if (conv.support) {
+      return await sendSupport(text) == ContactOutcome.sent;
+    }
     if (turns.containsKey(conv.id)) {
       if (bare) return false;
       (_queues[conv.id] ??= []).add(text.trim());
@@ -4022,6 +4223,7 @@ class AppController extends ChangeNotifier {
     if (!signedIn || identity.pubkey.isEmpty) return;
     if (_entered) relays.wake();
     if (_entered) unawaited(sync.kick());
+    if (_entered) unawaited(fetchSupport());
     await refreshNotices();
     await refreshBalance();
     await resumeInvoice();
@@ -4433,6 +4635,7 @@ class AppController extends ChangeNotifier {
     var standard = 0.0;
     var pro = 0.0;
     for (final conv in conversations) {
+      if (conv.support) continue;
       final list =
           conv.id == current?.id ? messages : store.messages(conv.id);
       replies += list.where((m) => m.role == ChatRole.bot).length;
@@ -4460,6 +4663,9 @@ class AppController extends ChangeNotifier {
             onTimeout: () => false,
           );
     }
+    _stopSupport();
+    _supportSeen = null;
+    _supportWraps.clear();
     await store.wipe();
     identity.forget();
     relays.close();

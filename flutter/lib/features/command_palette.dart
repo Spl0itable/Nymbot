@@ -40,14 +40,15 @@ List<(String, String, String)> paletteActions() => [
       ('settings', t('Settings'), ''),
       ('memory', t('Memory'), ''),
       ('shortcuts', t('Keyboard shortcuts'), ''),
+      ('about', t('About Nymbot'), ''),
       ('credits', t('Buy credits'), ''),
+      ('api', t('API keys'), ''),
       ('anon', t('Anonymous chat'), ''),
       ('identity', t('Identity'), ''),
       ('stats', t('Chat statistics'), ''),
       ('export-md', t('Export this chat as Markdown'), ''),
       ('tags', t('Tags and folder'), ''),
       ('clear', t('Clear this chat'), ''),
-      ('about', t('About Nymbot'), ''),
     ];
 
 List<PaletteRow> paletteRows(BuildContext context, String term) {

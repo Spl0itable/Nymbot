@@ -1,4 +1,4 @@
-const CACHE = 'nymbot-shell-v76';
+const CACHE = 'nymbot-shell-v77';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -53,6 +53,8 @@ const SHELL = [
     '/app/js/viewer.js',
     '/app/js/integrity.js',
     '/app/js/canary.js',
+    '/app/js/apikeys.js',
+    '/app/js/support.js',
     '/app/js/ui.js',
     '/app/share.html',
     '/app/js/share-view.js',

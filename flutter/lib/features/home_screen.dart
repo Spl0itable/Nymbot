@@ -16,6 +16,7 @@ import '../services/attachments.dart';
 import '../services/backup.dart';
 import '../services/share_file.dart';
 import '../services/chat_engine.dart';
+import '../services/dev_contact.dart';
 import '../services/dictation.dart';
 import '../services/gifts.dart';
 import '../services/incoming.dart';
@@ -61,6 +62,7 @@ import 'nym_avatar.dart';
 import 'nym_icons.dart';
 import 'sheets/about_sheet.dart';
 import 'sheets/anon_sheet.dart';
+import 'sheets/api_sheet.dart';
 import 'sheets/artifact_library_sheet.dart';
 import 'sheets/appearance_sheet.dart';
 import 'sheets/credits_sheet.dart';
@@ -75,6 +77,17 @@ import 'sheets/repos_sheet.dart';
 import 'toolbar.dart';
 import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
+
+String supportSendError(ContactOutcome outcome, {required bool connected}) {
+  if (outcome == ContactOutcome.tooLong) {
+    return t('That is over 2000 characters. Shorten it and send it again.');
+  }
+  if (!connected) return t('Not connected to a relay. Try again once connected.');
+  if (outcome == ContactOutcome.refused) {
+    return t('No relay took the message. Try again.');
+  }
+  return t('Could not send the message. Try again.');
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -1232,6 +1245,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             await showTagsSheet(context);
           case 'about':
             await showAboutSheet(context);
+          case 'api':
+            await showApiSheet(context);
           case 'clear':
             final before = await app.clearCurrent();
             if (before != null) {
@@ -1297,6 +1312,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _input.clear();
       setState(() => _suggestTerm = '');
       await app.store.setDraft(app.current!.id, '');
+    }
+    if (app.current?.support ?? false) {
+      _toBottom();
+      final outcome = await app.sendSupport(text);
+      if (!mounted) return;
+      if (outcome == ContactOutcome.sent) {
+        _toBottom();
+        return;
+      }
+      if (override == null && _input.markdown.trim().isEmpty) {
+        _input.setMarkdown(text);
+        _lastInput = _input.text;
+        setState(() => _hasText = true);
+      }
+      _say(supportSendError(outcome, connected: app.relays.connected > 0));
+      return;
     }
     if (override == null && await _localCommand(text)) {
       _toBottom();
@@ -1757,16 +1788,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     children: [
                       Flexible(
                         child: Text(
-                          conv == null || conv.title.isEmpty
-                              ? t('New chat')
-                              : conv.title,
+                          conv?.support ?? false
+                              ? t('Support')
+                              : conv == null || conv.title.isEmpty
+                                  ? t('New chat')
+                                  : conv.title,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (conv?.pinned ?? false)
                         const Padding(
                           padding: EdgeInsets.only(left: 6),
-                          child: NymGlyph('star',
+                          child: NymGlyph('pin',
                               size: 14,
                               filled: true,
                               color: NymbotColors.lightning),
@@ -1807,8 +1840,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Column(
             children: [
               const NoticeBanner(),
-              const NymbotToolbar(),
-              const ContextBar(),
+              if (!(conv?.support ?? false)) ...[
+                const NymbotToolbar(),
+                const ContextBar(),
+              ],
               if (_findTerm != null) _findBar(context, app),
               Expanded(
                 child: Stack(
@@ -2060,7 +2095,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _supportEmpty(BuildContext context) =>
+      NotificationListener<ScrollNotification>(
+        onNotification: _threadScrolled,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            key: const ValueKey('support-empty'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 20),
+              Text(t('Nymbot support'),
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text(
+                t('Messages here go to the Nymbot developer as end-to-end '
+                    'encrypted private messages from your own key. Replies show '
+                    'up here.'),
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      );
+
   Widget _empty(BuildContext context, AppController app) {
+    if (app.current?.support ?? false) return _supportEmpty(context);
     final bot = app.activeBot;
     final starters = bot != null && bot.starters.isNotEmpty
         ? [for (final s in bot.starters) (bot.name, s)]
@@ -2146,6 +2209,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _composer(BuildContext context, AppController app) {
+    final support = app.current?.support ?? false;
     final estimate = app.estimate(_input.markdown);
     return SafeArea(
       top: false,
@@ -2158,13 +2222,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (Mentions.typing(_suggestTerm) case final query?)
+            if (Mentions.typing(support ? '' : _suggestTerm) case final query?)
               MentionSuggestions(
                 query: query,
                 catalog: app.mentionCatalog,
                 onPick: (m) => _completeMention(m, query.fresh),
               ),
-            if (_suggestTerm.startsWith('?') && !_suggestTerm.contains(' '))
+            if (!support &&
+                _suggestTerm.startsWith('?') &&
+                !_suggestTerm.contains(' '))
               CommandSuggestions(
                 term: _suggestTerm,
                 onPick: (c) {
@@ -2323,8 +2389,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 IconButton(
                   icon: const NymGlyph('attach', size: 20),
-                  tooltip: t('Attach a file'),
-                  onPressed: _attach,
+                  tooltip: support
+                      ? t('Attachments cannot be sent to support.')
+                      : t('Attach a file'),
+                  onPressed: support ? null : _attach,
                 ),
                 Expanded(
                   child: CodeFrame(
@@ -2374,13 +2442,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             }
                           : null,
                       decoration: InputDecoration(
-                        hintText: _composerHint(app.activeMediaModel, app.attachments),
+                        hintText: support
+                            ? t('Write to the Nymbot developer')
+                            : _composerHint(app.activeMediaModel, app.attachments),
                         hintMaxLines: 1,
                         hintStyle: TextStyle(
                           fontSize: 12,
                           color: Theme.of(context).hintColor.withValues(alpha: 0.7),
                         ),
-                        suffixIcon: Dictation.supported &&
+                        suffixIcon: !support &&
+                                Dictation.supported &&
                                 (_dictation != null || _inputEmpty)
                             ? IconButton(
                                 key: const ValueKey('mic'),
@@ -2429,7 +2500,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
               ],
             ),
-            if (app.researchHint(_input.markdown) != null)
+            if (support)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  t('Sent to the developer as an encrypted private message. Free.'),
+                  key: const ValueKey('support-hint'),
+                  style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                ),
+              )
+            else if (app.researchHint(_input.markdown) != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
@@ -2762,12 +2842,16 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         dense: true,
         selected: conv.id == app.current?.id,
         leading: conv.pinned
-            ? const NymGlyph('star',
+            ? const NymGlyph('pin',
                 size: 15, filled: true, color: NymbotColors.lightning)
             : null,
         horizontalTitleGap: conv.pinned ? null : 0,
         title: Text(
-          conv.title.isEmpty ? t('New chat') : conv.title,
+          conv.support
+              ? t('Support')
+              : conv.title.isEmpty
+                  ? t('New chat')
+                  : conv.title,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: bits.isEmpty
@@ -2792,6 +2876,16 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               const Padding(
                 padding: EdgeInsets.only(left: 4),
                 child: AnonBadge(),
+              ),
+            if (conv.support)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: SupportBadge(),
+              ),
+            if (conv.support && conv.unread > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: UnreadBadge(count: conv.unread),
               ),
             IconButton(
               icon: const NymGlyph('more', size: 18, filled: true),
@@ -2949,6 +3043,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             await showSavedMessagesSheet(context);
           }),
           ('memory', t('Memory'), () => showMemorySheet(context)),
+          ('api', t('API'), () => showApiSheet(context)),
           ('settings', t('Settings'), () => showAppearanceSheet(context)),
           ('help', t('Help'), () => showHelpSheet(context)),
           ('keyboard', t('Getting around'),

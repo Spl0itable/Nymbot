@@ -17,6 +17,7 @@ import 'anon.dart';
 import 'connectors.dart';
 import 'nostr/event_signer.dart';
 import 'storage_sync.dart';
+import 'support_thread.dart';
 
 class AccountSync {
   AccountSync({
@@ -563,8 +564,21 @@ class AccountSync {
     }
   }
 
-  Future<Map<String, dynamic>> _snapshot() async {
+  List<Map<String, dynamic>> _supportWire() =>
+      [for (final m in _store.messages(kSupportChatId)) _msgToWire(m, null)];
+
+  Future<Map<String, int>> _liveGraves() async {
     final graves = _store.syncGraves();
+    if (graves.containsKey(kSupportChatId) &&
+        supportOutlivesGrave(graves, [_supportWire()]) > 0) {
+      graves.remove(kSupportChatId);
+      await _store.saveSyncGraves(graves);
+    }
+    return graves;
+  }
+
+  Future<Map<String, dynamic>> _snapshot() async {
+    final graves = await _liveGraves();
     final out = <String, dynamic>{};
 
     out['settings'] =
@@ -656,6 +670,8 @@ class AccountSync {
     }
     final anonKeys = _anon?.syncValue();
     if (anonKeys != null) out['anonKeys'] = anonKeys;
+    final supportTokens = SupportTokens.entries(_store);
+    if (supportTokens.isNotEmpty) out['supportTokens'] = supportTokens;
     out['graves'] = graves;
     return out;
   }
@@ -665,12 +681,34 @@ class AccountSync {
 
   Future<List<String>> _apply(Map<String, dynamic> remote) async {
     final touched = <String>[];
-    final graves = {..._store.syncGraves()};
+    final mineGraves = await _liveGraves();
+    final graves = {...mineGraves};
     final theirGraves = remote['graves'];
     if (theirGraves is Map) {
       theirGraves.forEach((k, v) {
         if (v is num) graves['$k'] = v.toInt();
       });
+    }
+    final heldGrave = mineGraves[kSupportChatId] ?? 0;
+    if ((graves[kSupportChatId] ?? 0) < heldGrave) {
+      graves[kSupportChatId] = heldGrave;
+    }
+    final supportEntry = remote['chat-$kSupportChatId'];
+    final supportCut = supportOutlivesGrave(graves, [
+      _supportWire(),
+      if (supportEntry is Map) supportEntry['messages'],
+    ]);
+    if (supportCut > 0) {
+      graves.remove(kSupportChatId);
+      final held = _store.messages(kSupportChatId);
+      final kept = [
+        for (final m in held)
+          if (m.at.millisecondsSinceEpoch > supportCut) m
+      ];
+      if (kept.length != held.length) {
+        await _store.saveMessages(kSupportChatId, kept);
+        touched.add('chat-$kSupportChatId');
+      }
     }
     await _store.saveSyncGraves(graves);
 
@@ -803,6 +841,12 @@ class AccountSync {
       touched.add('anonKeys');
     }
 
+    if (remote['supportTokens'] != null &&
+        !_alreadyApplied(remote, 'supportTokens') &&
+        await SupportTokens.absorb(_store, remote['supportTokens'])) {
+      touched.add('supportTokens');
+    }
+
     for (final key in remote.keys) {
       if (!key.startsWith('chat-') || _alreadyApplied(remote, key)) continue;
       await _breathe();
@@ -812,9 +856,15 @@ class AccountSync {
       if (id is! String || id.isEmpty) continue;
       if (graves.containsKey(id) || _store.isGhost(id)) continue;
       final mine = _store.messages(id);
+      final theirs = _maps(entry['messages']);
       final merged = _mergeById(
         [for (final m in mine) _msgToWire(m, null)],
-        _maps(entry['messages']),
+        supportCut > 0 && id == kSupportChatId
+            ? [
+                for (final m in theirs)
+                  if (supportMessageAt(m) > supportCut) m
+              ]
+            : theirs,
         graves,
       ).map(_msgFromWire).toList()
         ..sort((a, b) => a.at.compareTo(b.at));

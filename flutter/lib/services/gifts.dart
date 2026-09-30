@@ -58,6 +58,7 @@ class Gifts {
   static const keptKey = 'giftCodes';
   static const keptMax = 50;
   static final _code = RegExp(r'^GIFT-[0-9A-F]{32}$');
+  static final _refund = RegExp(r'^REFUND-[0-9A-F]{64}$');
 
   static String? codeOf(String? raw) {
     var s = (raw ?? '').trim();
@@ -68,7 +69,7 @@ class Gifts {
       s = Uri.decodeComponent(s);
     } catch (_) {}
     s = s.trim().toUpperCase();
-    return _code.hasMatch(s) ? s : null;
+    return _code.hasMatch(s) || _refund.hasMatch(s) ? s : null;
   }
 
   static String newCode() => 'GIFT-${bytesToHex(randomBytes(16)).toUpperCase()}';

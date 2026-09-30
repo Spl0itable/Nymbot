@@ -32,6 +32,8 @@ class Conversation {
     this.satsSpent,
     this.serverRuns = false,
     this.team,
+    this.support = false,
+    this.unread = 0,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : tags = tags ?? [],
@@ -72,6 +74,8 @@ class Conversation {
   double? satsSpent;
   bool serverRuns;
   Map<String, dynamic>? team;
+  final bool support;
+  int unread;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -103,6 +107,8 @@ class Conversation {
         if (satsSpent != null) 'satsSpent': satsSpent,
         if (serverRuns) 'serverRuns': true,
         'team': team,
+        if (support) 'support': true,
+        if (unread > 0) 'unread': unread,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
@@ -135,6 +141,10 @@ class Conversation {
         satsSpent: (j['satsSpent'] as num?)?.toDouble(),
         serverRuns: j['serverRuns'] == true,
         team: j['team'] is Map ? (j['team'] as Map).cast<String, dynamic>() : null,
+        support: j['support'] == true,
+        unread: j['unread'] is num && (j['unread'] as num) > 0
+            ? (j['unread'] as num).toInt()
+            : 0,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
@@ -192,6 +202,7 @@ class ChatMessage {
     this.team,
     this.tasks,
     this.updatedAt,
+    this.support = false,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
@@ -234,6 +245,7 @@ class ChatMessage {
   final Map<String, dynamic>? team;
   final Map<String, dynamic>? tasks;
   final DateTime? updatedAt;
+  final bool support;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -274,6 +286,7 @@ class ChatMessage {
         team: team,
         tasks: tasks ?? this.tasks,
         updatedAt: updatedAt ?? DateTime.now(),
+        support: support,
         at: at,
       );
 
@@ -307,6 +320,7 @@ class ChatMessage {
         if (team != null) 'team': team,
         if (tasks != null) 'tasks': tasks,
         if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
+        if (support) 'support': true,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -348,6 +362,7 @@ class ChatMessage {
         updatedAt: j['updatedAt'] is num
             ? DateTime.fromMillisecondsSinceEpoch((j['updatedAt'] as num).toInt())
             : null,
+        support: j['support'] == true,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
 

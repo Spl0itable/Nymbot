@@ -731,7 +731,7 @@
                 memories: this.memories(),
                 schedules: this.schedules(),
                 bots: (function () { const b = read('bots', []); return Array.isArray(b) ? b : []; })(),
-                conversations: this.conversations().map(c => ({
+                conversations: this.conversations().filter(c => !c.support).map(c => ({
                     conversation: c,
                     messages: this.messages(c.id)
                 }))
@@ -741,7 +741,7 @@
         importAll(payload, mode) {
             if (!payload || !Array.isArray(payload.conversations)) throw new Error('unreadable');
             if (mode === 'replace') {
-                for (const c of this.conversations()) this.deleteConversation(c.id);
+                for (const c of this.conversations()) if (!c.support) this.deleteConversation(c.id);
             }
             for (const name of ['folders', 'personas', 'prompts', 'workspaces', 'memories', 'schedules', 'bots']) {
                 if (!Array.isArray(payload[name])) continue;
@@ -756,6 +756,7 @@
             }
             for (const entry of payload.conversations) {
                 const source = entry && entry.conversation ? entry.conversation : {};
+                if (source.support === true) continue;
                 const original = source.importedFrom || source.id || null;
                 if (original && have.has(original)) continue;
                 if (original) have.add(original);

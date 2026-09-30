@@ -22,6 +22,8 @@ var MCP_RESERVED_HEADERS = {
 };
 var MCP_BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa",
   ".corp", ".intranet", ".private", ".localdomain"];
+export var MCP_REBIND_DOMAINS = ["nip.io", "sslip.io", "xip.io", "nip.direct", "traefik.me", "backname.io", "localtest.me", "lvh.me", "vcap.me",
+  "lacolhost.com", "localho.st", "1u.ms", "rbndr.us", "rebind.it", "rebind.network"];
 var MCP_ALLOWED_PORTS = ["", "443", "8443"];
 var MCP_BLOCKED_HOSTS = { "localhost": 1, "metadata": 1, "metadata.google.internal": 1,
   "instance-data": 1, "ip6-localhost": 1, "ip6-loopback": 1 };
@@ -57,7 +59,8 @@ export function mcpIpv6Blocked(host) {
   var h = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (h.indexOf(":") === -1) return null;
   if (h === "::" || h === "::1" || /^0*:0*:0*:0*:0*:0*:0*:0*1?$/.test(h)) return true;
-  if (/^f[cd]/.test(h) || /^fe[89ab]/.test(h) || /^ff/.test(h)) return true;
+  if (/^f[cd]/.test(h) || /^fe[89a-f]/.test(h) || /^ff/.test(h)) return true;
+  if (/^100:(:|0{1,4}:)/.test(h) || /^2001:(:|0{1,4}:)/.test(h)) return true;
   if (/^::ffff:/.test(h) || /^64:ff9b:/.test(h) || /^2001:db8:/.test(h) || /^2002:/.test(h)) return true;
   if (/^::/.test(h)) return true;
   return false;
@@ -75,6 +78,10 @@ export function mcpHostBlocked(rawHost) {
     for (var i = 0; i < MCP_BLOCKED_SUFFIXES.length; i++) {
       var suf = MCP_BLOCKED_SUFFIXES[i];
       if (host.slice(-suf.length) === suf) return "local";
+    }
+    for (var j = 0; j < MCP_REBIND_DOMAINS.length; j++) {
+      var d = MCP_REBIND_DOMAINS[j];
+      if (host === d || host.slice(-(d.length + 1)) === "." + d) return "local";
     }
     if (!/^[a-z0-9.-]+$/.test(host)) return "invalid";
   }

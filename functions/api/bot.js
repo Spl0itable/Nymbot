@@ -105,6 +105,7 @@ import { gitCompactConvo, gitReadRange, gitApplyEdits, gitStageEntry, gitStagePu
 import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_runner.js";
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
+import { l402RefundToken, l402RefundPeek, l402RefundRedeem } from "./_l402refund.js";
 import { apnsSendReply } from "./_apns.js";
 import { webPushSendReply, webPushToken, webPushPublicKey, webPushConfigured } from "./_webpush.js";
 
@@ -1010,18 +1011,25 @@ async function botStoreMedia(env, bytes, contentType, privkey, pubkey, sourceUrl
   throw botBilledError((label || "The media") + " was made, but it could not be stored for delivery: " + String((lastErr && lastErr.message) || lastErr).slice(0, 200));
 }
 
+async function botPollVideoOnce(jobUrl) {
+  var resp;
+  try { resp = await fetch(jobUrl, { headers: { "Accept": "application/json" } }); } catch (e) { return { pending: true }; }
+  if (!resp.ok) return { pending: true };
+  var payload = null;
+  try { payload = await resp.json(); } catch (e) { return { pending: true }; }
+  var found = botExtractGeneratedVideo(payload, 0);
+  if (found) return { found: found };
+  var status = String((payload && (payload.status || payload.state)) || "").toLowerCase();
+  if (/fail|error|cancel/.test(status)) return { failed: true };
+  return { pending: true, status: status };
+}
+
 async function botPollVideoJob(jobUrl, label) {
   for (var i = 0; i < BOT_VIDEO_POLL_TRIES; i++) {
     await botMediaPause(BOT_VIDEO_POLL_MS);
-    var resp;
-    try { resp = await fetch(jobUrl, { headers: { "Accept": "application/json" } }); } catch (e) { continue; }
-    if (!resp.ok) continue;
-    var payload = null;
-    try { payload = await resp.json(); } catch (e) { continue; }
-    var found = botExtractGeneratedVideo(payload, 0);
-    if (found) return found;
-    var status = String((payload && (payload.status || payload.state)) || "").toLowerCase();
-    if (/fail|error|cancel/.test(status)) {
+    var polled = await botPollVideoOnce(jobUrl);
+    if (polled.found) return polled.found;
+    if (polled.failed) {
       throw new Error("The video model reported the render failed.");
     }
   }
@@ -1032,7 +1040,18 @@ async function botPollVideoJob(jobUrl, label) {
   throw e;
 }
 
-async function botVideoPlan(env, prompt, videoModel, imageUrl, res) {
+function botMediaMergeExtra(body, extra, declared) {
+  var out = Object.assign({}, body);
+  var open = !!(declared && typeof declared === "object" && Object.keys(declared).length);
+  Object.keys(extra || {}).forEach(function (k) {
+    var v = extra[k];
+    if (v === undefined || v === null || v === "") return;
+    if (open || Object.prototype.hasOwnProperty.call(body, k)) out[k] = v;
+  });
+  return out;
+}
+
+async function botVideoPlan(env, prompt, videoModel, imageUrl, res, extra) {
   if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Video generation needs the AI binding and AI_GATEWAY_NAME configured on the worker.");
   }
@@ -1041,45 +1060,47 @@ async function botVideoPlan(env, prompt, videoModel, imageUrl, res) {
   var tierRate = mediaRate("video", videoModel);
   if (tier && tierRate.field) body[tierRate.field] = tier.value;
   var declared = await botDeclaredMediaParams(env, videoModel.model);
+  if (extra) body = botMediaMergeExtra(body, extra, declared);
   body = botMediaBodyFromParams(body, declared);
   var said = body.duration != null || body.duration_seconds != null ? body
     : { duration: declared && declared.duration && typeof declared.duration === "object" ? declared.duration.default : null };
   return { body: body, seconds: mediaSeconds(said, mediaRate("video", videoModel, { body: body })) };
 }
 
-async function botGenerateVideo(env, plan, videoModel, privkey, pubkey) {
+async function botVideoStart(env, plan, videoModel) {
   var result;
   try {
     result = await aiRun(env.AI, videoModel.model, plan.body, { gateway: { id: env.AI_GATEWAY_NAME } });
   } catch (e) {
     throw new Error(videoModel.label + " failed: " + String((e && e.message) || e).slice(0, 200));
   }
-  var bytes = null;
-  var sourceUrl = "";
   var direct = await botMediaBytes(result, "video");
-  if (direct && direct.length > 4096) bytes = direct;
-  if (!bytes) {
-    var found = botExtractGeneratedVideo(result, 0);
-    if (!found) {
-      var job = botExtractVideoJob(result, 0);
-      if (job && job.url) found = await botPollVideoJob(job.url, videoModel.label);
-      else if (job) throw botBilledError(videoModel.label + " accepted the clip but gave no way to collect it. The provider bills a render once it accepts it, so it was charged.");
-    }
-    if (!found) {
-      var snippet = "";
-      try { snippet = JSON.stringify(result); } catch (e) { snippet = String(result); }
-      throw new Error(videoModel.label + " returned an unrecognized response: " + String(snippet || "").slice(0, 300));
-    }
-    if (found.b64) {
-      bytes = botBase64Decode(found.b64);
-    } else {
-      bytes = await botFetchMedia(found.url);
-      sourceUrl = found.url;
-      if (!bytes) return found.url + "\n\n_The clip could not be copied to Nymbot's media host, so this is the provider's own link. It expires in a few hours; save the clip._";
-    }
-  }
-  if (!bytes || !bytes.length) throw botBilledError(videoModel.label + " accepted the clip but returned no video.");
-  return await botStoreMedia(env, bytes, botSniffVideoMime(bytes), privkey, pubkey, sourceUrl, "The clip");
+  if (direct && direct.length > 4096) return { bytes: direct };
+  var found = botExtractGeneratedVideo(result, 0);
+  if (found) return { found: found };
+  var job = botExtractVideoJob(result, 0);
+  if (job && job.url) return { job: job };
+  if (job) throw botBilledError(videoModel.label + " accepted the clip but gave no way to collect it. The provider bills a render once it accepts it, so it was charged.");
+  var snippet = "";
+  try { snippet = JSON.stringify(result); } catch (e) { snippet = String(result); }
+  throw new Error(videoModel.label + " returned an unrecognized response: " + String(snippet || "").slice(0, 300));
+}
+
+async function botVideoCollect(got) {
+  if (got.bytes) return { bytes: got.bytes, sourceUrl: "" };
+  var found = got.found;
+  if (found.b64) return { bytes: botBase64Decode(found.b64), sourceUrl: "" };
+  var pulled = await botFetchMedia(found.url);
+  return { bytes: pulled, sourceUrl: found.url, linkOnly: !pulled };
+}
+
+async function botGenerateVideo(env, plan, videoModel, privkey, pubkey) {
+  var got = await botVideoStart(env, plan, videoModel);
+  if (got.job) got = { found: await botPollVideoJob(got.job.url, videoModel.label) };
+  var clip = await botVideoCollect(got);
+  if (clip.linkOnly) return clip.sourceUrl + "\n\n_The clip could not be copied to Nymbot's media host, so this is the provider's own link. It expires in a few hours; save the clip._";
+  if (!clip.bytes || !clip.bytes.length) throw botBilledError(videoModel.label + " accepted the clip but returned no video.");
+  return await botStoreMedia(env, clip.bytes, botSniffVideoMime(clip.bytes), privkey, pubkey, clip.sourceUrl, "The clip");
 }
 
 function botProImageModel(key, table) {
@@ -1392,11 +1413,14 @@ function botWithoutVideo(messages) {
 }
 
 var BOT_INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+var BOT_INLINE_IMAGES_MAX_TOTAL = 20 * 1024 * 1024;
+var BOT_INLINE_IMAGES_MIN_ROOM = 64 * 1024;
 var BOT_INLINE_IMAGE_TIMEOUT_MS = 8000;
 var botInlinedMessages = new WeakMap();
 
-async function botImageDataUrl(url) {
-  var bytes = await botFetchCapped(url, BOT_INLINE_IMAGE_MAX_BYTES, BOT_INLINE_IMAGE_TIMEOUT_MS, "image/*");
+async function botImageDataUrl(url, maxBytes) {
+  var cap = maxBytes > 0 ? Math.min(maxBytes, BOT_INLINE_IMAGE_MAX_BYTES) : BOT_INLINE_IMAGE_MAX_BYTES;
+  var bytes = await botFetchCapped(url, cap, BOT_INLINE_IMAGE_TIMEOUT_MS, "image/*");
   if (!bytes) return null;
   var mime = botSniffImageMime(bytes);
   if (mime === "image/jpeg" && !(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
@@ -1497,8 +1521,13 @@ async function botInlineVisionImages(messages) {
   });
   var list = Object.keys(urls);
   if (!list.length) return messages;
-  var loaded = await Promise.all(list.map(botImageDataUrl));
-  list.forEach(function (u, i) { urls[u] = loaded[i]; });
+  var budget = BOT_INLINE_IMAGES_MAX_TOTAL;
+  for (var i = 0; i < list.length && budget >= BOT_INLINE_IMAGES_MIN_ROOM; i++) {
+    var data = await botImageDataUrl(list[i], budget);
+    if (!data) continue;
+    urls[list[i]] = data;
+    budget -= Math.floor((data.length - data.indexOf(",") - 1) * 3 / 4);
+  }
   var out = messages.map(function (m) {
     if (!m || !Array.isArray(m.content)) return m;
     return Object.assign({}, m, {
@@ -1581,7 +1610,7 @@ async function botMediaBytes(result, field) {
   return null;
 }
 
-async function botProImageGenerate(env, imageModel, prompt, refs) {
+async function botProImageGenerate(env, imageModel, prompt, refs, extra) {
   // Provider-hosted generators need the gateway name as well as the binding.
   if (!proBindingAvailable(env) || !env.AI_GATEWAY_NAME) {
     throw new Error("Frontier image models need the AI binding and AI_GATEWAY_NAME configured on the worker. Standard-tier ?image still works.");
@@ -1589,7 +1618,9 @@ async function botProImageGenerate(env, imageModel, prompt, refs) {
   var body = refs && refs.length
     ? mediaEditBody(imageModel.family, prompt, await botMediaDirectUrls(refs))
     : botImageRequestBody(imageModel.family, prompt);
-  body = botMediaBodyFromParams(body, await botDeclaredMediaParams(env, imageModel.model));
+  var declared = await botDeclaredMediaParams(env, imageModel.model);
+  if (extra) body = botMediaMergeExtra(body, extra, declared);
+  body = botMediaBodyFromParams(body, declared);
   var result;
   try {
     result = await aiRun(env.AI, imageModel.model, body, { gateway: { id: env.AI_GATEWAY_NAME } });
@@ -1610,6 +1641,11 @@ async function botProImageGenerate(env, imageModel, prompt, refs) {
   return { bytes: pulled, sourceUrl: found.url, linkOnly: !pulled };
 }
 
+async function botStandardImageBytes(env, prompt, model) {
+  var result = await aiRun(env.AI, model || BOT_IMAGE_MODELS.standard, { prompt: truncateText(String(prompt), 2000) });
+  return await botMediaBytes(result, "image");
+}
+
 async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel, refs) {
   var ai = env.AI;
   if (!ai) throw new Error("Image generation is not configured on this server.");
@@ -1623,22 +1659,23 @@ async function botGenerateImage(env, prompt, tier, privkey, pubkey, imageModel, 
     if (!made.bytes || !made.bytes.length) throw botBilledError(imageModel.label + " accepted the request but returned no image.");
     return await botStoreMedia(env, made.bytes, botSniffImageMime(made.bytes), privkey, pubkey, made.sourceUrl, "The picture");
   } else {
-    var model = BOT_IMAGE_MODELS[tier] || BOT_IMAGE_MODELS.standard;
-    var result = await aiRun(ai, model, { prompt: truncateText(String(prompt), 2000) });
-    bytes = await botMediaBytes(result, "image");
+    bytes = await botStandardImageBytes(env, prompt, BOT_IMAGE_MODELS[tier] || BOT_IMAGE_MODELS.standard);
   }
   if (!bytes || !bytes.length) throw new Error("The image model returned no image.");
   return await botBlossomUpload(env, bytes, botSniffImageMime(bytes), privkey, pubkey, sourceUrl);
+}
+
+// melotts takes { prompt }, Deepgram Aura takes { text }; send both.
+async function botSpeechBytes(env, model, text, extra) {
+  var result = await aiRun(env.AI, model, Object.assign({ prompt: text, text: text }, extra || {}));
+  return await botMediaBytes(result, "audio");
 }
 
 async function botGenerateSpeech(env, text, tier, privkey, pubkey, voice) {
   var ai = env.AI;
   if (!ai) throw new Error("Speech generation is not configured on this server.");
   var model = (voice && voice.model) || BOT_TTS_MODELS[tier] || BOT_TTS_MODELS.standard;
-  var clipped = truncateText(String(text), BOT_TTS_MAX_CHARS);
-  // melotts takes { prompt }, Deepgram Aura takes { text }; send both.
-  var result = await aiRun(ai, model, { prompt: clipped, text: clipped });
-  var bytes = await botMediaBytes(result, "audio");
+  var bytes = await botSpeechBytes(env, model, truncateText(String(text), BOT_TTS_MAX_CHARS));
   if (!bytes || !bytes.length) throw new Error("The speech model returned no audio.");
   return await botBlossomUpload(env, bytes, "audio/mpeg", privkey, pubkey, "");
 }
@@ -2518,11 +2555,12 @@ async function proHttpChat(url, headers, body, draft, shape) {
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   if (streaming && res.ok && res.body && /event-stream/i.test(res.headers.get("Content-Type") || "")) {
     var onText = function (t) { draft.push(t); };
+    var onDelta = typeof draft.delta === "function" ? function (kind, piece) { draft.delta(kind, piece); } : null;
     var streamed;
     try {
       streamed = shape === "anthropic"
-        ? await botCollectAnthropicStream(res.body, onText)
-        : await botCollectChatStream(res.body, onText);
+        ? await botCollectAnthropicStream(res.body, onText, onDelta)
+        : await botCollectChatStream(res.body, onText, onDelta);
     } catch (e) {
       throw proStreamSpent(e, body);
     }
@@ -2697,15 +2735,15 @@ async function proGeminiVideoChat(env, model, messages, maxTokens) {
 }
 
 // Throws on failure so the runner can decide whether the next transport is worth trying.
-async function proAttempt(env, step, messages, maxTokens, tools, draft, cacheAt) {
-  if (!draft) return proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt);
+async function proAttempt(env, step, messages, maxTokens, tools, draft, cacheAt, params) {
+  if (!draft) return proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt, params);
   try {
-    return await proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt);
+    return await proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt, params);
   } catch (e) {
-    if (!e || !e.streamEmpty) throw e;
+    if (!e || !e.streamEmpty || draft.committed) throw e;
     draft.reset();
     try {
-      return proUsageFold(await proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt), e.usage);
+      return proUsageFold(await proAttemptOnce(env, step, messages, maxTokens, tools, null, cacheAt, params), e.usage);
     } catch (again) {
       throw proUsageCarry(again, e.usage);
     }
@@ -2727,7 +2765,12 @@ function botStreamEmptyError() {
   return err;
 }
 
-async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt) {
+function proExtraParams(params, shape, step) {
+  var extra = typeof params === "function" ? params(shape, step) : null;
+  return extra && typeof extra === "object" ? extra : null;
+}
+
+async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cacheAt, params) {
   if (botMessagesHaveVideo(messages)) {
     if (step.kind === "compat" && !(tools && tools.length) && BOT_VIDEO_MODEL_RE.test(String(step.model || "")) &&
         proGeminiNativeUrl(env, step.model)) {
@@ -2750,6 +2793,9 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
       boundReq[step.maxTokensField || (/^openai\//.test(step.model)
         ? "max_completion_tokens" : "max_tokens")] = maxTokens;
     }
+    var boundExtra = proExtraParams(params, step.apiPath === "responses" ? "responses"
+      : (step.anthropicBody || /^anthropic\//.test(step.model) ? "anthropic" : "chat"), step);
+    if (boundExtra) Object.assign(boundReq, boundExtra);
     var opts = env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     var boundStream = canStream && /^@cf\//.test(step.model) && !step.anthropicBody;
     if (boundStream) boundReq.stream = true;
@@ -2759,7 +2805,8 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
       if (boundStream && botIsStream(bound)) {
         var got;
         try {
-          got = await botCollectChatStream(bound, function (t) { draft.push(t); });
+          got = await botCollectChatStream(bound, function (t) { draft.push(t); },
+            typeof draft.delta === "function" ? function (kind, piece) { draft.delta(kind, piece); } : null);
         } catch (cut) {
           throw proStreamSpent(cut, boundReq);
         }
@@ -2785,6 +2832,8 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
       nativeHeaders["x-api-key"] = env.ANTHROPIC_API_KEY;
     }
     var nativeReq = anthropicizeRequest(messages, maxTokens, tools, cacheAt, step.model);
+    var nativeExtra = proExtraParams(params, "anthropic", step);
+    if (nativeExtra) Object.assign(nativeReq, nativeExtra);
     if (canStream) nativeReq.stream = true;
     return proHttpChat(proAnthropicNativeUrl(env),
       nativeHeaders,
@@ -2804,6 +2853,9 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
     req[step.maxTokensField || (/^openai\//.test(step.model)
       ? "max_completion_tokens" : "max_tokens")] = maxTokens;
   }
+  var compatExtra = proExtraParams(params, step.apiPath === "responses" ? "responses"
+    : (step.apiPath === "messages" ? "anthropic" : "chat"), step);
+  if (compatExtra) Object.assign(req, compatExtra);
   if (canStream) {
     req.stream = true;
     if (step.apiPath !== "messages") req.stream_options = { include_usage: true };
@@ -2835,6 +2887,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
         proRouteDownUntil[endpoints[i].url] = Date.now() + PRO_ROUTE_AUTH_COOLDOWN_MS;
       }
       if (e && e.streamEmpty) throw proUsageCarry(e, spent);
+      if (draft && draft.committed) throw proUsageCarry(e, spent);
       if (!proWorthRetrying(e)) throw proUsageCarry(e, spent);
       botUsageAdd(spent, e && e.usage);
       if (e && typeof e === "object") e.usage = null;
@@ -3017,7 +3070,8 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
       var callFrom = Date.now();
       try {
         if (draft) draft.reset();
-        var answered = proUsageFold(await proAttempt(env, plan[i], messages, maxTokens, tools, draft, cacheAt), wasted);
+        var answered = proUsageFold(await proAttempt(env, plan[i], messages, maxTokens, tools, draft, cacheAt,
+          watch && watch.params ? watch.params : null), wasted);
         if (clock) clock.since("model", callFrom);
         var spent = paceUsageTokens(answered && answered.usage);
         if (spent > 0) await proGateSettle(env, provider, estimate - spent);
@@ -3029,6 +3083,9 @@ async function proGatewayChat(env, proModel, messages, maxTokens, tools, watch) 
       if (failure && typeof failure === "object" && failure.usage) {
         botUsageAdd(wasted, failure.usage);
         failure.usage = null;
+      }
+      if ((draft && draft.committed) || (watch && typeof watch.gone === "function" && watch.gone())) {
+        throw proUsageCarry(failure, wasted);
       }
       if (proRateLimited(failure)) {
         proLastLimitedAt = Date.now();
@@ -3082,12 +3139,14 @@ function proCheckedMessage(payload) {
       ". Something earlier in this conversation may be the trigger, since the whole thread is sent each turn — try ?clear for a fresh thread, rephrasing, or ?model to switch models.");
     err.noRetry = true;
     err.userFacing = true;
+    err.refusal = true;
     throw proUsageCarry(err, proCallUsage(payload));
   }
   if (msg && proMessageReasoning(msg)) {
     var thought = new Error("The model spent this reply reasoning and returned no answer text. Try again, or ask for something shorter.");
     thought.noRetry = true;
     thought.userFacing = true;
+    thought.reasoning = proMessageReasoning(msg);
     throw proUsageCarry(thought, proCallUsage(payload));
   }
   var snippet = "";
@@ -5393,6 +5452,91 @@ function botCreditsForSatsTier(sats, tier) {
   return tier === "pro" ? botProCreditsForSats(sats) : botCreditsForSats(sats);
 }
 
+async function botCreditInvoice(env, payerPubkey, reqSats, ciTier, opts) {
+  var o = opts || {};
+  // Try the primary wallet, then the backup, so one wallet failing doesn't fail the top-up.
+  var ciAddresses = botLightningAddresses(env);
+  if (!ciAddresses.length) return { error: "Bot Lightning address misconfigured.", status: 500 };
+  var lnurlData = null, invData = null, hasVerify = false, canNip57 = false;
+  var hasNwc = !!(env.BOT_NWC_URI && parseNwcUri(env.BOT_NWC_URI));
+  var milli = reqSats * 1000;
+  var ciLastError = { error: "Bot Lightning address misconfigured.", status: 500 };
+  for (var ci = 0; ci < ciAddresses.length; ci++) {
+    var lnAddr = ciAddresses[ci].split("@");
+    var ld = null;
+    try {
+      var lnRes = await fetch("https://" + lnAddr[1] + "/.well-known/lnurlp/" + lnAddr[0], {
+        headers: { "Accept": "application/json" }
+      });
+      ld = await lnRes.json();
+    } catch (e) {
+      ciLastError = { error: "Could not reach the bot's Lightning wallet.", status: 502 };
+      continue;
+    }
+    if (!ld || !ld.callback) {
+      ciLastError = { error: "Bot Lightning wallet returned an invalid response.", status: 502 };
+      continue;
+    }
+    if (milli < (ld.minSendable || 0) || milli > (ld.maxSendable || Infinity)) {
+      ciLastError = { error: "Amount must be between " + Math.ceil((ld.minSendable || 0) / 1000) + " and " + Math.floor((ld.maxSendable || 0) / 1000) + " sats.", status: 400 };
+      continue;
+    }
+    var cbUrl;
+    try {
+      cbUrl = new URL(ld.callback);
+      cbUrl.searchParams.set("amount", String(milli));
+      if (o.zapRequest && ld.allowsNostr && ld.nostrPubkey) {
+        cbUrl.searchParams.set("nostr", JSON.stringify(o.zapRequest));
+      }
+      if (o.comment && ld.commentAllowed) {
+        cbUrl.searchParams.set("comment", String(o.comment).slice(0, ld.commentAllowed));
+      }
+    } catch (e) {
+      ciLastError = { error: "Bot Lightning wallet callback is invalid.", status: 502 };
+      continue;
+    }
+    var idata = null;
+    try {
+      var invRes = await fetch(cbUrl.toString(), { headers: { "Accept": "application/json" } });
+      idata = await invRes.json();
+    } catch (e) {
+      ciLastError = { error: "Could not generate a Lightning invoice.", status: 502 };
+      continue;
+    }
+    if (!idata || !idata.pr) {
+      ciLastError = { error: (idata && idata.reason) || "Bot wallet did not return an invoice.", status: 502 };
+      continue;
+    }
+    // Prefer LUD-21 verification; fall back to the wallet-signed NIP-57 zap receipt (kind 9735).
+    var hv = idata.verify && /^https:\/\//i.test(idata.verify);
+    var cn = o.zapRequest && ld.allowsNostr &&
+      typeof ld.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(ld.nostrPubkey);
+    if (!hv && !cn && !hasNwc && o.store !== false) {
+      ciLastError = { error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts.", status: 502 };
+      continue;
+    }
+    lnurlData = ld; invData = idata; hasVerify = hv; canNip57 = cn;
+    break;
+  }
+  if (!invData) return { error: ciLastError.error, status: ciLastError.status || 502 };
+  var invoiceId = bytesToHex(sha256(utf8ToBytes(invData.pr)));
+  if (o.store !== false) await invoicePut(env.DB_INVOICES, "credits", "pending", invoiceId, {
+    pubkey: payerPubkey,
+    recipientPubkey: o.recipientPubkey || null,
+    amountSats: reqSats,
+    tier: ciTier,
+    pr: invData.pr,
+    verifyMethod: hasVerify ? "lud21" : (canNip57 ? "nip57" : "nwc"),
+    verifyUrl: hasVerify ? invData.verify : null,
+    providerPubkey: canNip57 ? lnurlData.nostrPubkey.toLowerCase() : null,
+    createdAt: Date.now()
+  });
+  return {
+    invoiceId: invoiceId, pr: invData.pr, verify: hasVerify ? invData.verify : null,
+    hasVerify: hasVerify, hasNwc: hasNwc, tier: ciTier, amountSats: reqSats
+  };
+}
+
 // Heavy-model routes cost about twice as much upstream, so they cost 2 credits.
 function botCreditsForTask(taskType) {
   if (taskType === "coding" || taskType === "reasoning") return 2;
@@ -5596,19 +5740,26 @@ async function botReadSse(body, onData) {
     try { obj = JSON.parse(data); } catch (e) { return; }
     onData(obj, event);
   };
-  while (true) {
-    var chunk = await reader.read();
-    if (chunk.done) break;
-    buf += typeof chunk.value === "string" ? chunk.value : dec.decode(chunk.value, { stream: true });
-    var nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      var line = buf.slice(0, nl).replace(/\r$/, "");
-      buf = buf.slice(nl + 1);
-      handle(line);
+  try {
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buf += typeof chunk.value === "string" ? chunk.value : dec.decode(chunk.value, { stream: true });
+      var nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        var line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        handle(line);
+      }
     }
+    buf += dec.decode();
+    if (buf) handle(buf.replace(/\r$/, ""));
+  } catch (e) {
+    if (e && e.clientGone) {
+      try { reader.cancel(); } catch (x) { }
+    }
+    throw e;
   }
-  buf += dec.decode();
-  if (buf) handle(buf.replace(/\r$/, ""));
 }
 
 function botIsStream(x) {
@@ -5630,7 +5781,7 @@ function botStreamCut(err, chars, usage) {
   return err;
 }
 
-async function botCollectChatStream(body, onText) {
+async function botCollectChatStream(body, onText, onDelta) {
   var text = "";
   var reasoning = "";
   var usage = null;
@@ -5648,11 +5799,15 @@ async function botCollectChatStream(body, onText) {
       else if (typeof obj.response === "string") piece = obj.response;
       if (delta) {
         var r = delta.reasoning_content != null ? delta.reasoning_content : delta.reasoning;
-        if (typeof r === "string") reasoning += r;
+        if (typeof r === "string") {
+          reasoning += r;
+          if (onDelta && r) onDelta("reasoning", r);
+        }
       }
       if (piece) {
         text += piece;
         if (onText) onText(text);
+        if (onDelta) onDelta("text", piece);
       }
     });
   } catch (e) {
@@ -5662,7 +5817,7 @@ async function botCollectChatStream(body, onText) {
   return { text: text, reasoning: reasoning, usage: usage };
 }
 
-async function botCollectAnthropicStream(body, onText) {
+async function botCollectAnthropicStream(body, onText, onDelta) {
   var text = "";
   var thinking = "";
   var usage = {};
@@ -5682,8 +5837,10 @@ async function botCollectAnthropicStream(body, onText) {
       if (obj.delta.type === "text_delta" && typeof obj.delta.text === "string") {
         text += obj.delta.text;
         if (onText) onText(text);
+        if (onDelta && obj.delta.text) onDelta("text", obj.delta.text);
       } else if (obj.delta.type === "thinking_delta" && typeof obj.delta.thinking === "string") {
         thinking += obj.delta.thinking;
+        if (onDelta && obj.delta.thinking) onDelta("reasoning", obj.delta.thinking);
       }
       return;
     }
@@ -6390,6 +6547,31 @@ function botGiftStatus(res) {
   return 400;
 }
 
+async function botRefundAction(env, body, userPubkey, json) {
+  var res;
+  if (body.action === "gift-peek") {
+    res = await l402RefundPeek(env, body.code);
+    if (res && res.ok && res.state === "open" && res.sats < BOT_SATS_PER_CREDIT) {
+      return json({ error: "This refund token holds " + res.sats + " sats, less than one credit (" + BOT_SATS_PER_CREDIT + " sats). Spend it on an API request instead.", tooSmall: true }, 400);
+    }
+    if (res && res.ok) {
+      return json({ ok: true, gift: {
+        id: res.id, tier: "standard", amount: Math.floor(res.sats / BOT_SATS_PER_CREDIT), state: res.state,
+        createdAt: res.createdAt, expiresAt: res.expiresAt, doneAt: 0, own: false, refund: true, sats: res.sats
+      } });
+    }
+  } else {
+    res = await l402RefundRedeem(env, userPubkey, body.code, "standard", BOT_SATS_PER_CREDIT);
+    if (res && res.ok) {
+      return json({ ok: true, credited: res.credited, tier: res.tier, balance: res.balance, refund: true, remainingSats: res.remainingSats });
+    }
+  }
+  var failed = Object.assign({}, res || {});
+  delete failed._noLedger;
+  if (!failed.error) failed.error = "The refund could not be handled right now.";
+  return json(failed, botGiftStatus(res));
+}
+
 async function botGiftAction(env, body, userPubkey, json) {
   var res;
   if (body.action === "gift-create") {
@@ -6405,6 +6587,8 @@ async function botGiftAction(env, body, userPubkey, json) {
         error: "You have " + res.available + " " + (tier === "pro" ? "Pro " : "") + "credits free to give right now, and this gift needs " + res.required + "."
       }, 402);
     }
+  } else if ((body.action === "gift-redeem" || body.action === "gift-peek") && l402RefundToken(body.code)) {
+    return botRefundAction(env, body, userPubkey, json);
   } else if (body.action === "gift-redeem") {
     if (!giftCode(body.code)) return json({ error: "That is not a gift code.", invalid: true }, 400);
     res = await ledgerCall(env, { op: "gift-redeem", user: userPubkey, code: body.code });
@@ -6534,22 +6718,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     }
   } catch (e) { }
   if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted) {
-    var pmCtx = "";
+    var pmCtx = botSearchContext(question, pmSearchResults, pmSearchAttempted, pmSearchedQuery);
     if (pmSearchResults.length > 0) {
-      pmCtx += "--- LIVE WEB SEARCH RESULTS ---\n";
-      pmCtx += botUntrusted("SEARCH RESULTS", pmSearchResults.map(function (x, ri) { return (ri + 1) + ". " + x; }).join("\n"));
-      pmCtx += "--- END SEARCH RESULTS ---\n";
-      pmCtx += BOT_UNTRUSTED_WEB_NOTE;
-      pmCtx += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
-        "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, cite nothing at all in a reply that says the search found nothing on point, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
-      pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
-      pmCtx += searchPageBlock(pmSearchResults);
-      pmCtx += searchResultCaveats(question, pmSearchResults);
       // The results the model was numbered against, so [1] and [2] have cards on the device.
       pmCitations = searchCitations(pmSearchResults);
-    } else if (pmSearchAttempted) {
-      pmCtx += "A live web search ran just now for \"" + searchQueryTerms(pmSearchedQuery) +
-        "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news, and put no link at all in a reply that says you found nothing.\n";
     }
     if (pmChangelogCtx) {
       pmCtx += pmChangelogCtx + "\n";
@@ -6721,6 +6893,21 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   if (runOpts.progress) {
     runOpts.progress({ kind: "route", task: taskType, seeing: !!visionReroute });
   }
+  var std = await botStandardRun(ai, pmModel, messages, maxOut, {
+    draft: runOpts.draft || null,
+    clock: pmClock,
+    vision: !!(canSee && (visionUrls.length || historyImages || frameCount))
+  });
+  return { reply: std.reply, taskType: taskType, sources: pmCitations,
+    usage: std.usage, usageParts: std.usageParts, billedModel: std.billedModel };
+}
+
+async function botStandardRun(ai, pmModel, messages, maxOut, opts) {
+  var o = opts || {};
+  var clean = typeof o.clean === "function" ? o.clean : function (t) { return sanitizeBotResponse(t, true); };
+  var pmClock = o.clock || null;
+  var extra = o.params && typeof o.params === "object" ? o.params : null;
+  var withExtra = function (req) { return extra ? Object.assign({}, extra, req) : req; };
   var reply = "";
   var usage = botUsageZero();
   var billedModel = pmModel;
@@ -6730,16 +6917,18 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     botUsageAdd(usage, u);
     usageParts.push({ model: model, usage: u });
   };
-  var stdDraft = runOpts.draft || null;
+  var stdDraft = o.draft || null;
   var stdFrom = Date.now();
+  var cutOff = null;
   try {
     var primary = null;
     if (stdDraft) {
-      var streamReq = { messages: messages, max_tokens: maxOut, stream: true };
+      var streamReq = withExtra({ messages: messages, max_tokens: maxOut, stream: true });
       try {
         primary = await aiRun(ai, pmModel, streamReq);
         if (botIsStream(primary)) {
-          var got = await botCollectChatStream(primary, function (t) { stdDraft.push(t); });
+          var got = await botCollectChatStream(primary, function (t) { stdDraft.push(t); },
+            typeof stdDraft.delta === "function" ? function (kind, piece) { stdDraft.delta(kind, piece); } : null);
           if (!got.text) spentOn(pmModel, proCallUsage({ usage: got.usage }));
           primary = got.text ? { response: got.text } : null;
           if (primary && got.usage) primary.usage = got.usage;
@@ -6748,17 +6937,27 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         var cut = proStreamSpent(e, streamReq);
         spentOn(pmModel, cut && cut.usage);
         primary = null;
-        stdDraft.reset();
+        if (stdDraft.committed) cutOff = cut || e;
+        else stdDraft.reset();
       }
     }
-    if (!primary) primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
-    spentOn(pmModel, proCallUsage(primary));
-    reply = primary && primary.response ? sanitizeBotResponse(primary.response, true) : "";
+    if (!cutOff) {
+      if (!primary) primary = await aiRun(ai, pmModel, withExtra({ messages: messages, max_tokens: maxOut }));
+      spentOn(pmModel, proCallUsage(primary));
+      reply = primary && primary.response ? clean(primary.response) : "";
+    }
   } catch (e) { }
   if (pmClock) pmClock.since("model", stdFrom);
+  if (cutOff) {
+    if (typeof cutOff === "object") {
+      cutOff.usage = usage;
+      cutOff.usageParts = usageParts;
+    }
+    throw cutOff;
+  }
   if (stdDraft && !botTakeFollowUps(reply).text.trim()) stdDraft.reset();
   // Fall back down a ladder ending in a non-reasoning model, since a truncated <think> sanitizes to nothing.
-  var fallbacks = (canSee && (visionUrls.length || historyImages || frameCount) ? BOT_PM_VISION_FALLBACKS : [])
+  var fallbacks = (o.vision ? BOT_PM_VISION_FALLBACKS : [])
     .concat([BOT_MODEL_DEFAULT, BOT_MODEL_UTILITY]);
   // The last two can't see, so image blocks collapse back to plain text.
   var textOnly = messages.map(function (m) {
@@ -6769,22 +6968,25 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   });
   var seesToo = {};
   BOT_PM_VISION_FALLBACKS.forEach(function (m) { seesToo[m] = true; });
+  var fbGone = typeof o.gone === "function" ? o.gone : null;
+  var fbMax = Number(o.fallbackMax) > 0
+    ? Math.min(Math.floor(Number(o.fallbackMax)), BOT_PM_MAX_TOKENS.general) : BOT_PM_MAX_TOKENS.general;
   for (var f = 0; f < fallbacks.length && !botTakeFollowUps(reply).text.trim(); f++) {
     if (fallbacks[f] === pmModel) continue;
+    if (fbGone && fbGone()) break;
     var fbFrom = Date.now();
     try {
       var fb = await aiRun(ai, fallbacks[f], {
         messages: seesToo[fallbacks[f]] ? messages : textOnly,
-        max_tokens: BOT_PM_MAX_TOKENS.general
+        max_tokens: fbMax
       });
       spentOn(fallbacks[f], proCallUsage(fb));
-      reply = fb && fb.response ? sanitizeBotResponse(fb.response, true) : "";
+      reply = fb && fb.response ? clean(fb.response) : "";
       if (botTakeFollowUps(reply).text.trim()) billedModel = fallbacks[f];
     } catch (e) { }
     if (pmClock) pmClock.since("model", fbFrom);
   }
-  return { reply: reply, taskType: taskType, sources: pmCitations,
-    usage: usage, usageParts: usageParts, billedModel: billedModel };
+  return { reply: reply, usage: usage, usageParts: usageParts, billedModel: billedModel };
 }
 function botPriceRefusal(e) {
   return new Response(JSON.stringify({ error: e.message, retryable: true, priceUnavailable: true }), {
@@ -7172,6 +7374,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     } catch (e) {
       return json({ error: botFailText("Transcription failed: the speech service could not process that clip. Please try again.", "transcribe", e) }, 502);
     }
+    var heardSeconds = Number(heard && heard.transcription_info && heard.transcription_info.duration);
+    if (Number.isFinite(heardSeconds) && heardSeconds > BOT_TRANSCRIBE_MAX_SECONDS + BOT_TRANSCRIBE_GRACE_SECONDS) {
+      return json({ error: "That clip is too long — dictation takes up to " +
+        BOT_TRANSCRIBE_MAX_SECONDS + " seconds at a time.", seconds: Math.ceil(heardSeconds) }, 413);
+    }
     var heardCharge = await botTranscribeCharge(env, userPubkey, clipLength.seconds);
     noteUsage(context, { pubkey: userPubkey, kind: "transcribe", tier: heardCharge.tier, model: BOT_TRANSCRIBE_MODEL,
       calls: 1, costMilli: heardCharge.milli, ms: Date.now() - transcribeT0 });
@@ -7352,89 +7559,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (body.recipientPubkey && /^[0-9a-f]{64}$/i.test(body.recipientPubkey)) {
       ciGiftTo = body.recipientPubkey.toLowerCase();
     }
-    // Try the primary wallet, then the backup, so one wallet failing doesn't fail the top-up.
-    var ciAddresses = botLightningAddresses(env);
-    if (!ciAddresses.length) return json({ error: "Bot Lightning address misconfigured." }, 500);
-    var lnurlData = null, invData = null, hasVerify = false, canNip57 = false;
-    var hasNwc = !!(env.BOT_NWC_URI && parseNwcUri(env.BOT_NWC_URI));
-    var milli = reqSats * 1000;
-    var ciLastError = { error: "Bot Lightning address misconfigured.", status: 500 };
-    for (var ci = 0; ci < ciAddresses.length; ci++) {
-      var lnAddr = ciAddresses[ci].split("@");
-      var ld = null;
-      try {
-        var lnRes = await fetch("https://" + lnAddr[1] + "/.well-known/lnurlp/" + lnAddr[0], {
-          headers: { "Accept": "application/json" }
-        });
-        ld = await lnRes.json();
-      } catch (e) {
-        ciLastError = { error: "Could not reach the bot's Lightning wallet.", status: 502 };
-        continue;
-      }
-      if (!ld || !ld.callback) {
-        ciLastError = { error: "Bot Lightning wallet returned an invalid response.", status: 502 };
-        continue;
-      }
-      if (milli < (ld.minSendable || 0) || milli > (ld.maxSendable || Infinity)) {
-        ciLastError = { error: "Amount must be between " + Math.ceil((ld.minSendable || 0) / 1000) + " and " + Math.floor((ld.maxSendable || 0) / 1000) + " sats.", status: 400 };
-        continue;
-      }
-      var cbUrl;
-      try {
-        cbUrl = new URL(ld.callback);
-        cbUrl.searchParams.set("amount", String(milli));
-        if (body.zapRequest && ld.allowsNostr && ld.nostrPubkey) {
-          cbUrl.searchParams.set("nostr", JSON.stringify(body.zapRequest));
-        }
-        if (body.comment && ld.commentAllowed) {
-          cbUrl.searchParams.set("comment", String(body.comment).slice(0, ld.commentAllowed));
-        }
-      } catch (e) {
-        ciLastError = { error: "Bot Lightning wallet callback is invalid.", status: 502 };
-        continue;
-      }
-      var idata = null;
-      try {
-        var invRes = await fetch(cbUrl.toString(), { headers: { "Accept": "application/json" } });
-        idata = await invRes.json();
-      } catch (e) {
-        ciLastError = { error: "Could not generate a Lightning invoice.", status: 502 };
-        continue;
-      }
-      if (!idata || !idata.pr) {
-        ciLastError = { error: (idata && idata.reason) || "Bot wallet did not return an invoice.", status: 502 };
-        continue;
-      }
-      // Prefer LUD-21 verification; fall back to the wallet-signed NIP-57 zap receipt (kind 9735).
-      var hv = idata.verify && /^https:\/\//i.test(idata.verify);
-      var cn = body.zapRequest && ld.allowsNostr &&
-        typeof ld.nostrPubkey === "string" && /^[0-9a-f]{64}$/i.test(ld.nostrPubkey);
-      if (!hv && !cn && !hasNwc) {
-        ciLastError = { error: "Bot Lightning wallet supports neither LUD-21 verification nor NIP-57 zap receipts.", status: 502 };
-        continue;
-      }
-      lnurlData = ld; invData = idata; hasVerify = hv; canNip57 = cn;
-      break;
-    }
-    if (!invData) return json({ error: ciLastError.error }, ciLastError.status || 502);
-    var invoiceId = bytesToHex(sha256(utf8ToBytes(invData.pr)));
-    await invoicePut(env.DB_INVOICES, "credits", "pending", invoiceId, {
-      pubkey: userPubkey,
-      recipientPubkey: ciGiftTo,
-      amountSats: reqSats,
-      tier: ciTier,
-      pr: invData.pr,
-      verifyMethod: hasVerify ? "lud21" : (canNip57 ? "nip57" : "nwc"),
-      verifyUrl: hasVerify ? invData.verify : null,
-      providerPubkey: canNip57 ? lnurlData.nostrPubkey.toLowerCase() : null,
-      createdAt: Date.now()
+    var ciMade = await botCreditInvoice(env, userPubkey, reqSats, ciTier, {
+      recipientPubkey: ciGiftTo, zapRequest: body.zapRequest, comment: body.comment
     });
+    if (ciMade.error) return json({ error: ciMade.error }, ciMade.status || 502);
     return json({
-      pr: invData.pr,
-      verify: hasVerify ? invData.verify : null,
-      serverVerify: hasNwc,
-      needsReceipt: !hasVerify && !hasNwc,
-      invoiceId: invoiceId
+      pr: ciMade.pr,
+      verify: ciMade.hasVerify ? ciMade.verify : null,
+      serverVerify: ciMade.hasNwc,
+      needsReceipt: !ciMade.hasVerify && !ciMade.hasNwc,
+      invoiceId: ciMade.invoiceId
     });
   }
 
@@ -9741,7 +9875,7 @@ function isPromptInjection(text) {
 var BOT_THINKING_MAX_CHARS = 4000;
 
 // keepThinking keeps one leading <think> block for private chats; public replies always strip it.
-function sanitizeBotResponse(text, keepThinking) {
+function sanitizeBotResponse(text, keepThinking, keepMentions) {
   if (typeof text !== "string") return text;
   var thinking = "";
   text = text.replace(/<think>([\s\S]*?)<\/think>/gi, function (_, inner) {
@@ -9762,7 +9896,7 @@ function sanitizeBotResponse(text, keepThinking) {
   text = text.replace(/<\|[^|]*\|>/g, "");
   text = text.replace(/\b(assistant|user|system)\s*$/i, "").trim();
   // Strip @mentions from bot output to prevent notifying other users.
-  text = text.split("\n").map(function(line) {
+  if (!keepMentions) text = text.split("\n").map(function(line) {
     if (/^\s*>/.test(line)) return line;
     return line.replace(/@[\w\u{1d400}-\u{1d7ff}\u{24b6}-\u{24e9}\u{ff21}-\u{ff5a}\u{1f1e6}-\u{1f1ff}\u{1f170}-\u{1f19a}][\w\u{1d400}-\u{1d7ff}\u{24b6}-\u{24e9}\u{ff21}-\u{ff5a}\u{1f1e6}-\u{1f1ff}\u{1f170}-\u{1f19a}#\-]*/gu, function(match) {
       return match.slice(1);
@@ -10650,6 +10784,25 @@ async function searchBrave(env, query) {
   }
 }
 
+function botSearchContext(question, results, attempted, searchedQuery) {
+  var pmCtx = "";
+  if (results.length > 0) {
+    pmCtx += "--- LIVE WEB SEARCH RESULTS ---\n";
+    pmCtx += botUntrusted("SEARCH RESULTS", results.map(function (x, ri) { return (ri + 1) + ". " + x; }).join("\n"));
+    pmCtx += "--- END SEARCH RESULTS ---\n";
+    pmCtx += BOT_UNTRUSTED_WEB_NOTE;
+    pmCtx += "IMPORTANT: These results were retrieved automatically by the Nymchat system just now — the user did NOT paste or provide them, so never say 'the search results you provided'. They ARE real-time data, so do NOT say you lack real-time access or can't browse the web, and do NOT call an event they describe 'fictional' or 'speculative' just because it postdates your training.\n" +
+      "They are keyword matches, not vetted answers. Read each one and use only those that actually address the question. A result that merely shares a word with it answers nothing: say the search turned up nothing on point rather than building an answer around it. Never state a name, date, place or outcome that is not in a result you are citing, never attach a result's URL to a claim it does not make, cite nothing at all in a reply that says the search found nothing on point, and never present your own recollection as something the search found. Answer naturally in your own voice.\n";
+    pmCtx += "Each result ends with its source URL in square brackets. When you use one, name the source in plain words and include that URL so the user can check it.\n";
+    pmCtx += searchPageBlock(results);
+    pmCtx += searchResultCaveats(question, results);
+  } else if (attempted) {
+    pmCtx += "A live web search ran just now for \"" + searchQueryTerms(searchedQuery) +
+      "\" and came back with nothing usable. Say plainly that you searched for that and found nothing, then answer from what you already know and be clear that is what you are doing. Never say the topic is simply absent from your knowledge without mentioning that the search also came up empty. Do not imply you found something, and do not present training data as if it were today's news, and put no link at all in a reply that says you found nothing.\n";
+  }
+  return pmCtx;
+}
+
 // Parses searchResultLine strings back into citation cards for the device.
 function searchCitations(results) {
   var out = [];
@@ -11218,12 +11371,24 @@ function botExtractPageUrls(text) {
   return out;
 }
 
-// A worker can reach its adjacent private network, so pasted links must never point back at it.
+var BOT_OWN_DOMAINS = ["nymbot.ai", "nymbot.pages.dev"];
+
+function botHostUnder(host, list) {
+  for (var i = 0; i < list.length; i++) {
+    var d = list[i];
+    if (host === d || host.slice(-(d.length + 1)) === "." + d) return true;
+  }
+  return false;
+}
+
 function isPrivateHostUrl(raw) {
-  var host;
-  try { host = new URL(raw).hostname.toLowerCase(); } catch (e) { return true; }
+  var u;
+  try { u = new URL(raw); } catch (e) { return true; }
+  var host = u.hostname.toLowerCase().replace(/\.+$/, "");
   if (!host) return true;
-  return mcpHostBlocked(host) !== "";
+  if (mcpHostBlocked(host) !== "") return true;
+  if (botHostUnder(host, BOT_OWN_DOMAINS) && /^\/api(\/|$)/i.test(u.pathname)) return true;
+  return false;
 }
 
 async function botReadLinkedPages(question, progress, perPage) {
@@ -12729,8 +12894,84 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botCreditInvoice,
+  botCreditsForSatsTier,
+  BOT_BULK_BONUS,
+  aiRun,
+  botBlossomUpload,
+  botStoreMedia,
+  botBilledError,
+  botSniffImageMime,
+  botSniffVideoMime,
+  botStandardImageBytes,
+  botSpeechBytes,
+  botVideoPlan,
+  botVideoStart,
+  botVideoCollect,
+  botPollVideoOnce,
+  botProImageModel,
+  botProVideoModel,
+  botProSpeechModel,
+  BOT_PRO_VIDEO_MODELS,
+  BOT_PRO_SPEECH_MODELS,
+  BOT_PRO_IMAGE_DEFAULT,
+  BOT_PRO_VIDEO_DEFAULT,
+  BOT_PRO_SPEECH_DEFAULT,
+  BOT_UNIFIED_BILLING_FEE,
+  BOT_PRICE_MARGIN,
+  BOT_TRANSCRIBE_MAX_SECONDS,
+  BOT_TRANSCRIBE_CHARGED,
   botMediaDirectUrl,
   botTranscribeCharge,
+  botProPick,
+  botBtcPrice,
+  botBtcPriceBind,
+  botMeteredModel,
+  botMeteredCharge,
+  botMeteredReserveMilli,
+  botMilliForUsd,
+  botChargeRate,
+  botCachesLegs,
+  botCreditFigure,
+  botStandardRates,
+  botStandardPartsMilli,
+  botFailedSpendMilli,
+  botProCost,
+  botProMaxCost,
+  botCreditsForTask,
+  botClassify,
+  botStandardRun,
+  botOutCeiling,
+  botWatchesVideo,
+  botWebReserveTokens,
+  botUsageZero,
+  botUsageAdd,
+  botUsageBilled,
+  botProGenerators,
+  botMediaQuote,
+  botSearchContext,
+  searchCitations,
+  searchQueryFor,
+  needsWebSearch,
+  sanitizeBotResponse,
+  proConfigured,
+  BOT_PM_MODELS,
+  BOT_PM_MAX_TOKENS,
+  BOT_PM_VISION_ROUTES,
+  BOT_PM_VISION_MODEL,
+  BOT_IMAGE_MODELS,
+  BOT_TTS_MODELS,
+  BOT_MEDIA_COSTS,
+  BOT_TRANSCRIBE_MODEL,
+  BOT_TTS_MAX_CHARS,
+  BOT_IMAGE_RESERVE_TOKENS,
+  BOT_RESERVE_CHARS_PER_TOKEN,
+  BOT_SATS_PER_CREDIT,
+  BOT_PRO_SATS_PER_CREDIT,
+  BOT_MILLI_PER_CREDIT,
+  BOT_MIN_CHARGE_MILLI,
+  BOT_MODEL_UTILITY,
+  BOT_HOLD_TTL_S,
   onRequest,
   handleBotPMAction,
   botProCatalog,

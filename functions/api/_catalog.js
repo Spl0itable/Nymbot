@@ -444,3 +444,47 @@ export function catalogMergeGenerators(builtin, live, defaults) {
   });
   return out;
 }
+
+var EMBEDDING_TASKS = ["text-embeddings"];
+var embeddingCache = { at: 0, data: null };
+
+export async function catalogEmbeddingModels(env, opts) {
+  var now = Date.now();
+  if (!(opts && opts.fresh) && embeddingCache.data && now - embeddingCache.at < CACHE_MS) {
+    return embeddingCache.data;
+  }
+  var db = await resolveCatalogDb(env);
+  if (!db) return null;
+  var rows, overrides = {};
+  try {
+    var rs = await replica(db).prepare(
+      "SELECT * FROM ai_models WHERE available = 1 AND deprecated = 0 AND task_slug IN (" +
+      EMBEDDING_TASKS.map(function () { return "?"; }).join(", ") + ")"
+    ).bind(...EMBEDDING_TASKS).all();
+    rows = rs.results || [];
+  } catch (e) { return null; }
+  try {
+    var os = await replica(db).prepare("SELECT id, patch FROM ai_model_overrides").all();
+    (os.results || []).forEach(function (r) {
+      var p = parseJson(r.patch, null);
+      if (p && typeof p === "object") overrides[r.id] = p;
+    });
+  } catch (e) { }
+  var byModelId = {};
+  rows.forEach(function (r) {
+    if (EMBEDDING_TASKS.indexOf(r.task_slug) === -1 || !/^@cf\//.test(String(r.id || ""))) return;
+    var patch = overrides[r.id] || {};
+    if (patch.hidden || patch.available === false) return;
+    byModelId[r.id] = {
+      id: r.id,
+      label: patch.name || r.name || r.slug || r.id,
+      author: patch.author || r.author || "",
+      description: catalogBlurb(patch.description || r.description),
+      context: Number(r.context_window) > 0 ? Number(r.context_window) : null,
+      inUsdPerMTok: catalogRate(patch.price_in_usd_mtok, r.price_in_usd_mtok)
+    };
+  });
+  var out = { byModelId: byModelId, count: Object.keys(byModelId).length };
+  embeddingCache = { at: now, data: out };
+  return out;
+}

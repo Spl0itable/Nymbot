@@ -10,7 +10,6 @@ import '../../services/build_integrity.dart';
 import '../../services/canary.dart';
 import '../../services/dev_contact.dart';
 import '../i18n/i18n.dart';
-import '../nym_icons.dart';
 import 'sheet.dart';
 
 const String kAboutVersion = 'v1.0.7';
@@ -57,16 +56,20 @@ Future<String?> fetchLiveVersion({http.Client? client}) async {
 Future<BuildIntegrityResult> _measureBuild() =>
     BuildIntegrityService(publisherPubkey: kDeveloperPubkey).run();
 
+bool _buildSupported() => BuildIntegrityService.isSupported;
+
 class AboutSources {
   const AboutSources({
     this.canary = fetchCanary,
     this.version = fetchLiveVersion,
     this.build = _measureBuild,
+    this.buildSupported = _buildSupported,
   });
 
   final Future<CanaryResult> Function() canary;
   final Future<String?> Function() version;
   final Future<BuildIntegrityResult> Function() build;
+  final bool Function() buildSupported;
 }
 
 AboutSources aboutSources = const AboutSources();
@@ -126,11 +129,24 @@ AboutSources aboutSources = const AboutSources();
   }
 }
 
-Future<void> showAboutSheet(BuildContext context) =>
-    showNymSheet<void>(context, (_) => const _AboutSheet());
+Color buildIntegrityColor(ThemeData theme, BuildIntegrityState state) =>
+    switch (state) {
+      BuildIntegrityState.verified => theme.colorScheme.primary,
+      BuildIntegrityState.mismatch => NymbotColors.danger,
+      BuildIntegrityState.provenanceUnreachable ||
+      BuildIntegrityState.notPublished ||
+      BuildIntegrityState.storeRepackaged =>
+        NymbotColors.lightning,
+      BuildIntegrityState.unsupported => theme.colorScheme.onSurface,
+    };
+
+Future<void> showAboutSheet(BuildContext context, {bool contact = false}) =>
+    showNymSheet<void>(context, (_) => _AboutSheet(contact: contact));
 
 class _AboutSheet extends StatefulWidget {
-  const _AboutSheet();
+  const _AboutSheet({this.contact = false});
+
+  final bool contact;
 
   @override
   State<_AboutSheet> createState() => _AboutSheetState();
@@ -138,14 +154,17 @@ class _AboutSheet extends StatefulWidget {
 
 class _AboutSheetState extends State<_AboutSheet> {
   final _message = TextEditingController();
+  final _messageFocus = FocusNode();
+  final _contactKey = GlobalKey();
   String _topic = kContactTopics.first;
   String? _status;
-  bool _statusOk = false;
+  String? _statusKind;
   bool _sending = false;
   CanaryResult? _canary;
   bool _canaryFailed = false;
   String _version = _liveVersionCache ?? kAboutVersion;
   BuildIntegrityResult? _build;
+  late final bool _buildSupported = aboutSources.buildSupported();
 
   @override
   void initState() {
@@ -153,12 +172,24 @@ class _AboutSheetState extends State<_AboutSheet> {
     final sources = aboutSources;
     _loadCanary(sources);
     _loadVersion(sources);
-    if (BuildIntegrityService.isSupported) _loadBuild(sources);
+    if (_buildSupported) _loadBuild(sources);
+    if (widget.contact) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _focusContact());
+    }
+  }
+
+  Future<void> _focusContact() async {
+    final target = _contactKey.currentContext;
+    if (!mounted || target == null) return;
+    _messageFocus.requestFocus();
+    await Scrollable.ensureVisible(target,
+        duration: const Duration(milliseconds: 250));
   }
 
   @override
   void dispose() {
     _message.dispose();
+    _messageFocus.dispose();
     super.dispose();
   }
 
@@ -206,48 +237,47 @@ class _AboutSheetState extends State<_AboutSheet> {
     } catch (_) {}
   }
 
+  void _say(String? text, [String? kind]) => setState(() {
+        _status = text;
+        _statusKind = kind;
+      });
+
   Future<void> _send() async {
+    if (_sending) return;
     final text = _message.text.trim();
     if (text.isEmpty) {
-      setState(() {
-        _status = t('Please enter a message.');
-        _statusOk = false;
-      });
+      _say(t('Write a message first.'), 'warn');
       return;
     }
     if (text.length > kContactMaxChars) {
-      setState(() {
-        _status = t('Keep it under {n} characters.', {'n': kContactMaxChars});
-        _statusOk = false;
-      });
+      _say(t('That is over 2000 characters. Shorten it and send it again.'),
+          'warn');
       return;
     }
     final app = AppScope.read(context);
     if (app.relays.connected == 0) {
-      setState(() {
-        _status = t('Not connected to a relay. Try again once connected.');
-        _statusOk = false;
-      });
+      _say(t('Not connected to a relay. Try again once connected.'), 'warn');
       return;
     }
-    setState(() {
-      _sending = true;
-      _status = t('Sending…');
-      _statusOk = true;
-    });
+    setState(() => _sending = true);
+    _say(t('Sending…'));
     final outcome = await app.contactDeveloper(_topic, text);
     if (!mounted) return;
-    setState(() {
-      _sending = false;
-      if (outcome == ContactOutcome.sent) {
-        _status = t('Message sent. Thanks for reaching out!');
-        _statusOk = true;
+    setState(() => _sending = false);
+    switch (outcome) {
+      case ContactOutcome.sent:
         _message.clear();
-      } else {
-        _status = t('Failed to send. Please try again.');
-        _statusOk = false;
-      }
-    });
+        _say(t('Message sent. Thanks for reaching out.'), 'ok');
+      case ContactOutcome.refused:
+        _say(t('No relay took the message. Try again.'), 'warn');
+      case ContactOutcome.empty:
+        _say(t('Write a message first.'), 'warn');
+      case ContactOutcome.tooLong:
+        _say(t('That is over 2000 characters. Shorten it and send it again.'),
+            'warn');
+      case ContactOutcome.failed:
+        _say(t('Could not send the message. Try again.'), 'warn');
+    }
   }
 
   String _topicLabel(String topic) => switch (topic) {
@@ -268,6 +298,7 @@ class _AboutSheetState extends State<_AboutSheet> {
       );
 
   Widget _panel({
+    required Key key,
     required String label,
     required String status,
     required Color statusColor,
@@ -275,8 +306,10 @@ class _AboutSheetState extends State<_AboutSheet> {
   }) {
     final theme = Theme.of(context);
     return Container(
+      key: key,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
         border: Border.all(color: theme.dividerColor),
         borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),
       ),
@@ -339,20 +372,15 @@ class _AboutSheetState extends State<_AboutSheet> {
   Widget _buildPanel() {
     final theme = Theme.of(context);
     final result = _build;
-    final pending = result == null && BuildIntegrityService.isSupported;
+    final pending = result == null && _buildSupported;
     final state = result?.state ?? BuildIntegrityState.unsupported;
     final copy = buildIntegrityCopy(state);
     final measured = result?.info;
     return _panel(
+      key: const ValueKey('about-build'),
       label: t('Build integrity'),
-      status: pending ? t('Checking…') : copy.$1,
-      statusColor: pending
-          ? theme.hintColor
-          : switch (state) {
-              BuildIntegrityState.verified => theme.colorScheme.primary,
-              BuildIntegrityState.mismatch => NymbotColors.danger,
-              _ => theme.colorScheme.onSurface,
-            },
+      status: pending ? t('Verifying…') : copy.$1,
+      statusColor: pending ? theme.hintColor : buildIntegrityColor(theme, state),
       children: [
         if (!pending) _note(copy.$2),
         if (measured?.apkSha256 != null)
@@ -363,7 +391,8 @@ class _AboutSheetState extends State<_AboutSheet> {
           spacing: 14,
           children: [
             _link(t('Source'), kRepoUrl),
-            _link(t('Build provenance'), '$kRepoUrl/actions'),
+            _link(t('Build provenance'),
+                '$kRepoUrl/actions/workflows/build-provenance.yml'),
             _link(t('How to verify'), '$kRepoUrl#verify-build'),
           ],
         ),
@@ -373,6 +402,16 @@ class _AboutSheetState extends State<_AboutSheet> {
 
   String _day(DateTime? d) =>
       d == null ? '' : d.toUtc().toIso8601String().substring(0, 10);
+
+  Widget _meta(String text, Color color) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 11,
+                fontFamily: kMonoFamily,
+                fontFamilyFallback: kMonoFallback,
+                color: color)),
+      );
 
   Widget _canaryPanel() {
     final theme = Theme.of(context);
@@ -395,11 +434,18 @@ class _AboutSheetState extends State<_AboutSheet> {
               ? r.statement
               : t('No secret government requests have been received.');
         case CanaryState.stale:
-          status = r.overdue ? t('Update overdue') : t('Not all clear');
-          color = NymbotColors.lightning;
-          note = t('The canary has not been refreshed on schedule or no longer '
-              'says all clear, so a silenced request (an NSL or FISA order) '
-              'cannot be ruled out.');
+          if (r.overdue) {
+            status = t('Update overdue');
+            color = NymbotColors.lightning;
+            note = t('The canary was not refreshed on schedule, so a silenced '
+                'request such as a National Security Letter or FISA order '
+                'cannot be ruled out.');
+          } else {
+            status = t('Not all clear');
+            color = NymbotColors.danger;
+            note = t('The developer no longer states that no secret government '
+                'request has been received.');
+          }
         case CanaryState.gone:
           status = t('Canary removed');
           color = NymbotColors.danger;
@@ -411,29 +457,31 @@ class _AboutSheetState extends State<_AboutSheet> {
           note = t('The canary signature does not match the Nymbot developer '
               'key. Do not trust this canary.');
         case CanaryState.unsigned:
-          status = t('Unsigned');
-          color = theme.hintColor;
-          note = t('The canary has not been signed yet, so its statement '
-              'cannot be verified.');
+          status = t('Not signed yet');
+          color = NymbotColors.lightning;
+          note = t('The canary has not been signed by the Nymbot developer '
+              'yet, so it does not vouch for anything.');
       }
     }
-    final meta = <Widget>[_link(t('canary'), kCanaryPageUrl)];
-    if (r != null && !_canaryFailed && r.signed) {
-      meta.add(Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Text(t('signature verified'),
-            style: TextStyle(
-                fontSize: 11,
-                fontFamily: kMonoFamily,
-                fontFamilyFallback: kMonoFallback,
-                color: theme.colorScheme.primary)),
-      ));
-      if (r.id.isNotEmpty) {
-        meta.add(_link(t('nostr event'), 'https://njump.me/${r.id}'));
+    final meta = <Widget>[_link(t('Canary file'), kCanaryPageUrl)];
+    if (r != null && !_canaryFailed && r.state != CanaryState.gone) {
+      if (r.signed) {
+        meta.add(_meta(t('signature valid'), theme.colorScheme.primary));
+      } else if (r.state == CanaryState.forged) {
+        meta.add(_meta(t('signature invalid'), NymbotColors.danger));
+      } else {
+        meta.add(_meta(t('unsigned'), theme.hintColor));
       }
-      if (r.btcBlockHeight != null) {
-        meta.add(_link(t('btc block {height}', {'height': r.btcBlockHeight}),
-            'https://mempool.space/block/${r.btcBlockHash ?? ''}'));
+      if (r.signed && r.id.isNotEmpty) {
+        meta.add(_link(t('Nostr event'), 'https://njump.me/${r.id}'));
+      }
+      final hash = r.btcBlockHash;
+      if (r.btcBlockHeight != null &&
+          hash != null &&
+          RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
+        meta.add(_link(
+            t('Bitcoin block {height}', {'height': figure(r.btcBlockHeight)}),
+            'https://mempool.space/block/$hash'));
       }
       final updated = _day(r.updatedAt);
       final due = _day(r.dueBy);
@@ -441,19 +489,10 @@ class _AboutSheetState extends State<_AboutSheet> {
         if (updated.isNotEmpty) t('updated {date}', {'date': updated}),
         if (due.isNotEmpty) t('due {date}', {'date': due}),
       ].join(' · ');
-      if (dates.isNotEmpty) {
-        meta.add(Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Text(dates,
-              style: TextStyle(
-                  fontSize: 11,
-                  fontFamily: kMonoFamily,
-                  fontFamilyFallback: kMonoFallback,
-                  color: theme.hintColor)),
-        ));
-      }
+      if (dates.isNotEmpty) meta.add(_meta(dates, theme.hintColor));
     }
     return _panel(
+      key: const ValueKey('about-canary'),
       label: t('Warrant canary'),
       status: status,
       statusColor: color,
@@ -478,33 +517,27 @@ class _AboutSheetState extends State<_AboutSheet> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
             children: [
-              const NymbotMark(size: 28),
-              const SizedBox(width: 8),
+              Text('Nymbot', style: theme.textTheme.titleMedium),
+              const SizedBox(width: 6),
               Flexible(
-                child: Text(
-                  'Nymbot',
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: kMonoFamily,
-                    fontFamilyFallback: kMonoFallback,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
+                child: Text(_version,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: kMonoFamily,
+                        fontFamilyFallback: kMonoFallback,
+                        color: theme.hintColor)),
               ),
-              const SizedBox(width: 8),
-              Text(_version,
-                  style: TextStyle(fontSize: 12, color: theme.hintColor)),
             ],
           ),
           const SizedBox(height: 6),
           Text(
-            t('A private AI assistant. No account, end-to-end encrypted, paid '
-                'in sats.'),
-            style: const TextStyle(fontSize: 13, height: 1.5),
+            t('Private AI chat with no account, end-to-end encrypted, and paid '
+                'per reply in Bitcoin over Lightning.'),
+            style: TextStyle(fontSize: 12, height: 1.45, color: theme.hintColor),
           ),
           const SizedBox(height: 14),
           _buildPanel(),
@@ -522,15 +555,19 @@ class _AboutSheetState extends State<_AboutSheet> {
             ],
           ),
           const Divider(height: 28),
-          Text(t('Contact the developer'), style: theme.textTheme.titleSmall),
+          Text(t('Contact the developer'),
+              key: _contactKey, style: theme.textTheme.titleSmall),
           const SizedBox(height: 4),
           Text(
-            t('Send feedback, a question, or a bug report. It is delivered as '
-                'an end-to-end encrypted private message from your nym to the '
-                'Nymbot developer, never from an anonymous key.'),
+            t('Send feedback, a question or a bug report. It goes to the '
+                'Nymbot developer as an end-to-end encrypted private message '
+                'from your own key, never from a throwaway one.'),
             style: TextStyle(fontSize: 12, color: theme.hintColor),
           ),
           const SizedBox(height: 10),
+          Text(t('Topic'),
+              style: TextStyle(fontSize: 12, color: theme.hintColor)),
+          const SizedBox(height: 4),
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -545,12 +582,14 @@ class _AboutSheetState extends State<_AboutSheet> {
           ),
           const SizedBox(height: 10),
           TextField(
+            key: const ValueKey('contact-message'),
             controller: _message,
+            focusNode: _messageFocus,
             minLines: 3,
             maxLines: 6,
             maxLength: kContactMaxChars,
             scrollPadding: textAreaScrollPadding(context, 6),
-            decoration: InputDecoration(hintText: t('Write your message…')),
+            decoration: InputDecoration(hintText: t('Write your message')),
           ),
           if (_status != null)
             Padding(
@@ -559,9 +598,11 @@ class _AboutSheetState extends State<_AboutSheet> {
                 _status!,
                 style: TextStyle(
                   fontSize: 12,
-                  color: _statusOk
-                      ? theme.colorScheme.primary
-                      : NymbotColors.danger,
+                  color: switch (_statusKind) {
+                    'ok' => theme.colorScheme.primary,
+                    'warn' => NymbotColors.danger,
+                    _ => theme.hintColor,
+                  },
                 ),
               ),
             ),
@@ -569,7 +610,7 @@ class _AboutSheetState extends State<_AboutSheet> {
             alignment: Alignment.centerRight,
             child: FilledButton(
               onPressed: _sending ? null : _send,
-              child: Text(_sending ? t('Sending…') : t('Send')),
+              child: Text(t('Send message')),
             ),
           ),
         ],

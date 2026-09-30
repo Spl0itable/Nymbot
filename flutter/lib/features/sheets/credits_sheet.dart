@@ -232,12 +232,6 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(t('Buy credits'), style: Theme.of(context).textTheme.titleMedium),
-            if (widget.reason != null) ...[
-              const SizedBox(height: 8),
-              Text(widget.reason!,
-                  key: const ValueKey('credits-reason'),
-                  style: const TextStyle(fontSize: 13, height: 1.35)),
-            ],
             const SizedBox(height: 12),
             _balances(context, app, pick: true),
             const SizedBox(height: 12),
@@ -348,6 +342,13 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                         : null,
                   ),
                 ),
+              )
+            else if (widget.reason != null && app.invoice == null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(widget.reason!,
+                    key: const ValueKey('credits-reason'),
+                    style: const TextStyle(fontSize: 12)),
               ),
             const SizedBox(height: 14),
             if (invoice == null)

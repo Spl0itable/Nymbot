@@ -185,6 +185,18 @@ class ReplyNotify with WidgetsBindingObserver {
     if (pending.isEmpty) await _stopWaiting();
   }
 
+  Future<void> incoming(String conv,
+      {required String title, required String body}) async {
+    if (!supported || !enabled()) return;
+    if (!background && viewing == conv) return;
+    await channel.reply(
+      chat: conv,
+      title: title,
+      body: body,
+      channelName: t('Replies'),
+    );
+  }
+
   Future<void> settingChanged(bool on) async {
     if (!supported) return;
     if (!on) {

@@ -284,12 +284,16 @@
                     <span>Scheduled</span><span class="side-count" id="scheduleCount"></span>
                 </button>
                 <button class="side-link" type="button" data-act="open-pinned">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 2h6l-1 7 4 4v2H6v-2l4-4z"></path></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 3 14.9 9 21.5 9.8 16.7 14.3 18 20.8 12 17.6 6 20.8 7.3 14.3 2.5 9.8 9.1 9 12 3"></polygon></svg>
                     <span>Saved messages</span>
                 </button>
                 <button class="side-link" type="button" data-act="open-memory">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12c-.2-1.7.5-3 1.7-3.8.1-1.7 1.2-2.9 2.8-3.2C9 3.8 10.4 3.5 11.8 4c1.5-.6 3.2-.2 4.3.9 1.8 0 3.2 1.1 3.6 2.7 1.4 1 1.9 2.7 1.2 4.2.3 1.6-.5 3-1.9 3.6-.2.9-.8 1.6-1.7 2 .2 1.5.7 2.6 1.5 3.3.7.6-.1 1.7-.9 1.3-1.6-.8-2.7-2.3-3.2-4.4H9c-3 0-5.2-2.3-5.5-5.7Z"></path><path d="M4.6 13.8c2.4 1.8 6 2 9-.6"></path><path d="M6.3 8.4c2.2 1.2 5.2.4 7-1.5"></path><path d="M14.2 9.6c1.5 1 3.3.7 4.5-.6"></path></svg>
                     <span>Memory</span>
+                </button>
+                <button class="side-link" type="button" data-act="open-api">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"></path><path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path><line x1="9.5" y1="12" x2="9.51" y2="12"></line><line x1="14.5" y1="12" x2="14.51" y2="12"></line></svg>
+                    <span>API</span>
                 </button>
                 <button class="side-link" type="button" data-act="open-appearance">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.46.62.85.7H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
@@ -633,7 +637,8 @@
                     your chats &mdash; they are encrypted to keys we do not hold &mdash; so the more you
                     can tell us, the more we can help.</p>
                 <div class="gate-actions">
-                    <a class="btn btn-small btn-primary" id="helpMail" href="mailto:support@nymbot.ai">Email support@nymbot.ai</a>
+                    <button class="btn btn-small btn-primary" type="button" data-act="help-message-support">Message support</button>
+                    <a class="btn btn-small" id="helpMail" href="#">Email support</a>
                     <a class="btn btn-small" href="/docs/" target="_blank" rel="noopener">Full knowledge base</a>
                 </div>
             </div>
@@ -679,7 +684,8 @@
                 <a href="https://nymbot.ai/privacy/" target="_blank" rel="noopener">Privacy</a>
                 <a href="https://nymbot.ai/dmca/" target="_blank" rel="noopener">DMCA</a>
             </nav>
-            <h3 class="section-head">Contact the developer</h3>
+            <div class="about-divider"></div>
+            <h3 class="section-head" id="aboutContactHead">Contact the developer</h3>
             <p class="hint">Send feedback, a question or a bug report. It goes to the Nymbot developer as an end-to-end encrypted private message from your own key, never from a throwaway one.</p>
             <label for="aboutContactTopic">Topic</label>
             <select id="aboutContactTopic">
@@ -693,6 +699,107 @@
             <p class="modal-status" id="aboutContactStatus"></p>
             <footer>
                 <button class="btn btn-primary" type="button" data-act="about-send" id="aboutContactSend">Send message</button>
+                <button class="btn btn-ghost" type="button" data-act="close-modal">Close</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalApi" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>API</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Call Nymbot's models from your own code with an OpenAI-compatible API. Requests
+                spend the same balances as the app: Nymbot Auto uses the standard balance, any other model the
+                Pro balance. Unlike chats in the app, API requests are not end-to-end encrypted.</p>
+            <p class="api-free" id="apiFreeNote" hidden>API calls need credits. You can make keys now, but every call is refused until you buy some.</p>
+            <label for="apiBaseUrl">Base URL</label>
+            <div class="api-copy-row">
+                <input data-i18n-skip type="text" id="apiBaseUrl" readonly spellcheck="false">
+                <button class="btn btn-small" type="button" data-act="api-copy-base">Copy</button>
+            </div>
+            <div class="api-balances" id="apiBalances"></div>
+            <h3 class="section-head">Quick start</h3>
+            <div class="filter-row" role="group" aria-label="Quick start language">
+                <button class="pill" type="button" data-act="api-snippet" data-snippet="curl" aria-pressed="false">cURL</button>
+                <button class="pill" type="button" data-act="api-snippet" data-snippet="python" aria-pressed="false">Python</button>
+                <button class="pill" type="button" data-act="api-snippet" data-snippet="js" aria-pressed="false">JavaScript</button>
+            </div>
+            <pre class="api-snippet" data-i18n-skip><code id="apiSnippet"></code></pre>
+            <div class="api-snippet-foot">
+                <button class="btn btn-small" type="button" data-act="api-copy-snippet">Copy</button>
+                <a id="apiDocsLink" href="https://nymbot.ai/docs/api/" target="_blank" rel="noopener">API documentation</a>
+            </div>
+            <p class="modal-status" id="apiStatus"></p>
+            <h3 class="section-head">Keys</h3>
+            <div class="api-new-key" id="apiNewKey" hidden>
+                <p class="api-new-key-warn">Copy this key now. You will not see it again: Nymbot keeps only a hash of it.</p>
+                <div class="api-copy-row">
+                    <input data-i18n-skip type="text" id="apiNewKeyValue" readonly spellcheck="false" autocomplete="off">
+                    <button class="btn btn-small btn-primary" type="button" data-act="api-copy-key">Copy</button>
+                </div>
+                <footer>
+                    <button class="btn btn-small" type="button" data-act="api-new-key-done">I saved it</button>
+                </footer>
+            </div>
+            <div class="repo-list api-key-list" id="apiKeyList"></div>
+            <div class="repo-form" id="apiKeyForm">
+                <h3 class="section-head" id="apiKeyFormTitle">New key</h3>
+                <label for="apiKeyName">Name</label>
+                <input data-i18n-skip type="text" id="apiKeyName" maxlength="40" placeholder="Laptop" autocomplete="off">
+                <div class="field-grid">
+                    <div>
+                        <label for="apiKeyCap">Spending cap (sats, optional)</label>
+                        <input type="number" id="apiKeyCap" min="1" step="1" inputmode="numeric" placeholder="No cap">
+                    </div>
+                    <div>
+                        <label for="apiKeyPeriod">Cap resets</label>
+                        <select id="apiKeyPeriod">
+                            <option value="">Never</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+                </div>
+                <label for="apiKeyExpiry">Expires (optional)</label>
+                <input type="date" id="apiKeyExpiry">
+                <p class="modal-status" id="apiKeyStatus"></p>
+                <footer>
+                    <button class="btn btn-primary" type="button" data-act="api-key-save" id="apiKeySave">Create key</button>
+                    <button class="btn" type="button" data-act="api-key-reset">Clear the form</button>
+                </footer>
+            </div>
+            <h3 class="section-head">Recent API calls</h3>
+            <div class="repo-list api-history" id="apiHistory"></div>
+            <section class="api-nwc" id="apiNwc" hidden>
+                <h3 class="section-head">Auto top-up</h3>
+                <p class="hint">Connect a Nostr Wallet Connect wallet and Nymbot pays an invoice from it whenever a balance drops below the threshold. The connection is stored encrypted on the server.</p>
+                <p class="api-nwc-state" id="apiNwcState"></p>
+                <div id="apiNwcForm">
+                    <label for="apiNwcUrl">Wallet connection</label>
+                    <input data-i18n-skip type="password" id="apiNwcUrl" placeholder="nostr+walletconnect://…" autocomplete="off" spellcheck="false">
+                    <div class="field-grid">
+                        <div>
+                            <label for="apiNwcThreshold">When below (sats)</label>
+                            <input type="number" id="apiNwcThreshold" min="1000" step="1" inputmode="numeric" value="5000">
+                        </div>
+                        <div>
+                            <label for="apiNwcAmount">Top up by (sats)</label>
+                            <input type="number" id="apiNwcAmount" min="1000" max="1000000" step="1" inputmode="numeric" value="10000">
+                        </div>
+                    </div>
+                    <label for="apiNwcTier">Balance</label>
+                    <select id="apiNwcTier">
+                        <option value="pro">Pro</option>
+                        <option value="standard">Standard</option>
+                    </select>
+                </div>
+                <p class="modal-status" id="apiNwcStatus"></p>
+                <footer>
+                    <button class="btn btn-primary" type="button" data-act="api-nwc-connect" id="apiNwcConnect">Connect wallet</button>
+                    <button class="btn btn-danger" type="button" data-act="api-nwc-disconnect" id="apiNwcDisconnect" hidden>Disconnect</button>
+                </footer>
+            </section>
+            <footer>
                 <button class="btn btn-ghost" type="button" data-act="close-modal">Close</button>
             </footer>
         </div>
@@ -1470,7 +1577,10 @@
             <div class="amount-grid" id="amountGrid"></div>
             <label for="creditAmount">Credits</label>
             <input type="number" id="creditAmount" min="1" value="50">
-            <label class="check" id="creditAnonRow"><input type="checkbox" id="creditAnon"> Put them on a throwaway key, not your nym</label>
+            <div id="creditAnonRow">
+                <label class="check"><input type="checkbox" id="creditAnon"> Put them on a throwaway key, not your nym</label>
+                <p class="hint">Your nym never touches the payment. Spend them from an anonymous chat.</p>
+            </div>
             <p class="modal-status" id="creditSats"></p>
             <p class="hint" id="creditPricingNote"></p>
             <div class="invoice" id="invoiceBox" hidden>
@@ -1776,6 +1886,8 @@
     <script src="/app/js/viewer.js"></script>
     <script src="/app/js/integrity.js"></script>
     <script src="/app/js/canary.js"></script>
+    <script src="/app/js/apikeys.js"></script>
+    <script src="/app/js/support.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>
 </body>

@@ -742,7 +742,11 @@ class _TierSwitch extends StatelessWidget {
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               face(standard, !pro),
-              face(proLabel, pro),
+              Opacity(
+                key: const ValueKey('tier-pro-face'),
+                opacity: app.freeOnly ? 0.45 : 1,
+                child: face(proLabel, pro),
+              ),
             ]),
           ),
         ),

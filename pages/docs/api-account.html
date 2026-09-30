@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Balance, top-ups and keys - Nymbot Knowledge Base</title>
+    <meta name="description" content="Nymbot API account endpoints: balances, Lightning top-ups, automatic top-ups over Nostr Wallet Connect, query history, and managing API keys with requests signed by your nym.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Balance, top-ups and keys - Nymbot Knowledge Base">
+    <meta property="og:description" content="Nymbot API account endpoints: balances, Lightning top-ups, automatic top-ups over Nostr Wallet Connect, query history, and managing API keys with requests signed by your nym.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api-account/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="Balance, top-ups and keys - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Nymbot API account endpoints: balances, Lightning top-ups, automatic top-ups over Nostr Wallet Connect, query history, and managing API keys with requests signed by your nym.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api-account/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Balance, top-ups and keys</h1>
+            <p class="docs-lede">Check what you have, top up over Lightning, top up automatically from your own
+                wallet, see what each request cost, and manage keys from code.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="balance">Checking the balance</h2>
+            <p>Both of your balances, and how much of this key's cap is used.</p>
+            <p><code>GET https://nymbot.ai/api/v1/credits/balance</code> &mdash; needs an API key. <code>POST</code> works too, for clients that expect it.</p>
+            <p><code>balance</code> is the two balances together in dollars at the current Bitcoin price, for
+                tools that expect a single number (<code>null</code> if the price cannot be read). The rest is in
+                credits and sats, which is how the balances are actually kept. <code>key</code> describes the key
+                that asked. A key that has reached its cap can still check the balance.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "balance": 49.18,
+  "balance_sats": 42037,
+  "standard": { "credits": 120.4, "sats": 1204 },
+  "pro": { "credits": 408.33, "sats": 40833 },
+  "key": {
+    "id": "4f0c9a1be27d3856",
+    "name": "laptop scripts",
+    "limit_sats": 20000,
+    "period_used_sats": 3412,
+    "total_used_sats": 18230,
+    "reset_period": "monthly",
+    "reset_at": "2026-10-01T00:00:00Z"
+  }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>401</code></td><td>The key is missing, unknown, revoked or expired.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/credits/balance \
+  -H "Authorization: Bearer $NYMBOT_API_KEY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import requests
+
+res = requests.get(
+    "https://nymbot.ai/api/v1/credits/balance",
+    headers={"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]},
+)
+balance = res.json()
+print(balance["standard"]["sats"], balance["pro"]["sats"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/credits/balance", {
+  headers: { "Authorization": "Bearer " + process.env.NYMBOT_API_KEY },
+});
+const balance = await res.json();
+console.log(balance.standard.sats, balance.pro.sats);</code></pre>
+
+            <h2 id="payment-methods">Payment methods</h2>
+            <p>How you can top up, and the limits. Lightning is the only method.</p>
+            <p><code>GET https://nymbot.ai/api/v1/topup/payment-methods</code> &mdash; no key needed.</p>
+            <p>A top-up is 10 to 1,000,000 sats; a Pro top-up has to buy at least one Pro credit, so it starts
+                at 100 sats. The dollar limits follow the Bitcoin price. <code>bulk_bonus</code> lists the extra
+                credit on larger top-ups, the same as in the app: 10%, 15% or 20% more on standard top-ups from
+                500, 1,000 or 5,000 sats, and on Pro top-ups from 5,000, 10,000 or 50,000 sats.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "supported_methods": [
+    {
+      "method": "btc-lightning",
+      "display_name": "Bitcoin Lightning",
+      "supported_currencies": ["SATS", "USD", "BTC"],
+      "limits": {
+        "SATS": { "min": 10, "max": 1000000 },
+        "USD": { "min": 0.02, "max": 1170 },
+        "BTC": { "min": 1e-7, "max": 0.01 }
+      },
+      "tiers": ["standard", "pro"],
+      "default_tier": "pro",
+      "tier_min_sats": { "standard": 10, "pro": 100 },
+      "sats_per_credit": { "standard": 10, "pro": 100 },
+      "bulk_bonus": [
+        { "bonus": 0.1, "standard_sats": 500, "pro_sats": 5000 },
+        { "bonus": 0.15, "standard_sats": 1000, "pro_sats": 10000 },
+        { "bonus": 0.2, "standard_sats": 5000, "pro_sats": 50000 }
+      ]
+    }
+  ]
+}</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/topup/payment-methods</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+methods = requests.get("https://nymbot.ai/api/v1/topup/payment-methods").json()
+print(methods["supported_methods"][0]["limits"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const methods = await (await fetch("https://nymbot.ai/api/v1/topup/payment-methods")).json();
+console.log(methods.supported_methods[0].limits);</code></pre>
+
+            <h2 id="topup">Topping up over Lightning</h2>
+            <p>Makes a Lightning invoice that adds credit to the nym the key belongs to. Pay it from any
+                Lightning wallet, then <a href="#topup-status">check it</a> to have the credit added.</p>
+            <p><code>POST https://nymbot.ai/api/v1/topup/create/btc-lightning</code> &mdash; needs an API key.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>amount</code></td><td>number</td><td>Yes</td><td>How much, in <code>currency</code>. A whole number for sats.</td></tr>
+                        <tr><td><code>currency</code></td><td>string</td><td>No</td><td><code>SATS</code> (the default), <code>USD</code> or <code>BTC</code>. Dollars are converted at the current Bitcoin price.</td></tr>
+                        <tr><td><code>tier</code></td><td>string</td><td>No</td><td><code>pro</code> (the default) or <code>standard</code>: which balance the credit goes to.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>A standard credit is 10 sats and a Pro credit 100 sats, plus any bulk bonus;
+                <code>credits</code> says what this invoice will add.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "invoice_id": "b7d41e0c95a2f38e6c1d0e9a4b7f2c61d3e8a05f9b2c4d7e1a6f3b8c0d5e2a9f4",
+  "payment_request": "lnbc100u1p5...",
+  "amount_sats": 10000,
+  "credits": 115,
+  "tier": "pro",
+  "expires_at": "2026-09-30T09:27:00Z",
+  "status": "pending"
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>Another method in the path (<code>unsupported_method</code>), an unknown currency (<code>unsupported_currency</code>) or tier, a missing amount, or an amount below the minimum (<code>amount_too_small</code>), above 1,000,000 sats (<code>amount_too_large</code>) or refused by the Lightning wallet (<code>amount_out_of_range</code>).</td></tr>
+                        <tr><td><code>429</code></td><td>More than 60 invoices for this nym, or 120 from this address, in an hour (<code>rate_limit_exceeded</code>, with <code>Retry-After</code>).</td></tr>
+                        <tr><td><code>502</code></td><td>No invoice could be made right now (<code>invoice_unavailable</code>, with <code>Retry-After</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/topup/create/btc-lightning \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 10000, "currency": "SATS", "tier": "pro"}'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import requests
+
+res = requests.post(
+    "https://nymbot.ai/api/v1/topup/create/btc-lightning",
+    headers={"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]},
+    json={"amount": 10000, "currency": "SATS", "tier": "pro"},
+)
+invoice = res.json()
+print(invoice["payment_request"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/topup/create/btc-lightning", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer " + process.env.NYMBOT_API_KEY,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ amount: 10000, currency: "SATS", tier: "pro" }),
+});
+const invoice = await res.json();
+console.log(invoice.payment_request);</code></pre>
+
+            <h2 id="topup-status">Checking a top-up</h2>
+            <p>Asks whether the invoice has been paid and, once it has, adds the credit. Checking is what
+                credits it, so after paying, check until the status is <code>credited</code>. Checking again
+                afterwards is safe: the credit lands once, however many times you ask.</p>
+            <p><code>GET https://nymbot.ai/api/v1/topup/status/{invoice_id}</code> &mdash; needs a key from the nym that made the invoice.</p>
+            <p><code>status</code> is <code>pending</code> (not paid yet), <code>paid</code> (paid, but not yet
+                credited; check again), <code>credited</code> (on your balance) or <code>expired</code> (not paid
+                in time). The balance fields are for the tier the invoice tops up.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "invoice_id": "b7d41e0c95a2f38e6c1d0e9a4b7f2c61d3e8a05f9b2c4d7e1a6f3b8c0d5e2a9f4",
+  "status": "credited",
+  "amount_sats": 10000,
+  "credits": 115,
+  "tier": "pro",
+  "expires_at": null,
+  "balance_credits": 523.33,
+  "balance_sats": 52333
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>The id is not the 64-character id from the create call.</td></tr>
+                        <tr><td><code>404</code></td><td>No invoice by that id for your nym (<code>invoice_not_found</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/topup/status/$INVOICE_ID \
+  -H "Authorization: Bearer $NYMBOT_API_KEY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os, time
+import requests
+
+headers = {"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]}
+url = "https://nymbot.ai/api/v1/topup/status/" + invoice["invoice_id"]
+
+while True:
+    status = requests.get(url, headers=headers).json()["status"]
+    if status in ("credited", "expired"):
+        break
+    time.sleep(3)
+print(status)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const headers = { "Authorization": "Bearer " + process.env.NYMBOT_API_KEY };
+const url = "https://nymbot.ai/api/v1/topup/status/" + invoice.invoice_id;
+
+let status;
+do {
+  await new Promise((r) =&gt; setTimeout(r, 3000));
+  status = (await (await fetch(url, { headers })).json()).status;
+} while (status !== "credited" &amp;&amp; status !== "expired");
+console.log(status);</code></pre>
+
+            <h2 id="history">Query history</h2>
+            <p>One row per request: what it was, which model, how many tokens and what it cost. No prompts
+                or answers are kept, so none are returned. Rows are kept for 90 days, newest first. A key that
+                has reached its cap can still read its history.</p>
+            <p><code>GET https://nymbot.ai/api/v1/queries/history</code> &mdash; needs an API key, which sees its own requests, or a <a href="#nip98">signed request</a> from your nym, which sees every key's.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>page</code></td><td>integer (query)</td><td>No</td><td>Default 1.</td></tr>
+                        <tr><td><code>page_count</code></td><td>integer (query)</td><td>No</td><td>Rows per page. Default 20, at most 100.</td></tr>
+                        <tr><td><code>start_date</code><br><code>end_date</code></td><td>string (query)</td><td>No</td><td>ISO 8601 dates or times.</td></tr>
+                        <tr><td><code>model</code></td><td>string (query)</td><td>No</td><td>Only this model.</td></tr>
+                        <tr><td><code>type</code></td><td>string (query)</td><td>No</td><td><code>chat</code>, <code>responses</code>, <code>messages</code>, <code>image</code>, <code>video</code>, <code>speech</code>, <code>transcription</code> or <code>embedding</code>.</td></tr>
+                        <tr><td><code>all_keys</code></td><td>boolean (query)</td><td>No</td><td>With a key: <code>true</code> includes every key of the same nym. Default <code>false</code>.</td></tr>
+                        <tr><td><code>key_id</code></td><td>string (query)</td><td>No</td><td>With a signed request, or with <code>all_keys=true</code>: only this key.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "data": [
+    {
+      "id": "q_71c4e9a0",
+      "timestamp": "2026-09-30T08:12:00Z",
+      "model": "anthropic/claude-sonnet-5",
+      "type": "chat",
+      "input_tokens": 1240,
+      "output_tokens": 380,
+      "cached_tokens": 0,
+      "cost_sats": 16.2,
+      "cost_usd": 0.01895,
+      "balance": "pro",
+      "key_id": "4f0c9a1be27d3856",
+      "web_search": false,
+      "status": "ok"
+    }
+  ],
+  "pagination": { "page": 1, "page_count": 20, "total": 311, "total_pages": 16 }
+}</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl "https://nymbot.ai/api/v1/queries/history?page_count=50&amp;type=chat" \
+  -H "Authorization: Bearer $NYMBOT_API_KEY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import requests
+
+res = requests.get(
+    "https://nymbot.ai/api/v1/queries/history",
+    headers={"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]},
+    params={"page_count": 50, "type": "chat"},
+)
+for row in res.json()["data"]:
+    print(row["timestamp"], row["model"], row["cost_sats"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/queries/history?page_count=50&amp;type=chat", {
+  headers: { "Authorization": "Bearer " + process.env.NYMBOT_API_KEY },
+});
+for (const row of (await res.json()).data) console.log(row.timestamp, row.model, row.cost_sats);</code></pre>
+
+            <h2 id="nip98">Signing account requests</h2>
+            <p>Making, changing and revoking keys, the account summary and automatic top-ups do not take an
+                API key. They take a signature from your nym, so a leaked key can spend up to its cap but can
+                never make another key or raise its own cap.</p>
+            <p>The app does this for you: everything in its <strong>API</strong> sheet uses these endpoints.
+                You only need this section to manage keys from your own code.</p>
+            <p>The signature is a Nostr event of kind 27235 (NIP-98), sent base64-encoded in the
+                <code>Authorization</code> header with the word <code>Nostr</code> in front:</p>
+            <p class="docs-note-label">The event</p>
+<pre><code>{
+  "kind": 27235,
+  "created_at": 1790726400,
+  "tags": [
+    ["u", "https://nymbot.ai/api/v1/keys"],
+    ["method", "POST"],
+    ["payload", "3f1a0d7c8e2b...sha256 of the exact request body in hex"]
+  ],
+  "content": "",
+  "pubkey": "your public key in hex",
+  "id": "...",
+  "sig": "..."
+}</code></pre>
+            <ul>
+                <li><code>u</code> is the full URL of the request, query string included, exactly as sent.</li>
+                <li><code>method</code> is the HTTP method.</li>
+                <li><code>payload</code> is the SHA-256 of the raw request body, in hex. It is required on
+                    <code>POST</code> and <code>PATCH</code>, and the body you send has to be byte for byte the
+                    one you hashed.</li>
+                <li><code>created_at</code> has to be within 60 seconds of the server's clock.</li>
+                <li>An event for a <code>POST</code>, <code>PATCH</code> or <code>DELETE</code> works once; sign
+                    a new one for every change. A <code>GET</code> may be repeated with the same event while it
+                    is within its 60 seconds.</li>
+            </ul>
+            <p>A missing event returns <code>401</code> <code>missing_nostr_auth</code>; one that is badly
+                formed, badly signed, too old, or for a different URL, method or body returns
+                <code>invalid_nostr_auth</code>, with the reason in the message; a reused one returns
+                <code>nostr_auth_replayed</code>. An API key sent to these endpoints is refused.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Your secret key</span>
+                <p>Signing needs your nym's secret key (the <code>nsec</code>), which controls
+                    everything: your identity, your history and your balance. Only put it in a script on a
+                    machine you trust, read it from the environment rather than writing it into the file, and
+                    prefer the app when you can.</p>
+            </div>
+            <p>These helpers build the header. The later examples on this page use them. They read the secret
+                key in hex from <code>NOSTR_SECRET_HEX</code>; the cURL one uses the
+                <a href="https://github.com/fiatjaf/nak">nak</a> command-line tool, which takes an nsec or hex
+                key, and <code>sha256sum</code> (on macOS, <code>shasum -a 256</code>).</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>nostr_auth() {
+  method="$1"; url="$2"; body="$3"
+  if [ -n "$body" ]; then
+    hash=$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)
+    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method" -t "payload=$hash")
+  else
+    event=$(nak event --sec "$NOSTR_SECRET_HEX" -k 27235 -t "u=$url" -t "method=$method")
+  fi
+  printf 'Nostr %s' "$(printf '%s' "$event" | base64 | tr -d '\n')"
+}</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code># pip install coincurve requests
+import base64, hashlib, json, os, time
+from coincurve import PrivateKey, PublicKeyXOnly
+
+SECRET = bytes.fromhex(os.environ["NOSTR_SECRET_HEX"])
+
+def nostr_auth(method, url, body=b""):
+    pubkey = PublicKeyXOnly.from_secret(SECRET).format().hex()
+    tags = [["u", url], ["method", method]]
+    if body:
+        tags.append(["payload", hashlib.sha256(body).hexdigest()])
+    created_at = int(time.time())
+    serialized = json.dumps([0, pubkey, created_at, 27235, tags, ""], separators=(",", ":"), ensure_ascii=False)
+    event_id = hashlib.sha256(serialized.encode()).digest()
+    event = {
+        "id": event_id.hex(),
+        "pubkey": pubkey,
+        "created_at": created_at,
+        "kind": 27235,
+        "tags": tags,
+        "content": "",
+        "sig": PrivateKey(SECRET).sign_schnorr(event_id).hex(),
+    }
+    return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>// npm install nostr-tools
+import { createHash } from "node:crypto";
+import { finalizeEvent } from "nostr-tools/pure";
+
+const secret = Buffer.from(process.env.NOSTR_SECRET_HEX, "hex");
+
+export function nostrAuth(method, url, body = "") {
+  const tags = [["u", url], ["method", method]];
+  if (body) tags.push(["payload", createHash("sha256").update(body).digest("hex")]);
+  const event = finalizeEvent(
+    { kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: "" },
+    secret,
+  );
+  return "Nostr " + Buffer.from(JSON.stringify(event)).toString("base64");
+}</code></pre>
+
+            <h2 id="account">The account summary</h2>
+            <p>What the app's API sheet shows at the top: your public key, both balances, how many keys are
+                active (not revoked or expired), and the <a href="#nwc">automatic top-up</a> settings, or
+                <code>null</code> when the server does not offer them.</p>
+            <p><code>GET https://nymbot.ai/api/v1/account</code> &mdash; needs a <a href="#nip98">signed request</a>.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "data": {
+    "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+    "balances": {
+      "standard": { "credits": 120.4, "sats": 1204 },
+      "pro": { "credits": 408.33, "sats": 40833 }
+    },
+    "keys_active": 3,
+    "nwc_auto_topup": {
+      "connected": true, "threshold_sats": 5000, "topup_sats": 20000, "tier": "pro",
+      "last_topup_at": null, "last_topup_sats": null, "last_error": null
+    }
+  }
+}</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/account
+curl "$URL" -H "Authorization: $(nostr_auth GET "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/account"
+print(requests.get(url, headers={"Authorization": nostr_auth("GET", url)}).json())</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/account";
+const res = await fetch(url, { headers: { "Authorization": nostrAuth("GET", url) } });
+console.log(await res.json());</code></pre>
+
+            <h2 id="key-endpoints">Managing keys</h2>
+            <p>The endpoints behind the app's key list. All of them need a <a href="#nip98">signed
+                request</a>. Every key is returned in this form, with times in ISO 8601 and amounts in sats:</p>
+            <p class="docs-note-label">Key object</p>
+<pre><code>{
+  "id": "4f0c9a1be27d3856",
+  "name": "laptop scripts",
+  "hint": "sk-nymbot-Qm7x…c2Lw",
+  "limit_sats": 20000,
+  "reset_period": "monthly",
+  "reset_at": "2026-10-01T00:00:00Z",
+  "expire_at": null,
+  "period_used_sats": 3412,
+  "total_used_sats": 18230,
+  "created_at": "2026-08-14T09:21:07Z",
+  "updated_at": "2026-09-02T17:40:55Z",
+  "last_used_at": "2026-09-30T08:12:00Z",
+  "revoked_at": null
+}</code></pre>
+            <p><code>hint</code> is enough to recognize a key but not to use it. The key itself is returned
+                only once, when it is made.</p>
+
+            <h3 id="list-keys">Listing keys</h3>
+            <p><code>GET https://nymbot.ai/api/v1/keys</code> &mdash; signed.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>include_revoked</code></td><td>boolean (query)</td><td>No</td><td>Include revoked keys. Default <code>false</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response</p>
+<pre><code>{ "data": [ { "id": "4f0c9a1be27d3856", "name": "laptop scripts", "hint": "sk-nymbot-Qm7x…c2Lw", "...": "..." } ] }</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/keys
+curl "$URL" -H "Authorization: $(nostr_auth GET "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/keys"
+for key in requests.get(url, headers={"Authorization": nostr_auth("GET", url)}).json()["data"]:
+    print(key["id"], key["name"], key["period_used_sats"], key["limit_sats"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/keys";
+const { data } = await (await fetch(url, { headers: { "Authorization": nostrAuth("GET", url) } })).json();
+for (const key of data) console.log(key.id, key.name, key.period_used_sats, key.limit_sats);</code></pre>
+
+            <h3 id="create-key">Making a key</h3>
+            <p><code>POST https://nymbot.ai/api/v1/keys</code> &mdash; signed. Returns <code>201</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>name</code></td><td>string</td><td>Yes</td><td>1 to 40 characters, different from your other active keys (ignoring case).</td></tr>
+                        <tr><td><code>limit_sats</code></td><td>integer</td><td>No</td><td>The spending cap in sats, at least 1. Leave it out for no cap.</td></tr>
+                        <tr><td><code>reset_period</code></td><td>string</td><td>No</td><td><code>daily</code>, <code>weekly</code> or <code>monthly</code>. Needs <code>limit_sats</code>. Leave it out for a cap that never resets.</td></tr>
+                        <tr><td><code>expire_at</code></td><td>string or integer</td><td>No</td><td>When the key stops working: an ISO 8601 time, or milliseconds since 1970.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response (201)</p>
+<pre><code>{
+  "data": {
+    "id": "4f0c9a1be27d3856",
+    "name": "laptop scripts",
+    "hint": "sk-nymbot-Qm7x…c2Lw",
+    "limit_sats": 20000,
+    "reset_period": "monthly",
+    "key": "sk-nymbot-Qm7x...c2Lw",
+    "...": "the rest of the key object"
+  }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>A missing or too long name; a name already in use (<code>duplicate_name</code>); a cap that is not a whole number of at least 1; a reset period without a cap; an expiry in the past; an unknown field (<code>unknown_parameter</code>); or 25 active keys already (<code>too_many_keys</code>).</td></tr>
+                        <tr><td><code>429</code></td><td>More than 60 keys made by this nym, or 120 from this address, in an hour (<code>rate_limit_exceeded</code>, with <code>Retry-After</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/keys
+BODY='{"name":"laptop scripts","limit_sats":20000,"reset_period":"monthly"}'
+curl "$URL" \
+  -H "Authorization: $(nostr_auth POST "$URL" "$BODY")" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import json
+import requests
+
+url = "https://nymbot.ai/api/v1/keys"
+body = json.dumps({"name": "laptop scripts", "limit_sats": 20000, "reset_period": "monthly"}).encode()
+res = requests.post(
+    url,
+    data=body,
+    headers={"Authorization": nostr_auth("POST", url, body), "Content-Type": "application/json"},
+)
+print(res.json()["data"]["key"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/keys";
+const body = JSON.stringify({ name: "laptop scripts", limit_sats: 20000, reset_period: "monthly" });
+const res = await fetch(url, {
+  method: "POST",
+  headers: { "Authorization": nostrAuth("POST", url, body), "Content-Type": "application/json" },
+  body,
+});
+console.log((await res.json()).data.key);</code></pre>
+
+            <h3 id="get-key">Reading one key</h3>
+            <p><code>GET https://nymbot.ai/api/v1/keys/{id}</code> &mdash; signed.</p>
+            <p>Returns <code>{"data": {&hellip;}}</code> with the key object, or <code>404</code>
+                <code>key_not_found</code> if no key of yours has that id.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856
+curl "$URL" -H "Authorization: $(nostr_auth GET "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856"
+print(requests.get(url, headers={"Authorization": nostr_auth("GET", url)}).json()["data"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856";
+console.log((await (await fetch(url, { headers: { "Authorization": nostrAuth("GET", url) } })).json()).data);</code></pre>
+
+            <h3 id="update-key">Changing a key</h3>
+            <p><code>PATCH https://nymbot.ai/api/v1/keys/{id}</code> &mdash; signed.</p>
+            <p>Send any of <code>name</code>, <code>limit_sats</code>, <code>reset_period</code> and
+                <code>expire_at</code>, with the same rules as when making a key. <code>null</code> clears a
+                field: no cap, no reset, no expiry. Changing the reset period starts a new period at zero. A
+                revoked key cannot be changed (<code>400</code> <code>key_revoked</code>). Returns
+                <code>{"data": {&hellip;}}</code> with the updated key object.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856
+BODY='{"limit_sats":50000,"expire_at":null}'
+curl -X PATCH "$URL" \
+  -H "Authorization: $(nostr_auth PATCH "$URL" "$BODY")" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import json
+import requests
+
+url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856"
+body = json.dumps({"limit_sats": 50000, "expire_at": None}).encode()
+res = requests.patch(
+    url,
+    data=body,
+    headers={"Authorization": nostr_auth("PATCH", url, body), "Content-Type": "application/json"},
+)
+print(res.json()["data"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856";
+const body = JSON.stringify({ limit_sats: 50000, expire_at: null });
+const res = await fetch(url, {
+  method: "PATCH",
+  headers: { "Authorization": nostrAuth("PATCH", url, body), "Content-Type": "application/json" },
+  body,
+});
+console.log((await res.json()).data);</code></pre>
+
+            <h3 id="revoke-key">Revoking a key</h3>
+            <p><code>DELETE https://nymbot.ai/api/v1/keys/{id}</code> &mdash; signed.</p>
+            <p>Stops the key at once, for good. It stays in the list with <code>revoked_at</code> set, and can
+                be seen with <code>include_revoked=true</code>. Revoking a key that is already revoked answers
+                the same way. Only the newest 50 revoked keys are kept; older ones are deleted when another key
+                is revoked.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{ "data": { "id": "4f0c9a1be27d3856", "revoked": true } }</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856
+curl -X DELETE "$URL" -H "Authorization: $(nostr_auth DELETE "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856"
+print(requests.delete(url, headers={"Authorization": nostr_auth("DELETE", url)}).json())</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/keys/4f0c9a1be27d3856";
+const res = await fetch(url, { method: "DELETE", headers: { "Authorization": nostrAuth("DELETE", url) } });
+console.log(await res.json());</code></pre>
+
+            <h2 id="nwc">NWC auto-top-up</h2>
+            <p>Connect a Lightning wallet with Nostr Wallet Connect and Nymbot tops up a balance by itself when
+                API spending runs it low. The app's API sheet has the same settings; these are the endpoints
+                behind it. All of them need a <a href="#nip98">signed request</a>.</p>
+            <p>How it works: after an API request is charged to the balance you chose to watch, if that
+                balance has fallen below your threshold, Nymbot makes an invoice for your top-up amount, asks
+                your wallet to pay it, and adds the credit. It tops up at most once every 5 minutes for each
+                nym and balance, so a burst of requests cannot drain the wallet. Spending in the apps does not
+                trigger it. The time and size of the last top-up, and the last error, are in the settings; if a
+                payment went through after an error, checking its invoice with
+                <a href="#topup-status">the top-up status</a> credits it.</p>
+            <div class="docs-note is-warning">
+                <span class="docs-note-label">Before you connect a wallet</span>
+                <p>A connection string lets whoever holds it ask your wallet to pay. Nymbot
+                    stores it encrypted and only ever uses it to pay its own top-up invoices, but make a
+                    connection just for this, with a spending budget in your wallet, so the most it could ever
+                    pay is a number you chose. The wallet has to support <code>pay_invoice</code>.</p>
+            </div>
+
+            <h3 id="nwc-connect">Connecting a wallet</h3>
+            <p><code>POST https://nymbot.ai/api/v1/nwc-auto-topup/connect</code> &mdash; signed.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>nwc_url</code></td><td>string</td><td>Yes</td><td>The connection string, starting <code>nostr+walletconnect://</code>. Nymbot asks the wallet for <code>get_info</code> before saving it, and stores it encrypted.</td></tr>
+                        <tr><td><code>threshold_sats</code></td><td>integer</td><td>Yes</td><td>Top up when the balance falls below this many sats. At least 1,000.</td></tr>
+                        <tr><td><code>topup_sats</code></td><td>integer</td><td>Yes</td><td>How much to add each time. 1,000 to 1,000,000 sats.</td></tr>
+                        <tr><td><code>tier</code></td><td>string</td><td>No</td><td><code>pro</code> (the default) or <code>standard</code>: the balance to watch and top up.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "data": {
+    "connected": true,
+    "threshold_sats": 5000,
+    "topup_sats": 20000,
+    "tier": "pro",
+    "last_topup_at": null,
+    "last_topup_sats": null,
+    "last_error": null
+  }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>Not a connection string (<code>invalid_nwc_url</code>); the wallet did not answer over its relay (<code>nwc_unreachable</code>) or refused the check (<code>nwc_rejected</code>); the connection cannot pay invoices (<code>nwc_missing_permission</code>); or an amount outside the limits.</td></tr>
+                        <tr><td><code>501</code></td><td>Automatic top-ups are not turned on for this server (<code>nwc_unavailable</code>). The same applies to the other two endpoints.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/nwc-auto-topup/connect
+BODY='{"nwc_url":"nostr+walletconnect://...","threshold_sats":5000,"topup_sats":20000,"tier":"pro"}'
+curl "$URL" \
+  -H "Authorization: $(nostr_auth POST "$URL" "$BODY")" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import json, os
+import requests
+
+url = "https://nymbot.ai/api/v1/nwc-auto-topup/connect"
+body = json.dumps({
+    "nwc_url": os.environ["NWC_URL"],
+    "threshold_sats": 5000,
+    "topup_sats": 20000,
+    "tier": "pro",
+}).encode()
+res = requests.post(
+    url,
+    data=body,
+    headers={"Authorization": nostr_auth("POST", url, body), "Content-Type": "application/json"},
+)
+print(res.json())</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/nwc-auto-topup/connect";
+const body = JSON.stringify({
+  nwc_url: process.env.NWC_URL,
+  threshold_sats: 5000,
+  topup_sats: 20000,
+  tier: "pro",
+});
+const res = await fetch(url, {
+  method: "POST",
+  headers: { "Authorization": nostrAuth("POST", url, body), "Content-Type": "application/json" },
+  body,
+});
+console.log(await res.json());</code></pre>
+
+            <h3 id="nwc-settings">Reading the settings</h3>
+            <p><code>GET https://nymbot.ai/api/v1/nwc-auto-topup</code> &mdash; signed.</p>
+            <p>Returns the same object as connecting, with <code>connected: false</code> and the other fields
+                <code>null</code> when no wallet is connected. The connection string itself is never
+                returned.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/nwc-auto-topup
+curl "$URL" -H "Authorization: $(nostr_auth GET "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/nwc-auto-topup"
+print(requests.get(url, headers={"Authorization": nostr_auth("GET", url)}).json())</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/nwc-auto-topup";
+console.log(await (await fetch(url, { headers: { "Authorization": nostrAuth("GET", url) } })).json());</code></pre>
+
+            <h3 id="nwc-disconnect">Disconnecting</h3>
+            <p><code>DELETE https://nymbot.ai/api/v1/nwc-auto-topup/connection</code> &mdash; signed.</p>
+            <p>Deletes the stored connection string. No more top-ups are made. To be sure, you can also revoke
+                the connection in your wallet.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{ "data": { "connected": false, "threshold_sats": null, "topup_sats": null, "tier": null, "last_topup_at": null, "last_topup_sats": null, "last_error": null } }</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/nwc-auto-topup/connection
+curl -X DELETE "$URL" -H "Authorization: $(nostr_auth DELETE "$URL")"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+url = "https://nymbot.ai/api/v1/nwc-auto-topup/connection"
+print(requests.delete(url, headers={"Authorization": nostr_auth("DELETE", url)}).json())</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/nwc-auto-topup/connection";
+const res = await fetch(url, { method: "DELETE", headers: { "Authorization": nostrAuth("DELETE", url) } });
+console.log(await res.json());</code></pre>
+            <h2 id="l402">Paying per request without a key</h2>
+            <p>The fixed-price endpoints can be paid for one request at a time over Lightning, with no key,
+                no account and no balance: <code>POST /images/generations</code>, <code>POST /images/edits</code>,
+                <code>POST /videos</code>, <code>POST /audio/speech</code>, <code>POST /audio/transcriptions</code>,
+                <code>POST /audio/translations</code> and <code>POST /embeddings</code>. Chat, Responses and
+                Messages always need a key. A request that carries a key is billed to the balance as usual; the
+                payment flow only starts when no key is sent.</p>
+            <p>Nymbot speaks two versions of the same idea, from one backend: Lightning Labs'
+                <strong>L402</strong> (also accepted under its old name, <code>LSAT</code>) and the IETF draft
+                <strong>Payment</strong> HTTP authentication scheme with the <code>lightning</code> method and
+                <code>charge</code> intent. Use whichever your client understands.</p>
+
+            <h3 id="l402-challenge">The challenge</h3>
+            <p>Send the request with no <code>Authorization</code> header. If it is valid, nothing runs, and
+                you get <code>402 Payment Required</code> with an invoice for exactly what that request costs:
+                the same price a key would pay, converted at 10 sats a standard credit or 100 sats a Pro credit
+                and rounded up to a whole sat (at least 1 sat, and at least the 0.05 credit minimum). The
+                response carries three <code>WWW-Authenticate</code> challenges for the same invoice:</p>
+<pre><code>HTTP/1.1 402 Payment Required
+Content-Type: application/problem+json; charset=utf-8
+Cache-Control: no-store
+WWW-Authenticate: L402 macaroon="AgJC...", invoice="lnbc2370n1..."
+WWW-Authenticate: LSAT macaroon="AgJC...", invoice="lnbc2370n1..."
+WWW-Authenticate: Payment id="kM9x...", realm="nymbot", method="lightning", intent="charge",
+    request="eyJhbW91bnQiOiIyMzciLC...", description="Nymbot API POST /images/generations (237 sats)",
+    digest="sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:", expires="2026-09-30T12:15:00.000Z",
+    opaque="eyJlbmRwb2ludCI6IlBPU1QgL2ltYWdlcy9nZW5lcmF0aW9ucyJ9"
+
+{
+  "type": "https://paymentauth.org/problems/payment-required",
+  "title": "Payment Required",
+  "status": 402,
+  "detail": "This request costs 237 sats. Pay the Lightning invoice, then send the identical request again ...",
+  "challengeId": "kM9x...",
+  "amount_sats": 237,
+  "invoice": "lnbc2370n1...",
+  "payment_hash": "9db1370f...",
+  "expires_at": "2026-09-30T12:15:00.000Z",
+  "error": { "message": "This request costs 237 sats. ...", "type": "payment_required", "code": "payment_required", "param": null }
+}</code></pre>
+            <p>The Payment <code>request</code> parameter is base64url JSON:
+                <code>{"amount":"237","currency":"sat","methodDetails":{"invoice":"lnbc...","network":"mainnet","paymentHash":"..."}}</code>.</p>
+            <p>A challenge is bound to the endpoint, to the <code>Content-Type</code> (its media type and, for
+                multipart, its boundary) and to the SHA-256 of the exact body bytes you sent, and lasts 15
+                minutes. After paying, send the <strong>identical</strong> request again: the same
+                <code>Content-Type</code> and the same JSON bytes, or for the multipart endpoints
+                (<code>/images/edits</code>, <code>/audio/transcriptions</code>, <code>/audio/translations</code>)
+                the same multipart body with the same boundary. Most HTTP libraries pick a new boundary each
+                time they encode a form, so encode it once and send those bytes twice.</p>
+            <p>Each address can ask for 30 challenges a minute (an IPv6 address counts as its whole /64).
+                Requests whose address is not known share a stricter 10 a minute, and there is an overall cap
+                across all addresses. Beyond that the answer is <code>429</code> with <code>Retry-After</code>,
+                sent before the body is read. Paid endpoints called without a key or credential also count
+                toward the general limit of 120 unauthenticated requests a minute per address.</p>
+            <p>Embeddings are priced from an estimate of the tokens in the input, with a 1.5&times; margin,
+                since the real count is only known afterwards. You pay for the tokens actually used, and the
+                unused part of the payment comes back as a <a href="#l402-refunds">refund token</a>.</p>
+
+            <h3 id="l402-pay">Sending the payment</h3>
+            <p>Pay the invoice with any Lightning wallet. The wallet gives you the preimage, 64 hex characters.
+                Then send the same request with one of these:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Scheme</th><th>Header</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>L402</td><td><code>Authorization: L402 &lt;macaroon&gt;:&lt;preimage&gt;</code> (<code>LSAT</code> works too)</td></tr>
+                        <tr><td>Payment</td><td><code>Authorization: Payment &lt;base64url JSON&gt;</code>, where the JSON is <code>{"challenge": {every parameter of the challenge, as sent}, "payload": {"preimage": "&lt;hex&gt;"}}</code></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>A paid request answers exactly like one made with a key, except that the <code>nymbot</code>
+                object has no balance fields: <code>{"payment": "l402", "tier": "pro", "paid_sats": 237,
+                "charged_sats": 237}</code>, and there is no <code>X-Nymbot-Balance-Sats</code> header. A
+                request paid with the Payment scheme also gets a <code>Payment-Receipt</code> header (base64url
+                JSON with the challenge id, the payment hash as <code>reference</code>, <code>status</code> and
+                <code>timestamp</code>). Paid requests are not tied to any nym, so they do not show up in the
+                query history.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>402</code> <code>payment_already_used</code></td><td>Every payment pays for one request. The response is a fresh challenge for this request, so a client that caches its last credential (as <code>lnget</code> does) simply pays again.</td></tr>
+                        <tr><td><code>402</code> <code>payment_mismatch</code></td><td>The credential was issued for another endpoint, <code>Content-Type</code> or body, or pays less than this request now costs. A fresh challenge for this request comes with it; if the payment was too small, what you paid comes back as a <a href="#l402-refunds">refund token</a> (<code>refund_token</code> and <code>refund_sats</code> in the body).</td></tr>
+                        <tr><td><code>402</code> <code>payment_expired</code></td><td>More than 15 minutes passed since the challenge. A fresh challenge comes with it.</td></tr>
+                        <tr><td><code>401</code> <code>invalid_preimage</code></td><td>The preimage does not hash to the invoice's payment hash. The payment is not used up.</td></tr>
+                        <tr><td><code>401</code> <code>invalid_payment_credential</code></td><td>The credential is malformed, or was changed after Nymbot issued it. A macaroon with a caveat Nymbot does not know, or with conflicting caveats, is refused.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>BODY='{"model":"nano-banana","prompt":"a lighthouse at dusk","response_format":"b64_json"}'
+URL=https://nymbot.ai/api/v1/images/generations
+
+# 1. Get the challenge
+CH=$(curl -s -D - -o /dev/null "$URL" -H "Content-Type: application/json" -d "$BODY" | grep -i '^www-authenticate: L402')
+MAC=$(echo "$CH" | sed -E 's/.*macaroon="([^"]+)".*/\1/')
+INVOICE=$(echo "$CH" | sed -E 's/.*invoice="([^"]+)".*/\1/')
+
+# 2. Pay $INVOICE with your wallet and copy the preimage
+PREIMAGE=...
+
+# 3. Send the identical request with the credential
+curl "$URL" -H "Content-Type: application/json" -H "Authorization: L402 $MAC:$PREIMAGE" -d "$BODY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>lnget</p>
+<pre><code># lnget (Lightning Labs) pays L402 challenges from your own lnd node and retries for you
+lnget -X POST -H "Content-Type: application/json" \
+  -d '{"model":"nano-banana","prompt":"a lighthouse at dusk","response_format":"b64_json"}' \
+  https://nymbot.ai/api/v1/images/generations</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import base64, json, re
+import requests
+
+url = "https://nymbot.ai/api/v1/images/generations"
+body = json.dumps({"model": "nano-banana", "prompt": "a lighthouse at dusk", "response_format": "b64_json"}).encode()
+headers = {"Content-Type": "application/json"}
+
+challenge = requests.post(url, data=body, headers=headers)
+assert challenge.status_code == 402
+info = challenge.json()
+print("Pay", info["amount_sats"], "sats:", info["invoice"])
+
+preimage = pay_with_your_wallet(info["invoice"])  # 64 hex characters
+
+# L402
+mac = re.search(r'L402 macaroon="([^"]+)"', challenge.headers["WWW-Authenticate"]).group(1)
+res = requests.post(url, data=body, headers={**headers, "Authorization": f"L402 {mac}:{preimage}"})
+print(res.json()["nymbot"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const url = "https://nymbot.ai/api/v1/images/generations";
+const body = JSON.stringify({ model: "nano-banana", prompt: "a lighthouse at dusk", response_format: "b64_json" });
+const headers = { "Content-Type": "application/json" };
+
+const challenge = await fetch(url, { method: "POST", headers, body });
+const www = challenge.headers.get("www-authenticate");
+
+// The Payment scheme: echo every challenge parameter back with the preimage
+const start = www.indexOf("Payment ");
+const params = Object.fromEntries([...www.slice(start + 8).matchAll(/(\w+)="((?:[^"\\]|\\.)*)"/g)].map((m) => [m[1], m[2]]));
+const { invoice } = JSON.parse(Buffer.from(params.request, "base64url").toString());
+const preimage = await payWithYourWallet(invoice);
+
+const credential = Buffer.from(JSON.stringify({ challenge: params, payload: { preimage } })).toString("base64url");
+const res = await fetch(url, { method: "POST", headers: { ...headers, Authorization: `Payment ${credential}` }, body });
+console.log((await res.json()).nymbot, res.headers.get("payment-receipt"));</code></pre>
+            <p>Clients built on <code>mppx</code> with a Lightning method handle the Payment challenge
+                themselves; point them at the endpoint and let them pay.</p>
+
+            <h3 id="l402-video">Videos</h3>
+            <p>A paid <code>POST /videos</code> answers <code>202</code> like a keyed one, plus a
+                <code>status_url</code>: <code>GET</code> it without any key to follow the job. It is signed
+                and works for 24 hours, as long as the job is kept.</p>
+<pre><code>{
+  "id": "vid_...",
+  "status": "in_progress",
+  "status_url": "https://nymbot.ai/api/v1/videos/vid_...?exp=1790000000&amp;sig=...",
+  "nymbot": { "payment": "l402", "tier": "pro", "paid_sats": 4800, "charged_sats": 4800 }
+}</code></pre>
+
+            <h3 id="l402-refunds">Refunds</h3>
+            <p>If a paid request fails and the provider billed Nymbot for the attempt, the payment is kept and
+                the error says so, with <code>charged_sats</code>, exactly as for a keyed request. If it fails
+                without being billed, the error carries a <strong>refund token</strong> worth what you paid:</p>
+<pre><code>{
+  "error": {
+    "message": "The image generator failed. Nothing was charged. Please try again. The 237 sats you paid are on refund token REFUND-...",
+    "type": "api_error",
+    "code": "upstream_error",
+    "refund_token": "REFUND-0C15DBED145D59131BA70298A413ADEB3D9B9AB082C476EA70A5BD38FCA5DE6D",
+    "refund_sats": 237,
+    "refund_expires_at": "2026-10-30T12:00:00.000Z"
+  }
+}</code></pre>
+            <p>Unused parts come back the same way: if you asked for two pictures and one failed unbilled,
+                the success response's <code>nymbot</code> object carries a refund token for the missing one;
+                a transcription whose length could not be read up front is priced for the longest the file
+                could be (never more than 30 minutes), and the difference to the real length comes back as a
+                refund token; if it turns out to be longer than 30 minutes, it is refused with <code>413</code>
+                and the whole payment comes back. Embeddings return what the estimate held back. A failed video shows its refund token in the job's status.</p>
+            <p>A refund token is a random 256-bit code. Nymbot stores only its hash, and it expires after 30
+                days. It holds a sat balance, and you can:</p>
+            <ul>
+                <li><strong>Pay with it.</strong> Send <code>Authorization: Bearer REFUND-&hellip;</code> on any
+                    of the endpoints above (an OpenAI SDK takes it as its API key). The price comes off the
+                    token and what is left stays on it (<code>refund_token_sats</code> in the
+                    <code>nymbot</code> object). A token worth less than the request answers <code>402</code>
+                    <code>refund_insufficient</code>; an unbilled failure puts the sats back on the same token.</li>
+                <li><strong>Check it.</strong> <code>GET /api/v1/l402/refunds</code> with the same header
+                    returns <code>{"sats": 237, "status": "open", "expires_at": "..."}</code>.</li>
+                <li><strong>Move it to a nym.</strong> Paste it into <strong>Redeem a gift</strong> in the
+                    Nymbot app, or call <code>POST /api/v1/l402/refunds/redeem</code> with a
+                    <a href="#nip98">signed request</a> and <code>{"refund_token": "REFUND-...", "balance":
+                    "standard"}</code> (or <code>"pro"</code>). Whole credits go to the balance (10 sats each on
+                    standard, 100 on Pro); sats that do not make a whole credit stay on the token for API
+                    requests.</li>
+            </ul>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>URL=https://nymbot.ai/api/v1/l402/refunds/redeem
+BODY='{"refund_token":"REFUND-...","balance":"standard"}'
+curl "$URL" \
+  -H "Authorization: $(nostr_auth POST "$URL" "$BODY")" \
+  -H "Content-Type: application/json" \
+  -d "$BODY"</code></pre>
+            <p class="docs-note-label">Response</p>
+<pre><code>{ "data": { "credited": 23, "tier": "standard", "balance_credits": 123, "remaining_sats": 7 } }</code></pre>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

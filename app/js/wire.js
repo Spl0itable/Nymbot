@@ -84,11 +84,12 @@
         },
 
         /// `kemPk` present means hybrid; `sender` overrides the identity with a local keypair.
-        async wrap(rumor, recipientPubkey, kemPk, sender) {
+        async wrap(rumor, recipientPubkey, kemPk, sender, outerTags) {
             const T = NT();
             const NCx = NC();
             const sk = sender ? sender.sk : Identity._sk;
-            if (sk) {
+            const extra = Array.isArray(outerTags) ? outerTags.filter(x => Array.isArray(x) && x.length >= 2) : [];
+            if (sk && (sender || !extra.length)) {
                 return kemPk
                     ? NCx.pq2Nip59Wrap(rumor, sk, recipientPubkey, kemPk)
                     : NCx.nip59Wrap(rumor, sk, recipientPubkey);
@@ -118,7 +119,7 @@
                 kind: 1059,
                 content: wrapContent,
                 created_at: NCx.randomNow(),
-                tags: [['p', recipientPubkey]],
+                tags: [['p', recipientPubkey]].concat(extra.map(x => x.map(String))),
                 pubkey: T.getPublicKey(ephSk)
             }, ephSk);
         },

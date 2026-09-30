@@ -468,6 +468,16 @@ class _ShortcutsSheet extends StatelessWidget {
   }
 }
 
+const Set<String> _botOnlyChoices = {
+  'rename',
+  'duplicate',
+  'system',
+  'tags',
+  'stats',
+  'caps',
+  'share-link',
+};
+
 Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
     showNymSheet<String>(
       context,
@@ -480,7 +490,7 @@ Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
                 ('find', const NymGlyph('search', size: 19),
                     t('Find in this chat')),
                 ('rename', const NymGlyph('pencil', size: 19), t('Rename')),
-                ('pin', NymGlyph('star', size: 19, filled: conv.pinned),
+                ('pin', NymGlyph('pin', size: 19, filled: conv.pinned),
                     conv.pinned ? t('Unpin') : t('Pin')),
                 ('archive', const Icon(Icons.archive_outlined, size: 19),
                     conv.archived ? t('Unarchive') : t('Archive')),
@@ -510,12 +520,13 @@ Future<String?> showChatMenu(BuildContext context, Conversation conv) =>
                     t('Clear this chat')),
                 ('delete', const NymGlyph('close', size: 19), t('Delete')),
               ])
-                ListTile(
-                  dense: true,
-                  leading: item.$2,
-                  title: Text(item.$3),
-                  onTap: () => Navigator.pop(context, item.$1),
-                ),
+                if (!conv.support || !_botOnlyChoices.contains(item.$1))
+                  ListTile(
+                    dense: true,
+                    leading: item.$2,
+                    title: Text(item.$3),
+                    onTap: () => Navigator.pop(context, item.$1),
+                  ),
             ],
           ),
         ),

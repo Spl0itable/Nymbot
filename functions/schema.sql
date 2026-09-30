@@ -123,3 +123,80 @@ CREATE TABLE IF NOT EXISTS shares (
   PRIMARY KEY (hash, part)
 );
 CREATE INDEX IF NOT EXISTS shares_owner ON shares (owner);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY,
+  pubkey TEXT NOT NULL,
+  name TEXT NOT NULL,
+  hash TEXT UNIQUE NOT NULL,
+  hint TEXT,
+  limit_sats INTEGER,
+  reset_period TEXT,
+  expire_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS api_keys_pubkey ON api_keys (pubkey, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS api_keys_name ON api_keys (pubkey, lower(name)) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS api_queries (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  pubkey TEXT NOT NULL,
+  key_id TEXT,
+  model TEXT,
+  type TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cached_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_msat INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  balance TEXT,
+  web_search INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_queries_pubkey ON api_queries (pubkey, at);
+CREATE INDEX IF NOT EXISTS api_queries_key ON api_queries (key_id, at);
+CREATE INDEX IF NOT EXISTS api_queries_at ON api_queries (at);
+
+CREATE TABLE IF NOT EXISTS api_video_jobs (
+  id TEXT PRIMARY KEY,
+  pubkey TEXT NOT NULL,
+  key_id TEXT,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL,
+  job_url TEXT,
+  hold_id TEXT NOT NULL,
+  hold_credits INTEGER NOT NULL,
+  key_limited INTEGER NOT NULL DEFAULT 0,
+  milli INTEGER NOT NULL,
+  seconds INTEGER,
+  resolution TEXT,
+  url TEXT,
+  content_type TEXT,
+  error TEXT,
+  charged_milli INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_video_jobs_pubkey ON api_video_jobs (pubkey, created_at);
+CREATE INDEX IF NOT EXISTS api_video_jobs_expires ON api_video_jobs (expires_at);
+
+CREATE TABLE IF NOT EXISTS api_nwc (
+  pubkey TEXT PRIMARY KEY,
+  uri_enc TEXT NOT NULL,
+  threshold_sats INTEGER NOT NULL,
+  topup_sats INTEGER NOT NULL,
+  tier TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_topup_at INTEGER,
+  last_topup_sats INTEGER,
+  last_error TEXT,
+  last_attempt_at INTEGER
+);

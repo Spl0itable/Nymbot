@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat, Responses and Messages - Nymbot Knowledge Base</title>
+    <meta name="description" content="Nymbot API text endpoints: Chat Completions with streaming, tools, pictures, reasoning, model suffixes and web search, the Responses API, Anthropic Messages and the model list.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Chat, Responses and Messages - Nymbot Knowledge Base">
+    <meta property="og:description" content="Nymbot API text endpoints: Chat Completions with streaming, tools, pictures, reasoning, model suffixes and web search, the Responses API, Anthropic Messages and the model list.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api-chat/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="Chat, Responses and Messages - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Nymbot API text endpoints: Chat Completions with streaming, tools, pictures, reasoning, model suffixes and web search, the Responses API, Anthropic Messages and the model list.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api-chat/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Chat, Responses and Messages</h1>
+            <p class="docs-lede">Three ways to ask a model something, in the three formats clients already
+                speak, all running on the same models and billed the same way.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="chat-completions">Chat Completions</h2>
+            <p>The OpenAI chat format, and the one almost every tool supports. Send the conversation so far and
+                get the next message back.</p>
+            <p><code>POST https://nymbot.ai/api/v1/chat/completions</code> &mdash; needs an API key.</p>
+            <p>Only <code>model</code> and <code>messages</code> are required. A sampling parameter the chosen
+                model does not take is dropped without an error, so one request body works across models. The
+                model list gives each model's <code>supported_parameters</code>. What is refused rather than
+                dropped is anything the model cannot do at all: pictures for a model that cannot see, tools for
+                a model that cannot call them.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td><code>nymbot/auto</code> (or <code>auto</code>) for Nymbot's routing on the standard balance, or a catalog model id such as <code>anthropic/claude-sonnet-5</code> on the Pro balance. The app's short names and aliases are accepted too. May end in a <a href="#suffixes">suffix</a>.</td></tr>
+                        <tr><td><code>messages</code></td><td>array</td><td>Yes</td><td>The conversation. Roles <code>system</code>, <code>developer</code> (treated as system), <code>user</code>, <code>assistant</code> and <code>tool</code>. Content is a string or a list of <code>text</code> and <code>image_url</code> parts; pictures only in user messages. <code>input_audio</code> and file parts are refused.</td></tr>
+                        <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Send the answer as it is written. See <a href="#streaming">streaming</a>.</td></tr>
+                        <tr><td><code>stream_options</code></td><td>object</td><td>No</td><td><code>{"include_usage": true}</code> adds a final chunk with token counts and the cost.</td></tr>
+                        <tr><td><code>max_tokens</code><br><code>max_completion_tokens</code></td><td>integer</td><td>No</td><td>The most tokens to write. Lowered to the model's maximum if higher. Also sets how much is held from your balance, so a smaller number needs less credit to start.</td></tr>
+                        <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls.</td></tr>
+                        <tr><td><code>stop</code></td><td>string or array</td><td>No</td><td>Text that ends the answer. Not used by <code>nymbot/auto</code>.</td></tr>
+                        <tr><td><code>seed</code></td><td>integer</td><td>No</td><td>For repeatable sampling, where the model supports it.</td></tr>
+                        <tr><td><code>presence_penalty</code><br><code>frequency_penalty</code></td><td>number</td><td>No</td><td>Repetition controls.</td></tr>
+                        <tr><td><code>response_format</code></td><td>object</td><td>No</td><td><code>{"type": "json_object"}</code> or <code>{"type": "json_schema", "json_schema": {&hellip;}}</code>, where the model supports it. Not used by <code>nymbot/auto</code>.</td></tr>
+                        <tr><td><code>tools</code><br><code>tool_choice</code><br><code>parallel_tool_calls</code></td><td>array, string or object, boolean</td><td>No</td><td>Function calling. See <a href="#tools">tool calls</a>. A <code>web_search</code> tool turns on <a href="#web-search">web search</a>. At most 128 tools and 512 KB of definitions, nested at most 64 levels deep; more is a <code>400</code>.</td></tr>
+                        <tr><td><code>reasoning_effort</code><br><code>reasoning</code></td><td>string, object</td><td>No</td><td><code>"minimal"</code>, <code>"low"</code>, <code>"medium"</code> or <code>"high"</code>, or <code>{"effort": "high"}</code>. <code>"none"</code> or <code>{"enabled": false}</code> turns it off. See <a href="#reasoning">reasoning</a>.</td></tr>
+                        <tr><td><code>plugins</code></td><td>array</td><td>No</td><td><code>[{"id": "web", "max_results": 5}]</code> always searches the web first. Up to 10 results.</td></tr>
+                        <tr><td><code>n</code></td><td>integer</td><td>No</td><td>Only 1. Anything else returns <code>400</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The reply is an ordinary <code>chat.completion</code>, with the cost in <code>usage.cost</code>
+                (in dollars) and in the <code>nymbot</code> object. <code>model</code> is the resolved model id,
+                so a short name comes back as the full one. If the model reasoned before answering, its
+                reasoning is in <code>message.reasoning_content</code>, separate from the answer.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "id": "chatcmpl-5f1c0a9e27d84b3c",
+  "object": "chat.completion",
+  "created": 1790726400,
+  "model": "anthropic/claude-sonnet-5",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "A Lightning invoice is a one-time payment request..."
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1240,
+    "completion_tokens": 380,
+    "total_tokens": 1620,
+    "prompt_tokens_details": { "cached_tokens": 0 },
+    "completion_tokens_details": { "reasoning_tokens": 0 },
+    "cost": 0.01895
+  },
+  "nymbot": {
+    "balance": "pro",
+    "charged_credits": 0.162,
+    "charged_sats": 16.2,
+    "balance_credits": 412.425,
+    "balance_sats": 41242.5
+  }
+}</code></pre>
+            <p><code>finish_reason</code> is worked out from what came back, since providers report it
+                differently: <code>tool_calls</code> when the model asked for tools, <code>length</code> when
+                the answer used every token allowed (or the model spent them all reasoning and wrote no
+                answer), <code>content_filter</code> when the provider refused, and <code>stop</code>
+                otherwise. <code>usage.completion_tokens_details.reasoning_tokens</code> is always 0: hidden
+                reasoning tokens are counted, and charged, in <code>completion_tokens</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No <code>model</code> or <code>messages</code> (<code>missing_required_parameter</code>); an audio or file part, or pictures for a model that cannot see them (<code>unsupported_content</code>); more than 20 pictures (<code>too_many_images</code>); a picture link that is not public (<code>invalid_image_url</code>); tools on a model that cannot call them (<code>unsupported_tool</code>); <code>n</code> other than 1; a <code>:thinking</code> suffix on a model that cannot reason (<code>model_not_found</code>); or the provider refused the request (<code>upstream_rejected</code>).</td></tr>
+                        <tr><td><code>402</code></td><td>The balance the model spends cannot cover the hold.</td></tr>
+                        <tr><td><code>403</code></td><td>The worst case does not fit the key's cap (<code>key_limit_reached</code>). Lower <code>max_tokens</code> or raise the cap.</td></tr>
+                        <tr><td><code>404</code></td><td>No model by that name (<code>model_not_found</code>).</td></tr>
+                        <tr><td><code>429</code></td><td>The key's rate limit, or the provider's (<code>upstream_rate_limited</code>).</td></tr>
+                        <tr><td><code>502</code>, <code>503</code></td><td>The provider failed (<code>upstream_error</code>) or is overloaded (<code>upstream_overloaded</code>, with <code>Retry-After</code>). Nothing is charged unless the provider billed for the attempt.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The status codes every endpoint shares are listed under <a href="/docs/api/#errors">errors</a>.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "messages": [
+      {"role": "system", "content": "Answer in one short paragraph."},
+      {"role": "user", "content": "What is a Lightning invoice?"}
+    ],
+    "max_tokens": 400
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5",
+    messages=[
+        {"role": "system", "content": "Answer in one short paragraph."},
+        {"role": "user", "content": "What is a Lightning invoice?"},
+    ],
+    max_tokens=400,
+)
+print(reply.choices[0].message.content)
+print(reply.usage.cost)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5",
+  messages: [
+    { role: "system", content: "Answer in one short paragraph." },
+    { role: "user", content: "What is a Lightning invoice?" },
+  ],
+  max_tokens: 400,
+});
+console.log(reply.choices[0].message.content);
+console.log(reply.usage.cost);</code></pre>
+
+            <h2 id="streaming">Streaming</h2>
+            <p>With <code>"stream": true</code> the answer arrives as server-sent events while the model writes
+                it. Each event is a <code>chat.completion.chunk</code> on a <code>data:</code> line, and the
+                stream ends with <code>data: [DONE]</code>. Reasoning arrives in
+                <code>delta.reasoning_content</code>, the answer in <code>delta.content</code>.</p>
+            <p class="docs-note-label">Stream</p>
+<pre><code>data: {"id":"chatcmpl-5f1c0a9e27d84b3c","object":"chat.completion.chunk","created":1790726400,"model":"anthropic/claude-sonnet-5","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-5f1c0a9e27d84b3c","object":"chat.completion.chunk","created":1790726400,"model":"anthropic/claude-sonnet-5","choices":[{"index":0,"delta":{"content":"A Lightning invoice"},"finish_reason":null}]}
+
+: keep-alive
+
+data: {"id":"chatcmpl-5f1c0a9e27d84b3c","object":"chat.completion.chunk","created":1790726400,"model":"anthropic/claude-sonnet-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-5f1c0a9e27d84b3c","object":"chat.completion.chunk","created":1790726400,"model":"anthropic/claude-sonnet-5","choices":[],"usage":{"prompt_tokens":1240,"completion_tokens":380,"total_tokens":1620,"cost":0.01895},"nymbot":{"balance":"pro","charged_credits":0.162,"charged_sats":16.2,"balance_credits":412.425,"balance_sats":41242.5}}
+
+data: [DONE]</code></pre>
+            <ul>
+                <li>Lines starting with <code>:</code> are keep-alive comments, sent every 15 seconds while
+                    the model is thinking. SSE clients skip them.</li>
+                <li>Ask for <code>"stream_options": {"include_usage": true}</code> to get the last chunk above,
+                    with an empty <code>choices</code>, the token counts, the cost and the
+                    <code>nymbot</code> object.</li>
+                <li>The charge settles after the stream ends. If you close the connection early, you pay for
+                    what was written up to then.</li>
+                <li>An error before the first chunk, such as <code>401</code> or <code>402</code>, comes back as
+                    ordinary JSON with its status code, not as a stream. An error after the stream has started
+                    arrives as a last <code>data: {"error": {&hellip;}}</code> event, and the stream ends without
+                    <code>[DONE]</code>.</li>
+                <li>Requests with tools, and models on OpenAI's Responses transport, do not stream from the
+                    provider. They still answer with a valid stream, sent once the answer is complete.</li>
+            </ul>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl -N https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nymbot/auto",
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "messages": [{"role": "user", "content": "Write a haiku about sats."}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+stream = client.chat.completions.create(
+    model="nymbot/auto",
+    stream=True,
+    stream_options={"include_usage": True},
+    messages=[{"role": "user", "content": "Write a haiku about sats."}],
+)
+for chunk in stream:
+    if chunk.choices:
+        print(chunk.choices[0].delta.content or "", end="", flush=True)
+    elif chunk.usage:
+        print("\ncost:", chunk.usage.cost)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const stream = await client.chat.completions.create({
+  model: "nymbot/auto",
+  stream: true,
+  stream_options: { include_usage: true },
+  messages: [{ role: "user", content: "Write a haiku about sats." }],
+});
+for await (const chunk of stream) {
+  if (chunk.choices.length) process.stdout.write(chunk.choices[0].delta.content || "");
+  else if (chunk.usage) console.log("\ncost:", chunk.usage.cost);
+}</code></pre>
+
+            <h2 id="tools">Tool calls</h2>
+            <p>Describe functions in <code>tools</code> and the model can ask for one to be called instead of
+                answering. You run the function, add its result as a <code>tool</code> message with the same
+                <code>tool_call_id</code>, and send the conversation again. Nymbot never runs your functions;
+                it passes the model's request back to you.</p>
+            <p><code>tool_choice</code> takes <code>"auto"</code>, <code>"none"</code>,
+                <code>"required"</code> or <code>{"type": "function", "function": {"name": "&hellip;"}}</code>.
+                The model list marks which models can call tools (<code>capabilities.tools</code>). Tools are
+                refused with <code>400</code> <code>unsupported_tool</code> on <code>nymbot/auto</code> and on
+                the few catalog models that run on OpenAI's Responses transport, which Nymbot cannot pass tools
+                to.</p>
+            <p>With <code>"stream": true</code>, a request with tools runs in one piece and is then sent as a
+                normal chunk sequence: the role, one chunk carrying every tool call with its index, id, name and
+                arguments, and the finish chunk. Clients that read streamed tool calls handle it as usual.</p>
+            <p class="docs-note-label">Response, in part</p>
+<pre><code>"choices": [
+  {
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_7d2e",
+          "type": "function",
+          "function": { "name": "get_invoice_status", "arguments": "{\"invoice_id\":\"a41f\"}" }
+        }
+      ]
+    },
+    "finish_reason": "tool_calls"
+  }
+]</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "messages": [{"role": "user", "content": "Has invoice a41f been paid?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_invoice_status",
+        "description": "Look up whether an invoice is paid.",
+        "parameters": {
+          "type": "object",
+          "properties": {"invoice_id": {"type": "string"}},
+          "required": ["invoice_id"]
+        }
+      }
+    }]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import json, os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_invoice_status",
+        "description": "Look up whether an invoice is paid.",
+        "parameters": {
+            "type": "object",
+            "properties": {"invoice_id": {"type": "string"}},
+            "required": ["invoice_id"],
+        },
+    },
+}]
+messages = [{"role": "user", "content": "Has invoice a41f been paid?"}]
+
+reply = client.chat.completions.create(model="anthropic/claude-sonnet-5", messages=messages, tools=tools)
+call = reply.choices[0].message.tool_calls[0]
+args = json.loads(call.function.arguments)
+
+messages.append(reply.choices[0].message)
+messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps({"paid": True})})
+
+final = client.chat.completions.create(model="anthropic/claude-sonnet-5", messages=messages, tools=tools)
+print(final.choices[0].message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const tools = [{
+  type: "function",
+  function: {
+    name: "get_invoice_status",
+    description: "Look up whether an invoice is paid.",
+    parameters: {
+      type: "object",
+      properties: { invoice_id: { type: "string" } },
+      required: ["invoice_id"],
+    },
+  },
+}];
+const messages = [{ role: "user", content: "Has invoice a41f been paid?" }];
+
+const reply = await client.chat.completions.create({ model: "anthropic/claude-sonnet-5", messages, tools });
+const call = reply.choices[0].message.tool_calls[0];
+const args = JSON.parse(call.function.arguments);
+
+messages.push(reply.choices[0].message);
+messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ paid: true }) });
+
+const final = await client.chat.completions.create({ model: "anthropic/claude-sonnet-5", messages, tools });
+console.log(final.choices[0].message.content);</code></pre>
+
+            <h2 id="vision">Pictures in a request</h2>
+            <p>Models with <code>capabilities.vision</code> can read pictures. Add an <code>image_url</code>
+                part to a user message, with either a public <code>https://</code> link or a
+                <code>data:image/&hellip;;base64,</code> URL. Up to 20 pictures per request.</p>
+            <p>With <code>nymbot/auto</code>, a request with a picture in it is routed to a standard model that
+                can see. A catalog model without <code>capabilities.vision</code> refuses pictures with
+                <code>400</code> <code>unsupported_content</code>. Pictures can only be in user messages. A
+                link must point to a public host; Nymbot passes the picture to the model's provider and does
+                not keep it.</p>
+            <p>A picture is charged as the input tokens the provider counts for it, like the rest of the
+                request.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is in this picture?"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/receipt.jpg"}}
+      ]
+    }]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import base64, os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+with open("receipt.jpg", "rb") as f:
+    data_url = "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in this picture?"},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ],
+    }],
+)
+print(reply.choices[0].message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import { readFile } from "node:fs/promises";
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const dataUrl = "data:image/jpeg;base64," + (await readFile("receipt.jpg")).toString("base64");
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5",
+  messages: [{
+    role: "user",
+    content: [
+      { type: "text", text: "What is in this picture?" },
+      { type: "image_url", image_url: { url: dataUrl } },
+    ],
+  }],
+});
+console.log(reply.choices[0].message.content);</code></pre>
+
+            <h2 id="reasoning">Reasoning</h2>
+            <p>Models with <code>capabilities.reasoning</code> can think before they answer. Ask for more or less
+                of it with <code>reasoning_effort</code> (<code>"minimal"</code>, <code>"low"</code>,
+                <code>"medium"</code> or <code>"high"</code>) or <code>"reasoning": {"effort": "high"}</code>, or
+                add <code>:thinking</code> to the model name, which means high effort. On a model without
+                reasoning the setting is ignored. With <code>nymbot/auto</code>, <code>:thinking</code> sends the
+                request to the standard reasoning route.</p>
+            <p>On Anthropic models the effort becomes a thinking budget of about 1,000, 2,000, 8,000 or 16,000
+                tokens, never more than <code>max_tokens</code> allows. Thinking is left off when
+                <code>tool_choice</code> forces a tool, and when the request continues a tool loop (its last
+                message is a tool result), because Anthropic needs the earlier signed thinking to resume it.
+                The same applies on the Responses and Messages endpoints.</p>
+            <p>The reasoning comes back in <code>message.reasoning_content</code>, or
+                <code>delta.reasoning_content</code> when streaming, never mixed into the answer. Reasoning is
+                output and is charged as such, inside <code>completion_tokens</code>. Some providers do not
+                return the reasoning text at all, and it is still charged.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "reasoning_effort": "high",
+    "messages": [{"role": "user", "content": "Is 2^61 - 1 prime? Show why."}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5",
+    reasoning_effort="high",
+    messages=[{"role": "user", "content": "Is 2^61 - 1 prime? Show why."}],
+)
+message = reply.choices[0].message
+print(getattr(message, "reasoning_content", None))
+print(message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5",
+  reasoning_effort: "high",
+  messages: [{ role: "user", content: "Is 2^61 - 1 prime? Show why." }],
+});
+console.log(reply.choices[0].message.reasoning_content);
+console.log(reply.choices[0].message.content);</code></pre>
+
+            <h2 id="suffixes">Model suffixes</h2>
+            <p>A suffix on the model name changes how the request is handled, without another field. They
+                work on full ids and short names alike, as in <code>anthropic/claude-sonnet-5:online</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Suffix</th><th>Effect</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>:online</code></td><td>Searches the web first, like <code>plugins: [{"id": "web"}]</code>. See <a href="#web-search">web search</a>.</td></tr>
+                        <tr><td><code>:thinking</code></td><td>High reasoning effort; on <code>nymbot/auto</code>, the reasoning route. On a model that cannot reason, <code>400</code> <code>model_not_found</code> with &ldquo;no endpoints found&rdquo;.</td></tr>
+                        <tr><td><code>:nitro</code>, <code>:floor</code>, <code>:exacto</code>, <code>:extended</code></td><td>Accepted and ignored. Each catalog model has one route, so there is no faster, cheaper or longer one to pick; the suffixes are allowed so model names copied from other services still work.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Any other suffix is ignored. The whole name is tried first, so a model whose id really contains a
+                colon still works; failing that, suffixes are taken off the end one at a time until a model
+                matches.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5:thinking",
+    "messages": [{"role": "user", "content": "Plan a three-day trip to Lisbon."}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5:thinking",
+    messages=[{"role": "user", "content": "Plan a three-day trip to Lisbon."}],
+)
+print(reply.choices[0].message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5:thinking",
+  messages: [{ role: "user", content: "Plan a three-day trip to Lisbon." }],
+});
+console.log(reply.choices[0].message.content);</code></pre>
+
+            <h2 id="web-search">Web search</h2>
+            <p>Any chat model can answer from the live web. Nymbot searches for the last user message, reads
+                the best pages and gives them to the model with the question, marked as outside content the
+                model should not take instructions from. There are two modes:</p>
+            <ul>
+                <li><strong>Always search</strong>: <code>"plugins": [{"id": "web", "max_results": 5}]</code>,
+                    or a <code>:online</code> suffix on the model.</li>
+                <li><strong>Search when it helps</strong>:
+                    <code>"tools": [{"type": "web_search", "parameters": {"max_results": 5}}]</code>, also
+                    accepted as <code>web_search_preview</code> or <code>openrouter:web_search</code>. Nymbot
+                    searches only when the question looks like it needs current information, the same test
+                    the app uses.</li>
+            </ul>
+            <p><code>max_results</code> is 5 by default and at most 10. The sources come back in
+                <code>nymbot.web_search.sources</code>, each with a <code>title</code>, <code>snippet</code> and
+                <code>url</code>, and as <code>url_citation</code> annotations on the message.</p>
+            <p>There is no search fee. The pages it read are input tokens, so an answer from the web costs more
+                than the same question asked cold, sometimes several times more.</p>
+            <p class="docs-note-label">Response, in part</p>
+<pre><code>"nymbot": {
+  "balance": "pro",
+  "charged_credits": 0.431,
+  "charged_sats": 43.1,
+  "balance_credits": 411.994,
+  "balance_sats": 41199.4,
+  "web_search": {
+    "sources": [
+      { "title": "Lightning Network - Wikipedia", "snippet": "The Lightning Network is a payment protocol...", "url": "https://en.wikipedia.org/wiki/Lightning_Network" }
+    ]
+  }
+}</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "plugins": [{"id": "web", "max_results": 5}],
+    "messages": [{"role": "user", "content": "What changed in the latest Bitcoin Core release?"}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+reply = client.chat.completions.create(
+    model="anthropic/claude-sonnet-5",
+    messages=[{"role": "user", "content": "What changed in the latest Bitcoin Core release?"}],
+    extra_body={"plugins": [{"id": "web", "max_results": 5}]},
+)
+print(reply.choices[0].message.content)
+for source in reply.model_extra["nymbot"]["web_search"]["sources"]:
+    print(source["url"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const reply = await client.chat.completions.create({
+  model: "anthropic/claude-sonnet-5",
+  plugins: [{ id: "web", max_results: 5 }],
+  messages: [{ role: "user", content: "What changed in the latest Bitcoin Core release?" }],
+});
+console.log(reply.choices[0].message.content);
+for (const source of reply.nymbot.web_search.sources) console.log(source.url);</code></pre>
+
+            <h2 id="responses">Responses API</h2>
+            <p>OpenAI's newer format, used by the OpenAI Agents SDK and by Codex. It runs on the same models,
+                billing and features as Chat Completions.</p>
+            <p><code>POST https://nymbot.ai/api/v1/responses</code> &mdash; needs an API key.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>As for <a href="#chat-completions">Chat Completions</a>, suffixes included.</td></tr>
+                        <tr><td><code>input</code></td><td>string or array</td><td>Yes</td><td>A string, or a list of items: messages (roles <code>user</code>, <code>assistant</code>, <code>system</code>, <code>developer</code>) with <code>input_text</code>, <code>input_image</code> and <code>output_text</code> parts, and <code>function_call</code> and <code>function_call_output</code> items for tools. <code>input_image</code> takes an <code>image_url</code> link or data URL, not a file id. <code>reasoning</code> and <code>web_search_call</code> items are skipped; <code>item_reference</code> is refused.</td></tr>
+                        <tr><td><code>instructions</code></td><td>string</td><td>No</td><td>System instructions.</td></tr>
+                        <tr><td><code>max_output_tokens</code></td><td>integer</td><td>No</td><td>The most tokens to write.</td></tr>
+                        <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls, where the model takes them.</td></tr>
+                        <tr><td><code>tools</code><br><code>tool_choice</code><br><code>parallel_tool_calls</code></td><td>array, string or object, boolean</td><td>No</td><td>Function tools, in the Responses shape (<code>{"type": "function", "name": &hellip;, "parameters": &hellip;}</code>). A <code>web_search</code> or <code>web_search_preview</code> tool turns on <a href="#web-search">web search</a> when it helps. Other built-in tools are refused.</td></tr>
+                        <tr><td><code>reasoning</code></td><td>object</td><td>No</td><td><code>{"effort": "minimal" | "low" | "medium" | "high"}</code>. <code>xhigh</code> and <code>max</code> mean <code>high</code>; <code>none</code> turns it off.</td></tr>
+                        <tr><td><code>text.format</code><br><code>response_format</code></td><td>object</td><td>No</td><td>Structured output, as a JSON schema or <code>json_object</code>.</td></tr>
+                        <tr><td><code>metadata</code></td><td>object</td><td>No</td><td>Returned unchanged in the response.</td></tr>
+                        <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Stream events as described below.</td></tr>
+                        <tr><td><code>store</code></td><td>boolean</td><td>No</td><td>Ignored. Nothing is stored, and the response always says <code>"store": false</code>.</td></tr>
+                        <tr><td><code>previous_response_id</code><br><code>conversation</code><br><code>background</code></td><td>string, object, boolean</td><td>No</td><td>Not supported: <code>400</code> <code>unsupported_parameter</code>. Responses are not stored, so send the whole conversation in <code>input</code> every time.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "id": "resp_8c1e4b0f9a2d4e61",
+  "object": "response",
+  "created_at": 1790726400,
+  "status": "completed",
+  "model": "anthropic/claude-sonnet-5",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_2b7f",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{ "type": "output_text", "text": "A Lightning invoice is...", "annotations": [] }]
+    }
+  ],
+  "output_text": "A Lightning invoice is...",
+  "usage": {
+    "input_tokens": 1240,
+    "input_tokens_details": { "cached_tokens": 0 },
+    "output_tokens": 380,
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "total_tokens": 1620
+  },
+  "incomplete_details": null,
+  "error": null,
+  "instructions": null,
+  "store": false,
+  "previous_response_id": null,
+  "metadata": {},
+  "nymbot": { "balance": "pro", "charged_credits": 0.162, "charged_sats": 16.2, "balance_credits": 412.425, "balance_sats": 41242.5 }
+}</code></pre>
+            <p>A tool request shows up in <code>output</code> as a <code>function_call</code> item with
+                <code>call_id</code>, <code>name</code> and <code>arguments</code>; send the result back as a
+                <code>function_call_output</code> item with the same <code>call_id</code>. Reasoning, when the
+                model returns it, is a <code>reasoning</code> item with <code>reasoning_text</code> content,
+                listed first. <code>status</code> is <code>incomplete</code> when the answer hit
+                <code>max_output_tokens</code> or the provider refused, with
+                <code>incomplete_details.reason</code> set to <code>max_output_tokens</code> or
+                <code>content_filter</code>. The response also echoes the request's settings (temperature,
+                tools, tool choice and so on) as OpenAI's does, and carries the <code>nymbot</code> cost
+                object.</p>
+            <p>Streamed, each event is an <code>event:</code> line and a <code>data:</code> line with a
+                <code>sequence_number</code>, in this order: <code>response.created</code>,
+                <code>response.in_progress</code>, <code>response.output_item.added</code>,
+                <code>response.content_part.added</code>, any number of <code>response.output_text.delta</code>,
+                <code>response.output_text.done</code>, <code>response.content_part.done</code>,
+                <code>response.output_item.done</code>, and finally <code>response.completed</code> with the
+                usage and cost. An answer cut short ends with <code>response.incomplete</code> instead, and a
+                failure after the stream started with <code>response.failed</code>. Reasoning streams as its
+                own item with <code>response.reasoning_text.delta</code> and <code>.done</code>. Tool calls
+                come after the message, each as an item with <code>response.function_call_arguments.delta</code>
+                and <code>.done</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No <code>model</code> or <code>input</code>; <code>previous_response_id</code>, <code>conversation</code>, <code>background</code> or an <code>item_reference</code> (<code>unsupported_parameter</code>); an unsupported tool or content type.</td></tr>
+                        <tr><td><code>402</code>, <code>403</code>, <code>404</code>, <code>429</code>, <code>502</code>, <code>503</code></td><td>As for Chat Completions.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/responses \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-5",
+    "instructions": "Answer in one short paragraph.",
+    "input": "What is a Lightning invoice?"
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+response = client.responses.create(
+    model="anthropic/claude-sonnet-5",
+    instructions="Answer in one short paragraph.",
+    input="What is a Lightning invoice?",
+)
+print(response.output_text)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const response = await client.responses.create({
+  model: "anthropic/claude-sonnet-5",
+  instructions: "Answer in one short paragraph.",
+  input: "What is a Lightning invoice?",
+});
+console.log(response.output_text);</code></pre>
+
+            <h2 id="messages">Anthropic Messages</h2>
+            <p>Anthropic's format, for the Anthropic SDKs and Claude Code. It works with every model in the
+                catalog, not only Claude: the request is translated, run through the same pipeline, and
+                translated back.</p>
+            <p><code>POST https://nymbot.ai/api/v1/messages</code> &mdash; needs an API key, as <code>x-api-key</code> or <code>Authorization: Bearer</code>.</p>
+            <p>The <code>anthropic-version</code> and <code>anthropic-beta</code> headers are accepted and
+                ignored. Anthropic model names are matched to the catalog, so Claude Code and the SDKs work
+                with the names they already use:</p>
+            <ul>
+                <li>A name the catalog knows, such as <code>claude-sonnet-5</code> or
+                    <code>anthropic/claude-opus-5</code>, is used as it is.</li>
+                <li>Otherwise a date (<code>-20260514</code>), <code>-latest</code>, a version tag such as
+                    <code>-v1</code>, a bracketed tag such as <code>[1m]</code> and an
+                    <code>anthropic/</code> or <code>anthropic.</code> prefix are taken off, and dots and dashes
+                    in the version are tried both ways (<code>claude-haiku-4-5</code> finds
+                    <code>claude-haiku-4.5</code>).</li>
+                <li>If that still matches nothing, the family (Opus, Sonnet or Haiku) is used, as long as the
+                    catalog's version is the same or newer than the one asked for.</li>
+                <li>A name that matches nothing returns <code>404</code> <code>not_found_error</code>.</li>
+            </ul>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>A catalog model id, or an Anthropic model name.</td></tr>
+                        <tr><td><code>max_tokens</code></td><td>integer</td><td>Yes</td><td>The most tokens to write.</td></tr>
+                        <tr><td><code>messages</code></td><td>array</td><td>Yes</td><td><code>user</code> and <code>assistant</code> turns, with <code>text</code>, <code>image</code> (base64 or URL source), <code>tool_use</code> and <code>tool_result</code> blocks. <code>thinking</code> blocks from earlier turns are accepted and dropped.</td></tr>
+                        <tr><td><code>system</code></td><td>string or array</td><td>No</td><td>System prompt, as a string or text blocks.</td></tr>
+                        <tr><td><code>temperature</code><br><code>top_p</code></td><td>number</td><td>No</td><td>Sampling controls, where the model takes them. <code>top_k</code> is accepted and dropped.</td></tr>
+                        <tr><td><code>stop_sequences</code></td><td>array of strings</td><td>No</td><td>Text that ends the answer.</td></tr>
+                        <tr><td><code>tools</code><br><code>tool_choice</code></td><td>array, object</td><td>No</td><td>Tools with <code>name</code>, <code>description</code> and <code>input_schema</code>. A <code>web_search</code> server tool turns on <a href="#web-search">web search</a>; Anthropic's other built-in tools (bash, text editor, computer use) are refused with <code>unsupported_tool</code>. <code>tool_choice</code> takes <code>auto</code>, <code>any</code>, <code>tool</code> or <code>none</code>, and <code>disable_parallel_tool_use</code>.</td></tr>
+                        <tr><td><code>thinking</code></td><td>object</td><td>No</td><td><code>{"type": "enabled", "budget_tokens": 8192}</code>, <code>{"type": "adaptive"}</code> or <code>{"type": "disabled"}</code>. The budget picks an effort level: under 2,048 minimal, from 2,048 low, from 8,192 medium, from 16,384 high. Adaptive uses <code>output_config.effort</code>, or high.</td></tr>
+                        <tr><td><code>stream</code></td><td>boolean</td><td>No</td><td>Stream in Anthropic's event format.</td></tr>
+                        <tr><td><code>metadata</code></td><td>object</td><td>No</td><td>Accepted and ignored.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "id": "msg_01c7a2f93e5b4d08",
+  "type": "message",
+  "role": "assistant",
+  "model": "anthropic/claude-sonnet-5",
+  "content": [{ "type": "text", "text": "A Lightning invoice is..." }],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 1240,
+    "output_tokens": 380,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "nymbot": { "balance": "pro", "charged_credits": 0.162, "charged_sats": 16.2, "balance_credits": 412.425, "balance_sats": 41242.5 }
+}</code></pre>
+            <p><code>content</code> can also hold <code>tool_use</code> blocks and a <code>thinking</code>
+                block, whose <code>signature</code> is empty. <code>stop_reason</code> is
+                <code>end_turn</code>, <code>max_tokens</code>, <code>tool_use</code> or <code>refusal</code>,
+                worked out the same way as <code>finish_reason</code> on
+                <a href="#chat-completions">Chat Completions</a>; <code>stop_sequence</code> is always
+                <code>null</code>, even when a stop sequence ended the answer. <code>input_tokens</code> counts
+                fresh input only; cached input is in the two cache fields. The cost is in the
+                <code>nymbot</code> object and the <code>X-Nymbot-Cost-Sats</code> header.</p>
+            <p>Streamed, the events are Anthropic's: <code>message_start</code>,
+                <code>content_block_start</code>, <code>ping</code>, <code>content_block_delta</code>
+                (<code>text_delta</code>, <code>input_json_delta</code> or <code>thinking_delta</code>),
+                <code>content_block_stop</code>, <code>message_delta</code> with the stop reason, the usage and
+                the <code>nymbot</code> cost object, and <code>message_stop</code>. A <code>ping</code> is also
+                sent every 15 seconds while the model is working. Tool calls arrive after the text, each as a
+                <code>tool_use</code> block with its whole input in one <code>input_json_delta</code>.</p>
+            <p>Errors on this endpoint use Anthropic's format:
+                <code>{"type": "error", "error": {"type": "not_found_error", "message": "&hellip;"}}</code>. A
+                short balance is <code>402</code> <code>billing_error</code>, an overloaded provider
+                <code>503</code> <code>overloaded_error</code>. A failure after the stream has started is sent
+                as an <code>error</code> event.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/messages \
+  -H "x-api-key: $NYMBOT_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-5",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "What is a Lightning invoice?"}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import anthropic
+
+client = anthropic.Anthropic(base_url="https://nymbot.ai/api", api_key=os.environ["NYMBOT_API_KEY"])
+
+message = client.messages.create(
+    model="claude-sonnet-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "What is a Lightning invoice?"}],
+)
+print(message.content[0].text)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "https://nymbot.ai/api", apiKey: process.env.NYMBOT_API_KEY });
+
+const message = await client.messages.create({
+  model: "claude-sonnet-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "What is a Lightning invoice?" }],
+});
+console.log(message.content[0].text);</code></pre>
+
+            <h2 id="count-tokens">Counting tokens</h2>
+            <p>An estimate of how many input tokens a Messages request would use, so a client can check before
+                it sends. It is free, but still needs a key.</p>
+            <p><code>POST https://nymbot.ai/api/v1/messages/count_tokens</code> &mdash; needs an API key. Free.</p>
+            <p>The body is the same as for <a href="#messages">Messages</a>, without <code>max_tokens</code>;
+                the model name has to resolve. The count is an estimate: the characters of the system prompt,
+                messages, tool calls and tool definitions divided by four, plus 1,600 for each picture. It is
+                not the provider's own tokenizer, so the real count can differ. A key that has reached its cap
+                can still use it.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{ "input_tokens": 318 }</code></pre>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/messages/count_tokens \
+  -H "x-api-key: $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-5",
+    "messages": [{"role": "user", "content": "What is a Lightning invoice?"}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import anthropic
+
+client = anthropic.Anthropic(base_url="https://nymbot.ai/api", api_key=os.environ["NYMBOT_API_KEY"])
+
+count = client.messages.count_tokens(
+    model="claude-sonnet-5",
+    messages=[{"role": "user", "content": "What is a Lightning invoice?"}],
+)
+print(count.input_tokens)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "https://nymbot.ai/api", apiKey: process.env.NYMBOT_API_KEY });
+
+const count = await client.messages.countTokens({
+  model: "claude-sonnet-5",
+  messages: [{ role: "user", content: "What is a Lightning invoice?" }],
+});
+console.log(count.input_tokens);</code></pre>
+
+            <h2 id="models">Listing models</h2>
+            <p>Every model and generator the API accepts, with what it costs. The list is read from the same
+                live catalog as the app's picker, so it is always what the server will run.</p>
+            <p><code>GET https://nymbot.ai/api/v1/models</code> &mdash; no key needed. Cached for five minutes.</p>
+            <p><code>GET /api/v1/models/{id}</code> returns one entry.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>type</code></td><td>string (query)</td><td>No</td><td><code>chat</code> (the default), <code>image</code>, <code>video</code>, <code>audio</code>, <code>embedding</code> or <code>all</code>. Several can be given, as <code>image,video</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Prices are what you pay, with the fee and margin already in, in dollars and in sats at the
+                current Bitcoin price. <code>balance</code> says which balance the model spends.
+                <code>nymbot_key</code> is the model's short name in the app. <code>created</code> is always
+                0, since the catalog does not record when a model was added. A model without published token
+                rates is priced <code>per_request</code> instead.</p>
+            <p><code>nymbot/auto</code> is always first, priced as <code>variable</code>, with a
+                <code>routes</code> list giving each standard route's rates. It lists vision and reasoning, but
+                not tools.</p>
+            <p><code>GET /api/v1/models/{id}</code> accepts the same names and aliases as a request, and returns
+                the entry for the model they resolve to.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "object": "list",
+  "data": [
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "object": "model",
+      "type": "chat",
+      "owned_by": "anthropic",
+      "name": "Claude Sonnet 5",
+      "created": 0,
+      "context_length": 1000000,
+      "max_output_tokens": 64000,
+      "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] },
+      "supported_parameters": ["max_tokens", "temperature", "tools", "tool_choice", "reasoning", "response_format", "stop"],
+      "capabilities": { "vision": true, "video": false, "tools": true, "reasoning": true, "web_search": true },
+      "balance": "pro",
+      "pricing": {
+        "type": "per_token",
+        "currency": "USD",
+        "input_per_1M_tokens": 4.725,
+        "output_per_1M_tokens": 23.625,
+        "cache_read_per_1M_tokens": 0.4725,
+        "sats_input_per_1M_tokens": 4038,
+        "sats_output_per_1M_tokens": 20192
+      },
+      "description": "...",
+      "nymbot_key": "claude-sonnet"
+    }
+  ]
+}</code></pre>
+            <p>The other types:</p>
+            <ul>
+                <li><strong>Image</strong> entries have <code>capabilities</code>
+                    (<code>accepts_image_url</code>, <code>requires_image_url</code>, <code>edit</code>) and a
+                    price <code>per_generation</code>.</li>
+                <li><strong>Video</strong> entries have <code>max_duration_seconds</code> and
+                    <code>resolutions</code>, and a price <code>per_second</code> for each resolution.</li>
+                <li><strong>Audio</strong> entries have <code>audio_type</code> <code>speech</code> or
+                    <code>transcription</code>, priced <code>per_1k_chars</code> or <code>per_minute</code>.</li>
+                <li><strong>Embedding</strong> entries have <code>dimensions</code>, <code>context_length</code>,
+                    <code>max_inputs</code> and a price per million input tokens.</li>
+            </ul>
+            <p>Prices marked <code>"estimated": true</code> are the app's estimate for a generator whose price
+                is not published. An unknown <code>type</code> returns <code>400</code>.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl "https://nymbot.ai/api/v1/models?type=chat"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+models = requests.get("https://nymbot.ai/api/v1/models", params={"type": "chat"}).json()["data"]
+for m in models:
+    print(m["id"], m["balance"], m["pricing"].get("input_per_1M_tokens"))</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/models?type=chat");
+const { data } = await res.json();
+for (const m of data) console.log(m.id, m.balance, m.pricing.input_per_1M_tokens);</code></pre>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

@@ -9,6 +9,7 @@
 
 /// Outline glyphs: painted with a round-capped stroke and no fill.
 const Map<String, String> kNymGlyphStroke = <String, String>{
+  'pin': '<path d="M12 17v5"></path><path d="M9 2h6l-1 7 4 4v2H6v-2l4-4z"></path>',
   'info': '<circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16.5"></line><line x1="12" y1="7.5" x2="12.01" y2="7.5"></line>',
   'copy': '<rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path>',
   'refresh': '<path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline>',
@@ -67,11 +68,13 @@ const Map<String, String> kNymGlyphStroke = <String, String>{
   'tasks': '<polyline points="3.5 6.5 5.2 8.2 8 5"></polyline><line x1="11" y1="6.5" x2="20.5" y2="6.5"></line><polyline points="3.5 12.5 5.2 14.2 8 11"></polyline><line x1="11" y1="12.5" x2="20.5" y2="12.5"></line><circle cx="5.6" cy="18.5" r="1.6"></circle><line x1="11" y1="18.5" x2="20.5" y2="18.5"></line>',
   'workspace': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path>',
   'bot': '<rect x="4" y="8" width="16" height="12" rx="2"></rect><path d="M12 8V4"></path><circle cx="9" cy="14" r="1"></circle><circle cx="15" cy="14" r="1"></circle>',
+  'api': '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"></path><path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path><line x1="9.5" y1="12" x2="9.51" y2="12"></line><line x1="14.5" y1="12" x2="14.51" y2="12"></line>',
   'artifacts': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><polyline points="14 2 14 8 20 8"></polyline>',
 };
 
 /// The few that also have a solid form, for a selected or active state.
 const Map<String, String> kNymGlyphFilled = <String, String>{
+  'pin': '<rect x="11" y="16" width="2" height="6" rx="1"></rect><path d="M9 2h6l-1 7 4 4v2H6v-2l4-4z"></path>',
   'star': '<polygon points="12 3 14.9 9 21.5 9.8 16.7 14.3 18 20.8 12 17.6 6 20.8 7.3 14.3 2.5 9.8 9.1 9 12 3"></polygon>',
   'dot': '<circle cx="12" cy="12" r="5"></circle>',
   'thumbUp': '<path d="M7 21V10l5-7a2 2 0 0 1 3 2l-1 5h5a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.6 21H7Z"></path><rect x="2" y="10" width="5" height="11" rx="1"></rect>',
@@ -85,7 +88,6 @@ const Map<String, String> kNymGlyphFilled = <String, String>{
 const Map<String, String> kNymGlyphShell = <String, String>{
   'connectors': '<path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 17v4"></path>',
   'scheduled': '<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>',
-  'saved-messages': '<path d="M12 17v5"></path><path d="M9 2h6l-1 7 4 4v2H6v-2l4-4z"></path>',
   'help': '<circle cx="12" cy="12" r="9"></circle><path d="M9.6 9.2a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.8-.9 1.4v.5"></path><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"></circle>',
   'server-runs': '<rect x="3" y="4" width="18" height="7" rx="1.5"></rect><rect x="3" y="13" width="18" height="7" rx="1.5"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line>',
   'research': '<circle cx="11" cy="11" r="6"></circle><line x1="20" y1="20" x2="15.5" y2="15.5"></line><line x1="8.5" y1="11" x2="13.5" y2="11"></line><line x1="11" y1="8.5" x2="11" y2="13.5"></line>',
@@ -105,8 +107,9 @@ const Map<String, String> kNymGlyphFor = <String, String>{
   'bots': 'bot',
   'artifacts': 'artifacts',
   'scheduled': 'scheduled',
-  'saved-messages': 'saved-messages',
+  'saved-messages': 'star',
   'memory': 'memory',
+  'api': 'api',
   'settings': 'settings',
   'help': 'help',
   'auto-routed': 'model',

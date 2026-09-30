@@ -39,7 +39,7 @@ class Backup {
         'bots': [for (final b in store.bots()) b.toJson()],
         'conversations': [
           for (final c in store.conversations())
-            if (!c.ephemeral) _chat(c, store.messages(c.id)),
+            if (!c.ephemeral && !c.support) _chat(c, store.messages(c.id)),
         ],
       });
 
@@ -130,7 +130,7 @@ class Backup {
     var count = 0;
     for (final entry in _maps(payload['conversations'])) {
       final raw = entry['conversation'];
-      if (raw is! Map) continue;
+      if (raw is! Map || raw['support'] == true) continue;
       final Conversation conv;
       try {
         conv = AccountSync.chatFromWire({

@@ -4,6 +4,7 @@
     const PRESETS = { standard: [50, 100, 250, 500, 1000], pro: [1, 5, 10, 25, 50] };
     const MIN = { standard: 10, pro: 1 };
     const CODE_RE = /^GIFT-[0-9A-F]{32}$/;
+    const REFUND_RE = /^REFUND-[0-9A-F]{64}$/;
     const KEPT = 50;
 
     const $ = (id) => document.getElementById(id);
@@ -30,7 +31,7 @@
         s = s.split(/[&\s]/)[0];
         try { s = decodeURIComponent(s); } catch (_) { }
         s = s.trim().toUpperCase();
-        return CODE_RE.test(s) ? s : '';
+        return CODE_RE.test(s) || REFUND_RE.test(s) ? s : '';
     }
 
     function newCode() {

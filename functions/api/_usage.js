@@ -68,7 +68,7 @@ export function noteUsage(context, row) {
         Date.now(), row.pubkey.toLowerCase(), String(row.kind || "chat").slice(0, 16), String(row.tier || "standard").slice(0, 16),
         row.task ? String(row.task).slice(0, 32) : null, row.model ? String(row.model).slice(0, 120) : null,
         num(row.calls), num(u.fresh) + num(u.wrote), num(u.out), num(u.read),
-        num(row.costMilli), num(row.ms), usageClient(context.request), row.git ? 1 : 0, row.web ? 1 : 0,
+        num(row.costMilli), num(row.ms), row.client ? String(row.client).slice(0, 32) : usageClient(context.request), row.git ? 1 : 0, row.web ? 1 : 0,
         row.ok === false ? 0 : 1, row.err ? String(row.err).slice(0, 200) : null
       ];
       const cols = "at, pubkey, kind, tier, task, model, calls, tok_in, tok_out, tok_cached, cost_milli, ms, client, git, web, ok, err";

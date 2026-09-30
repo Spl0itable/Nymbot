@@ -51,6 +51,9 @@
     const ServerRun = window.NymbotServerRun;
     const Notify = window.NymbotNotify;
     const KB = window.NymbotKeyBackup;
+    const Support = window.NymbotSupport;
+    const SUPPORT_MAX = 2000;
+    const SUPPORT_HIDDEN_ACTS = new Set(['rename-chat', 'fork-chat', 'open-system', 'open-tags', 'open-stats', 'open-caps', 'share-chat']);
     const NT = () => window.NostrTools;
 
     /// Never abbreviated: every digit of money stays.
@@ -290,6 +293,7 @@
                 }
             });
             if (this.conv) Notify.viewingChat(this.conv.id);
+            this.startSupport();
             window.NymbotGift.fromUrl(this);
             this.watchScrolling();
             this.startScheduler();
@@ -399,8 +403,37 @@
             window.addEventListener('focus', () => Sync.touch(1500));
         },
 
+        startSupport() {
+            if (!Support) return;
+            Support.attach({
+                viewing: () => !!(this.conv && this.conv.support && !document.hidden),
+                changed: () => this.supportChanged(),
+                replied: (msg, info) => {
+                    if (!Notify.allowed()) return;
+                    if (!Notify.hidden() && info && info.watching) return;
+                    Notify.show(Support.ID, true, t('Nymbot support replied'));
+                }
+            });
+            if (!this._supportWatch) {
+                this._supportWatch = Store.watch((key) => {
+                    if (key === 'conversations' || key === 'supportTokens') Support.start();
+                });
+            }
+        },
+
+        supportChanged() {
+            const conv = Store.conversation(Support.ID);
+            if (this.conv && this.conv.support && conv) {
+                if (!document.hidden) Support.markRead();
+                this.conv = Store.conversation(Support.ID) || conv;
+                this.renderMessages();
+            }
+            this.renderList();
+        },
+
         afterSync(touched) {
             const set = new Set(touched || []);
+            if (Support && (set.has('chats') || set.has('supportTokens'))) Support.start();
             if (set.has('settings')) {
                 const nickname = this.nickname();
                 this.settings = Store.settings();
@@ -496,8 +529,15 @@
             this.editing = null;
             this.renderAttachments();
             this.renderQuote();
-            $('chatTitle').textContent = conv.title || t('New chat');
+            $('chatTitle').textContent = conv.support ? t('Support') : (conv.title || t('New chat'));
             $('chatAnon').hidden = !conv.anon;
+            const support = !!conv.support;
+            $('shell').classList.toggle('is-support', support);
+            $('attachBtn').disabled = support;
+            if (support && Support) {
+                Support.markRead();
+                this.conv = Store.conversation(conv.id) || conv;
+            }
             const payer = conv.anon ? Anon.forConv(conv) : null;
             if (payer && payer.pk !== this.anonBalancePk) {
                 this.anonBalance = { standard: null, pro: null };
@@ -568,11 +608,11 @@
                 btn.type = 'button';
                 if (conv.pinned) {
                     const pin = el('span', 'conv-pin');
-                    pin.appendChild(Icons.node('star', { size: 11, filled: true }));
+                    pin.appendChild(Icons.node('pin', { size: 11, filled: true }));
                     btn.appendChild(pin);
                 }
                 const main = el('div', 'conv-main');
-                main.appendChild(el('span', 'conv-title', conv.title || t('New chat')));
+                main.appendChild(el('span', 'conv-title', conv.support ? t('Support') : (conv.title || t('New chat'))));
                 const bits = [];
                 const convRepos = (conv.repoIds || []).map(id => repos.find(r => r.id === id)).filter(Boolean);
                 if (convRepos.length) bits.push(convRepos.map(r => r.label || r.repo).join(', '));
@@ -580,6 +620,15 @@
                 if (bits.length) main.appendChild(el('span', 'conv-sub', bits.join(' · ')));
                 btn.appendChild(main);
                 if (conv.anon) btn.appendChild(el('span', 'conv-badge', t('Anon')));
+                if (conv.support) {
+                    btn.appendChild(el('span', 'conv-badge is-support', t('Support')));
+                    const unread = Number(conv.unread) || 0;
+                    if (unread > 0) {
+                        const dot = el('span', 'conv-unread', String(unread));
+                        dot.setAttribute('aria-label', t('{n} unread', { n: unread }));
+                        btn.appendChild(dot);
+                    }
+                }
                 if (this.sendingIn(conv.id)) btn.appendChild(this.busyMark());
                 btn.addEventListener('click', () => this.open(Store.conversation(conv.id)));
                 li.className = 'conv-row';
@@ -698,6 +747,12 @@
         },
 
         emptyState() {
+            if (this.conv && this.conv.support) {
+                const box = el('div', 'empty');
+                box.appendChild(el('h2', null, t('Nymbot support')));
+                box.appendChild(el('p', null, t('Messages here go to the Nymbot developer as end-to-end encrypted private messages from your own key. Replies show up here.')));
+                return box;
+            }
             const bot = Chat.botFor(this.conv);
             const wrap = el('div', 'empty');
             wrap.appendChild(el('h2', null, bot ? bot.name : t('Ask Nymbot anything')));
@@ -741,7 +796,7 @@
         groupFor(m) {
             const box = $('messages');
             const self = m.role === 'self';
-            const key = m.role === 'bot' ? 'bot' : self ? 'self' : m.role + '-' + m.id;
+            const key = m.role === 'bot' ? (m.support ? 'support' : 'bot') : self ? 'self' : m.role + '-' + m.id;
             if (this._lastGroup && this._lastKey === key && this._lastGroup.isConnected) {
                 return { group: this._lastGroup, grouped: true };
             }
@@ -864,7 +919,9 @@
             node.dataset.id = m.id;
             node.dataset.role = m.role;
 
-            if (m.role === 'self' || m.role === 'bot') {
+            if (m.role === 'bot' && m.support) {
+                node.appendChild(el('span', 'message-author bot-author', t('Nymbot support')));
+            } else if (m.role === 'self' || m.role === 'bot') {
                 const who = el('span', 'message-author' + (m.role === 'bot' ? ' bot-author' : ''));
                 if (m.role === 'bot') {
                     who.appendChild(document.createTextNode(C.botName));
@@ -926,7 +983,7 @@
                 text.textContent = m.content;
             }
             body.appendChild(text);
-            if (m.role === 'bot' && window.NymbotRunner) window.NymbotRunner.decorate(text);
+            if (m.role === 'bot' && !m.support && window.NymbotRunner) window.NymbotRunner.decorate(text);
             if (m.docs && window.NymbotDocs) {
                 const used = window.NymbotDocs.usedNode(m.docs);
                 if (used) body.appendChild(used);
@@ -1008,6 +1065,20 @@
 
         actionsFor(m) {
             const row = el('div', 'msg-actions');
+            if (this.conv && this.conv.support) {
+                for (const [icon, title, act] of [['copy', t('Copy'), 'msg-copy'], ['close', t('Delete'), 'msg-delete']]) {
+                    const b = el('button', 'msg-action');
+                    b.type = 'button';
+                    b.title = title;
+                    b.dataset.tip = title;
+                    b.setAttribute('aria-label', title);
+                    b.dataset.act = act;
+                    b.dataset.id = m.id;
+                    b.appendChild(Icons.node(icon, { size: 14 }));
+                    row.appendChild(b);
+                }
+                return row;
+            }
             const add = (icon, title, act, extra) => {
                 const b = el('button', 'msg-action' + (extra && extra.cls ? ' ' + extra.cls : ''));
                 b.type = 'button';
@@ -1640,6 +1711,7 @@
             const typed = override != null ? override : input.value.trim();
             const bare = !!(opts && opts.bare);
             if (!typed) return;
+            if (conv.support) return this.sendSupport(conv, typed, override == null);
             Notify.askOnce();
             this._pinnedReply = null;
             const here = () => !!(this.conv && this.conv.id === conv.id);
@@ -3305,6 +3377,13 @@
             const input = $('input');
             const text = input.value;
             const hint = $('costHint');
+            if (this.conv && this.conv.support) {
+                input.setAttribute('placeholder', t('Write to the Nymbot developer'));
+                hint.textContent = t('Sent to the developer as an encrypted private message. Free.');
+                const over = text.trim().length > SUPPORT_MAX;
+                $('lenHint').textContent = over ? t('{n} of {max} characters', { n: num(text.trim().length), max: num(SUPPORT_MAX) }) : '';
+                return;
+            }
             const opts = { attachments: this.attachments, quote: this.quote };
             const media = this.mediaModel();
             input.setAttribute('placeholder', this.composerPlaceholder(media));
@@ -3376,6 +3455,10 @@
         },
 
         async addFiles(files) {
+            if (this.conv && this.conv.support) {
+                this.toast(t('Attachments cannot be sent to support.'));
+                return;
+            }
             const added = [];
             for (const file of files) {
                 try {
@@ -6242,6 +6325,8 @@
         },
 
         openHelp(term) {
+            $('helpMail').href = 'mailto:' + C.supportEmail;
+            $('helpMail').textContent = t('Email {address}', { address: C.supportEmail });
             $('helpSearch').value = term || '';
             this.renderHelp();
             this.openModal('modalHelp');
@@ -6276,12 +6361,27 @@
             }
         },
 
-        openAbout() {
+        openAbout(opts) {
             $('aboutVersion').textContent = C.version;
             this.modalStatus('aboutContactStatus', '');
             this.renderBuildCheck();
             this.renderCanaryCheck();
             this.openModal('modalAbout');
+            if (opts && opts.contact) {
+                const head = $('aboutContactHead');
+                const field = $('aboutContactMessage');
+                if (head) head.scrollIntoView({ block: 'start' });
+                if (field) field.focus({ preventScroll: true });
+            }
+        },
+
+        openSupportContact() {
+            this.openAbout({ contact: true });
+        },
+
+        openApi() {
+            const Keys = window.NymbotApiKeys;
+            return Keys ? Keys.open(this) : null;
         },
 
         aboutStatus(id, text, kind) {
@@ -6395,17 +6495,45 @@
         },
 
         async sendDeveloperMessage(topic, text) {
-            const Wire = window.NymbotWire;
-            const to = C.developerPubkey;
-            let kem = null;
+            return Support.send(text, { topic });
+        },
+
+        async sendSupport(conv, text, typed) {
+            if (this._supportSending) return;
+            const input = $('input');
+            if (text.length > SUPPORT_MAX) {
+                this.toast(t('That is over 2000 characters. Shorten it and send it again.'));
+                return;
+            }
+            if (this.attachments.length) {
+                this.attachments = [];
+                this.renderAttachments();
+                this.toast(t('Attachments cannot be sent to support.'));
+            }
+            if (!Relays.connected) {
+                this.toast(t('Not connected to a relay. Try again once connected.'));
+                return;
+            }
+            this._supportSending = true;
+            $('sendBtn').disabled = true;
             try {
-                const key = await PQ.resolve(to);
-                kem = key && key.pk ? key.pk : null;
-            } catch (_) { kem = null; }
-            const body = '[Nymbot contact \u2014 ' + topic + ']\n\n' + text;
-            const rumor = Wire.rumor(body, to, null, null, Identity.pubkey);
-            const wrap = await Wire.wrap(rumor, to, kem);
-            return Relays.publish(wrap, 5000);
+                const accepted = await Support.send(text);
+                if (accepted > 0) {
+                    if (typed && this.conv && this.conv.id === conv.id && input.value.trim() === text) {
+                        input.value = '';
+                        this.autoGrow();
+                        this.updateHints();
+                    }
+                    Store.setDraft(conv.id, '');
+                } else {
+                    this.toast(t('No relay took the message. Try again.'));
+                }
+            } catch (_) {
+                this.toast(t('Could not send the message. Try again.'));
+            } finally {
+                this._supportSending = false;
+                $('sendBtn').disabled = false;
+            }
         },
 
         async sendAboutContact() {
@@ -7075,7 +7203,7 @@
         shareTargets(term) {
             const needle = String(term || '').toLowerCase().trim();
             return Store.conversations()
-                .filter(c => !c.archived)
+                .filter(c => !c.archived && !c.support)
                 .filter(c => !needle
                     || (c.title || '').toLowerCase().includes(needle)
                     || (c.tags || []).some(x => String(x).toLowerCase().includes(needle)))
@@ -7100,7 +7228,7 @@
                     + (this.conv && this.conv.id === conv.id ? ' is-active' : ''));
                 row.type = 'button';
                 row.dataset.share = conv.id;
-                if (conv.pinned) row.appendChild(Icons.node('star', { size: 11, filled: true }));
+                if (conv.pinned) row.appendChild(Icons.node('pin', { size: 11, filled: true }));
                 row.appendChild(el('span', 'chip-menu-label', conv.title || t('New chat')));
                 row.addEventListener('click', () => this.acceptShare(conv));
                 list.appendChild(row);
@@ -8495,7 +8623,7 @@
             if (!menu) return;
             const icons = {
                 'menu-find': 'search', 'share-transcript': 'share',
-                'rename-chat': 'pencil', 'pin-chat': 'star', 'archive-chat': 'archive', 'fork-chat': 'branch',
+                'rename-chat': 'pencil', 'pin-chat': 'pin', 'archive-chat': 'archive', 'fork-chat': 'branch',
                 'open-system': 'person', 'open-tags': 'workspace', 'open-stats': 'chart', 'open-caps': 'wallet',
                 'export-md': 'artifacts', 'export-txt': 'terse', 'export-json': 'code',
                 'copy-transcript': 'copy', 'share-chat': 'link', 'clear-chat': 'broom', 'delete-chat': 'close'
@@ -8518,6 +8646,9 @@
             });
             const share = $('menuShareTranscript');
             if (share) share.hidden = typeof navigator.share !== 'function';
+            menu.querySelectorAll('button[data-act]').forEach((button) => {
+                if (SUPPORT_HIDDEN_ACTS.has(button.dataset.act)) button.hidden = !!(conv && conv.support);
+            });
             if (!conv) return;
             $('menuPin').querySelector('.menu-label').textContent = conv.pinned ? t('Unpin') : t('Pin');
             $('menuArchive').querySelector('.menu-label').textContent = conv.archived ? t('Unarchive') : t('Archive');
@@ -8637,6 +8768,7 @@
                 { label: t('Memory'), hint: '', run: () => this.openMemory() },
                 { label: t('Keyboard shortcuts'), hint: '', run: () => this.openShortcuts() },
                 { label: t('About Nymbot'), hint: '', run: () => this.openAbout() },
+                { label: t('API keys'), hint: '', run: () => this.openApi() },
                 { label: t('Buy credits'), hint: '', run: () => this.openCredits() },
                 { label: t('Anonymous chat'), hint: '', run: this.paidOnly(() => this.openAnon(), true) },
                 { label: t('Identity'), hint: '', run: () => this.openSettings() },
@@ -9181,6 +9313,8 @@
                 'open-models': () => this.openModels(),
                 'open-help': () => this.openHelp(),
                 'open-about': () => this.openAbout(),
+                'help-message-support': () => this.openSupportContact(),
+                'open-api': () => this.openApi(),
                 'about-send': () => this.sendAboutContact(),
                 'open-schedules': () => this.openSchedules(),
                 'schedule-save': () => this.saveScheduleForm(),
@@ -9348,6 +9482,7 @@
                 Team.handlers(this),
                 window.NymbotTasks ? window.NymbotTasks.handlers(this) : {},
                 window.NymbotGift.handlers(this),
+                window.NymbotApiKeys ? window.NymbotApiKeys.handlers(this) : {},
                 window.NymbotVault ? window.NymbotVault.handlers(this) : {});
 
             document.addEventListener('click', (e) => {
@@ -9514,6 +9649,13 @@
             input.addEventListener('paste', async (e) => {
                 const data = e.clipboardData;
                 if (!data) return;
+                if (this.conv && this.conv.support) {
+                    if (Array.from(data.items || []).some(i => i.kind === 'file')) {
+                        e.preventDefault();
+                        this.toast(t('Attachments cannot be sent to support.'));
+                    }
+                    return;
+                }
                 const files = Array.from(data.items || []).filter(i => i.kind === 'file');
                 if (files.length) {
                     e.preventDefault();

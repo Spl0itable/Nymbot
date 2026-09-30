@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API overview - Nymbot Knowledge Base</title>
+    <meta name="description" content="The Nymbot API: OpenAI- and Anthropic-compatible endpoints paid from your Nymbot balance, with keys you make in the app, spending caps in sats, errors, limits and privacy.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="API overview - Nymbot Knowledge Base">
+    <meta property="og:description" content="The Nymbot API: OpenAI- and Anthropic-compatible endpoints paid from your Nymbot balance, with keys you make in the app, spending caps in sats, errors, limits and privacy.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="API overview - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="The Nymbot API: OpenAI- and Anthropic-compatible endpoints paid from your Nymbot balance, with keys you make in the app, spending caps in sats, errors, limits and privacy.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>API overview</h1>
+            <p class="docs-lede">The models, generators and balance you use in the app, from your own code. The
+                API speaks the OpenAI and Anthropic formats, so most tools and SDKs work by changing a base URL
+                and a key.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="what-it-is">What the API is</h2>
+            <p>An HTTP API on <code>nymbot.ai</code> that answers the same requests an OpenAI or Anthropic
+                client already sends. You get:</p>
+            <ul>
+                <li><a href="/docs/api-chat/#chat-completions">Chat Completions</a>, the
+                    <a href="/docs/api-chat/#responses">Responses API</a> and
+                    <a href="/docs/api-chat/#messages">Anthropic Messages</a>, with streaming, tools, pictures,
+                    reasoning and web search, for every model in the <a href="/docs/models/#catalog">catalog</a>
+                    and for Nymbot's own auto-routing.</li>
+                <li><a href="/docs/api-media/#images">Images</a>, <a href="/docs/api-media/#video">video</a>,
+                    <a href="/docs/api-media/#speech">speech</a>,
+                    <a href="/docs/api-media/#transcription">transcription</a> and
+                    <a href="/docs/api-media/#embeddings">embeddings</a>.</li>
+                <li>Your <a href="/docs/api-account/#balance">balance</a>,
+                    <a href="/docs/api-account/#topup">Lightning top-ups</a>,
+                    <a href="/docs/api-account/#nwc">automatic top-ups from your wallet</a> and a
+                    <a href="/docs/api-account/#history">history</a> of what each request cost.</li>
+            </ul>
+            <p>It is paid from the same two <a href="/docs/credits/#two-balances">balances</a> as the app, at
+                the same prices. There is no subscription and no free allowance on the API: every request is
+                paid for from credits you bought.</p>
+            <p>What the API does not do is add anything of Nymbot's own. Your messages go to the model as you
+                sent them: no Nymbot system prompt, no memory, no date or language hints. What comes back is
+                the model's answer and a note of what it cost.</p>
+
+            <h2 id="base-urls">Base URLs</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Use</th><th>Base URL</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>OpenAI SDKs and OpenAI-compatible tools</td><td><code>https://nymbot.ai/api/v1</code></td></tr>
+                        <tr><td>Anthropic SDKs and Claude Code</td><td><code>https://nymbot.ai/api</code> (the SDK adds <code>/v1/messages</code> itself)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Every endpoint lives under <code>/api/v1/</code>. An unknown path returns <code>404</code> and a
+                known path called with the wrong method returns <code>405</code>, both as JSON.</p>
+            <p>The API answers cross-origin requests from any site, so a browser page can call it. Anything
+                you ship to a browser can be read by whoever opens it, though, so only do that with a key that
+                has a small <a href="#keys">cap</a>.</p>
+
+            <h2 id="keys">API keys</h2>
+            <p>Keys are made in the app. Open <strong>API</strong> in the sidebar of the web app, or in the
+                menu on Android and iOS, and tap <strong>Create key</strong>. Give it a name and, if you like,
+                a cap and an expiry date.</p>
+            <p>The key is shown once. Copy it somewhere safe before you close the sheet: Nymbot keeps only a
+                fingerprint of it, so it cannot show it to you again. A lost key cannot be recovered; revoke it
+                and make another.</p>
+            <p>A key looks like <code>sk-nymbot-</code> followed by 43 letters, digits, dashes and
+                underscores. The app lists each key by its name and a short hint such as
+                <code>sk-nymbot-Qm7x&hellip;c2Lw</code>.</p>
+            <ul>
+                <li><strong>A key belongs to your nym.</strong> It spends your balance, and only your nym can
+                    make, change or revoke it. Anyone holding the key can spend with it, so treat it like a
+                    password.</li>
+                <li><strong>Caps are in sats.</strong> A key can have a spending cap, and the cap can reset
+                    every day, every week (Monday) or every month (the first), at 00:00 UTC. It counts both
+                    balances, a standard credit as 10 sats and a Pro credit as 100, so it means the same
+                    whichever balance a request spends. Before a request runs, the most it could cost
+                    (rounded up to whole credits) is set against what is left of the cap. If it does not fit,
+                    the request is refused with <code>403</code> <code>key_limit_reached</code>, even if the
+                    answer would have come in under the cap; the error says how much is left and when the cap
+                    resets. Lowering <code>max_tokens</code> lowers that worst case. A request is charged what it
+                    actually cost and that counts against the cap, so if the provider reports more tokens than
+                    were set aside, the last request that fit can take the key a little past its cap; the next
+                    one is then refused.</li>
+                <li><strong>A spent cap only stops spending.</strong> A key at its cap can still check the
+                    balance, read its history, list models, count tokens, top up and check on a video it
+                    already started.</li>
+                <li><strong>Expiry is optional.</strong> After the date you set, the key stops working.</li>
+                <li><strong>Revoking is immediate and final.</strong> A revoked key fails its next request.
+                    It stays in the list, marked revoked, so its spending history still makes sense.</li>
+                <li>You can have up to 25 active keys, each with its own name. Changing a key's reset
+                    period starts a new period at zero.</li>
+            </ul>
+            <p>The same sheet shows each key's spending this period and in total, when it was last used, both
+                of your balances, and your recent API requests. The endpoints behind it are documented under
+                <a href="/docs/api-account/#key-endpoints">managing keys</a>.</p>
+
+            <h2 id="authentication">Authenticating a request</h2>
+            <p>Send the key in any one of these headers. They are equivalent, so use whichever your client
+                sends by default:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Header</th><th>Sent by</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>Authorization: Bearer sk-nymbot-&hellip;</code></td><td>OpenAI SDKs, most tools, Claude Code with <code>ANTHROPIC_AUTH_TOKEN</code></td></tr>
+                        <tr><td><code>x-api-key: sk-nymbot-&hellip;</code></td><td>Anthropic SDKs</td></tr>
+                        <tr><td><code>api-key: sk-nymbot-&hellip;</code></td><td>Azure-style clients</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>A missing, unknown, revoked or expired key returns <code>401</code>, with the code
+                <code>missing_api_key</code>, <code>invalid_api_key</code>, <code>revoked_api_key</code> or
+                <code>expired_api_key</code>. Listing models, audio models and voices, and payment methods
+                needs no key.</p>
+            <p>Pictures, video, speech, transcription and embeddings can also be paid for one request at a
+                time over Lightning with no key at all: send the request without one and pay the invoice in
+                the <code>402</code> answer. See <a href="/docs/api-account/#l402">paying per request without a
+                key</a>.</p>
+            <p>Key management, the account summary and automatic top-ups are the exception: they take a
+                signature from your nym instead of a key, so a leaked key cannot make more keys. See
+                <a href="/docs/api-account/#nip98">signing account requests</a>.</p>
+
+            <h2 id="first-request">Your first request</h2>
+            <p>Put the key in an environment variable, then ask a model something. The examples throughout
+                these pages read it from <code>NYMBOT_API_KEY</code>.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>export NYMBOT_API_KEY="sk-nymbot-..."
+
+curl https://nymbot.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nymbot/auto",
+    "messages": [{"role": "user", "content": "What is a Lightning invoice?"}]
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://nymbot.ai/api/v1",
+    api_key=os.environ["NYMBOT_API_KEY"],
+)
+
+reply = client.chat.completions.create(
+    model="nymbot/auto",
+    messages=[{"role": "user", "content": "What is a Lightning invoice?"}],
+)
+print(reply.choices[0].message.content)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://nymbot.ai/api/v1",
+  apiKey: process.env.NYMBOT_API_KEY,
+});
+
+const reply = await client.chat.completions.create({
+  model: "nymbot/auto",
+  messages: [{ role: "user", content: "What is a Lightning invoice?" }],
+});
+console.log(reply.choices[0].message.content);</code></pre>
+            <p><code>nymbot/auto</code> is Nymbot's own routing, paid from the standard balance. Put a catalog
+                model's id there instead, such as <code>anthropic/claude-sonnet-5</code>, to use that model
+                from the Pro balance. <a href="/docs/api-chat/#models">Listing models</a> gives every id.</p>
+
+            <h2 id="billing">What a request costs</h2>
+            <p>The API bills exactly the way the app does.</p>
+            <ul>
+                <li><strong>Which balance.</strong> <code>nymbot/auto</code> spends the
+                    <strong>standard</strong> balance (10 sats a credit). Every other chat model spends the
+                    <strong>Pro</strong> balance (100 sats a credit). The standard image generator and the
+                    standard voice spend standard credits; every other generator spends Pro. Embeddings spend
+                    standard credits. Transcription spends standard credits when the standard balance can
+                    cover it, and Pro credits otherwise. The models list says which balance each model
+                    spends.</li>
+                <li><strong>How much.</strong> A chat request is metered on the tokens the model actually read
+                    and wrote, at the provider's published rates. That price has a 5% fee added and is then
+                    multiplied by 1.5, so you pay 1.575 times the provider's list price. It is converted to
+                    sats at the live Bitcoin price and charged in thousandths of a credit. Pro pictures, video
+                    and speech are priced per generation, per second or per character, and transcription per
+                    second of audio, with the same fee and margin. The standard picture is a flat 5 standard
+                    credits and the standard voice a flat 3.</li>
+                <li><strong>The minimum.</strong> Every metered request that runs costs at least 0.05 credit:
+                    half a sat on the standard balance, 5 sats on Pro. Fractions of a credit are carried over,
+                    not rounded up each time.</li>
+                <li><strong>Hold, then settle.</strong> Before a request runs, the most it could cost is held
+                    from your balance, based on what you sent and the most tokens it may write. Text outside
+                    plain ASCII is sized from its UTF-8 bytes, so text in any script is held for in full. The hold is in
+                    whole credits, at least one, so any request needs at least 10 sats free on the standard
+                    balance or 100 sats on Pro to start. Only the actual cost is charged; the rest is released
+                    when it finishes. A long request keeps its hold for as long as it runs. If the actual cost
+                    is more than the balance can pay, the whole balance is taken, the rest is owed
+                    (<code>owed_sats</code> in the <code>nymbot</code> object, and a negative balance), and it is
+                    collected before your next request runs.</li>
+                <li><strong>Not enough credit.</strong> If the balance cannot cover the hold, the request is
+                    refused with <code>402</code> before anything runs. The error says which balance is short,
+                    how many sats the request needs and how many are free. A smaller
+                    <code>max_tokens</code> means a smaller hold.</li>
+                <li><strong>Failures.</strong> A request that fails costs nothing, unless the provider billed
+                    for the work it did before failing, or a web search or the <code>nymbot/auto</code> task
+                    check had already run; then that is what you pay, at least 0.05 credit. A stream you cut
+                    off is charged for what was generated up to that point, and a request whose connection
+                    drops still finishes and is charged.</li>
+                <li><strong>Web search</strong> has no fee of its own when the request succeeds. The pages it
+                    reads are sent to the model as input, so it costs the tokens they add. If the model then
+                    fails, the search is charged on its own.</li>
+            </ul>
+            <p>Every response says what it cost. JSON responses carry a <code>nymbot</code> object with the
+                balance it was paid from, the charge in credits and sats, and what is left:</p>
+            <p class="docs-note-label">The cost object</p>
+<pre><code>"nymbot": {
+  "balance": "pro",
+  "charged_credits": 0.162,
+  "charged_sats": 16.2,
+  "balance_credits": 412.425,
+  "balance_sats": 41242.5
+}</code></pre>
+            <p>Paid responses also carry these headers, which is where to look for the cost of a response
+                that is not JSON, such as speech:</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Header</th><th>Meaning</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>X-Nymbot-Cost-Sats</code></td><td>What this request cost, in sats.</td></tr>
+                        <tr><td><code>X-Nymbot-Balance-Sats</code></td><td>What is left on the balance it was paid from, in sats.</td></tr>
+                        <tr><td><code>X-Request-Id</code></td><td>An id for the request, on every response. Quote it if you contact support.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Rates per million tokens, already including the fee and margin, are in the
+                <a href="/docs/api-chat/#models">models list</a> in dollars and sats, and on
+                <a href="/docs/credits/#every-model">the price sheet</a>. If the Bitcoin price cannot be read,
+                paid requests return <code>503</code> <code>price_unavailable</code> with
+                <code>Retry-After: 60</code> rather than guessing.</p>
+
+            <h2 id="errors">Errors</h2>
+            <p>Every error has the same shape, the one OpenAI clients already understand. <code>code</code> is
+                a stable name you can match on; <code>message</code> is for people and may change.</p>
+            <p class="docs-note-label">Error body</p>
+<pre><code>{
+  "error": {
+    "message": "This request needs up to 200 sats (2 credits) on your Pro balance, and 40 sats are free. Catalog models spend the Pro balance. Top up in the Nymbot app or with POST /api/v1/topup/create/btc-lightning.",
+    "type": "insufficient_quota",
+    "code": "insufficient_balance",
+    "param": null,
+    "balance": "pro",
+    "required_sats": 200,
+    "balance_sats": 40
+  }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code> <code>invalid_request_error</code></td><td>The body is not valid JSON (<code>invalid_json</code>), a required field is missing (<code>missing_required_parameter</code>), a value is wrong, or the request asks for something the model or endpoint does not do, such as tools on <code>nymbot/auto</code> (<code>unsupported_tool</code>). <code>param</code> names the field. Also <code>upstream_rejected</code> when the provider refused the request.</td></tr>
+                        <tr><td><code>401</code> <code>authentication_error</code></td><td>The key is missing, unknown, revoked or expired, or a signed request is invalid or reused.</td></tr>
+                        <tr><td><code>402</code> <code>insufficient_quota</code></td><td>The balance cannot cover the request. Code <code>insufficient_balance</code>, with <code>balance</code>, <code>required_sats</code> and <code>balance_sats</code>.</td></tr>
+                        <tr><td><code>403</code> <code>permission_error</code></td><td>The request does not fit the key's cap (<code>key_limit_reached</code>, with <code>limit_sats</code>, <code>used_sats</code> and <code>reset_at</code>), or the account may not use the service (<code>account_denied</code>).</td></tr>
+                        <tr><td><code>404</code> <code>not_found_error</code></td><td>An unknown path (<code>unknown_endpoint</code>), a model that does not exist (<code>model_not_found</code>), or an unknown key, invoice or video.</td></tr>
+                        <tr><td><code>405</code></td><td>The path exists but not with that method (<code>method_not_allowed</code>). The <code>Allow</code> header lists the methods it takes.</td></tr>
+                        <tr><td><code>413</code></td><td>The body or file is too large (<code>payload_too_large</code>, <code>file_too_large</code>), or a recording is too long (<code>audio_too_long</code>). See <a href="#limits">limits</a>.</td></tr>
+                        <tr><td><code>422</code></td><td>A voice and language that do not go together in text to speech (<code>voice_language_mismatch</code>, <code>unsupported_language</code>).</td></tr>
+                        <tr><td><code>429</code> <code>rate_limit_error</code></td><td>Too many requests on this key (<code>rate_limit_exceeded</code>), or the provider is rate-limiting (<code>upstream_rate_limited</code>). Wait for the seconds in <code>Retry-After</code>.</td></tr>
+                        <tr><td><code>500</code> <code>api_error</code></td><td>Something went wrong on Nymbot's side (<code>internal_error</code>).</td></tr>
+                        <tr><td><code>502</code> <code>api_error</code></td><td>The provider did not return an answer (<code>upstream_error</code>), or a Lightning invoice could not be made (<code>invoice_unavailable</code>).</td></tr>
+                        <tr><td><code>503</code> <code>api_error</code></td><td>The provider is overloaded (<code>upstream_overloaded</code>), the Bitcoin price cannot be read (<code>price_unavailable</code>), or a part of the service is down (<code>service_unavailable</code>, <code>media_hosting_unavailable</code>). <code>Retry-After</code> says when to try again, where it is known.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>Two exceptions:</p>
+            <ul>
+                <li><code>/api/v1/messages</code> answers in Anthropic's error format, since that is what
+                    Anthropic clients parse:
+                    <code>{"type": "error", "error": {"type": "authentication_error", "message": "&hellip;"}}</code>.
+                    The type follows the status: <code>invalid_request_error</code>,
+                    <code>authentication_error</code>, <code>billing_error</code> (402),
+                    <code>permission_error</code>, <code>not_found_error</code>, <code>request_too_large</code>,
+                    <code>rate_limit_error</code>, <code>api_error</code> or <code>overloaded_error</code>
+                    (503).</li>
+                <li>A streaming request that fails before its first byte gets an ordinary JSON error with the
+                    status above, not an event stream. A failure after the stream has started is sent as the
+                    stream's last event, in that endpoint's own format.</li>
+            </ul>
+            <p>Error messages never contain another service's internal details. A provider's own error is
+                reworded before it reaches you.</p>
+
+            <h2 id="limits">Limits</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Limit</th><th>Value</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Requests per key</td><td>120 a minute. Above that, <code>429</code> with <code>Retry-After</code>.</td></tr>
+                        <tr><td>Requests without a key</td><td>120 a minute per address, for the model, audio and payment method listings, refund token checks, and paid endpoints called without a key or payment. Above that, <code>429</code> with <code>Retry-After</code>.</td></tr>
+                        <tr><td>New keys</td><td>60 an hour per nym and 120 an hour per address.</td></tr>
+                        <tr><td>Top-up invoices</td><td>60 an hour per nym and 120 an hour per address.</td></tr>
+                        <tr><td>JSON request body</td><td>4 MB</td></tr>
+                        <tr><td>Multipart request body (uploads)</td><td>32 MB. A picture to edit can be up to 20 MB, an audio file up to 25 MB.</td></tr>
+                        <tr><td>Pictures in one chat request</td><td>20. Each is an <code>https://</code> or <code>http://</code> link to a public host, or a <code>data:image/&hellip;</code> URL.</td></tr>
+                        <tr><td>Images per generation request</td><td>1 to 4 (<code>n</code>)</td></tr>
+                        <tr><td>Output tokens</td><td>Capped at the model's own maximum. A larger <code>max_tokens</code> is lowered to it, not refused.</td></tr>
+                        <tr><td>Speech input</td><td>800 characters for the standard voice, 2,000 for Aura 2.</td></tr>
+                        <tr><td>Transcription</td><td>30 minutes of audio, 25 MB. A longer recording is refused with <code>413</code> and not charged, even when its length is only known once Whisper has heard it.</td></tr>
+                        <tr><td>Embeddings</td><td>100 inputs per request.</td></tr>
+                        <tr><td>Video jobs</td><td>Kept for 24 hours after they are submitted; a render is given up after an hour. At most 10 rendering at once per nym.</td></tr>
+                        <tr><td>Query history</td><td>Kept for 90 days.</td></tr>
+                        <tr><td>Active keys per nym</td><td>25. Only the newest 50 revoked keys are kept.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>A link to a picture must point to a public host: an address on a private or local network is
+                refused. Provider pacing that applies in the app applies here too, so a burst of requests to
+                one provider can be slowed down rather than failed.</p>
+
+            <h2 id="privacy">What the API can see</h2>
+            <p>The API is not private in the way the apps are, and it is worth being exact about how.</p>
+            <ul>
+                <li><strong>It is not end-to-end encrypted.</strong> In the apps, a message is sealed on your
+                    device to keys only Nymbot holds and travels as a
+                    <a href="/docs/encryption/#gift-wraps">gift wrap</a>. An API request is ordinary HTTPS: it is
+                    encrypted on the way to Nymbot, and Nymbot's server reads it in the clear to handle it.</li>
+                <li><strong>Prompts and replies are not stored.</strong> They pass through to the model and the
+                    answer passes back. What is kept is the bill: for each request the time, model, kind,
+                    token counts, cost, balance, key and whether it succeeded, for 90 days, which is what
+                    <a href="/docs/api-account/#history">query history</a> shows you.</li>
+                <li><strong>The model's provider sees your request</strong>, as it does from the app. Catalog
+                    models run at their makers; standard routes and embeddings run on Cloudflare.</li>
+                <li><strong>Generated media is public.</strong> Pictures and video delivered as links are
+                    uploaded to public Blossom file hosts, where a file's address is its hash. Anyone with the
+                    link can open it, and Nymbot cannot take it down again. Ask for <code>b64_json</code> and a
+                    generated picture comes back in the response and is never uploaded.</li>
+                <li><strong>So are the pictures you give a generator.</strong> A picture you upload to
+                    <a href="/docs/api-media/#image-edits">edit</a>, or send as a <code>data:</code> URL in a
+                    generator's <code>image_url</code>, is uploaded to a public Blossom host first so the
+                    generator can fetch it, and the same applies to it. A picture sent by <code>https://</code>
+                    link is passed on as that link. Pictures in a chat request go to the model's provider,
+                    not to Blossom.</li>
+                <li><strong>A key is linked to your nym.</strong> Everything a key spends comes off your nym's
+                    balance, so API use is not <a href="/docs/anonymous/">anonymous</a>. If you want API use
+                    kept apart from your everyday nym, make the keys from a separate nym with its own
+                    balance.</li>
+            </ul>
+            <p>If you need the protection of the apps, use the apps. The API is for when you need the models
+                in your own tools.</p>
+
+            <h2 id="endpoints">Every endpoint</h2>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Endpoint</th><th>What it does</th><th>Auth</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>GET /api/v1/models</code></td><td><a href="/docs/api-chat/#models">Lists models</a>, with prices</td><td>None</td></tr>
+                        <tr><td><code>POST /api/v1/chat/completions</code></td><td><a href="/docs/api-chat/#chat-completions">Chat Completions</a></td><td>Key</td></tr>
+                        <tr><td><code>POST /api/v1/responses</code></td><td><a href="/docs/api-chat/#responses">Responses API</a></td><td>Key</td></tr>
+                        <tr><td><code>POST /api/v1/messages</code></td><td><a href="/docs/api-chat/#messages">Anthropic Messages</a></td><td>Key</td></tr>
+                        <tr><td><code>POST /api/v1/messages/count_tokens</code></td><td><a href="/docs/api-chat/#count-tokens">Estimates input tokens</a></td><td>Key</td></tr>
+                        <tr><td><code>POST /api/v1/images/generations</code></td><td><a href="/docs/api-media/#images">Generates images</a></td><td>Key or <a href="/docs/api-account/#l402">Lightning</a></td></tr>
+                        <tr><td><code>POST /api/v1/images/edits</code></td><td><a href="/docs/api-media/#image-edits">Edits an image</a></td><td>Key or <a href="/docs/api-account/#l402">Lightning</a></td></tr>
+                        <tr><td><code>POST /api/v1/videos</code>, <code>GET /api/v1/videos</code>, <code>GET /api/v1/videos/{id}</code></td><td><a href="/docs/api-media/#video">Starts, lists and checks videos</a></td><td>Key, or <a href="/docs/api-account/#l402">Lightning</a> to start one</td></tr>
+                        <tr><td><code>POST /api/v1/audio/speech</code></td><td><a href="/docs/api-media/#speech">Text to speech</a></td><td>Key or <a href="/docs/api-account/#l402">Lightning</a></td></tr>
+                        <tr><td><code>GET /api/v1/audio/models</code>, <code>GET /api/v1/audio/voices</code></td><td><a href="/docs/api-media/#voices">Audio models and voices</a></td><td>None</td></tr>
+                        <tr><td><code>POST /api/v1/audio/transcriptions</code>, <code>POST /api/v1/audio/translations</code></td><td><a href="/docs/api-media/#transcription">Speech to text, and to English</a></td><td>Key or <a href="/docs/api-account/#l402">Lightning</a></td></tr>
+                        <tr><td><code>POST /api/v1/embeddings</code></td><td><a href="/docs/api-media/#embeddings">Embeddings</a></td><td>Key or <a href="/docs/api-account/#l402">Lightning</a></td></tr>
+                        <tr><td><code>GET /api/v1/credits/balance</code> (or <code>POST</code>)</td><td><a href="/docs/api-account/#balance">Both balances</a></td><td>Key</td></tr>
+                        <tr><td><code>GET /api/v1/topup/payment-methods</code></td><td><a href="/docs/api-account/#payment-methods">Ways to pay</a></td><td>None</td></tr>
+                        <tr><td><code>POST /api/v1/topup/create/btc-lightning</code></td><td><a href="/docs/api-account/#topup">A Lightning invoice</a></td><td>Key</td></tr>
+                        <tr><td><code>GET /api/v1/topup/status/{invoice_id}</code></td><td><a href="/docs/api-account/#topup-status">Checks and credits it</a></td><td>Key</td></tr>
+                        <tr><td><code>GET /api/v1/queries/history</code></td><td><a href="/docs/api-account/#history">What each request cost</a></td><td>Key or nym</td></tr>
+                        <tr><td><code>GET /api/v1/account</code></td><td><a href="/docs/api-account/#account">Account summary</a></td><td>Nym</td></tr>
+                        <tr><td><code>/api/v1/keys</code></td><td><a href="/docs/api-account/#key-endpoints">Makes, changes and revokes keys</a></td><td>Nym</td></tr>
+                        <tr><td><code>/api/v1/nwc-auto-topup</code></td><td><a href="/docs/api-account/#nwc">Automatic top-ups</a></td><td>Nym</td></tr>
+                        <tr><td><code>GET /api/v1/l402/refunds</code>, <code>POST /api/v1/l402/refunds/redeem</code></td><td><a href="/docs/api-account/#l402">Checks or redeems a refund token</a></td><td>Refund token; nym to redeem</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>&ldquo;Nym&rdquo; means a request signed by your Nostr key, described in
+                <a href="/docs/api-account/#nip98">signing account requests</a>. For tools that already speak
+                these formats, see <a href="/docs/api-integrations/">tools and SDKs</a>.</p>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

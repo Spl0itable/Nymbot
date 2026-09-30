@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Images, audio and embeddings - Nymbot Knowledge Base</title>
+    <meta name="description" content="Nymbot API media endpoints: image generation and editing, asynchronous video, text to speech, voices, speech to text and embeddings, with fields, prices and examples.">
+    <link rel="icon" type="image/x-icon" href="https://nymbot.ai/images/favicon.ico">
+    <link rel="icon" type="image/png" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="https://nymbot.ai/images/android-chrome-512x512.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="https://nymbot.ai/images/android-chrome-192x192.png">
+
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="Images, audio and embeddings - Nymbot Knowledge Base">
+    <meta property="og:description" content="Nymbot API media endpoints: image generation and editing, asynchronous video, text to speech, voices, speech to text and embeddings, with fields, prices and examples.">
+    <meta property="og:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta property="og:url" content="https://nymbot.ai/docs/api-media/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Nymbot">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://nymbot.ai/images/og-banner.png">
+    <meta name="twitter:image:alt" content="The Nymbot robot mark beside its wordmark in ASCII block letters, above the words Private AI chat. No account, no email, no subscription.">
+    <meta name="twitter:title" content="Images, audio and embeddings - Nymbot Knowledge Base">
+    <meta name="twitter:description" content="Nymbot API media endpoints: image generation and editing, asynchronous video, text to speech, voices, speech to text and embeddings, with fields, prices and examples.">
+    <link rel="canonical" href="https://nymbot.ai/docs/api-media/">
+    <!--HREFLANG-->
+    <meta name="theme-color" content="#050810" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Nymbot">
+    <link rel="stylesheet" href="styles.css">
+    <!--I18N-RUNTIME-->
+    <script src="boot.js"></script>
+</head>
+
+<body>
+    <div class="grid-bg"></div>
+    <div class="docs-shell">
+        <!--DOCS-TOPBAR-->
+        <div class="docs-body">
+        <!--DOCS-NAV-->
+        <main id="docs-main" class="docs-main">
+        <!--DOCS-CRUMBS-->
+            <h1>Images, audio and embeddings</h1>
+            <p class="docs-lede">The generators from the app, and the building blocks for search: pictures,
+                video, speech, transcription and embeddings, each billed per use from your balance.</p>
+            <p class="legal-note" data-i18n-translated-only>This page is machine-translated for convenience. The English original is the version that applies.</p>
+
+            <h2 id="images">Generating images</h2>
+            <p>Makes one to four pictures from a prompt and returns them when they are done. It is the same
+                set of generators as <code>?image</code> in the app.</p>
+            <p><code>POST https://nymbot.ai/api/v1/images/generations</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>.</p>
+            <p>Ids come from <code>GET /api/v1/models?type=image</code>. The standard generator,
+                <code>@cf/black-forest-labs/flux-1-schnell</code>, costs a flat 5 standard credits (50 sats) a
+                picture. Every other generator spends Pro credits at its own price, with the usual fee and
+                margin, as in <a href="/docs/media/#generators">the app</a>. <code>n</code> pictures cost
+                <code>n</code> times as much. A field a generator does not take is dropped rather than refused;
+                the standard generator uses the prompt only.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>A generator id, such as <code>nano-banana</code>.</td></tr>
+                        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>What to draw. Only the first 2,000 characters are used.</td></tr>
+                        <tr><td><code>n</code></td><td>integer</td><td>No</td><td>1 to 4. Default 1. Also accepted as <code>num_images</code>.</td></tr>
+                        <tr><td><code>size</code></td><td>string</td><td>No</td><td>An aspect ratio such as <code>"16:9"</code>, or an OpenAI size such as <code>"1792x1024"</code>, which becomes the nearest of 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 21:9, 5:4 and 4:5. <code>"auto"</code> leaves it to the generator.</td></tr>
+                        <tr><td><code>aspect_ratio</code></td><td>string</td><td>No</td><td>The same as <code>size</code>, and wins if both are sent.</td></tr>
+                        <tr><td><code>quality</code></td><td>string</td><td>No</td><td>Generator-specific, such as <code>"low"</code>, <code>"medium"</code> or <code>"high"</code>.</td></tr>
+                        <tr><td><code>negative_prompt</code></td><td>string</td><td>No</td><td>What to leave out.</td></tr>
+                        <tr><td><code>output_format</code></td><td>string</td><td>No</td><td><code>"png"</code>, <code>"jpeg"</code> or <code>"webp"</code>.</td></tr>
+                        <tr><td><code>response_format</code></td><td>string</td><td>No</td><td><code>"url"</code> (the default) or <code>"b64_json"</code>.</td></tr>
+                        <tr><td><code>image_url</code></td><td>string</td><td>No</td><td>A picture to start from: an <code>https://</code> link or a <code>data:image/&hellip;;base64</code> URL (PNG, JPEG, WebP or GIF). Only for generators with <code>edit</code>; required by those with <code>requires_image_url</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p><code>resolution</code> is not used: each generator makes its own size. With <code>url</code>,
+                each picture is uploaded to a public Blossom host and you get its link (a few generators only
+                hand back a link of their own, which is passed on). Anyone with the link can open it and it
+                cannot be taken down again; see <a href="/docs/api/#privacy">what the API can see</a>. With
+                <code>b64_json</code> the picture comes back in the response and is never uploaded. A picture
+                sent as a <code>data:</code> URL in <code>image_url</code> is checked the same way as an
+                <a href="#image-edits">edit</a> and uploaded to Blossom first so the generator can fetch it; it
+                is deleted again if the request fails unbilled.</p>
+            <p>If some of the <code>n</code> pictures fail, you get the ones that worked, are charged only for
+                those (plus any the provider billed despite failing), and <code>nymbot.failed</code> says how
+                many are missing. If all fail, the request returns <code>502</code>.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "created": 1790726400,
+  "model": "nano-banana",
+  "cost": 0.2126,
+  "data": [
+    {
+      "url": "https://blossom.example/5c0e4b7d3a91f2e8...c4.png",
+      "content_type": "image/png"
+    }
+  ],
+  "nymbot": { "balance": "pro", "charged_credits": 1.817, "charged_sats": 181.7, "balance_credits": 410.608, "balance_sats": 41060.8 }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No prompt; <code>n</code> outside 1 to 4 (<code>invalid_value</code>); a bad size (<code>invalid_size</code>) or picture (<code>invalid_image</code>, <code>invalid_image_url</code>); a model that exists but is not an image generator (<code>invalid_model</code>); a picture for a generator that cannot edit (<code>edit_unsupported</code>); no picture for one that needs it (<code>image_required</code>).</td></tr>
+                        <tr><td><code>402</code></td><td>The balance cannot cover every picture asked for.</td></tr>
+                        <tr><td><code>404</code></td><td>No model by that name (<code>model_not_found</code>).</td></tr>
+                        <tr><td><code>502</code></td><td>The generator failed (<code>upstream_error</code>). Nothing is charged unless the provider billed for the attempt; then the error has <code>charged_sats</code>.</td></tr>
+                        <tr><td><code>503</code></td><td>Pictures cannot be hosted right now (<code>media_hosting_unavailable</code>). <code>b64_json</code> still works.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/images/generations \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nano-banana",
+    "prompt": "A lighthouse at dusk, oil painting",
+    "size": "16:9"
+  }'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+import requests
+
+res = requests.post(
+    "https://nymbot.ai/api/v1/images/generations",
+    headers={"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]},
+    json={"model": "nano-banana", "prompt": "A lighthouse at dusk, oil painting", "size": "16:9"},
+)
+res.raise_for_status()
+print(res.json()["data"][0]["url"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const res = await fetch("https://nymbot.ai/api/v1/images/generations", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer " + process.env.NYMBOT_API_KEY,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ model: "nano-banana", prompt: "A lighthouse at dusk, oil painting", size: "16:9" }),
+});
+const body = await res.json();
+console.log(body.data[0].url);</code></pre>
+
+            <h2 id="image-edits">Editing images</h2>
+            <p>Changes a picture you upload, following a prompt. This is OpenAI's edit endpoint, so the OpenAI
+                SDKs' <code>images.edit</code> works as it is. Only Pro generators with <code>edit</code> in the
+                model list accept it.</p>
+            <p><code>POST https://nymbot.ai/api/v1/images/edits</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>. The body is <code>multipart/form-data</code>, up to 32 MB.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>image</code></td><td>file</td><td>Yes</td><td>The picture to edit: PNG, JPEG, WebP or GIF, up to 20 MB. Also accepted as <code>image[]</code>; the first one is used.</td></tr>
+                        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>What to change.</td></tr>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>A generator with <code>edit</code>.</td></tr>
+                        <tr><td><code>n</code></td><td>integer</td><td>No</td><td>1 to 4.</td></tr>
+                        <tr><td><code>size</code><br><code>aspect_ratio</code><br><code>quality</code><br><code>negative_prompt</code><br><code>output_format</code></td><td>string</td><td>No</td><td>As for generation.</td></tr>
+                        <tr><td><code>response_format</code></td><td>string</td><td>No</td><td><code>"b64_json"</code> (the default here) or <code>"url"</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The picture you upload is checked to be a well-formed PNG, JPEG, WebP or GIF, sent on as its
+                real type, and put on a public Blossom host, because the generators fetch their input by link.
+                Treat it as public. If the edit fails and nothing is charged, the hosted copy is deleted again. The response has the same shape as for generation.
+                Pricing is the generator's price, which for some generators includes a charge for the input
+                picture.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "created": 1790726460,
+  "model": "nano-banana",
+  "cost": 0.2126,
+  "data": [{ "b64_json": "iVBORw0KGgoAAAANSUhEUgAA..." }],
+  "nymbot": { "balance": "pro", "charged_credits": 1.817, "charged_sats": 181.7, "balance_credits": 408.791, "balance_sats": 40879.1 }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No image or prompt, a file that is not a picture (<code>invalid_image</code>), or a generator that cannot edit (<code>edit_unsupported</code>).</td></tr>
+                        <tr><td><code>413</code></td><td>The picture is over 20 MB (<code>file_too_large</code>), or the whole request over 32 MB.</td></tr>
+                        <tr><td><code>503</code></td><td>The picture cannot be hosted right now (<code>media_hosting_unavailable</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/images/edits \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -F model=nano-banana \
+  -F image=@photo.png \
+  -F prompt="Make it a snowy evening"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import base64, os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+with open("photo.png", "rb") as f:
+    result = client.images.edit(model="nano-banana", image=f, prompt="Make it a snowy evening")
+
+with open("edited.png", "wb") as out:
+    out.write(base64.b64decode(result.data[0].b64_json))</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import fs from "node:fs";
+import { writeFile } from "node:fs/promises";
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const result = await client.images.edit({
+  model: "nano-banana",
+  image: fs.createReadStream("photo.png"),
+  prompt: "Make it a snowy evening",
+});
+await writeFile("edited.png", Buffer.from(result.data[0].b64_json, "base64"));</code></pre>
+
+            <h2 id="video">Video</h2>
+            <p>A video takes minutes, so it runs in the background. You submit it, get an id straight away, and
+                ask about the id until it is done. Every video generator spends the Pro balance.</p>
+            <p><code>POST https://nymbot.ai/api/v1/videos</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>. Returns <code>202</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>A video generator id from <code>GET /api/v1/models?type=video</code>, such as <code>veo</code>.</td></tr>
+                        <tr><td><code>prompt</code></td><td>string</td><td>Yes</td><td>What should happen.</td></tr>
+                        <tr><td><code>duration</code></td><td>number or string</td><td>No</td><td>Length in seconds, more than 0 and up to 60. Used only by generators that let you choose the length; the others make their usual length, which is what <code>seconds</code> in the response and the price follow.</td></tr>
+                        <tr><td><code>aspect_ratio</code></td><td>string</td><td>No</td><td>Such as <code>"16:9"</code> or <code>"9:16"</code>; a size such as <code>"1280x720"</code> becomes the nearest ratio.</td></tr>
+                        <tr><td><code>resolution</code><br><code>quality</code></td><td>string</td><td>No</td><td>One of the generator's <code>resolutions</code> in the model list, such as <code>"720p"</code> or <code>"1080p"</code>. It sets the price. Anything else is refused with <code>unsupported_resolution</code>.</td></tr>
+                        <tr><td><code>image_url</code></td><td>string</td><td>No</td><td>A picture to start from: an <code>https://</code> link or a <code>data:image/&hellip;</code> URL, which is uploaded to a public Blossom host first. Required by generators with <code>requires_image_url</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The price is fixed when you submit, from the generator, resolution and length, so it is
+                charged from your Pro balance as soon as the provider accepts the job, and shown as
+                <code>cost</code>, <code>estimated_cost</code> and <code>nymbot</code>. If the provider refuses
+                the job, nothing is charged. If the render later fails, or the finished clip cannot be stored
+                and the provider did not bill for it, the charge is refunded once, automatically. A render that
+                is still going after an hour is given up, and keeps its charge, because the provider bills a
+                render once it accepts it. A refund returns the credits but does not lower the key's spend
+                count.</p>
+            <p class="docs-note-label">Response (202)</p>
+<pre><code>{
+  "id": "vid_3e9a51c07b2f4d86e0a1c4f2",
+  "object": "video",
+  "model": "veo",
+  "status": "in_progress",
+  "created": 1790726400,
+  "seconds": 8,
+  "resolution": "1080p",
+  "estimated_cost": 3.18,
+  "expires_at": 1790812800,
+  "cost": 3.18,
+  "nymbot": { "balance": "pro", "charged_credits": 31.8, "charged_sats": 3180, "balance_credits": 378.808, "balance_sats": 37880.8 }
+}</code></pre>
+            <p><code>status</code> starts as <code>in_progress</code>, or <code>completed</code> with the video
+                already in <code>data</code> when the generator returned it straight away.</p>
+            <h3 id="video-status">Checking on a video</h3>
+            <p><code>GET https://nymbot.ai/api/v1/videos/{id}</code> &mdash; needs a key belonging to the nym that submitted it. A key that has reached its cap can still check.</p>
+            <p>It answers <code>202</code> while the video is being made and <code>200</code> once it is
+                finished or has failed. Ask every 5 to 10 seconds. Each check asks the provider once and answers
+                at once; it never waits for the video. A job is kept for 24 hours after it was submitted.
+                <code>GET /api/v1/videos</code> lists the key's last 50 jobs as
+                <code>{"object": "list", "data": [&hellip;]}</code>.</p>
+            <p class="docs-note-label">Response (200)</p>
+<pre><code>{
+  "id": "vid_3e9a51c07b2f4d86e0a1c4f2",
+  "object": "video",
+  "model": "veo",
+  "status": "completed",
+  "created": 1790726400,
+  "seconds": 8,
+  "resolution": "1080p",
+  "estimated_cost": 3.18,
+  "expires_at": 1790812800,
+  "completed_at": 1790726590,
+  "data": { "url": "https://blossom.example/9b41d0c2e7a3f658...1e.mp4", "content_type": "video/mp4" },
+  "cost": 3.18,
+  "nymbot": { "balance": "pro", "charged_credits": 31.8, "charged_sats": 3180 }
+}</code></pre>
+            <p><code>status</code> is <code>in_progress</code>, <code>completed</code> or <code>failed</code>. A
+                failed job carries <code>error</code> (<code>{"code": "generation_failed", "message": &hellip;}</code>);
+                if it was refunded, <code>cost</code> is 0 and <code>nymbot</code> adds
+                <code>refunded_credits</code> and <code>refunded_sats</code>. The finished video is on a public
+                Blossom host, like generated pictures.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No prompt; a duration outside 0 to 60 (<code>invalid_value</code>); a resolution the generator does not offer (<code>unsupported_resolution</code>); no picture for a generator that needs one (<code>image_required</code>); a model that is not a video generator (<code>invalid_model</code>).</td></tr>
+                        <tr><td><code>402</code></td><td>The Pro balance cannot cover the video.</td></tr>
+                        <tr><td><code>404</code></td><td>No such generator (<code>model_not_found</code>), or no job by that id for your nym, or it is more than 24 hours old (<code>video_not_found</code>).</td></tr>
+                        <tr><td><code>429</code></td><td>Your nym already has 10 videos rendering (<code>video_jobs_limit</code>). Check on them and submit more once one finishes.</td></tr>
+                        <tr><td><code>502</code></td><td>The generator refused the job. Nothing is charged unless the provider billed for it.</td></tr>
+                        <tr><td><code>503</code></td><td>Videos cannot be delivered or stored right now (<code>media_hosting_unavailable</code>, <code>service_unavailable</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/videos \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "veo", "prompt": "Waves rolling onto a beach at sunrise", "duration": 8, "aspect_ratio": "16:9"}'
+
+curl https://nymbot.ai/api/v1/videos/vid_3e9a51c07b2f4d86 \
+  -H "Authorization: Bearer $NYMBOT_API_KEY"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os, time
+import requests
+
+headers = {"Authorization": "Bearer " + os.environ["NYMBOT_API_KEY"]}
+
+job = requests.post(
+    "https://nymbot.ai/api/v1/videos",
+    headers=headers,
+    json={"model": "veo", "prompt": "Waves rolling onto a beach at sunrise", "duration": 8, "aspect_ratio": "16:9"},
+).json()
+
+while True:
+    time.sleep(8)
+    status = requests.get("https://nymbot.ai/api/v1/videos/" + job["id"], headers=headers).json()
+    if status["status"] in ("completed", "failed"):
+        break
+
+print(status["data"]["url"] if status["status"] == "completed" else status["error"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>const headers = {
+  "Authorization": "Bearer " + process.env.NYMBOT_API_KEY,
+  "Content-Type": "application/json",
+};
+
+const job = await (await fetch("https://nymbot.ai/api/v1/videos", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ model: "veo", prompt: "Waves rolling onto a beach at sunrise", duration: 8, aspect_ratio: "16:9" }),
+})).json();
+
+let status;
+do {
+  await new Promise((r) =&gt; setTimeout(r, 8000));
+  status = await (await fetch("https://nymbot.ai/api/v1/videos/" + job.id, { headers })).json();
+} while (status.status !== "completed" &amp;&amp; status.status !== "failed");
+
+console.log(status.status === "completed" ? status.data.url : status.error);</code></pre>
+
+            <h2 id="speech">Text to speech</h2>
+            <p>Reads text aloud and returns the audio file itself, not a link. It is OpenAI's speech endpoint,
+                so <code>audio.speech.create</code> in the OpenAI SDKs works.</p>
+            <p><code>POST https://nymbot.ai/api/v1/audio/speech</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>No</td><td>A speech model from <a href="#voices">the audio models list</a>. Default: the standard voice, <code>@cf/myshell-ai/melotts</code>. <code>aura-2</code> is Deepgram Aura 2.</td></tr>
+                        <tr><td><code>input</code></td><td>string</td><td>Yes</td><td>The text to read: up to 800 characters for the standard voice, 2,000 for Aura 2.</td></tr>
+                        <tr><td><code>voice</code></td><td>string</td><td>No</td><td>A voice id from <a href="#voices">the voices list</a>: an Aura speaker such as <code>luna</code> (or <code>aura-2-luna-en</code>), or a MeloTTS language (<code>en</code>, <code>es</code>, <code>fr</code>, <code>zh</code>). OpenAI voice names such as <code>alloy</code> are accepted and give the model's default voice.</td></tr>
+                        <tr><td><code>language</code></td><td>string</td><td>No</td><td>A language code such as <code>es</code>. Without a voice, it picks one for that language. A voice that speaks another language returns <code>422</code> <code>voice_language_mismatch</code>, and a language the model has no voice for <code>422</code> <code>unsupported_language</code>.</td></tr>
+                        <tr><td><code>response_format</code></td><td>string</td><td>No</td><td>The standard voice returns <code>mp3</code> only. Aura 2 returns <code>mp3</code> (the default), <code>opus</code>, <code>aac</code>, <code>flac</code>, <code>wav</code> or <code>pcm</code>.</td></tr>
+                        <tr><td><code>speed</code></td><td>number</td><td>No</td><td>Accepted and ignored.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The standard voice costs a flat 3 standard credits (30 sats) a request, as in the app. Aura 2
+                is Pro, priced by the characters you send. The response body is the audio, with a matching
+                <code>Content-Type</code>; the cost is in the <code>X-Nymbot-Cost-Sats</code> header. If the
+                speech model fails, nothing is charged.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>HTTP/1.1 200 OK
+Content-Type: audio/mpeg
+X-Nymbot-Cost-Sats: 4.2
+X-Nymbot-Balance-Sats: 41055.6
+
+(audio bytes)</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No input; input over the model's limit (<code>input_too_long</code>); a format the model cannot produce (<code>unsupported_response_format</code>); an unknown voice (<code>invalid_voice</code>); a model that is not a speech model (<code>invalid_model</code>).</td></tr>
+                        <tr><td><code>422</code></td><td>The voice does not speak the language given, or the model has no voice for it.</td></tr>
+                        <tr><td><code>502</code></td><td>The speech model failed. Nothing is charged.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/audio/speech \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "aura-2", "voice": "luna", "input": "Your invoice has been paid."}' \
+  --output speech.mp3</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+audio = client.audio.speech.create(
+    model="aura-2",
+    voice="luna",
+    input="Your invoice has been paid.",
+)
+audio.write_to_file("speech.mp3")</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import { writeFile } from "node:fs/promises";
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const audio = await client.audio.speech.create({
+  model: "aura-2",
+  voice: "luna",
+  input: "Your invoice has been paid.",
+});
+await writeFile("speech.mp3", Buffer.from(await audio.arrayBuffer()));</code></pre>
+
+            <h2 id="voices">Audio models and voices</h2>
+            <p>Two public lists for picking a speech model and voice, or a transcription model. There are 41
+                Aura 2 English speakers and four MeloTTS languages.</p>
+            <p><code>GET https://nymbot.ai/api/v1/audio/models</code> &mdash; no key needed.</p>
+            <p><code>GET https://nymbot.ai/api/v1/audio/voices?language=en</code> &mdash; no key needed.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>language</code></td><td>string (query)</td><td>No</td><td>Only voices for this language.</td></tr>
+                        <tr><td><code>model</code></td><td>string (query)</td><td>No</td><td>Only voices for this model.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label">Response (voices)</p>
+<pre><code>{
+  "object": "list",
+  "data": [
+    { "id": "luna", "name": "Luna", "provider": "deepgram", "model_id": "aura-2", "models": ["aura-2"], "language": "en", "description": "Aura 2 English voice", "gender": "female", "preview_url": null },
+    { "id": "en", "name": "MeloTTS English", "provider": "myshell", "model_id": "@cf/myshell-ai/melotts", "models": ["@cf/myshell-ai/melotts", "melotts"], "language": "en", "description": "English (MeloTTS)", "gender": null, "preview_url": null }
+  ]
+}</code></pre>
+            <p>The models list answers <code>{"object": "list", "data": {"tts": [&hellip;], "stt": [&hellip;]}}</code>.
+                Each speech model gives its balance, price, <code>max_input_chars</code>,
+                <code>response_formats</code>, <code>languages</code> and <code>default_voice</code>; the
+                transcription model gives its aliases, <code>max_file_bytes</code>, <code>max_seconds</code>,
+                formats and price per minute.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/audio/models
+curl "https://nymbot.ai/api/v1/audio/voices?language=en"</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import requests
+
+print(requests.get("https://nymbot.ai/api/v1/audio/models").json())
+for voice in requests.get("https://nymbot.ai/api/v1/audio/voices", params={"language": "en"}).json()["data"]:
+    print(voice["id"], voice["model_id"])</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>console.log(await (await fetch("https://nymbot.ai/api/v1/audio/models")).json());
+const voices = await (await fetch("https://nymbot.ai/api/v1/audio/voices?language=en")).json();
+for (const v of voices.data) console.log(v.id, v.model_id);</code></pre>
+
+            <h2 id="transcription">Speech to text</h2>
+            <p>Turns a recording into text with Whisper. This is OpenAI's transcription endpoint, so
+                <code>audio.transcriptions.create</code> works.</p>
+            <p><code>POST https://nymbot.ai/api/v1/audio/transcriptions</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>. The body is <code>multipart/form-data</code>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>file</code></td><td>file</td><td>Yes</td><td>The recording, from 256 bytes to 25 MB and up to 30 minutes: WAV, WebM, MP4 or M4A, Ogg or Opus, MP3 and the other formats Whisper reads.</td></tr>
+                        <tr><td><code>model</code></td><td>string</td><td>No</td><td>Default <code>whisper</code>, which is Whisper Large v3 Turbo. <code>whisper-1</code>, <code>whisper-large-v3-turbo</code> and <code>@cf/openai/whisper-large-v3-turbo</code> mean the same.</td></tr>
+                        <tr><td><code>language</code></td><td>string</td><td>No</td><td>The spoken language, such as <code>en</code>. Detected if left out.</td></tr>
+                        <tr><td><code>prompt</code></td><td>string</td><td>No</td><td>Words or spellings to expect, such as names. Only the first 1,000 characters are used.</td></tr>
+                        <tr><td><code>response_format</code></td><td>string</td><td>No</td><td><code>json</code> (the default), <code>text</code>, <code>srt</code>, <code>vtt</code> or <code>verbose_json</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>For WAV, WebM, MP4 and Ogg files the length is read from the file before anything runs, so a
+                recording over 30 minutes is refused up front (with 3 seconds' grace). A WAV file's length comes
+                from its sample rate, channels and sample size. For other formats it is estimated from the file
+                size; if Whisper then reports more than 30 minutes, the request is refused with
+                <code>413</code> <code>audio_too_long</code> and nothing is charged.</p>
+            <p>You pay for the length of the audio, rounded up to the second: the longest of the length read
+                from the file, the length Whisper reports, and the least the file's size allows, at Whisper's per-minute price
+                with the usual fee and margin, and at least 0.05 credit a request. It is paid from the standard
+                balance when that can cover the hold, and from Pro otherwise; a <code>402</code> gives what each
+                balance would need. In the app, transcribing a voice message may be free; on the API it is
+                always charged. If Whisper fails, nothing is charged.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "text": "Your invoice has been paid.",
+  "usage": { "type": "duration", "seconds": 3 },
+  "nymbot": { "balance": "standard", "charged_credits": 0.05, "charged_sats": 0.5, "balance_credits": 120.35, "balance_sats": 1203.5 }
+}</code></pre>
+            <p><code>text</code> returns plain text, <code>srt</code> and <code>vtt</code> return subtitles, and
+                <code>verbose_json</code> adds the language, duration and timed segments. For the three that are
+                not JSON, the cost is in the headers.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No file, a file with no usable audio (<code>invalid_audio</code>), an unknown format, or a model that is not a transcription model (<code>invalid_model</code>).</td></tr>
+                        <tr><td><code>402</code></td><td>Neither balance can cover it.</td></tr>
+                        <tr><td><code>413</code></td><td>The file is over 25 MB (<code>file_too_large</code>) or the recording over 30 minutes (<code>audio_too_long</code>).</td></tr>
+                        <tr><td><code>502</code></td><td>Whisper could not process the audio. Nothing is charged.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/audio/transcriptions \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -F file=@memo.m4a \
+  -F model=whisper \
+  -F response_format=json</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+with open("memo.m4a", "rb") as f:
+    transcript = client.audio.transcriptions.create(model="whisper", file=f)
+print(transcript.text)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import fs from "node:fs";
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const transcript = await client.audio.transcriptions.create({
+  model: "whisper",
+  file: fs.createReadStream("memo.m4a"),
+});
+console.log(transcript.text);</code></pre>
+
+            <h3 id="translation">Translating speech to English</h3>
+            <p><code>POST https://nymbot.ai/api/v1/audio/translations</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>. The body is <code>multipart/form-data</code>.</p>
+            <p>The same as transcription, with the same fields apart from <code>language</code>, limits and
+                price, but the text comes back in English whatever language was spoken. The OpenAI SDKs call
+                it with <code>audio.translations.create</code>.</p>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/audio/translations \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -F file=@nota.m4a \
+  -F model=whisper</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+with open("nota.m4a", "rb") as f:
+    translation = client.audio.translations.create(model="whisper", file=f)
+print(translation.text)</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import fs from "node:fs";
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const translation = await client.audio.translations.create({
+  model: "whisper",
+  file: fs.createReadStream("nota.m4a"),
+});
+console.log(translation.text);</code></pre>
+
+            <h2 id="embeddings">Embeddings</h2>
+            <p>Turns text into vectors for search, clustering and deduplication. The models run on Cloudflare
+                and spend the standard balance.</p>
+            <p><code>POST https://nymbot.ai/api/v1/embeddings</code> &mdash; needs an API key, or <a href="/docs/api-account/#l402">a Lightning payment per request</a>.</p>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>model</code></td><td>string</td><td>Yes</td><td>An embedding model from <code>GET /api/v1/models?type=embedding</code>.</td></tr>
+                        <tr><td><code>input</code></td><td>string or array of strings</td><td>Yes</td><td>The text to embed, up to 100 non-empty strings. Token arrays are refused (<code>token_input_unsupported</code>). Each input has to fit the model's <code>context_length</code>, counted as about four bytes a token.</td></tr>
+                        <tr><td><code>encoding_format</code></td><td>string</td><td>No</td><td><code>float</code> (the default) or <code>base64</code> (little-endian 32-bit floats).</td></tr>
+                        <tr><td><code>dimensions</code></td><td>integer</td><td>No</td><td>The model's own size, or for a model with <code>supported_dimensions</code> one of those; the vector is then shortened and normalized. Anything else is refused.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Model</th><th>Dimensions</th><th>Context</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>@cf/baai/bge-m3</code></td><td>1024, many languages</td><td>8,192 tokens</td></tr>
+                        <tr><td><code>@cf/qwen/qwen3-embedding-0.6b</code></td><td>1024, many languages</td><td>8,192 tokens</td></tr>
+                        <tr><td><code>@cf/baai/bge-large-en-v1.5</code></td><td>1024, English</td><td>512 tokens</td></tr>
+                        <tr><td><code>@cf/baai/bge-base-en-v1.5</code></td><td>768, English</td><td>512 tokens</td></tr>
+                        <tr><td><code>@cf/baai/bge-small-en-v1.5</code></td><td>384, English</td><td>512 tokens</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>The models list is the source of truth for which are available and what they cost; Google's
+                EmbeddingGemma, with shorter vectors on request, appears there too when the catalog has a price
+                for it. Embeddings are metered per input token, and the 0.05-credit minimum applies to each
+                request, not to each input, so batching many texts into one request is much cheaper than
+                sending them one at a time.</p>
+            <p class="docs-note-label">Response</p>
+<pre><code>{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0213, -0.0487, 0.0112] }
+  ],
+  "model": "@cf/baai/bge-m3",
+  "usage": { "prompt_tokens": 9, "total_tokens": 9 },
+  "nymbot": { "balance": "standard", "charged_credits": 0.05, "charged_sats": 0.5, "balance_credits": 1204.35, "balance_sats": 12043.5 }
+}</code></pre>
+            <div class="docs-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Status</th><th>When</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>400</code></td><td>No input or an empty one; token arrays (<code>token_input_unsupported</code>); more than 100 inputs (<code>too_many_inputs</code>); an input longer than the model takes (<code>input_too_long</code>); a size the model cannot give (<code>unsupported_dimensions</code>).</td></tr>
+                        <tr><td><code>402</code></td><td>The standard balance is too low. Embeddings never use the Pro balance.</td></tr>
+                        <tr><td><code>404</code></td><td>No embedding model by that name.</td></tr>
+                        <tr><td><code>502</code></td><td>The model failed. Nothing is charged.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="docs-note-label" data-i18n-skip>cURL</p>
+<pre><code>curl https://nymbot.ai/api/v1/embeddings \
+  -H "Authorization: Bearer $NYMBOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "@cf/baai/bge-m3", "input": ["Lightning invoices expire.", "Invoices on Lightning have a time limit."]}'</code></pre>
+            <p class="docs-note-label" data-i18n-skip>Python</p>
+<pre><code>import os
+from openai import OpenAI
+
+client = OpenAI(base_url="https://nymbot.ai/api/v1", api_key=os.environ["NYMBOT_API_KEY"])
+
+result = client.embeddings.create(
+    model="@cf/baai/bge-m3",
+    input=["Lightning invoices expire.", "Invoices on Lightning have a time limit."],
+)
+print(len(result.data), len(result.data[0].embedding))</code></pre>
+            <p class="docs-note-label" data-i18n-skip>JavaScript</p>
+<pre><code>import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://nymbot.ai/api/v1", apiKey: process.env.NYMBOT_API_KEY });
+
+const result = await client.embeddings.create({
+  model: "@cf/baai/bge-m3",
+  input: ["Lightning invoices expire.", "Invoices on Lightning have a time limit."],
+});
+console.log(result.data.length, result.data[0].embedding.length);</code></pre>
+        <!--DOCS-PAGER-->
+        </main>
+        <!--DOCS-TOC-->
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-brand">
+            <p>Nymbot - your AI, on your key</p>
+            <p class="footer-legal">&copy; <a href="https://nostrservices.com" target="_blank"
+                    rel="noopener">21 Million LLC</a> &bull; <a href="/terms/">Terms of Service</a> &bull; <a href="/privacy/">Privacy Policy</a> &bull; <a href="/dmca/">DMCA</a> &bull; <a href="/contact/">Contact</a> &bull; <a href="/brand/">Brand</a> &bull; <a href="/docs/">Knowledge Base</a> &bull; <a href="https://nymchat.app">Nymchat</a></p>
+        </div>
+        <p class="lang-picker-label">Language</p>
+        <!--LANG-SELECTOR-->
+    </footer>
+    <script src="docs.js"></script>
+</body>
+
+</html>

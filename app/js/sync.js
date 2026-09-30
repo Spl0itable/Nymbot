@@ -26,6 +26,7 @@
     const PARTS_PREFIX = 'parts1:';
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
+    const SUPPORT_ID = 'support';
 
     // Nymchat's row name, hashed its way: one account, one root, whichever app reached it first.
     const PQ_ROOT_D_TAG = 'nymchat-pq-root';
@@ -372,6 +373,20 @@
         return [...byId.values()].sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
     }
 
+    function sentAt(message) {
+        if (!message || typeof message !== 'object') return 0;
+        return Number(message.ts) || Number(message.at) || 0;
+    }
+
+    function supportOutlives(graves, lists) {
+        const at = Number(graves[SUPPORT_ID]) || 0;
+        if (!at) return 0;
+        for (const list of lists) {
+            if (Array.isArray(list) && list.some(m => sentAt(m) > at)) return at;
+        }
+        return 0;
+    }
+
     function mergeById(mine, theirs, graves) {
         const out = new Map();
         for (const record of [].concat(theirs || [], mine || [])) {
@@ -496,6 +511,10 @@
             for (const id of Object.keys(held)) {
                 if (!(held[id] > cutoff)) { delete held[id]; changed = true; }
             }
+            if (held[SUPPORT_ID] && supportOutlives(held, [Store.messages(SUPPORT_ID)])) {
+                delete held[SUPPORT_ID];
+                changed = true;
+            }
             if (changed) Store.write('sync_graves', held);
             return held;
         },
@@ -546,6 +565,8 @@
             out['graves'] = graves;
             const anonKeys = window.NymbotAnon ? window.NymbotAnon.syncCopy() : null;
             if (anonKeys) out['anonKeys'] = anonKeys;
+            const supportTokens = window.NymbotSupport ? window.NymbotSupport.syncCopy() : null;
+            if (supportTokens) out['supportTokens'] = supportTokens;
             return out;
         },
 
@@ -557,7 +578,26 @@
         _apply(remote) {
             if (!remote || typeof remote !== 'object') return [];
             const touched = [];
-            const graves = Object.assign({}, this.graves(), remote.graves || {});
+            const mineGraves = this.graves();
+            const theirGraves = remote.graves && typeof remote.graves === 'object' ? remote.graves : {};
+            const graves = Object.assign({}, mineGraves, theirGraves);
+            if (graves[SUPPORT_ID]) {
+                graves[SUPPORT_ID] = Math.max(Number(mineGraves[SUPPORT_ID]) || 0, Number(theirGraves[SUPPORT_ID]) || 0);
+            }
+            const supportEntry = remote['chat-' + SUPPORT_ID];
+            const supportCut = supportOutlives(graves, [
+                Store.messages(SUPPORT_ID),
+                supportEntry && supportEntry.messages
+            ]);
+            if (supportCut) {
+                delete graves[SUPPORT_ID];
+                const held = Store.messages(SUPPORT_ID);
+                const kept = held.filter(m => sentAt(m) > supportCut);
+                if (kept.length !== held.length) {
+                    Store.saveMessages(SUPPORT_ID, kept);
+                    touched.push('chat-' + SUPPORT_ID);
+                }
+            }
             Store.write('sync_graves', graves);
 
             if (remote.settings && typeof remote.settings === 'object') {
@@ -634,7 +674,10 @@
                 if (!entry || !entry.id || !Array.isArray(entry.messages)) continue;
                 if (graves[entry.id] || Store.isGhost(entry.id)) continue;
                 const mine = Store.messages(entry.id);
-                const merged = mergeById(mine, entry.messages, graves)
+                const theirs = supportCut && entry.id === SUPPORT_ID
+                    ? entry.messages.filter(m => sentAt(m) > supportCut)
+                    : entry.messages;
+                const merged = mergeById(mine, theirs, graves)
                     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
                 if (merged.length !== mine.length) {
                     Store.saveMessages(entry.id, merged);
@@ -644,6 +687,10 @@
 
             if (remote.anonKeys && typeof remote.anonKeys === 'object' && window.NymbotAnon) {
                 if (window.NymbotAnon.syncMerge(remote.anonKeys)) touched.push('anonKeys');
+            }
+
+            if (Array.isArray(remote.supportTokens) && window.NymbotSupport) {
+                if (window.NymbotSupport.syncMerge(remote.supportTokens)) touched.push('supportTokens');
             }
 
             const Artifacts = window.NymbotArtifacts;

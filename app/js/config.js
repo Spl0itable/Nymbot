@@ -46,6 +46,8 @@ window.NymbotConfig = {
 
     storagePrefix: 'nymbot_',
 
+    supportEmail: 'support@nymbot.ai',
+
     developerPubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
     sourceRepo: 'https://github.com/Spl0itable/Nymbot',
     attestationApi: 'https://api.github.com/repos/Spl0itable/Nymbot/attestations/sha256:',

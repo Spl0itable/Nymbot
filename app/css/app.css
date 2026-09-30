@@ -555,6 +555,9 @@ kbd {
 .conv-badge { display: inline-flex; align-items: center; line-height: 1.4; font-size: 0.62rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.3rem; flex: 0 0 auto; }
 .conv-badge.is-repo { color: var(--lightning); }
 .conv-badge.is-tag { color: var(--text-faint); }
+.conv-badge.is-support { color: var(--lightning); }
+.conv-unread { display: inline-flex; align-items: center; justify-content: center; min-width: 1.1rem; height: 1.1rem; padding: 0 0.3rem; margin-left: 0.3rem; border-radius: 999px; background: var(--lightning); color: var(--bg); font-size: 0.62rem; font-weight: 600; flex: 0 0 auto; }
+#shell.is-support #toolbar { display: none; }
 .conv-busy { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .conv-pin { color: var(--lightning); flex: 0 0 auto; display: inline-flex; }
 
@@ -2298,6 +2301,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .modal-status.is-warn { color: var(--danger); }
 .modal-status.is-ok { color: var(--primary); }
 
+.about-divider { height: 1px; background: var(--line); margin: 1.25rem 0; }
 .about-version { color: var(--text-dim); font-family: var(--mono); font-size: 0.85rem; font-weight: 400; margin-left: 0.35rem; }
 .about-panel { margin-top: 0.6rem; padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: var(--radius-btn); background: var(--bg-sunken); }
 .about-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; font-size: 0.85rem; }
@@ -2793,3 +2797,23 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
         min-width: 44px;
     }
 }
+
+.api-free { margin: 0.2rem 0 0.4rem; padding: 0.5rem 0.75rem; border: 1px solid rgba(247, 147, 26, 0.45); border-radius: var(--radius-btn); color: var(--lightning); font-size: 0.85rem; }
+.api-copy-row { display: flex; align-items: center; gap: 0.4rem; }
+.api-copy-row input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.82rem; }
+.api-balances { margin-top: 0.5rem; color: var(--text-dim); font-size: 0.85rem; }
+.api-balances:empty { display: none; }
+.api-snippet { margin: 0.5rem 0 0; padding: 0.65rem 0.75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); overflow-x: auto; font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; }
+.api-snippet code { background: none; padding: 0; font-size: inherit; white-space: pre; }
+.api-snippet-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 1rem; margin-top: 0.45rem; font-size: 0.85rem; }
+.api-new-key { margin: 0.4rem 0 0.6rem; padding: 0.6rem 0.75rem; border: 1px solid var(--primary); border-radius: var(--radius-btn); background: var(--bubble-self); }
+.api-new-key-warn { margin-bottom: 0.45rem; color: var(--lightning); font-size: 0.85rem; font-weight: 600; }
+.api-new-key footer { margin-top: 0.5rem; }
+.api-key-row, .api-query-row { cursor: default; }
+.api-key-row .repo-sub, .api-query-row .repo-sub { white-space: normal; overflow-wrap: anywhere; }
+.api-key-hint { font-family: var(--mono); }
+.api-key-row.is-revoked .repo-main { opacity: 0.55; }
+.api-query-row.is-error .repo-name { color: var(--danger); }
+.api-nwc-state { font-size: 0.85rem; color: var(--text-dim); }
+.api-nwc-state:empty { display: none; }
+#modalApi input[type="date"] { width: 100%; padding: 0.55rem 0.75rem; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 8px; outline: none; }

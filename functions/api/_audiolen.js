@@ -1,4 +1,6 @@
 export const AUDIO_FLOOR_BPS = 8000;
+export const AUDIO_CEIL_BPS = 1536000;
+export const AUDIO_PCM_CEIL_BPS = 4608000;
 
 function u16be(b, i) { return (b[i] << 8) | b[i + 1]; }
 function u32be(b, i) { return ((b[i] << 24) >>> 0) + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]); }
@@ -172,7 +174,7 @@ function mp4Seconds(b) {
       }
     }
   }, 0);
-  var bySamples = timescale ? samples * 1024 / timescale : 0;
+  var bySamples = samples * 1024 / (timescale ? Math.min(timescale, 96000) : 48000);
   var byTicks = timescale ? (sttsTicks + fragTicks) / timescale : 0;
   var best = Math.max(mvhd, bySamples, byTicks);
   return best > 0 ? best : null;
@@ -226,21 +228,34 @@ function oggSeconds(b) {
     }
     i = p;
   }
-  var byGranule = rate ? Math.max(0, granule - preSkip) / rate : 0;
+  var byGranule = rate >= 1000 && rate <= 384000 ? Math.max(0, granule - preSkip) / rate : 0;
   var best = Math.max(byGranule, framesMs / 1000);
   return best > 0 ? best : null;
 }
 
+var WAV_WIDTHS = { 1: [8, 16, 24, 32, 64], 3: [32, 64], 6: [8], 7: [8], 2: [4], 17: [4], 65534: [8, 16, 24, 32, 64] };
+
+function wavPerSecond(b, at) {
+  var tag = b[at] | (b[at + 1] << 8);
+  var channels = b[at + 2] | (b[at + 3] << 8);
+  var rate = u32le(b, at + 4);
+  var bits = b[at + 14] | (b[at + 15] << 8);
+  var widths = WAV_WIDTHS[tag];
+  if (!widths || widths.indexOf(bits) === -1) return 0;
+  if (channels < 1 || channels > 16 || rate < 1000 || rate > 384000) return 0;
+  return rate * channels * bits / 8;
+}
+
 function wavSeconds(b) {
   var i = 12;
-  var byteRate = 0;
+  var perSecond = 0;
   while (i + 8 <= b.length) {
     var id = String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
     var size = u32le(b, i + 4);
-    if (id === "fmt " && size >= 16) byteRate = u32le(b, i + 16);
+    if (id === "fmt " && size >= 16 && i + 24 <= b.length) perSecond = wavPerSecond(b, i + 8);
     if (id === "data") {
       var real = Math.min(size, b.length - i - 8);
-      return byteRate ? Math.max(real, 0) / byteRate : null;
+      return perSecond ? Math.max(real, 0) / perSecond : null;
     }
     i += 8 + size + (size & 1);
   }
@@ -273,4 +288,9 @@ export function audioSeconds(bytes) {
     return { seconds: measured, format: format, measured: true };
   }
   return { seconds: floor, format: format, measured: false };
+}
+
+export function audioMinSeconds(bytes) {
+  var b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  return b.length * 8 / (audioFormat(b) === "wav" ? AUDIO_PCM_CEIL_BPS : AUDIO_CEIL_BPS);
 }

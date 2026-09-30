@@ -133,7 +133,7 @@
             await this.show(convId, !!o.replied);
         },
 
-        async show(convId, replied) {
+        async show(convId, replied, heading) {
             const title = String(this.titleOf(convId) || '').trim();
             const options = {
                 body: title || t('Open the chat to read it.'),
@@ -142,16 +142,16 @@
                 icon: '/app/icons/nymbot-192.png',
                 badge: '/app/icons/nymbot-192.png'
             };
-            const heading = replied ? t('Nymbot replied') : t('Nymbot could not finish that reply');
+            const shown = heading || (replied ? t('Nymbot replied') : t('Nymbot could not finish that reply'));
             try {
                 const reg = await navigator.serviceWorker.getRegistration('/app/');
                 if (reg && typeof reg.showNotification === 'function') {
-                    await reg.showNotification(heading, options);
+                    await reg.showNotification(shown, options);
                     return true;
                 }
             } catch (_) { }
             try {
-                const n = new Notification(heading, options);
+                const n = new Notification(shown, options);
                 n.onclick = () => { try { window.focus(); } catch (_) { } this.open(convId); n.close(); };
                 return true;
             } catch (_) {

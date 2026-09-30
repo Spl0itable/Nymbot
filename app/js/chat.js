@@ -646,6 +646,7 @@
         partSurcharge,
 
         async send(conv, text, settings, options) {
+            if (conv && conv.support) throw new Error(t('Support messages go to the developer, not to Nymbot.'));
             const opts = options || {};
             const say = (line) => {
                 if (typeof opts.onStatus === 'function') opts.onStatus(line);
