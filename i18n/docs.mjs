@@ -1,28 +1,9 @@
-// The knowledge base at /docs/: its outline, and the shared chrome every page
-// in it carries.
-//
-// One outline drives four things that would otherwise drift apart — the
-// section nav, each page's "on this page" rail, the previous/next pager, and
-// the breadcrumb. It is also the reason a docs page's source file is mostly
-// prose: the chrome is filled in at build time from here, the way the language
-// selector and the hreflang block already are.
-//
-// The outline is checked against the documents themselves (see `checkOutline`),
-// so a heading renamed in the markup and not here fails the build instead of
-// publishing a nav that points at anchors which no longer exist.
+// The outline drives the nav, rail, pager and breadcrumb; `checkOutline` fails the build on drift.
 
 const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/// The knowledge base, in reading order.
-///
-/// `slug` is the path the page publishes under, minus the language prefix, and
-/// matches its source file: `docs/mesh` is `pages/docs/mesh.html` at
-/// `/docs/mesh/` and `/es/docs/mesh/`.
-///
-/// `nav` is the label in the sidebar — usually shorter than the page's own
-/// `<h1>`, which the outline does not repeat. `sections` lists the page's `<h2>`
-/// anchors in document order.
+/// `slug` matches the source file (`docs/mesh` is pages/docs/mesh.html); `sections` lists `<h2>` anchors in order.
 export const OUTLINE = [
   {
     group: 'Start here',
@@ -321,12 +302,7 @@ export const OUTLINE = [
     ],
   },
   {
-    // Pages that belong beside the knowledge base without being part of it.
-    // `page` is a slug elsewhere on the site, so the link follows the reader's
-    // language; `url` would be somewhere else entirely.
-    // Pages that belong beside the knowledge base without being part of it.
-    // `page` is a slug elsewhere on the site, so the link follows the reader's
-    // language; `url` would be somewhere else entirely.
+    // `page` is a site slug, so the link follows the reader's language; `url` is external.
     group: 'Elsewhere',
     pages: [
       { nav: 'Press kit and brand', page: 'brand' },
@@ -339,21 +315,16 @@ export const OUTLINE = [
   },
 ];
 
-/// Every page in the knowledge base, in reading order. Plain links in the
-/// outline are navigation, not pages: they have no headings, no place in the
-/// pager, and nothing to check against a document.
+/// Plain links in the outline are navigation, not pages.
 export const DOCS_PAGES = OUTLINE
   .flatMap((g) => g.pages.map((p) => ({ ...p, group: g.group })))
   .filter((p) => p.slug);
 
 const BY_SLUG = new Map(DOCS_PAGES.map((p) => [p.slug, p]));
 
-/// Whether [slug] is a page in the knowledge base.
 export const isDocsPage = (slug) => BY_SLUG.has(slug);
 
-/// The chrome's own copy — the words that appear in the shell rather than in
-/// any one document. Kept here so `loadSite` can send them for translation
-/// along with the copy the extractor finds in the markup.
+/// Shell copy, sent for translation alongside the extracted markup.
 export const CHROME = {
   home: 'Back to Nymbot',
   title: 'Knowledge base',
@@ -367,11 +338,6 @@ export const CHROME = {
   skip: 'Skip to the content',
 };
 
-/// Every English string the knowledge base's chrome needs translated: the
-/// group headings, the sidebar labels, each page's section titles, and the
-/// fixed copy above. The section titles are also the pages' own `<h2>` text,
-/// so in practice they cost nothing extra — the cache is keyed by the English
-/// string, not by where it was found.
 export function docsStrings() {
   const out = Object.values(CHROME);
   for (const group of OUTLINE) {
@@ -384,12 +350,8 @@ export function docsStrings() {
   return [...new Set(out)];
 }
 
-/// The path a docs page publishes under, for the language being rendered.
-/// `pathFor` is passed in rather than imported so this module stays about the
-/// outline and nothing else.
 const href = (pathFor, lang, slug) => pathFor(lang, slug);
 
-/// The skip link and the sticky top bar.
 export function renderTopbar(t) {
   return `        <a class="docs-skip" href="#docs-main">${escapeHtml(t(CHROME.skip))}</a>
         <header class="docs-topbar">
@@ -403,13 +365,7 @@ export function renderTopbar(t) {
         </header>`;
 }
 
-/// The section nav.
-///
-/// Every page carries the WHOLE tree, each page's own headings included. That
-/// is what lets the filter box in the top bar act as a search across the entire
-/// knowledge base without an index to build, ship or keep translated — and the
-/// stylesheet hides the headings that belong to other pages until a filter is
-/// actually running.
+/// Every page carries the whole tree so the filter box searches the knowledge base without an index.
 export function renderNav(t, pathFor, lang, currentSlug) {
   const groups = OUTLINE.map((group) => {
     const items = group.pages.map((page) => {
@@ -442,7 +398,6 @@ ${groups}
         </nav>`;
 }
 
-/// The breadcrumb above the article's title.
 export function renderCrumbs(t, pathFor, lang, slug) {
   const page = BY_SLUG.get(slug);
   const trail = [`<a href="${href(pathFor, lang, 'docs')}">${escapeHtml(t(CHROME.title))}</a>`];
@@ -450,7 +405,6 @@ export function renderCrumbs(t, pathFor, lang, slug) {
   return `        <p class="docs-crumbs">${trail.join(' <span aria-hidden="true">/</span> ')}</p>`;
 }
 
-/// The "on this page" rail, built from the same section list as the nav.
 export function renderToc(t, slug) {
   const page = BY_SLUG.get(slug);
   const items = page.sections.map((section) =>
@@ -463,8 +417,6 @@ ${items}
         </aside>`;
 }
 
-/// Previous and next in reading order. The first page has no previous and the
-/// last has no next, so the pager renders one side rather than a dead link.
 export function renderPager(t, pathFor, lang, slug) {
   const index = DOCS_PAGES.findIndex((p) => p.slug === slug);
   const prev = DOCS_PAGES[index - 1];
@@ -481,7 +433,6 @@ ${[side(prev, 'prev', CHROME.previous), side(next, 'next', CHROME.next)].filter(
         </nav>`;
 }
 
-/// Every `<h2 id="...">Title</h2>` in a document, in order.
 function documentSections(html) {
   const out = [];
   const re = /<h2\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g;
@@ -492,11 +443,7 @@ function documentSections(html) {
   return out;
 }
 
-/// The outline is duplicated information: the nav, the rail and the pager are
-/// generated from it, while the anchors and headings they point at live in the
-/// documents. A mismatch would ship a table of contents linking to anchors that
-/// are not there, which is exactly the sort of breakage nobody notices, so it
-/// fails the build instead. Throws with the first disagreement it finds.
+/// A mismatch between the outline and the documents fails the build; throws with the first disagreement.
 export function checkOutline(documents) {
   const bySlug = new Map(documents.map((d) => [d.slug, d]));
   for (const page of DOCS_PAGES) {
@@ -519,11 +466,7 @@ export function checkOutline(documents) {
     }
   }
 
-  // Pages in the knowledge base link to each other's headings constantly, and a
-  // heading renamed on one page silently breaks every link into it from the
-  // others — a dead link that still looks like a link. The outline knows every
-  // page and every anchor there is, so check them here rather than finding out
-  // from a reader.
+  // Cross-page heading links are checked here, since a renamed heading silently breaks them.
   const anchors = new Set(DOCS_PAGES.flatMap((p) => p.sections.map((s) => `${p.slug}#${s.id}`)));
   for (const doc of documents) {
     for (const match of doc.html.matchAll(/href="\/(docs(?:\/[\w-]+)?)\/(#([\w-]+))?"/g)) {

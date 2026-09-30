@@ -1,19 +1,4 @@
-// Build-time translation through the app's backend
-// (`/api/proxy?action=translate`, nym-staging functions/api/proxy.js), which
-// runs the models on Workers AI.
-//
-// The app translates at runtime and caches on-device; the landing page cannot,
-// because a search engine has to see finished text. So the text is translated
-// at BUILD time and the results are committed under i18n/cache/, which makes
-// builds reproducible, keeps CI offline-capable, and means a language is only
-// ever paid for once per string.
-//
-// This briefly went straight to Google instead, because the backend's own
-// upstream WAS Google and was being rate-limited by colo IP. The backend no
-// longer calls out to anyone, so that reason is gone.
-//
-// Source is always English here, which is what lets the backend take its fast
-// dedicated-translator paths rather than the instruct fallback.
+// Translated at build time via `/api/proxy?action=translate`; results are committed under i18n/cache/.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -22,19 +7,14 @@ const PROXY = process.env.NYM_TRANSLATE_PROXY || 'https://nymbot.ai/api/proxy';
 // Overridable so tests never touch the committed cache.
 const CACHE_DIR = process.env.NYM_I18N_CACHE_DIR || new URL('./cache/', import.meta.url).pathname;
 
-/// Concurrent requests. The proxy fans out to Google Translate, so this is
-/// polite rather than fast.
+/// Kept low to be polite to the upstream.
 const CONCURRENCY = 6;
 const RETRIES = 3;
 
-/// Base pause after a throttle, doubling per attempt. Overridable so the tests
-/// can exercise the retry path without waiting out a real backoff.
+/// Base pause after a throttle, doubling per attempt; overridable for tests.
 const THROTTLE_MS = Number(process.env.NYM_I18N_THROTTLE_MS || 6000);
 
-/// How many strings the batched upstream route puts in one request. Bounded by
-/// count and by encoded query length, because the endpoint takes its input in
-/// the URL — a knowledge base's worth of copy would otherwise build a query
-/// string the server rejects.
+/// Bounded by count and by query length, because the endpoint takes its input in the URL.
 const BATCH_STRINGS = 20;
 const BATCH_CHARS = 16000;
 
@@ -56,8 +36,7 @@ export async function saveCache(lang, map) {
   await writeFile(cachePath(lang), JSON.stringify(sorted, null, 2) + '\n');
 }
 
-/// One string. Used when a batch comes back short, so a single bad string
-/// costs itself rather than its nineteen neighbours.
+/// Used when a batch comes back short, so one bad string costs only itself.
 async function viaProxy(text, target) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
@@ -70,13 +49,7 @@ async function viaProxy(text, target) {
   return (data && data.translatedText) || '';
 }
 
-/// Many strings, one request. The backend still runs one inference per string;
-/// what this saves is the round trip, which is most of the wall clock when
-/// there are a few hundred thousand of them to get through.
-///
-/// Returns translations positionally. A `null` is a string the backend could
-/// not translate. A response of the wrong LENGTH is different and throws:
-/// there is no way to tell which translation belongs to which source.
+/// Returns translations positionally, `null` for a failure; a wrong-length response throws.
 async function viaProxyBatch(texts, target) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
@@ -93,7 +66,6 @@ async function viaProxyBatch(texts, target) {
   return out.map((v) => (typeof v === 'string' && v.trim() ? v : null));
 }
 
-/// The one route there is.
 let route = null;
 
 function pickRoute() {
@@ -101,26 +73,16 @@ function pickRoute() {
   return Promise.resolve(route);
 }
 
-/// What throttling looks like on this upstream.
-///
-/// A 429 or a 403 is the obvious form. The one that is not obvious, and cost
-/// three languages a full run, is a 200 carrying an EMPTY translation: the
-/// endpoint soft-throttles by answering successfully with nothing in it. Read
-/// as "transient error" that gets a few hundred milliseconds of backoff, which
-/// under throttling is no wait at all, and the retries are spent for nothing.
+/// Includes a 200 with an empty translation: the endpoint soft-throttles that way.
 const isThrottled = (err) => /\b(429|403)\b|empty translation/.test(String(err && err.message));
 
-/// When one request is throttled, every worker waits. Six workers each backing
-/// off privately still means six requests a second at a server that has just
-/// asked for fewer, so the pause is shared.
+/// The pause is shared so every worker backs off together.
 let cooldownUntil = 0;
 const cooldown = () => {
   const left = cooldownUntil - Date.now();
   return left > 0 ? new Promise((r) => setTimeout(r, left)) : Promise.resolve();
 };
 
-/// Retries [attempt] a few times, pausing much longer when throttled than after
-/// a transient 5xx.
 async function withRetries(attempt) {
   for (let i = 0; i < RETRIES; i++) {
     await cooldown();
@@ -144,7 +106,6 @@ async function translateOne(text, target) {
   });
 }
 
-/// Splits [texts] into requests the batched route will accept.
 function batches(texts) {
   const out = [];
   let current = [];
@@ -163,27 +124,10 @@ function batches(texts) {
   return out;
 }
 
-/// Translates a group of strings, as one request where the route allows it.
-/// A batch that comes back malformed is retried string by string rather than
-/// failing the language: one unlucky response should not cost a whole run.
-///
-/// The fallback is SEQUENTIAL, and waits out any cooldown first. Fanning a
-/// failed batch of twenty into twenty concurrent requests is the worst possible
-/// response to being throttled, and it is why failures arrived in exact
-/// multiples of the batch size: one throttled batch became twenty throttled
-/// strings, all of them spending their retries inside the same bad window.
-/// Whether the backend has already told us it does not speak the batch shape.
-/// Worth remembering for the run: an older deployment answers 400 to every
-/// batch, and finding that out once per group is 130 wasted round trips.
+/// Set once the backend answers 400 to a batch; older deployments reject every batch.
 let batchUnsupported = false;
 
-/// Records why a string could not be translated, keyed by the string.
-///
-/// Every one of these used to be a bare `catch { null }`, so the reason was
-/// discarded and the report said "no translation returned" for a 400, a 502, a
-/// timeout and an empty answer alike. That is the difference between "the
-/// backend is not deployed yet" and "this one string is untranslatable", and
-/// the run said neither.
+/// A malformed batch is retried string by string, sequentially after any cooldown, so throttling does not multiply.
 async function translateGroup(texts, target, reasons) {
   await pickRoute();
   const one = async (text) => {
@@ -197,39 +141,30 @@ async function translateGroup(texts, target, reasons) {
   }
   try {
     const out = await withRetries(() => viaProxyBatch(texts, target));
-    // A batch that came back with holes in it: retry just those, sequentially.
+    // Retry only the holes, sequentially.
     for (let i = 0; i < out.length; i++) {
       if (out[i] === null) out[i] = await one(texts[i]);
     }
     return out;
   } catch (err) {
     if (isThrottled(err)) cooldownUntil = Math.max(cooldownUntil, Date.now() + THROTTLE_MS);
-    // A 400 means the endpoint does not know `texts[]` — an older deployment.
-    // Say so once, loudly: it is the difference between a slow run and a
-    // backend that has not shipped yet, and the per-string path below will
-    // otherwise hide it behind whatever it fails with next.
+    // A 400 means an older deployment without `texts[]`; say so once, loudly.
     if (/\b400\b/.test(err.message || '') && !batchUnsupported) {
       batchUnsupported = true;
       notice(`the backend rejected a batch (${err.message}) — it is probably an `
         + 'older deployment without the batch endpoint. Falling back to one '
         + 'request per string for the rest of this run.');
     }
-    // One string's failure is one string's failure. Returning `null` for it
-    // keeps the other nineteen, and lets the caller name the string that
-    // actually failed instead of blaming the batch it happened to be in.
+    // Returning `null` for one string keeps the rest and names the one that failed.
     const out = [];
     for (const text of texts) out.push(await one(text));
     return out;
   }
 }
 
-/// The route actually in use, for the CLI to report.
 export const activeRoute = () => (route ? PROXY : 'unknown');
 
-/// Translates every source string missing from [lang]'s cache and returns the
-/// merged map. Strings already cached cost nothing.
-/// Drops entries whose English source is no longer on the page, so the
-/// committed cache tracks the copy instead of growing forever.
+/// Drops entries whose English source is gone so the committed cache tracks the copy.
 function prune(cache, sources) {
   const live = new Set(sources);
   const out = {};
@@ -249,16 +184,13 @@ export async function translateMissing(lang, sources, { onProgress } = {}) {
     return { cache: kept, translated: 0 };
   }
 
-  // Decide the route before splitting the work: the proxy takes one string per
-  // request, the fallback takes many, and the shape of the queue follows from
-  // which one is answering.
+  // Decide the route first; the queue's shape depends on which one answers.
   await pickRoute();
   const queue = batches(missing);
 
   let index = 0;
   let done = 0;
   const failures = [];
-  /// Why each failed string failed, filled in by translateGroup.
   const reasons = new Map();
 
   const worker = async () => {
@@ -280,18 +212,7 @@ export async function translateMissing(lang, sources, { onProgress } = {}) {
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
 
-  // What succeeded is written even when something failed. It used to be
-  // discarded: a language that lost one string to a transient upstream error
-  // threw away the other fifteen hundred translations of that run, so the next
-  // attempt started from the same place, did the same work, hit the same wall
-  // and discarded it again. Three languages sat at 440/1960 through several
-  // runs for exactly that reason — "re-run to retry, cached strings are not
-  // re-sent" was a promise the code could not keep.
-  //
-  // A partial cache cannot publish a partial page: build.mjs holds a language
-  // back until its cache covers every string on the site. That gate is what
-  // makes saving progress safe, and it is a better place for the invariant than
-  // refusing to remember work that was already paid for.
+  // Progress is saved even on failure; build.mjs withholds any language whose cache is incomplete.
   await saveCache(lang, prune(cache, sources));
 
   if (failures.length > 0) {

@@ -31,7 +31,7 @@ class GitRepo {
   bool approve;
   bool enabled;
 
-  /// Where this repository announced itself, when it did (NIP-34).
+  /// NIP-34 announcement this repo was added from, if any.
   NgitOrigin? ngit;
 
   String get display => label.isNotEmpty ? label : (ngit?.name.isNotEmpty == true ? ngit!.name : repo);
@@ -41,8 +41,6 @@ class GitRepo {
     if (host.isNotEmpty) bits.add(host);
     if (branch.isNotEmpty) bits.add(branch);
     if (paths.isNotEmpty) bits.add(paths);
-    // Announced on Nostr rather than typed in: worth saying, since it is the
-    // announcement that decided where this points.
     if (ngit != null) bits.add('ngit');
     return bits.join(' · ');
   }
@@ -107,7 +105,6 @@ class GitRepo {
   }
 }
 
-/// The NIP-34 announcement a repository was added from.
 class NgitOrigin {
   const NgitOrigin({
     this.naddr = '',
@@ -126,8 +123,7 @@ class NgitOrigin {
   final List<String> relays;
   final List<String> maintainers;
 
-  /// The earliest unique commit, which is what tells a repository from a fork of
-  /// it and groups the copies hosted in different places.
+  /// Earliest unique commit, which distinguishes a repo from its forks and groups its mirrors.
   final String euc;
 
   Map<String, dynamic> toJson() => {
@@ -180,9 +176,7 @@ class KnowledgeFile {
       );
 }
 
-/// One retrievable passage of a knowledge file: enough of it to answer with,
-/// labelled with where it came from so it still says what it is about once it
-/// has been lifted out of the file.
+/// A retrievable passage of a knowledge file, labeled with its source.
 class KnowledgeChunk {
   const KnowledgeChunk({
     required this.file,
@@ -197,9 +191,7 @@ class KnowledgeChunk {
   final String text;
 }
 
-/// Standing context a run of chats shares: instructions, reference files and
-/// repositories. Everything in it lives on this device, and the parts of it
-/// that bear on a question travel inside that message.
+/// Shared context for a run of chats, kept on device; relevant parts travel inside each message.
 class Workspace {
   Workspace({
     required this.id,
@@ -279,8 +271,7 @@ class Persona {
   final String name;
   final String instructions;
 
-  /// A name from the shared icon set rather than an emoji, so the web app and
-  /// this one draw the same mark for the same persona.
+  /// A shared icon-set name, not an emoji, so both apps draw the same mark.
   final String icon;
   final bool builtin;
 
@@ -521,20 +512,15 @@ class Attachment {
 
   Uint8List? bytes;
 
-  /// Where a picture was uploaded to, once it has been.
   String? url;
 
-  /// Why it never got there, if it did not.
   String? uploadError;
 
-  /// True while it is on its way up, so the chip can say so.
   bool uploading;
 
-  /// Set when this came from a paste rather than a file. Lines say more about
-  /// a wall of pasted text than bytes do.
+  /// Line count, set for pasted text rather than files.
   final int lines;
 
-  /// What to put on the chip: lines for something pasted, bytes for a file.
   String get measure => label ?? (lines > 0 ? '$lines lines' : humanSize);
 
   bool get uploads =>
@@ -546,7 +532,6 @@ class Attachment {
     return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
-  /// What an attachment looks like inside the message.
   String get wireBlock {
     if (searched) return '';
     if (kind == AttachmentKind.text) {
@@ -685,16 +670,13 @@ class AppSettings {
   int anonAutoTopAmount;
   String anonAutoTopTier;
 
-  /// Chats untouched for this many days are deleted when the app opens. Zero
-  /// means never, which is the default: deleting things is the user's call.
+  /// Chats untouched this many days are deleted on launch; 0 (default) means never.
   int autoDeleteDays;
 
-  /// Whether a durable fact mentioned in passing is offered to memory.
-  /// Explicit saves work either way; this is only the noticing.
+  /// Whether facts mentioned in passing are offered to memory; explicit saves always work.
   bool memoryCapture;
 
-  /// How much you are willing to spend letting a capped repo run carry on:
-  /// 0 is never, -1 is whatever the balance holds.
+  /// Spend allowed for a capped repo run to continue: 0 never, -1 whatever the balance holds.
   int autoContinue;
   bool showProgress;
 

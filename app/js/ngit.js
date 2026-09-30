@@ -32,8 +32,6 @@
         return all.length ? all[0] : '';
     }
 
-    /// Reads whatever somebody pasted: an naddr, a `nostr://` clone URL, or the
-    /// npub-and- identifier the URL is made of.
     function parseAddress(input) {
         const text = String(input || '').trim();
         if (!text) return null;
@@ -77,8 +75,7 @@
                 return d.type === 'npub' ? d.data : null;
             } catch (_) { return null; }
         }
-        // A NIP-05 name needs a lookup this module does not do; the caller is
-        // told what is missing rather than handed a silent failure.
+        // A NIP-05 name needs a lookup this module does not do.
         return null;
     }
 
@@ -113,7 +110,6 @@
         return best;
     }
 
-    /// Which forge a clone URL points at, and what to call the repo there.
     function forgeFor(cloneUrl) {
         let parsed;
         try {
@@ -152,7 +148,6 @@
         forgeFor,
         tagValues,
 
-        /// Looks an announcement up and reads everything off it.
         async resolve(input) {
             const address = parseAddress(input);
             if (!address) {
@@ -168,8 +163,7 @@
                 '#d': [address.identifier],
                 limit: 4
             };
-            // Both: the pool for anything mirrored to the usual relays, and the
-            // announcement's own for anything that is not.
+            // Both the pool and the announcement's own relays, for repos not mirrored to the usual ones.
             const events = [].concat(
                 await Relays.fetch(filter, 5000),
                 await Relays.fetchFrom(where, filter, 6000));
@@ -248,7 +242,6 @@
             } catch (_) { return ''; }
         },
 
-        /// What to store as a repository, once an announcement has been read.
         repoFrom(resolved, extra) {
             if (!resolved.forge) {
                 throw new Error(t('That repository is announced, but none of its clone URLs is on a git host Nymbot can read files from.'));

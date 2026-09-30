@@ -50,8 +50,7 @@ class ChatFailure implements Exception {
 
   final String? resumeToken;
 
-  /// Present when it was the day's free allowance that ran out rather than a
-  /// balance, which is a time rather than a wall.
+  /// Set when the daily free allowance, not a balance, ran out.
   final FreeAllowance? free;
 
   final bool capExceeded;
@@ -74,17 +73,14 @@ typedef TurnResult = ({
   List<String> repos,
   List<Map<String, dynamic>> sources,
   List<String> followUps,
-  /// What the day's free allowance has left, when this reply came out of it
-  /// rather than out of a balance.
+  /// Remaining free allowance when this reply was paid from it.
   FreeAllowance? free,
-  // Set when the run stopped at its tool-call cap with work left. The token
-  // buys one more leg; the caller decides whether to spend it.
+  // Set when the run hit its tool-call cap with work left; the token buys one more leg.
   bool truncated,
   bool capStopped,
   String? resumeToken,
   int nextReserve,
-  /// What this reply changed in a repository, and where the branch stood
-  /// before it did, so the run can be put back.
+  /// Repo changes and the prior branch head, so the run can be reverted.
   Map<String, dynamic>? checkpoint,
   Map<String, dynamic>? pendingTool,
   Map<String, dynamic>? staged,
@@ -96,7 +92,6 @@ typedef TurnResult = ({
   Map<String, dynamic>? team,
 });
 
-/// One thing the running turn reported doing.
 typedef TurnStep = ({
   int n,
   String kind,
@@ -104,8 +99,7 @@ typedef TurnStep = ({
   String tool,
   int call,
   int of,
-  /// The one yes/no a step carries — today, whether a picture is what sent the
-  /// message somewhere other than the route the question picked.
+  /// Currently: whether a picture rerouted the message.
   bool flag,
 });
 
@@ -131,7 +125,7 @@ class TurnControl {
   void say(String? status) => onStatus?.call(status);
 }
 
-/// One turn, end to end: seal, publish, ask the worker, open the reply.
+/// One turn end to end: seal, publish, ask the worker, open the reply.
 class ChatEngine {
   ChatEngine({
     required this.identity,
@@ -581,9 +575,7 @@ class ChatEngine {
       List<EstTurnText> history = const [],
       bool web = false,
       Map<String, dynamic>? pricing}) {
-    // A question too long for one wrap travels as several, and each extra one
-    // is a credit. Splitting is a transport detail, but the input it carries is
-    // real and the published price has never charged for input.
+    // Each extra wrap is charged a credit.
     final wire = wireText.isEmpty ? text : wireText;
     final extra = WireLimits.partSurcharge(wire);
     final unpriced = pricing?['priceUnavailable'] == true;
@@ -653,16 +645,7 @@ class ChatEngine {
     );
   }
 
-  // Project knowledge is retrieved per message rather than poured into the
-  // first one. The old caps sent up to 90,000 characters in turn one, where the
-  // worker cut it to 1000 the moment it became history — so a workspace stopped
-  // applying after a single reply. A few relevant passages, sent every turn,
-  // are both smaller on the wire and actually there when the question needs
-  // them.
-  // How hard a reply is asked to think, as the number of model calls it takes.
-  // A careful reply plans before it answers; a deep one also reads its answer
-  // back against the question before sending it. Both are charged as what they
-  // are — more model calls — so the price says what the work was.
+  // Model calls per reply: careful plans first, deep also checks its answer.
   static const effortLevels = {'normal': 1, 'careful': 2, 'deep': 3};
 
   static const reconnects = 2;
@@ -685,10 +668,7 @@ class ChatEngine {
   static const knowledgeSendCap = 5000;
   static const knowledgeFileCap = 24000;
 
-  /// Marks where the context repeated every turn ends and the message begins,
-  /// so the worker can drop the repeats from historical turns. A block of
-  /// knowledge has blank lines in it, so the boundary cannot be found by
-  /// looking — it has to be written down.
+  /// Marks where per-turn standing context ends so the worker can strip it from history.
   static const standingEnd = '[end of standing context]';
 
   static const _stopWords = {
@@ -706,10 +686,7 @@ class ChatEngine {
       .where((w) => w.length > 1 && !_stopWords.contains(w))
       .toList();
 
-  /// Splits one file into retrievable passages, on blank lines and headings,
-  /// each under a ceiling. A markdown heading is carried onto the passages
-  /// beneath it, so a passage still says what it is about once it has been
-  /// lifted out of the file it came from.
+  /// Splits a file on blank lines and headings; headings carry onto the passages beneath.
   static List<KnowledgeChunk> chunkFile(KnowledgeFile file) {
     final body = file.body.length > knowledgeFileCap
         ? file.body.substring(0, knowledgeFileCap)
@@ -737,8 +714,7 @@ class ChatEngine {
         flush();
         heading = head.group(2)!.trim();
       }
-      // A single paragraph over the ceiling is cut into pieces rather than
-      // dropped: a long table or code block is often the answer.
+      // An oversized paragraph is cut up rather than dropped.
       if (block.length > knowledgeChunkMax) {
         flush();
         for (var i = 0; i < block.length; i += knowledgeChunkMax) {
@@ -757,12 +733,7 @@ class ChatEngine {
     return chunks;
   }
 
-  /// Ranks passages against the question with BM25 over plain terms.
-  ///
-  /// Deliberately not embeddings: this runs on the device, for every message,
-  /// with no model to call and nothing downloaded. Term overlap is weaker than
-  /// a vector search and enormously better than sending the first 90,000
-  /// characters and hoping.
+  /// On-device BM25 over plain terms, deliberately not embeddings.
   static List<KnowledgeChunk> rankChunks(
       List<KnowledgeChunk> chunks, String query) {
     final want = _terms(query).toSet();
@@ -802,10 +773,7 @@ class ChatEngine {
     return scored.map((x) => x.chunk).toList();
   }
 
-  /// Puts a repo run back: each path the run wrote is read at the commit the
-  /// branch stood on before it and committed as it was. A revert, not a
-  /// rewrite — what the model did stays in the history, it is simply no longer
-  /// the state of the branch. Costs nothing: it touches no model.
+  /// Reverts each written path to the pre-run commit as a new commit; touches no model.
   Future<Map<String, dynamic>> revert({
     required GitRepo repo,
     required Map<String, dynamic> checkpoint,
@@ -845,10 +813,7 @@ class ChatEngine {
     return data;
   }
 
-  /// The passages of the workspace's files that bear on this question, plus the
-  /// names of every file so the model knows what else it could be told about.
-  /// When nothing matches, the opening of each file goes instead — enough to
-  /// say what the project is rather than nothing at all.
+  /// Relevant passages plus every file name; the opening of each file when nothing matches.
   static String knowledgeBlock(Workspace? space, [String query = '']) {
     final files = space?.files ?? const <KnowledgeFile>[];
     if (files.isEmpty) return '';
@@ -882,7 +847,7 @@ class ChatEngine {
     }
     if (picked.isEmpty) return '';
 
-    // Back into document order, so passages from one file read forwards.
+    // Back into document order.
     picked.sort((a, b) {
       final byFile = a.file.compareTo(b.file);
       return byFile != 0 ? byFile : a.at.compareTo(b.at);
@@ -905,15 +870,7 @@ class ChatEngine {
         '${parts.join('\n\n')}';
   }
 
-  /// The context that holds for every message in a chat: who the bot is being,
-  /// what it can read, and the part of the workspace that bears on what was
-  /// just asked.
-  ///
-  /// Sent on every message rather than only the first. It used to go once, at
-  /// the top of turn one, and the worker cut that turn to 1000 characters the
-  /// moment it became history — so instructions and project knowledge stopped
-  /// applying after a single reply, silently. The worker strips these blocks
-  /// from historical turns, so repeating them costs one copy, not twenty.
+  /// Per-message context (persona, access, relevant workspace); the worker strips it from historical turns.
   static List<String> standingContext(
     Conversation conv,
     List<GitRepo> repos,
@@ -967,9 +924,7 @@ class ChatEngine {
     if (standing.isNotEmpty) {
       parts.add('${standing.join('\n\n')}\n\n$standingEnd');
     }
-    // Past the marker, because nothing re-sends it: the client clears the seed
-    // after the first message, so stripping it from history would lose what
-    // the branch was branched from.
+    // After the marker, because the seed is sent only once and must stay in history.
     final seed = conv.seed;
     if (seed != null && seed.isNotEmpty) {
       parts.add('[earlier in this conversation]\n$seed');
@@ -977,9 +932,7 @@ class ChatEngine {
     return parts.isEmpty ? '' : '${parts.join('\n\n')}\n\n';
   }
 
-  /// A conversation is named after the first thing you say in it. Done here, on
-  /// the device: the worker is never asked to summarise anything, and never
-  /// sees the title.
+  /// Titled on device from the first message; the worker never sees the title.
   static String titleFor(String text) {
     var t = text
         .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
@@ -1013,7 +966,6 @@ class ChatEngine {
 
   String _sharedId() => bytesToHex(randomBytes(32));
 
-  /// Publishes the message and collects the reply.
   Future<TurnResult> send({
     required Conversation conv,
     required String text,
@@ -1029,21 +981,19 @@ class ChatEngine {
     Persona? persona,
     Workspace? workspace,
     Bot? bot,
-    /// The standing facts this chat may see. Passed in rather than read here,
-    /// so a caller that must not use memory simply does not hand any over.
+    /// Passed in so a caller that must not use memory hands none over.
     List<Memory> memories = const [],
     /// Continues a run parked by an earlier truncated turn.
     String? resume,
     double? maxCost,
-    /// Called with the turn's own event id as soon as it is published, so a
-    /// watcher can start before the answer comes back.
+    /// Called with the turn's event id as soon as it is published.
     void Function(String eventId)? onTurn,
     void Function(Map<String, dynamic> step)? onStep,
     List<Attachment> attachments = const [],
     String? quote,
     bool webSearch = false,
     bool firstTurn = true,
-    /// Answers the message outside the conversation, the way a '!' question is answered.
+    /// Answers outside the conversation, like a '!' question.
     bool fresh = false,
     Object? research,
     Map<String, dynamic>? team,
@@ -1058,9 +1008,7 @@ class ChatEngine {
         await pq.resolveBot();
       } catch (_) {}
     }
-    // Anonymous mode: the throwaway key signs the rumor, the seal and the
-    // request, and the reply comes back to it. The account key signs nothing in
-    // this conversation at all.
+    // Anonymous mode: the throwaway key signs everything and the account key signs nothing.
     Map<String, dynamic>? anonId;
     if (anonymous) {
       try {
@@ -1086,20 +1034,14 @@ class ChatEngine {
     final searched = DocLibrary.instance.wireFor(conv.id, text, attachments);
     final wireText = '$head$quoted$text$attached$searched';
 
-    // NIP-44 refuses a plaintext over 65535 bytes, and a gift wrap nests two
-    // of them, so a long question does not fit in one event. It travels as
-    // several instead — each saying where it sits, all sharing one message id
-    // — and the worker puts them back together. What stays capped is how many.
+    // NIP-44 caps plaintext at 65535 bytes, so long questions travel as several parts the worker reassembles.
     final bodies = WireLimits.split(wireText);
     if (bodies.length > WireLimits.partsMax) {
       throw ChatFailure(WireLimits.overLimitMessage(wireText));
     }
     final msgId = _sharedId();
 
-    // A ghost chat publishes nothing it does not have to. The wrap to the bot
-    // is how the message gets there at all; the archive copy and the reply's
-    // re-publish are for restoring a conversation later, which is exactly what
-    // a ghost chat is refusing.
+    // A ghost chat publishes only the wrap to the bot, no archive copy or reply re-publish.
     final ghost = conv.ephemeral;
     final botKem = pq.botKey?.pk;
     if (onStep != null) {
@@ -1140,8 +1082,6 @@ class ChatEngine {
       }
     }
 
-    // The turn is now identifiable, so anything watching it can start before
-    // the answer comes back.
     if (onTurn != null) {
       try {
         onTurn(wrap!.id);
@@ -1160,8 +1100,7 @@ class ChatEngine {
       'followUps': true,
       'draft': true,
       if (handed.isNotEmpty) 'history': [for (final w in handed) w.toJson()],
-      // Every event the question was split across, in order. The last is
-      // `eventId`, which is what a message that fits has always sent.
+      // Every part in order; the last is `eventId`.
       if (partIds.length > 1) 'parts': partIds,
       if (partIds.length > 1)
         'wraps': [for (final w in partWraps) w.toJson()],
@@ -1176,8 +1115,7 @@ class ChatEngine {
       if (attachments.isNotEmpty)
         'attachments': attachments.map((a) => a.toPayload()).toList(),
       if (proModel != null) 'proModel': proModel['key'],
-      // How hard this chat asked the reply to think. Only meaningful on Pro,
-      // and only outside a repo task, which loops on a budget of its own.
+      // Only meaningful on Pro outside a repo task.
       if (proModel != null &&
           repos.isEmpty &&
           connectors.isEmpty &&
@@ -1197,9 +1135,7 @@ class ChatEngine {
       if (runDecline != null && runDecline.isNotEmpty) 'runDecline': runDecline,
     };
 
-    // `pending` means an earlier attempt at this same message is still
-    // generating. Asking again with the same event id collects that reply
-    // rather than paying for a second one.
+    // `pending` means an earlier attempt is still generating; the same event id collects it without paying twice.
     ApiResult res;
     var held = 0;
     var waited = 0;
@@ -1269,9 +1205,7 @@ class ChatEngine {
       throw ChatFailure(t('Nymbot sent no reply.'));
     }
 
-    // Both copies go to the relays: the reply so it restores like any other
-    // message, and the bot's self-addressed copy so the worker can re-read its
-    // own turn as context next time.
+    // Publish the reply and the bot's self-addressed copy, which the worker re-reads as context.
     final replyEvent = NostrEvent.fromJson(eventJson);
     if (!ghost) {
       unawaited(relays.publish(replyEvent, timeout: const Duration(seconds: 3)));
@@ -1296,9 +1230,7 @@ class ChatEngine {
       throw ChatFailure(t('A reply arrived that Nymbot did not sign, so it was not shown.'));
     }
 
-    // A '!' question is answered without the conversation and stays out of it,
-    // on this side as on the worker's: it was asked that way so it would not
-    // become context. The chat still shows it.
+    // A '!' question stays out of the conversation context on both sides, though the chat shows it.
     if (!freshTurn) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
       holdWraps(conv.id, [...partWraps, if (selfEvent != null) selfEvent]);
@@ -1340,8 +1272,7 @@ class ChatEngine {
     );
   }
 
-  /// What the turn answering [eventId] is doing. Purely advisory: a failure
-  /// returns nothing rather than disturbing the turn.
+  /// Advisory only; a failure returns nothing.
   Future<List<TurnStep>> progress(
     EventSigner signer,
     String eventId, {
@@ -1387,9 +1318,7 @@ class ChatEngine {
       s['kind'] == 'research' ? Research.stepOf(s) : s['kind'] == 'team' ? Team.stepOf(s) : Connectors.step(s) ?? (
             n: (s['n'] as num?)?.toInt() ?? 0,
             kind: s['kind'] as String? ?? '',
-            // One field for "the thing this step is about", whichever name the
-            // worker gave it — the tool's own name stays separate so a tool
-            // step can say both what it did and what it touched.
+            // Whichever field names the step's subject; the tool name stays separate.
             text: (s['text'] ??
                     s['query'] ??
                     s['target'] ??

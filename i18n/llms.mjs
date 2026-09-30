@@ -1,16 +1,3 @@
-// The site as one markdown file, for agents.
-//
-// `/llms.txt` is a small convention: a markdown index at a well-known path that
-// tells a language model what a site contains and where each part lives, so it
-// does not have to crawl and strip HTML to find out. Everything here is derived
-// from the documents themselves — their own titles and descriptions, and the
-// knowledge base's own outline — so it cannot drift from the site the way a
-// hand-written summary would.
-//
-// English only, and deliberately: the convention describes one document at one
-// path, and an agent that wants another language can follow the hreflang set on
-// any page.
-
 import { OUTLINE } from './docs.mjs';
 import { pathFor } from './languages.mjs';
 import { articleMarkdown } from './markdown.mjs';
@@ -27,22 +14,16 @@ const meta = (html, re) => {
   return m ? decode(m[1]).trim() : '';
 };
 
-/// Title without the site suffix — `Anonymous mode`, not
-/// `Anonymous mode - Nymbot Knowledge Base`.
 const shortTitle = (html) => meta(html, /<title>([^<]*)<\/title>/i)
   .replace(/\s*-\s*Nymbot Knowledge Base$/, '')
   .replace(/\s*-\s*Nymbot$/, '');
 
 const describe = (html) => meta(html, /<meta name="description" content="([^"]*)">/i);
 
-/// One markdown line per page.
 const entry = (slug, html) =>
   `- [${shortTitle(html)}](${SITE}${pathFor('en', slug)}): ${describe(html)}`;
 
-/// The finished `/llms.txt` for [documents].
-///
-/// The knowledge base is listed in its reading order rather than
-/// alphabetically, because that order is the argument the pages make together.
+/// The knowledge base is listed in reading order, not alphabetically.
 export function renderLlmsTxt(documents) {
   const bySlug = new Map(documents.map((d) => [d.slug, d]));
   const landing = bySlug.get(null);
@@ -95,11 +76,6 @@ export function renderLlmsTxt(documents) {
   return lines.join('\n');
 }
 
-/// The whole knowledge base as one markdown document.
-///
-/// Same content as the pages, in the same reading order, so an agent can take
-/// the lot in a single fetch instead of fourteen. Generated from the
-/// documents, so it says exactly what they say.
 export function renderLlmsFull(documents) {
   const bySlug = new Map(documents.map((d) => [d.slug, d]));
   const landing = bySlug.get(null);

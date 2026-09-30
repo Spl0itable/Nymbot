@@ -35,9 +35,7 @@
     --mono: 'Courier New', 'Consolas', 'Monaco', monospace;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --radius: 12px;
-    /* A button is squared off, not a pill — the same 8px Nymchat gives its own
-       controls (--radius-xs there), so a chat with Nymbot looks the same
-       whichever app it is opened in. */
+    /* 8px to match Nymchat's --radius-xs, so a chat looks the same in either app. */
     --radius-btn: 8px;
     --bubble-radius: 16px;
     --bubble-tail: 4px;
@@ -159,10 +157,7 @@ html[data-theme="light"] {
     --tok-meta: #0b6fb8;
 }
 
-/* Scrollbars follow the theme rather than the browser's default grey, and
-   stay out of the way: the thumb is only painted while a surface is actually
-   being scrolled, so a page at rest has none. Surfaces that hide theirs
-   outright (the ASCII banner, the chip rails) override this below. */
+/* Themed scrollbars; the thumb only paints while a surface is scrolling. */
 * {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
@@ -215,17 +210,14 @@ html[data-motion="reduce"] *::after {
     * { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
 }
 
-/* --- onboarding ---------------------------------------------------------- */
+/* Onboarding */
 
 .gate {
     position: fixed;
     inset: var(--vv-top, 0px) 0 auto;
     height: var(--vv-height, 100dvh);
     display: grid;
-    /* An auto-sized track takes its item's max-content width, and the ASCII
-       wordmark's max-content is ~370px — wider than a phone, which pushed the
-       card and its buttons off the right of the screen. minmax(0, 1fr) caps
-       the track at the viewport; the wordmark scrolls inside itself instead. */
+    /* minmax(0, 1fr) caps the track at the viewport; the ~370px wordmark scrolls inside itself. */
     grid-template-columns: minmax(0, 1fr);
     justify-items: center;
     align-content: center;
@@ -239,7 +231,7 @@ html[data-motion="reduce"] *::after {
 .gate-card {
     width: min(500px, 100%);
     max-width: 100%;
-    /* Without this the column's automatic minimum is the <pre>'s width again. */
+    /* Otherwise the column's automatic minimum is the <pre>'s width. */
     min-width: 0;
     background: transparent;
     border: 0;
@@ -254,10 +246,7 @@ html[data-motion="reduce"] *::after {
     margin-inline: auto;
     text-align: left;
     font-family: var(--mono);
-    /* The logo is 61 monospace columns, so its width is ~37.7x the font size.
-       Scaling with the viewport below ~480px keeps the whole wordmark on
-       screen rather than scrolling half of it out of view; overflow-x stays as
-       the backstop for anything narrower still. */
+    /* The 61-column logo is ~37.7x the font size, so it scales with narrow viewports. */
     font-size: min(0.56rem, 1.7vw);
     line-height: 1.06;
     color: var(--primary);
@@ -307,7 +296,7 @@ html[data-motion="reduce"] *::after {
 
 .hint { color: var(--text-faint); font-size: 0.82rem; margin-top: 0.4rem; }
 
-/* --- controls ------------------------------------------------------------ */
+/* Controls */
 
 .btn {
     padding: 0.55rem 1rem;
@@ -400,9 +389,7 @@ input[type="number"], select, textarea {
 }
 input:focus, select:focus, textarea:focus { border-color: var(--line-strong); }
 
-/* iOS Safari zooms the whole page in when a field under 16px takes focus, and
-   it does not zoom back out — which is what makes an otherwise fluid layout
-   feel broken on a phone. Scoped to touch so the desktop scale is unchanged. */
+/* Under 16px iOS Safari zooms on focus and never zooms back out; scoped to touch. */
 @media (pointer: coarse) {
     input[type="text"], input[type="password"], input[type="search"],
     input[type="number"], select, textarea {
@@ -434,7 +421,7 @@ kbd {
     background: var(--bg-sunken);
 }
 
-/* --- shell --------------------------------------------------------------- */
+/* Shell */
 
 .shell { display: flex; height: 100dvh; }
 
@@ -462,8 +449,7 @@ kbd {
     color: var(--primary);
 }
 .brand-mark { display: block; flex: 0 0 auto; }
-/* Optical, not geometric: the mark's drawn body sits a hair below its box
-   because of the antennae, so the word is nudged to match its middle. */
+/* Optical centering: the antennae push the mark's body below its box center. */
 .brand-name {
     font-family: var(--mono);
     font-size: 1rem;
@@ -529,10 +515,7 @@ kbd {
     padding: 0.7rem 0.6rem 0.25rem;
 }
 
-/* The row is the button plus the menu that acts on it. The menu is always
-   there — a control that only appears on hover cannot be found by anyone
-   looking for it, and is not there at all on a touch screen. It stays quiet
-   instead of hidden: faint until you reach for it. */
+/* The row menu is always visible, faint until reached for, since hover-only controls vanish on touch. */
 .conv-row { display: flex; align-items: center; gap: 0.1rem; }
 .conv-row .conv-item { min-width: 0; }
 .conv-menu {
@@ -697,9 +680,7 @@ kbd {
     max-height: 70vh;
     overflow-y: auto;
 }
-/* Opened from a row rather than the header, it is placed against that row and
-   so has to leave the header's coordinate system — and on a phone that row is
-   inside the drawer, which is painted over the header it came from. */
+/* Fixed so it escapes the header; on a phone its row sits in the drawer, painted over the header. */
 .menu.is-floating { position: fixed; top: 0; left: 0; right: auto; z-index: 58; }
 
 .menu button {
@@ -730,11 +711,9 @@ kbd {
 .find-bar input { flex: 1; min-width: 0; }
 .find-count { font-size: 0.78rem; color: var(--text-faint); white-space: nowrap; }
 
-/* --- the AI toolbar ------------------------------------------------------ */
+/* AI toolbar */
 
-/* Only the chips scroll. The tier switch and the balance are anchored either
-   side of them, so a chat with a long model name or a dozen repositories can
-   never push the button that buys credits out of reach. */
+/* Only the chips scroll, so long content can never push the buy-credits button out of reach. */
 .bot-control-bar {
     display: flex;
     align-items: center;
@@ -752,8 +731,7 @@ kbd {
     scrollbar-width: none;
 }
 .toolbar-rail::-webkit-scrollbar { display: none; }
-/* Whatever is on for this chat sorts to the front, and this is where the
-   group ends. */
+/* Marks where the group of enabled items ends. */
 .toolbar-split {
     flex: 0 0 auto;
     width: 1px;
@@ -762,8 +740,7 @@ kbd {
     background: var(--line);
 }
 
-/* 10px around a 7px inner button: the two radii are concentric at this padding,
-   which is what keeps the track from looking like a sticker behind the tab. */
+/* 10px around a 7px inner button keeps the radii concentric at this padding. */
 .tier-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; padding: 2px; flex: 0 0 auto; }
 .tier-switch.wide { width: 100%; }
 .tier-switch.wide .tier-btn { flex: 1; text-align: center; }
@@ -798,6 +775,7 @@ kbd {
 }
 .chip:hover { border-color: var(--line-strong); color: var(--text); }
 .chip.is-active { border-color: var(--secondary); color: var(--secondary); }
+.chip.is-locked, .tier-btn.is-locked { opacity: 0.45; }
 .chip .chip-label { overflow: hidden; text-overflow: ellipsis; }
 .chip-buy { flex: 0 0 auto; border-color: rgba(247, 147, 26, 0.5); color: var(--lightning); }
 .chip-buy.is-anon { border-color: rgba(0, 212, 255, 0.5); color: var(--secondary); }
@@ -861,7 +839,7 @@ kbd {
 .chip-writes { display: inline-flex; opacity: 0.75; }
 .chat-badge { display: inline-flex; align-items: center; gap: 0.25rem; }
 
-/* --- messages ------------------------------------------------------------ */
+/* Messages */
 
 .messages {
     flex: 1;
@@ -1042,8 +1020,7 @@ html[data-mono="on"] .message-content { font-family: var(--mono); font-size: 0.8
 }
 html[data-timestamps="off"] .bubble-time-inner { display: none; }
 
-/* The bubble's last line: the time, and to the right of it what the reply
-   cost. Turning timestamps off leaves the price where it was. */
+/* Turning timestamps off leaves the price where it was. */
 .bubble-foot {
     display: flex;
     align-items: center;
@@ -1051,9 +1028,7 @@ html[data-timestamps="off"] .bubble-time-inner { display: none; }
     gap: 0.4rem;
 }
 
-/* Markdown renders into .msg-text, so a rule on .message-content's own
-   children never reaches the paragraphs — which is how consecutive paragraphs
-   ended up running together with no gap at all under the global reset. */
+/* Markdown renders into .msg-text, so its children need their own spacing rule. */
 .message-content > * + *, .msg-text > * + * { margin-top: 0.6rem; }
 .message-content > .bubble-foot { margin-top: 4px; }
 .msg-text > h3 + *, .msg-text > h4 + *, .msg-text > h5 + *, .msg-text > h6 + * { margin-top: 0.35rem; }
@@ -1172,7 +1147,7 @@ html[data-timestamps="off"] .bubble-time-inner { display: none; }
 .md-table .md-align-center { text-align: center; }
 .md-table .md-align-right { text-align: right; }
 
-/* --- code blocks --------------------------------------------------------- */
+/* Code blocks */
 
 .code-block { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--code-bg); }
 .code-head {
@@ -1264,7 +1239,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .tok-del { color: var(--tok-del); }
 .tok-meta { color: var(--tok-meta); }
 
-/* --- message chrome ------------------------------------------------------ */
+/* Message chrome */
 
 .reasoning-chip, .cost-chip, .repo-chip, .source-chip {
     display: inline-block;
@@ -1280,8 +1255,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .reasoning-chip { margin-bottom: 0.35rem; margin-right: 0.3rem; }
 .reasoning-chip, .cost-chip { display: inline-flex; align-items: center; gap: 0.25rem; vertical-align: middle; }
-/* The price of a reply belongs on its footer, to the right of the time,
-   rather than trailing the words it charged for. */
 .cost-chip {
     border-color: rgba(247, 147, 26, 0.4);
     color: var(--lightning);
@@ -1345,8 +1318,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .chat-message:focus-within .msg-actions,
 .msg-actions.is-open { opacity: 1; }
 
-/* No hover on a touch screen, so the row is revealed by tapping the bubble
-   rather than sitting under every message forever. */
+/* No hover on touch, so the row is revealed by tapping the bubble. */
 @media (pointer: coarse) {
     .msg-actions {
         opacity: 0;
@@ -1388,9 +1360,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .follow-up-text { overflow-wrap: anywhere; }
 @media (pointer: coarse) { .follow-up { min-height: 2.75rem; } }
 
-/* What each one does, said rather than guessed at. Drawn rather than left to
-   the native title, which takes a second to appear and never appears at all
-   on a touch screen. */
+/* Drawn labels, since native titles are slow and never show on touch. */
 .msg-action { position: relative; }
 .msg-action::after {
     content: attr(data-tip);
@@ -1416,8 +1386,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 /* At the ends of a row the bubble would run off the screen. */
 .msg-action:first-child::after { left: 0; transform: none; }
 .msg-action:last-child::after { left: auto; right: 0; transform: none; }
-/* On a touch screen there is nothing to hover, so the label stops floating
-   and simply sits beside its icon once the row has been tapped open. */
+/* On touch the label sits beside its icon once the row is tapped open. */
 @media (pointer: coarse) {
     .msg-action::after {
         position: static;
@@ -1434,10 +1403,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .msg-action.is-on { color: var(--primary); }
 .msg-action.is-down.is-on { color: var(--danger); }
 
-/* What Nymbot is doing, under the spinner rather than instead of it. Centred:
-   it is a status, not a message, and the lines under it change length every
-   couple of seconds — ragged against a left edge that keeps moving reads as
-   flicker, where a centred column stays still. */
+/* Centered because the status lines change length every few seconds. */
 .bot-thinking-head { display: flex; align-items: center; justify-content: center; gap: 0.3rem; }
 .bot-progress { display: grid; gap: 0.1rem; margin-top: 0.3rem; justify-items: center; }
 .progress-step {
@@ -1467,8 +1433,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     max-width: min(30rem, 88%);
     width: fit-content;
     background: var(--bubble-bot);
-    /* Every corner the same. The tail belongs to a bubble somebody said
-       something in; nothing has been said yet. */
+    /* Every corner the same: no tail until something has been said. */
     border-radius: var(--bubble-radius);
 }
 .bot-thinking > .bot-thinking-head,
@@ -1609,7 +1574,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .jump-btn:hover { background: color-mix(in srgb, var(--primary) 32%, var(--bg-raised)); }
 .jump-btn svg { width: 18px; height: 18px; }
 
-/* --- help ----------------------------------------------------------------- */
+/* Help */
 
 .help-body { margin-top: 0.6rem; }
 .help-topic {
@@ -1631,7 +1596,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .help-link { display: inline-block; margin-top: 0.35rem; font-size: 0.8rem; }
 .help-contact { border-top: 1px solid var(--line); margin-top: 0.9rem; padding-top: 0.7rem; }
 
-/* --- citations and diffs -------------------------------------------------- */
+/* Citations and diffs */
 
 .citations { margin-top: 0.5rem; }
 .citations-head { font-size: 0.7rem; color: var(--text-faint); margin-bottom: 0.25rem; }
@@ -1735,7 +1700,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .diff-line.is-hunk { background: var(--bg-sunken); color: var(--text-dim); }
 .diff-line.is-meta { color: var(--text-faint); }
 
-/* --- bots ----------------------------------------------------------------- */
+/* Bots */
 
 .bot-preview {
     border: 1px solid var(--line);
@@ -1759,7 +1724,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 #shareBotQr { display: block; margin: 0.6rem auto; border-radius: 8px; }
 #shareBotLink, #shareBotNaddr { font-family: var(--mono); font-size: 0.74rem; }
 
-/* --- compare -------------------------------------------------------------- */
+/* Compare */
 
 .compare-slots { display: flex; flex-direction: column; gap: 8px; }
 .compare-slot {
@@ -1834,7 +1799,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     .compare-body { max-height: 34vh; }
 }
 
-/* --- artifacts ------------------------------------------------------------ */
+/* Artifacts */
 
 .chat-body { flex: 1; min-height: 0; display: flex; }
 .chat-body > .messages { flex: 1; min-width: 0; }
@@ -1897,8 +1862,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     tab-size: 2;
 }
 .artifact-body:focus { border: 0; outline: 0; }
-/* The class beats the blanket rule further up, so the editor has to opt back
-   in or a phone zooms the whole shell in the moment it takes focus. */
+/* The class beats the blanket rule above, so the editor opts back in to avoid iOS focus zoom. */
 @media (pointer: coarse) {
     .artifact-body { font-size: 16px; }
 }
@@ -1946,7 +1910,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .artifact-card-main strong { color: var(--text); font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-card-main span { font-size: 0.74rem; color: var(--text-faint); }
 
-/* --- tasks ---------------------------------------------------------------- */
+/* Tasks */
 
 .tasks-btn { position: relative; }
 .tasks-btn.is-open { color: var(--primary); }
@@ -2080,7 +2044,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     }
 }
 
-/* --- composer ------------------------------------------------------------ */
+/* Composer */
 
 .composer { border-top: 1px solid var(--line); padding: 0.55rem 0.85rem calc(0.55rem + env(safe-area-inset-bottom)); }
 .composer > * { max-width: 820px; margin-left: auto; margin-right: auto; }
@@ -2097,9 +2061,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .composer-field:has(.mic-btn:not([hidden]).is-busy) .composer-input { padding-inline-end: 2.4rem; }
 .composer textarea { resize: none; max-height: 40vh; }
 
-/* The composer is editable rather than a textarea, so what you write in
-   markdown is drawn as what it means while you write it. It borrows the field
-   styling above, which only ever reached real form controls. */
+/* The editable composer borrows the field styling, which only reached real form controls. */
 .composer-input {
     flex: 1 1 auto;
     min-width: 0;
@@ -2118,9 +2080,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 }
 .composer-input:focus { border-color: var(--line-strong); }
 
-/* The placeholder sits over the first line rather than in front of it: an
-   empty field still holds a line to put the caret in, and text flowing after
-   the hint would push that line down. */
+/* The placeholder overlays the first line so the caret line is not pushed down. */
 .composer-input.is-empty::before {
     content: attr(placeholder);
     position: absolute;
@@ -2136,8 +2096,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .composer-field:has(.mic-btn:not([hidden])) .composer-input.is-empty::before { inset-inline-end: 2.4rem; }
 .composer-input .ce-line { min-height: 1.4em; }
 
-/* The marks stay where you typed them so the text you are editing is still
-   the text you wrote; they are only dimmed out of the way. */
+/* Marks stay in the text, only dimmed. */
 .ce-mark { color: var(--text-faint); font-weight: 400; font-style: normal; }
 .composer-input strong { font-weight: 700; }
 .composer-input em { font-style: italic; }
@@ -2157,8 +2116,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     padding: 0 0.15em;
 }
 
-/* A block is tinted across the line rather than around the words, so it reads
-   as one run of code and not as a string of inline spans. */
+/* Tinted across the line so a block reads as one run of code. */
 .composer-input .ce-line.is-code {
     background: var(--bg-raised);
     border-left: 1px solid var(--line);
@@ -2286,7 +2244,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .send-btn:disabled { opacity: 0.4; cursor: default; }
 .send-btn.is-stop { border-color: var(--danger); color: var(--danger); }
 
-/* --- modals -------------------------------------------------------------- */
+/* Modals */
 
 .credit-balances {
     display: grid;
@@ -2392,8 +2350,6 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .model-sort { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; color: var(--text-dim); margin: 0; }
 .model-sort select { width: auto; }
 .model-group { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin: 0.85rem 0 0.35rem; }
-/* Maker, name, price, star — the mark and the star pinned to the title line,
-   the name, description and price stacked beside them. */
 .model-row { display: flex; gap: 0.5rem; align-items: flex-start; width: 100%; padding: 0.5rem 0.6rem; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
 .model-row .brand-tile { flex: 0 0 auto; align-self: flex-start; margin-top: 0.05rem; }
 .chip .brand-tile { flex: 0 0 auto; align-self: center; }
@@ -2447,7 +2403,6 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .artifact-row:focus-within { border-color: var(--line-strong); }
 .artifact-row .conv-badge { margin-left: 0.35rem; }
 
-/* What a token can reach, ticked rather than typed. */
 .repo-browse {
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -2548,7 +2503,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .invoice canvas { background: #fff; border-radius: 8px; padding: 8px; max-width: 100%; height: auto; }
 .invoice textarea { font-family: var(--mono); font-size: 0.72rem; }
 
-/* --- command palette ----------------------------------------------------- */
+/* Command palette */
 
 .palette { position: fixed; inset: 0; z-index: 66; display: grid; place-items: start center; padding: 8vh 1rem 1rem; }
 .palette-card {
@@ -2586,8 +2541,6 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .dialog-body { color: var(--text-dim); font-size: 0.88rem; white-space: pre-line; }
 .dialog footer { justify-content: flex-end; }
 
-/* What a repo run changed, and the way back. Turning writes on is a promise
-   you can take back, so what it touched is stated rather than left in prose. */
 .checkpoint-card {
     display: grid;
     gap: 0.3rem;
@@ -2616,9 +2569,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .staged-diff { min-width: 0; max-height: 26rem; overflow: auto; }
 .staged-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
-/* Where a dropped file will land. Drawn only while something is over the
-   window: dropping already worked and said nothing about it, which from the
-   outside is the same as not working. */
+/* Drawn only while something is dragged over the window. */
 .drop-target {
     position: absolute;
     inset: 0;
@@ -2642,8 +2593,6 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     font-size: 0.95rem;
 }
 
-/* What you typed while it was still writing. Held rather than dropped, and
-   shown so the queue is never a surprise. */
 .queue-strip { display: grid; gap: 0.25rem; padding: 0 0 0.35rem; }
 .queue-item {
     display: flex;
@@ -2673,8 +2622,6 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 }
 .toast-undo:hover { text-decoration: underline; }
 
-/* What is remembered about you, one fact per row so each can be read and
-   thrown away on its own. */
 .memory-list { display: grid; gap: 0.35rem; margin: 0.6rem 0; max-height: 34vh; overflow-y: auto; }
 .memory-row {
     display: flex;
@@ -2728,7 +2675,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     text-align: center;
 }
 
-/* --- narrow -------------------------------------------------------------- */
+/* Narrow */
 
 .only-narrow { display: none; }
 
@@ -2740,9 +2687,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
         position: fixed;
         inset: 0 auto 0 0;
         z-index: 55;
-        /* Never the whole screen: the strip of scrim beside it is one of the
-           ways out, and at 320px a full-width 280px drawer leaves 40px of it —
-           too thin to hit on purpose. */
+        /* Never full width: at 320px the scrim beside it must stay wide enough to tap. */
         width: min(var(--sidebar-w), 82vw);
         transform: translateX(-100%);
         transition: transform 0.2s ease;
@@ -2752,8 +2697,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     .field-grid { grid-template-columns: 1fr; }
     .stat-grid { grid-template-columns: 1fr; }
     .message-content { max-width: 90%; }
-    /* On a phone the panel is the screen: there is no room to put a document
-       beside a conversation, so it covers it and the chat is one tap back. */
+    /* On a phone the panel covers the chat. */
     .artifact-panel {
         position: fixed;
         inset: 0;

@@ -55,9 +55,7 @@ class Attachments {
     'csv': 'csv', 'diff': 'diff', 'patch': 'diff', 'vue': 'html', 'svelte': 'html',
   };
 
-  // A wall of pasted text is a document, not a sentence. Past this it goes in
-  // as an attachment rather than filling the composer, so the question you are
-  // asking about it stays readable.
+  // Pasted text longer than this becomes an attachment instead of filling the composer.
   static const pasteAsFileChars = 1500;
   static const pasteAsFileLines = 30;
 
@@ -65,8 +63,6 @@ class Attachments {
       text.length >= pasteAsFileChars ||
       '\n'.allMatches(text).length + 1 >= pasteAsFileLines;
 
-  /// Wraps pasted text as an attachment. Named rather than guessed at: calling
-  /// it a .txt it never was would be worse than saying where it came from.
   static Attachment fromText(String text, {String? name, required String id}) {
     final kept =
         text.length > maxTextBytes ? text.substring(0, maxTextBytes) : text;

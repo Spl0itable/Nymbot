@@ -4,12 +4,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
-/// Translation at runtime, from a pack shipped as an asset.
-///
-/// The packs are generated from the same cache the marketing site and the web
-/// app read (`npm run build` writes `assets/i18n/`), keyed by the English
-/// string. So a sentence two surfaces share is translated once, and the same
-/// extractor finds `t('…')` here as it does in the web app's modules.
+/// Runtime translation from asset packs keyed by English string, shared with the web app.
 class I18n {
   I18n._();
 
@@ -19,9 +14,7 @@ class I18n {
   static Map<String, String>? _pack;
   static List<LanguageOption> available = const [];
 
-  /// Loads the index and, when there is a match, the pack itself. Never
-  /// throws: a missing or unreadable pack leaves the app in English, which is
-  /// what a checkout with no build looks like.
+  /// Never throws; a missing pack leaves the app in English.
   static Future<void> load({String? preferred}) async {
     available = await _index();
     lang = _pick(preferred, available.map((l) => l.code).toList());
@@ -57,8 +50,7 @@ class I18n {
     }
   }
 
-  /// The stored choice, else the closest published match for the device's
-  /// locales, else English.
+  /// The stored choice, else the closest published device locale, else English.
   static String _pick(String? preferred, List<String> published) {
     if (preferred != null && (preferred == 'en' || published.contains(preferred))) {
       return preferred;
@@ -74,12 +66,7 @@ class I18n {
     return 'en';
   }
 
-  /// One string, with `{name}` placeholders filled from [vars].
-  ///
-  /// Untranslated text is returned as it came in, so a pack missing an entry
-  /// degrades to English rather than to a key. The whole sentence is the unit
-  /// on purpose: a translator handed fragments to join cannot reorder them,
-  /// and word order is most of what changes.
+  /// Fills `{name}` placeholders; untranslated text falls back to English.
   static String translate(String text, [Map<String, Object?>? vars]) {
     final hit = _pack?[text] ?? text;
     if (vars == null) return hit;
@@ -107,24 +94,14 @@ class LanguageOption {
   final String name;
   final String? native;
 
-  /// The endonym, so a reader who cannot read the current language can still
-  /// find their own in the list.
+  /// The endonym, so a reader can find their own language.
   String get label => native ?? name;
 }
 
-/// The shorthand every call site uses, and the shape the extractor looks for.
+/// The shorthand the i18n extractor looks for.
 String t(String text, [Map<String, Object?>? vars]) => I18n.translate(text, vars);
 
-/// A figure with its thousands separated, and nothing else done to it.
-///
-/// Never abbreviated, however long it gets: these are balances and prices, and
-/// rounding 12,500 credits to "12.5k" throws away digits the reader is entitled
-/// to. Separators are all the legibility a figure needs when every one of them
-/// has to stay.
-///
-/// The grouping is written out rather than left to a locale formatter so it is
-/// deterministic: the same figure however the app has been translated, and
-/// whatever the device's own locale happens to be.
+/// Thousands-separated and never abbreviated, grouped by hand to stay locale-independent.
 String creditFigure(num? value) {
   if (value == null) return '…';
   final n = value.toDouble();

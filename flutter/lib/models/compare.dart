@@ -1,5 +1,4 @@
-/// One model's answer in a side-by-side comparison. Nothing here has touched
-/// the conversation yet: a run is only folded in when you keep it.
+/// One model's answer in a comparison, folded into the conversation only when kept.
 class CompareRun {
   const CompareRun({
     required this.model,

@@ -6,9 +6,7 @@ import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
 import '../services/media_cache.dart';
 
-/// One thing a reply says it read. A chip only ever showed a title; a card
-/// shows where it came from and what it said, which is what makes a citation
-/// checkable rather than decorative.
+/// One source a reply cites.
 class Citation {
   const Citation({
     required this.title,
@@ -39,7 +37,6 @@ class Citation {
     );
   }
 
-  /// The bare host, which is the part of a URL a reader actually judges.
   static String hostOf(String url) {
     final parsed = Uri.tryParse(url);
     final host = parsed?.host ?? '';
@@ -49,8 +46,7 @@ class Citation {
 
   String get host => url.isEmpty ? '' : hostOf(url);
 
-  /// The letter drawn while the favicon loads, and instead of it when the site
-  /// has none.
+  /// Drawn while the favicon loads, or when the site has none.
   String get initial {
     final from = host.isEmpty ? title : host;
     return from.isEmpty ? '?' : from.substring(0, 1).toUpperCase();

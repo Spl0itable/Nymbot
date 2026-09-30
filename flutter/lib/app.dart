@@ -11,18 +11,16 @@ import 'services/nostr/signer_links.dart';
 import 'state/app_controller.dart';
 import 'features/i18n/language_select.dart';
 
-/// Hands the one controller down without a state-management package: every
-/// screen listens to the same [ChangeNotifier].
+/// Hands the one controller down; every screen listens to the same [ChangeNotifier].
 class AppScope extends InheritedNotifier<AppController> {
   const AppScope({super.key, required AppController controller, required super.child})
       : super(notifier: controller);
 
-  /// Subscribes: the caller rebuilds whenever the controller notifies.
+  /// Subscribes the caller to rebuilds.
   static AppController of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
 
-  /// Reads without subscribing. Safe in `initState`, where registering a
-  /// dependency is not.
+  /// Reads without subscribing; safe in `initState`.
   static AppController read(BuildContext context) =>
       (context.getElementForInheritedWidgetOfExactType<AppScope>()!.widget
               as AppScope)
@@ -34,8 +32,7 @@ class NymbotApp extends StatelessWidget {
 
   final AppController controller;
 
-  /// Null in the shipped app. The screenshot harness passes one so it can open
-  /// the app's own sheets from outside the widget tree.
+  /// Null in the shipped app; the screenshot harness uses it to open sheets.
   final GlobalKey<NavigatorState>? navigatorKey;
 
   @override

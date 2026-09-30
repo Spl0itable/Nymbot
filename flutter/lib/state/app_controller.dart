@@ -55,9 +55,7 @@ import '../services/team.dart';
 import 'identity.dart';
 import 'store.dart';
 
-/// What the account already holds, as the sign-in gate needs to know it.
-/// [read] is false when neither D1 nor the relays could be reached — which is
-/// not the same answer as "there is no root".
+/// [read] is false when neither D1 nor the relays answered, which is not "no root".
 class RootLinkVerdict {
   const RootLinkVerdict(this.status,
       {this.probe, this.epoch = 0, this.announcedOnly = false});
@@ -86,8 +84,7 @@ typedef AccountRoot = ({
   Uint8List? announced,
 });
 
-/// One object the whole app listens to: the identity, the conversations, the
-/// toolbar's state and the balances.
+/// The single controller the whole app listens to.
 class AppController extends ChangeNotifier {
   AppController._(this.store, this.identity, this.relays, this.pq, this.api,
       this.anon, this.storage) {
@@ -398,8 +395,7 @@ class AppController extends ChangeNotifier {
   double? get anonTotalPro => anon.knownTotals().pro;
   String? _anonShownFor;
 
-  /// What the day's free allowance has left on the key that is signed in, as
-  /// the worker last reported it.
+  /// Free allowance left on the signed-in key, as last reported by the worker.
   FreeAllowance? free;
 
   String convFilter = 'all';
@@ -427,7 +423,7 @@ class AppController extends ChangeNotifier {
     return text;
   }
 
-  // --- settings ----------------------------------------------------------------
+  // Settings
 
   void _loadSettings() {
     settings = store.settings();
@@ -538,9 +534,7 @@ class AppController extends ChangeNotifier {
   static final RegExp _hasModelFlag = RegExp(r'(?:^|\s)(?:--model|-m)[\s=]');
   static final RegExp _bareGenerator = RegExp(r'^(\?\w+)\s+(\S+)$');
 
-  /// The catalog names a generator positionally, but the worker reads it only
-  /// from --model — left as sent, the name lands in the prompt and the default
-  /// generator runs, and is charged, in place of the one that was picked.
+  /// Moves a positional generator name into --model, which is the only place the worker reads it.
   static String generatorCommand(String? command) {
     final raw = (command ?? '').trim();
     if (_hasModelFlag.hasMatch(raw)) return raw;
@@ -548,9 +542,7 @@ class AppController extends ChangeNotifier {
         _bareGenerator, (m) => '${m[1]} --model ${m[2]}');
   }
 
-  /// The key that says the turn is Pro. A generator is named inside the
-  /// message, never in that field, so a Pro generator carries the key it
-  /// should be billed against rather than putting a chat model in the picker.
+  /// Generators are named in the message, so a Pro generator still carries the key it is billed against.
   Map<String, dynamic>? get proModelForTurn => proModelForTurnOf(current);
 
   Map<String, dynamic>? proModelForTurnOf(Conversation? conv) {
@@ -788,12 +780,7 @@ class AppController extends ChangeNotifier {
     return (text: said, error: null);
   }
 
-  /// Moves credits onto the throwaway key when it is running low, so
-  /// anonymous mode does not mean funding a key by hand before every chat.
-  ///
-  /// Only ever moves from the nym to the throwaway key, never the other way,
-  /// and never more than the nym actually holds. One call at a time: a second
-  /// while the first is still minting would spend the same balance twice.
+  /// Tops up the throwaway key from the nym only, never beyond its balance, one call at a time.
   Future<Map<String, int>?> autoTopUp({bool force = false, String? pk}) async {
     if (!settings.anonAutoTop || (pk == null && !anon.ready)) return null;
     if (_topping) return null;
@@ -912,9 +899,7 @@ class AppController extends ChangeNotifier {
     return t('Moved {what} onto the throwaway key.', {'what': parts.join(', ')});
   }
 
-  /// Ghost mode, per chat. Turning it on moves what has already been said off
-  /// the disk, and turning it off writes back what is on screen — so the switch
-  /// never silently loses a conversation either way.
+  /// Per-chat ghost mode; moves messages off disk when on and writes them back when off.
   Future<void> setEphemeral(bool on) async {
     final conv = current;
     if (conv == null || conv.ephemeral == on) return;
@@ -936,9 +921,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Two sweeps, both at startup: a ghost chat has nothing left to show once
-  /// the process it lived in is gone, and a chat older than the auto-delete
-  /// window is one the user has already said they do not want kept.
+  /// Startup sweep of ghost chats and chats past the auto-delete window.
   Future<int> sweepOldChats() async {
     final days = settings.autoDeleteDays;
     final cutoff = DateTime.now().subtract(Duration(days: days));
@@ -963,14 +946,12 @@ class AppController extends ChangeNotifier {
     return doomed.length;
   }
 
-  // --- carrying a capped run on --------------------------------------------
+  // Carrying a capped run on
 
   double get continueBudget =>
       continueBudgetAfter(turnOf(current)?.continuedSpend ?? 0);
 
-  /// What is left of this chat's continuation budget. A budget of -1 is
-  /// "whatever the balance holds", which is still a real ceiling — it is just
-  /// the user's own balance rather than a number they typed.
+  /// A budget of -1 means the user's whole balance.
   double continueBudgetAfter(double spent) {
     final cap = settings.autoContinue;
     if (cap == 0) return 0;
@@ -1036,8 +1017,7 @@ class AppController extends ChangeNotifier {
     await store.saveDismissedNotices(dismissedNotices);
   }
 
-  /// Polls the worker for what the turn is doing. Stops the moment the turn is
-  /// over, and never keeps the send waiting on it.
+  /// Polls the turn's progress until it ends, never delaying the send.
   void _watchTurn(ChatTurn turn, String eventId) {
     _askReplyNotifyOnce();
     replyNotify.pendingTurn(turn.conv.id, eventId);
@@ -1107,9 +1087,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The language to load at startup. Read here rather than loaded here: the
-  /// packs are bundle assets, and `main` is the one place that can wait on the
-  /// bundle without a widget test's clock waiting with it.
+  /// Loaded in `main`, which can await the asset bundle without stalling widget test clocks.
   String? get preferredLanguage => store.getString('lang');
 
   bool get languageChosen => store.getBool('lang_chosen');
@@ -1119,8 +1097,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reloads the pack in place. Every screen reads `t()` on build, so a
-  /// notify is the whole of the switch — no restart, no rebuilt widget tree.
+  /// Every screen reads `t()` on build, so notifying is enough.
   Future<void> setLanguage(String code) async {
     await store.setString('lang', code);
     await I18n.load(preferred: code);
@@ -1172,8 +1149,7 @@ class AppController extends ChangeNotifier {
 
   List<GitRepo> get activeRepos => reposOf(current);
 
-  /// A chat sees its own repositories plus the ones its workspace carries, in
-  /// that order and without duplicates.
+  /// The chat's own repos then its workspace's, deduplicated.
   List<GitRepo> reposOf(Conversation? conv) {
     final ids = [
       ...conv?.repoIds ?? const <String>[],
@@ -1193,8 +1169,7 @@ class AppController extends ChangeNotifier {
     return out;
   }
 
-  /// Repositories this chat picked itself, as opposed to the ones it inherits
-  /// from its workspace.
+  /// Repos this chat picked itself, not inherited from its workspace.
   bool ownsRepo(String id) => current?.repoIds.contains(id) ?? false;
 
   Future<GitRepo> saveRepo(GitRepo repo, {bool useHere = true}) async {
@@ -1469,7 +1444,7 @@ class AppController extends ChangeNotifier {
       final est = ChatEngine.estimate(text, model,
           conv: conv,
           hasRepos: reposOf(conv).isNotEmpty,
-          web: settings.webSearch,
+          web: webOn,
           history: ChatEngine.estHistoryOf(_messagesOf(conv)),
           pricing: catalogPricing);
       if (!waived) {
@@ -1514,7 +1489,7 @@ class AppController extends ChangeNotifier {
         workspace: workspaceOf(conv),
         bot: botOf(conv),
         memories: store.memories(),
-        webSearch: settings.webSearch,
+        webSearch: webOn,
         firstTurn: false,
         resume: token,
         onTurn: (eventId) => _watchTurn(turn, eventId),
@@ -1683,9 +1658,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Publishing is a claim of authorship, so it is always signed by the account
-  /// and never by a throwaway key, whatever mode the chat is in. Kind 30078 is
-  /// replaceable, so republishing the same bot replaces it.
+  /// Always signed by the account, never a throwaway key; kind 30078 replaces earlier versions.
   Future<int> publishBot(Bot bot) async {
     final signer = identity.signer;
     final event = await signer.sign(UnsignedEvent(
@@ -1721,8 +1694,7 @@ class AppController extends ChangeNotifier {
     return best;
   }
 
-  /// Reads a published bot back off the relays. Returns null when no relay has
-  /// it, which is what an unpublished or mistyped address looks like.
+  /// Null when no relay has it.
   Future<Bot?> fetchBot(String address) async {
     final ref = decodeNostrRef(address.trim());
     if (ref == null ||
@@ -1770,8 +1742,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Nothing runs on a server, so a run happens here, in the open app, and
-  /// only when it is not already waiting on a reply.
+  /// Runs in the open app, and only when not already awaiting a reply.
   Future<void> runSchedule(String id) async {
     if (sending) return;
     final at = schedules.indexWhere((s) => s.id == id);
@@ -1813,9 +1784,7 @@ class AppController extends ChangeNotifier {
     });
   }
 
-  /// Puts a repo run back. Free: it touches no model and spends no credits.
-  /// The token travels with the request as it always does, and never anywhere
-  /// else.
+  /// Free: touches no model; the token travels only with this request.
   Future<Map<String, dynamic>> revertCheckpoint(ChatMessage m) async {
     final mark = m.checkpoint;
     final conv = current;
@@ -1921,9 +1890,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reads one message for standing facts and keeps what it finds, handing
-  /// back what was saved so the caller can offer to take it straight back.
-  /// Nothing enters memory without the writer seeing it happen.
+  /// Saves found facts and returns them so the caller can offer an undo.
   Future<List<Memory>> noticeMemories(String text) async {
     if (!settings.memoryCapture) return const [];
     final found = MemoryKeeper.propose(text, current);
@@ -2024,23 +1991,15 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- session -------------------------------------------------------------------
+  // Session
 
-  /// Called once a key exists. `enter` does the rest, driven from the root.
+  /// Called once a key exists; `enter` does the rest.
   void signIn() {
     signedIn = true;
     notifyListeners();
   }
 
-  /// What the account already holds, asked before this device decides what
-  /// post-quantum root to give it.
-  ///
-  /// D1 answers this, not the relays: the root row is where an account records
-  /// that it HAS a root, it is written the moment one is minted, and it
-  /// survives an announcement expiring. The relay announcement is the second
-  /// opinion, for an account whose row predates this or whose row could not be
-  /// read. [read] is false when neither source could be reached, and the caller
-  /// must not read that as "there is no root".
+  /// Asks D1 first, then relay announcements; [read] false means neither answered, not "no root".
   Future<AccountRoot> probeAccountRoot(EventSigner signer) async {
     PqRootLookup? row;
     try {
@@ -2063,11 +2022,7 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  /// The same question, asked again on every launch of a device that is already
-  /// signed in. A launch that could not reach the worker settles nothing, so it
-  /// has to be re-asked rather than answered once: the row may have appeared
-  /// since, and a root of ours that never got a row leaves every other device
-  /// reading "no root".
+  /// Re-asked every launch, since an unreachable worker settles nothing.
   Future<void> settleRoot() async {
     if (!identity.present) return;
     final signer = identity.signer;
@@ -2102,9 +2057,7 @@ class AppController extends ChangeNotifier {
         identity.rootLocked = true;
         return;
       }
-      // A sign-in that could not reach the worker left this device without a
-      // root rather than minting one blind. The account turns out to have none,
-      // so this is the moment to make it.
+      // Sign-in deferred minting; the account turns out to have no root, so mint now.
       await mintAndRecordRoot();
       await note(t('Your post-quantum recovery code is ready. Open Identity to '
           'save it — nobody can reissue it.'));
@@ -2114,8 +2067,7 @@ class AppController extends ChangeNotifier {
       identity.rootLocked = true;
       return;
     }
-    // A row we could not read is still proof a root exists; only a root whose
-    // fingerprint the record names is proof we hold THAT one.
+    // An unreadable row still proves a root exists; only a matching fingerprint proves it is ours.
     if (row.fingerprint == null || row.fingerprint == held) return;
     identity.rootLocked = true;
   }
@@ -2211,8 +2163,7 @@ class AppController extends ChangeNotifier {
     return true;
   }
 
-  /// Mints the root for an account that turns out not to have one, and records
-  /// it, so the next device asks for the code instead of minting a rival.
+  /// Mints and records the root so other devices ask for the code instead of minting a rival.
   Future<String> mintAndRecordRoot({String? existing}) async {
     final String code;
     if (existing != null && Identity.rootFromCode(existing) != null) {
@@ -2251,9 +2202,7 @@ class AppController extends ChangeNotifier {
 
     conversations = store.conversations();
     schedules = store.schedules();
-    // Before anything is drawn: a ghost chat has nothing left to show now the
-    // process it lived in is gone, and a chat past the auto-delete window is
-    // one the user has already said they do not want kept.
+    // Before anything is drawn.
     await sweepOldChats();
     await openStartingChat();
     notifyListeners();
@@ -2271,14 +2220,9 @@ class AppController extends ChangeNotifier {
     _noticeTimer = Timer.periodic(
         const Duration(minutes: 15), (_) => unawaited(refreshNotices()));
 
-    // The announcement and the bot's key are what make a reply post-quantum;
-    // neither blocks the first message. Held so it can be cancelled: a wipe or
-    // a disposed controller must not leave network work running behind it.
+    // PQ setup does not block the first message; held so a wipe or dispose can cancel it.
     _bootWork = Timer(const Duration(milliseconds: 400), () async {
-      // A published profile is what the account already tells the world;
-      // showing it costs no privacy and makes the app feel signed in. The
-      // mirror answers in one round trip and needs no relay, so the name and
-      // avatar are drawn before anything else waits on one.
+      // The mirror answers in one round trip without a relay, so name and avatar draw first.
       await profiles.load(identity.pubkey, mirrorOnly: true);
       notifyListeners();
       try {
@@ -2287,9 +2231,7 @@ class AppController extends ChangeNotifier {
       try {
         await settleRoot();
       } catch (_) {}
-      // A locked device holds a root that is not this account's — already
-      // settled against the account's own record, which the relays cannot
-      // contradict. Announcing over the real key would strand every device.
+      // A locked device's root is not the account's, so announcing would strand every device.
       if (identity.kem != null && !identity.rootLocked) {
         try {
           identity.rootLocked =
@@ -2302,7 +2244,7 @@ class AppController extends ChangeNotifier {
       startScheduler();
       await runDueSchedules();
       await autoTopUp();
-      // Whatever the mirror did not have. A no-op when it did.
+      // Whatever the mirror lacked; a no-op otherwise.
       await profiles.load(identity.pubkey);
       notifyListeners();
     });
@@ -2351,7 +2293,7 @@ class AppController extends ChangeNotifier {
     super.dispose();
   }
 
-  // --- conversations -----------------------------------------------------------
+  // Conversations
 
   Future<Conversation> newConversation() async {
     final conv = Conversation(
@@ -2526,8 +2468,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The chat-scoped actions all take an optional target, because the sidebar
-  /// can act on a chat without opening it first.
+  /// An optional target lets the sidebar act on a chat without opening it.
   Future<void> renameCurrent(String title, {Conversation? target}) async {
     final conv = target ?? current;
     if (conv == null) return;
@@ -2606,10 +2547,7 @@ class AppController extends ChangeNotifier {
     return copy;
   }
 
-  /// A copy of this chat carrying everything up to a point, on a thread of its
-  /// own, with the whole standing setup — repositories, persona, workspace,
-  /// bot, model, effort — so the branch answers the way the chat it came from
-  /// does. The original is untouched, which is the whole point of a branch.
+  /// Copies the chat up to a point onto a new thread, with its whole setup; the original is untouched.
   Future<Conversation> branchFrom(List<ChatMessage> kept) async {
     final conv = current!;
     final seed = kept
@@ -2645,8 +2583,7 @@ class AppController extends ChangeNotifier {
     conversations.insert(0, copy);
     await store.saveConversations(conversations);
     await store.saveMessages(copy.id, kept);
-    // The files a branch was built on belong to it as much as the words that
-    // produced them, and they are cheap to carry.
+    // Artifacts from the kept messages come along too.
     final ids = kept.map((m) => m.id).toSet();
     final carried =
         artifacts.where((a) => ids.contains(a.messageId)).toList();
@@ -2660,15 +2597,13 @@ class AppController extends ChangeNotifier {
     return branchFrom(messages.sublist(0, at + 1));
   }
 
-  /// Asking the question differently, on a branch: everything before it comes
-  /// along, the question itself is replaced by what was typed instead.
+  /// Branch with everything before [message] and the question replaced.
   Future<Conversation> branchBefore(ChatMessage message) async {
     final at = messages.indexWhere((m) => m.id == message.id);
     return branchFrom(messages.sublist(0, at < 0 ? 0 : at));
   }
 
-  /// A fresh root id is what actually resets the model's context: the worker
-  /// scopes history to the marker, so a new one is a new thread.
+  /// A fresh root id resets the model's context, since the worker scopes history to it.
   ChatSnapshot _snapshot(Conversation conv) => (
         conv: conv,
         rootId: conv.rootId,
@@ -2849,8 +2784,7 @@ class AppController extends ChangeNotifier {
     return status >= 200 && status < 300;
   }
 
-  /// A picture has to be somewhere the worker can fetch it before the model can
-  /// be handed the image rather than the file's name.
+  /// Uploads so the worker can fetch the image itself.
   Future<void> uploadAttachment(Attachment a) async {
     if (!a.uploads) return;
     if (a.url != null || a.uploading) return;
@@ -2882,7 +2816,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// Everything still on its way up, finished before the message goes.
+  /// Waits for pending uploads before the message goes.
   Future<List<Attachment>> settleAttachments(List<Attachment> list) async {
     await Future.wait(list.map(uploadAttachment));
     return list
@@ -2890,13 +2824,12 @@ class AppController extends ChangeNotifier {
         .toList();
   }
 
-  // --- sending -------------------------------------------------------------------
+  // Sending
 
   void stop({Conversation? target}) {
     final conv = target ?? current;
     if (conv == null) return;
-    // Stop means stop: a run carrying itself on must not start another leg
-    // after the one being aborted, and nothing waiting behind it goes either.
+    // Also cancels continuation legs and anything queued behind the aborted run.
     _queues.remove(conv.id);
     _queueEdits.remove(conv.id);
     final turn = turns.remove(conv.id);
@@ -2950,8 +2883,7 @@ class AppController extends ChangeNotifier {
     await store.saveMessages(conv.id, next);
   }
 
-  /// The last few turns, plain enough for a model that has never seen this
-  /// thread to pick up where it left off.
+  /// The last few turns, as a seed for a model new to this thread.
   String compareSeed({int limit = 8}) {
     final kept = messages
         .where((m) => m.role == ChatRole.self || m.role == ChatRole.bot)
@@ -2965,9 +2897,7 @@ class AppController extends ChangeNotifier {
     }).join('\n\n');
   }
 
-  /// Asks two models the same thing at once, each on a thread of its own so
-  /// neither sees the other's answer and this chat is untouched until one is
-  /// kept. Two replies, so two charges.
+  /// Two models, each on its own thread, leaving this chat untouched until one is kept; charged twice.
   Future<List<CompareRun>> compare(
       String text, List<Map<String, dynamic>> models) async {
     final conv = current;
@@ -2982,7 +2912,7 @@ class AppController extends ChangeNotifier {
           ChatEngine.estimate(body, model,
               conv: conv,
               hasRepos: reposOf(conv).isNotEmpty,
-              web: settings.webSearch,
+              web: webOn,
               history: ChatEngine.estHistoryOf(_messagesOf(conv)),
               pricing: catalogPricing),
       ];
@@ -3043,10 +2973,9 @@ class AppController extends ChangeNotifier {
           workspace: space,
           bot: bot,
           memories: store.memories(),
-          webSearch: settings.webSearch,
+          webSearch: webOn,
           firstTurn: true,
-          // Neither run touches the conversation's stored thread: the seed
-          // carries what was said, and the real chat is untouched until one of
+          // Neither run touches the stored thread; the seed carries the context.
           fresh: true,
           onThreadIds: (_) {},
           control: turn.control,
@@ -3080,10 +3009,7 @@ class AppController extends ChangeNotifier {
     return out;
   }
 
-  /// Folds the winning answer into the chat. Neither reply was on this chat's
-  /// thread, so the worker has never seen this turn: the chat takes a fresh
-  /// thread and carries the transcript forward as its seed, exactly as a
-  /// branch does.
+  /// Folds the kept answer in by moving the chat to a fresh thread seeded with the transcript, as a branch does.
   Future<void> keepCompare(String prompt, CompareRun run) async {
     final conv = current;
     if (conv == null || !run.ok) return;
@@ -3121,9 +3047,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// What was typed while a reply was still being written, in the order it was
-  /// typed. Held rather than dropped: typing mid-reply used to do nothing at
-  /// all, with no sign the message had gone anywhere.
+  /// Removes a message queued while a reply was being written.
   void unqueue(int at, {Conversation? target}) {
     final conv = target ?? current;
     final queue = conv == null ? null : _queues[conv.id];
@@ -3141,8 +3065,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Sends the next thing that was waiting. One at a time: they were typed as
-  /// a conversation, so they have to arrive as one.
+  /// Sends queued messages one at a time, in order.
   Future<void> _sendQueued(Conversation conv) async {
     final queue = _queues[conv.id];
     if (queue == null || queue.isEmpty || turns.containsKey(conv.id)) return;
@@ -3155,8 +3078,7 @@ class AppController extends ChangeNotifier {
     await send(next, target: conv);
   }
 
-  /// Returns false when the message was held for later rather than sent, so a
-  /// caller does not go on to read out a reply that has not happened yet.
+  /// Returns false when the message was queued instead of sent.
   Future<bool> send(String text,
       {Conversation? target, bool bare = false, bool unattended = false}) async {
     final conv = target ?? current;
@@ -3167,11 +3089,7 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    // The free allowance, as this device sees it. The worker counts per key,
-    // and making another key is a tap in this app's own gate — so the device
-    // keeps a count of its own and stops offering free replies once it is
-    // spent, whichever key is signed in. A speed bump, never reported to the
-    // worker: see AppController.freeAllows.
+    // Device-side free-tier count across keys; never reported to the worker (see [freeAllows]).
     final typed = text.trim();
     MentionResult? mention;
     final head = bare ? null : Mentions.parse(typed);
@@ -3233,8 +3151,7 @@ class AppController extends ChangeNotifier {
     final sent = composing ? [...attachments] : <Attachment>[];
     final quoted = composing ? quote : null;
 
-    // A picture has to be uploaded before the message goes, since it is the link
-    // that travels and the link the model is handed.
+    // Pictures must be uploaded first, since the link is what travels.
     if (sent.any((a) => a.uploads && a.url == null)) {
       final stranded = await settleAttachments(sent);
       if (stranded.isNotEmpty) {
@@ -3350,7 +3267,7 @@ class AppController extends ChangeNotifier {
         memories: store.memories(),
         attachments: sent,
         quote: quoted,
-        webSearch: settings.webSearch,
+        webSearch: webOn,
         firstTurn: store.thread(conv.id).isEmpty,
         research: research?.payload,
         team: team,
@@ -3375,8 +3292,7 @@ class AppController extends ChangeNotifier {
         modelMaker: res.pro ? _maker(model)?.slug : null,
         modelMakerName: res.pro ? _maker(model)?.name : null,
         calls: res.modelCalls,
-        // What it changed in a repository, and where the branch stood before
-        // it did — so the run can be put back.
+        // Repo changes and the prior branch head, so the run can be reverted.
         checkpoint: res.checkpoint,
         pendingTool: res.pendingTool,
         staged: res.staged,
@@ -3399,8 +3315,7 @@ class AppController extends ChangeNotifier {
       await store.saveConversations(conversations);
       await store.recordUsage(res.cost);
       if (res.free != null) {
-        // Counted on this device as well as on the key, so a fresh key does
-        // not start the day over.
+        // Counted on the device too, so a fresh key does not reset the day.
         free = res.free;
         await store.freeTier.spent();
         await store.freeTier.observe(res.free!.used);
@@ -3411,9 +3326,7 @@ class AppController extends ChangeNotifier {
         unawaited(refreshBalance());
       }
       if (res.lowBalance) {
-        // In an anonymous chat a low balance is usually the throwaway key
-        // running dry rather than the nym, which is what the automatic
-        // transfer is for.
+        // In an anonymous chat, a low balance usually means the throwaway key ran dry.
         final topped = conv.anon ? await autoTopUp(pk: conv.anonPk) : null;
         if (topped != null) {
           await note(describeTopUp(topped), conv: conv);
@@ -3461,15 +3374,13 @@ class AppController extends ChangeNotifier {
       } else if (e.noCredits) {
         _creditBalance(e.pro, e.balance,
             anonKey: conv.anon, anonPk: conv.anonPk);
-        // The worker says the day is spent. Believe it over the device's own
-        // count, which can only ever be behind.
+        // Trust the worker's count over the device's, which can only lag.
         if (e.free != null) {
           free = e.free;
           await store.freeTier.observe(e.free!.used);
         }
         if (e.free != null && !e.pro) {
-          // The allowance ran out, not a balance: that is a time, not a wall,
-          // and there is nothing to top up from.
+          // The allowance ran out, not a balance, so there is nothing to top up.
           await note(freeSpentMessage(), conv: conv);
         } else {
           final topped = conv.anon
@@ -3521,7 +3432,7 @@ class AppController extends ChangeNotifier {
     return ChatEngine.estimate(body, model ?? modelOf(conv),
         conv: conv,
         hasRepos: reposOf(conv).isNotEmpty,
-        web: settings.webSearch,
+        web: webOn,
         history: ChatEngine.estHistoryOf(_messagesOf(conv)),
         pricing: catalogPricing);
   }
@@ -3609,9 +3520,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// A repo run stopped at its tool-call cap with work left. Spend the budget
-  /// the user set on carrying it on, one leg at a time, saying what each leg
-  /// cost as it goes — never silently.
+  /// Continues a capped repo run leg by leg within the user's budget, reporting each leg's cost.
   Future<void> _carryOn(ChatTurn turn, TurnResult first,
       {Map<String, dynamic>? asked}) {
     final conv = turn.conv;
@@ -3633,7 +3542,7 @@ class AppController extends ChangeNotifier {
               workspace: workspaceOf(conv),
               bot: botOf(conv),
               memories: store.memories(),
-              webSearch: settings.webSearch,
+              webSearch: webOn,
               firstTurn: false,
               resume: token,
               research: research,
@@ -3863,7 +3772,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  // --- balances --------------------------------------------------------------------
+  // Balances
 
   @visibleForTesting
   void creditBalanceForTest(bool pro, double? value, {required bool anonKey}) =>
@@ -3921,7 +3830,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<bool> createInvoice(int credits, String tier) async {
+  Future<bool> createInvoice(int credits, String tier, {bool toAnon = false}) async {
     if (invoiceBusy) return false;
     if (credits <= 0) {
       _invoiceSay(t('Enter how many credits to buy.'), warn: true);
@@ -3930,9 +3839,11 @@ class AppController extends ChangeNotifier {
     final sats = credits * (NymbotConfig.satsPerCredit[tier] ?? 10);
     invoiceBusy = true;
     _invoiceSay(t('Creating an invoice…'));
-    final useAnon = current?.anon ?? false;
+    final inAnonChat = current?.anon ?? false;
+    final useAnon = inAnonChat || toAnon;
     final anonPk = useAnon
-        ? (await anon.identityFor(current?.anonPk))['pk'] as String
+        ? (await anon.identityFor(inAnonChat ? current?.anonPk : null))['pk']
+            as String
         : null;
     final signer = useAnon ? await anon.signer(pk: anonPk) : identity.signer;
     ApiResult res;
@@ -4039,8 +3950,18 @@ class AppController extends ChangeNotifier {
       final error = claim.data['error'] as String?;
       if (error == null) {
         await _keepInvoice(null);
-        _invoiceSay(t('Credited. Balance: {balance}.',
-            {'balance': figure(claim.data['balance'])}));
+        if (inv.anon) {
+          _creditBalance(inv.tier == 'pro',
+              (claim.data['balanceCredits'] as num?)?.toDouble() ??
+                  (claim.data['balance'] as num?)?.toDouble(),
+              anonKey: true,
+              anonPk: inv.anonPk);
+        }
+        _invoiceSay(inv.anon && !spendingAnon
+            ? t('Credited to the throwaway key: {balance}. Start an anonymous '
+                'chat to spend them.', {'balance': figure(claim.data['balance'])})
+            : t('Credited. Balance: {balance}.',
+                {'balance': figure(claim.data['balance'])}));
         await refreshBalance();
       } else if (error.toLowerCase().contains('already claimed')) {
         await _keepInvoice(null);
@@ -4212,8 +4133,7 @@ class AppController extends ChangeNotifier {
       anonStandardBalance = null;
       anonProBalance = null;
     }
-    // The worker is the authority on what this key has used; the device keeps
-    // its own count so signing in with a fresh key does not start the day over.
+    // The worker is authoritative per key; the device count stops a fresh key resetting the day.
     final seen = FreeAllowance.fromJson(res.data['free']);
     if (seen != null) {
       free = seen;
@@ -4255,9 +4175,21 @@ class AppController extends ChangeNotifier {
       ? (proTier ? anonProBalance : anonStandardBalance)
       : (proTier ? proBalance : standardBalance);
 
-  /// How many free replies are actually available: the lower of what the worker
-  /// says this key has left and what this device has left. Null when the free
-  /// tier is not in play.
+  /// True only once the balances are known and neither the nym nor any throwaway key holds credits.
+  bool get freeOnly {
+    final standard = standardBalance, pro = proBalance;
+    if (standard == null || pro == null) return false;
+    if (standard > 0 || pro > 0) return false;
+    final held = anon.knownTotals();
+    return !((anonStandardBalance ?? 0) > 0 ||
+        (anonProBalance ?? 0) > 0 ||
+        (held.standard ?? 0) > 0 ||
+        (held.pro ?? 0) > 0);
+  }
+
+  bool get webOn => settings.webSearch && !freeOnly;
+
+  /// The lower of the worker's and the device's remaining count; null when the free tier is not in play.
   int? get freeLeft {
     final held = free;
     if (held == null || held.limit <= 0) return null;
@@ -4265,14 +4197,7 @@ class AppController extends ChangeNotifier {
     return held.left < here ? held.left : here;
   }
 
-  /// Whether a message may go at all. Only ever false on the free tier with the
-  /// day spent — a balance is never gated by the device count, because someone
-  /// who has paid is not on the free tier and must never be told they are.
-  ///
-  /// The device's count is a speed bump, not a control: clearing the app's data
-  /// walks past it. What it must never do is reach the worker, because a device
-  /// counter the server could see would link a person's keys to each other,
-  /// which is the one thing this app is built not to do.
+  /// False only on the free tier with the day spent; the device count must never reach the worker.
   bool get freeAllows {
     if (proTier) return true;
     if ((standardBalance ?? 0) > 0) return true;
@@ -4281,7 +4206,7 @@ class AppController extends ChangeNotifier {
     return store.freeTier.allows(held.limit, (standardBalance ?? 0).floor());
   }
 
-  /// The day is spent. Said as a time and a price rather than as a wall.
+  /// Phrased as a time and a price, not a wall.
   String freeSpentMessage() {
     final at = free?.resetsAt ?? 0;
     // Whose allowance ran out matters.
@@ -4425,11 +4350,8 @@ class AppController extends ChangeNotifier {
       hasRepos: activeRepos.isNotEmpty,
       pricing: catalogPricing,
       history: ChatEngine.estHistoryOf(messages),
-      web: settings.webSearch,
-      // Priced against what will actually go on the wire — the standing
-      // context and the attachments included — because that is what decides
-      // whether the question needs more than one wrap, and each extra one is a
-      // credit.
+      web: webOn,
+      // Priced on the full wire text, which decides how many wraps (and credits) it needs.
       wireText: _wireTextNow(text));
 
   String _wireTextNow(String text) {
@@ -4442,8 +4364,7 @@ class AppController extends ChangeNotifier {
     return '$head$text$attached$searched';
   }
 
-  /// Normal, careful, deep and back. Each step is another model call the reply
-  /// takes and the balance pays for, so the toolbar's estimate moves with it.
+  /// Cycles normal, careful, deep; each step is another billed model call.
   Future<String> cycleEffort([String? to]) async {
     const order = ['normal', 'careful', 'deep'];
     final conv = current;
@@ -4519,8 +4440,7 @@ class AppController extends ChangeNotifier {
     _noticeTimer?.cancel();
     sync.stop();
     sync.forget();
-    // Signed while the key is still here; bounded so a signer that never
-    // answers cannot hold the wipe up.
+    // Signed while the key is still here; bounded so a hung signer cannot block the wipe.
     if (purge && signedIn) {
       await api.purgeAccount(identity.signer).timeout(
             const Duration(seconds: 3),
@@ -4553,8 +4473,7 @@ class ChatTurn {
   final TurnControl control = TurnControl();
   String? status;
 
-  /// What the running turn is doing, newest last. Advisory: it is emptied the
-  /// moment a turn ends, and an empty list simply shows the plain spinner.
+  /// The running turn's steps, newest last; emptied when a turn ends.
   List<TurnStep> steps = [];
   List<Map<String, dynamic>> log = [];
   String? draft;
@@ -4567,7 +4486,6 @@ class ChatTurn {
   Object? research;
   Map<String, dynamic>? team;
 
-  /// Credits already spent carrying the current chat's run on, so a budget is
-  /// a budget for the task rather than for each leg of it.
+  /// Credits spent continuing the current run, so the budget covers the whole task.
   double continuedSpend = 0;
 }

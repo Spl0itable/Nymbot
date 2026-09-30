@@ -28,9 +28,7 @@
             .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'bot';
     }
 
-    /// What travels when a bot is shared. Only the four things that make it what
-    /// it is: no repositories, no tokens, no knowledge files, no transcript.
-    /// A bot is a way of answering, not access to anything.
+    /// Shares only what defines the bot: never repositories, tokens, knowledge files or transcript.
     function shareable(bot) {
         return {
             v: 1,
@@ -73,15 +71,13 @@
             Store.write('bots', this.all().filter(b => b.id !== id));
         },
 
-        /// A link anyone can open. The bot rides in the fragment, which browsers
-        /// never send to a server, so sharing one is not a request to anybody.
+        /// The bot rides in the URL fragment, which browsers never send to a server.
         link(bot, origin) {
             const base = (origin || location.origin) + '/app/';
             return base + '#bot=' + encode(JSON.stringify(shareable(bot)));
         },
 
-        /// Reads a bot out of a link or a raw payload. Returns null for anything
-        /// that is not one, so a stray fragment is ignored rather than trusted.
+        /// Returns null for anything that is not a bot, so a stray fragment is ignored rather than trusted.
         fromLink(text) {
             const raw = String(text || '');
             const at = raw.indexOf('bot=');
@@ -106,9 +102,7 @@
             };
         },
 
-        /// A replaceable kind 30078 event, so republishing the same bot replaces
-        /// it rather than piling up copies. Signed by the account, never by the
-        /// throwaway key: publishing is a claim of authorship.
+        /// Replaceable kind 30078; signed by the account, never the throwaway key.
         event(bot, pubkey) {
             return {
                 kind: KIND,

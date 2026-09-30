@@ -171,9 +171,7 @@
         return null;
     }
 
-    /// Splits a unified diff into files, counted, so a patch can be read as a
-    /// patch rather than as coloured text. Anything before the first file
-    /// header is kept under an empty path, so a bare hunk still renders.
+    /// Anything before the first file header is kept under an empty path so a bare hunk still renders.
     function diffFiles(source) {
         const files = [];
         let current = null;
@@ -261,8 +259,6 @@
     }
 
     function codeBlock(body, lang, options) {
-        // A patch is read as a patch: per file, with what it costs on the
-        // header rather than counted off the `+` lines by eye.
         if (lang === 'diff' || lang === 'patch') {
             const rendered = diffBlock(body);
             if (rendered) return rendered;

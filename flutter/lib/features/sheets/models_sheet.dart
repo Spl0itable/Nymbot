@@ -796,8 +796,7 @@ class _ModelListState extends State<ModelList> {
   }
 }
 
-/// The picker is generated from the worker's live catalog, so what it offers is
-/// exactly what the worker will accept and charge for.
+/// Built from the worker's live catalog.
 class _ModelsSheet extends StatefulWidget {
   const _ModelsSheet({required this.initialFilter});
 

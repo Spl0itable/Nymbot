@@ -10,20 +10,17 @@ import 'nip44.dart' as nip44;
 import 'pq.dart' as pq;
 import 'schnorr.dart';
 
-/// NIP-59 gift wrapping (matches nym-crypto.js `nip59Wrap`, `bitchatWrap`,
-/// `unwrapGiftWrap`).
+/// NIP-59 gift wrapping, matching nym-crypto.js `nip59Wrap`, `bitchatWrap` and `unwrapGiftWrap`.
 
 final Random _rng = Random.secure();
 
-/// CSPRNG-jittered timestamp: `now_seconds - rand*7200` (±2h backdating for
-/// NIP-59 metadata protection). Matches `randomNow()`.
+/// `now - rand*7200` seconds for NIP-59 metadata protection; matches `randomNow()`.
 int randomNow() {
   final r = _rng.nextDouble();
   final now = DateTime.now().millisecondsSinceEpoch / 1000.0;
   return (now - r * 7200).round();
 }
 
-/// Builds an unsigned rumor with its id computed, as the inner sealed event.
 Map<String, dynamic> _buildRumorMap(UnsignedEvent rumor, String senderPub) {
   final r = NostrEvent(
     pubkey: senderPub,
@@ -33,7 +30,7 @@ Map<String, dynamic> _buildRumorMap(UnsignedEvent rumor, String senderPub) {
     content: rumor.content,
   );
   final id = r.computeId();
-  // Rumor JSON: id + standard event fields, no sig (NIP-59).
+  // Rumor JSON: id and standard fields, no sig (NIP-59).
   return {
     'id': id,
     'pubkey': senderPub,
@@ -44,8 +41,7 @@ Map<String, dynamic> _buildRumorMap(UnsignedEvent rumor, String senderPub) {
   };
 }
 
-/// Wraps [rumor] for [recipientPubkey] using NIP-44/NIP-59. Returns a signed
-/// kind-1059 gift wrap.
+/// Returns a signed kind-1059 gift wrap for [recipientPubkey].
 NostrEvent nip59Wrap({
   required UnsignedEvent rumor,
   required Uint8List senderPrivkey,
@@ -87,19 +83,7 @@ NostrEvent nip59Wrap({
   );
 }
 
-/// Hybrid post-quantum NIP-59 gift wrap (matches nym-crypto.js `pqNip59Wrap`).
-///
-/// Structurally identical to [nip59Wrap] — same kinds, same tags, same
-/// signatures, same +/-2h jitter — but BOTH the seal and the wrap derive their
-/// NIP-44 conversation key from the hybrid ECDH + ML-KEM-768 combiner instead
-/// of plain ECDH. [recipientKemPublicKey] is the recipient's announced ML-KEM
-/// public key; callers only reach this path when they hold a valid one, so
-/// there is no in-band negotiation and no downgrade surface.
-///
-/// Local-key only: the seal's classical leg is static-static ECDH from the
-/// sender's identity key, and a NIP-46 remote signer returns a finished NIP-44
-/// payload rather than a conversation key, leaving no way to inject a hybrid
-/// one. Those logins stay on the classical path by construction.
+/// Hybrid ECDH + ML-KEM-768 [nip59Wrap] (nym-crypto.js `pqNip59Wrap`); local keys only.
 NostrEvent pqNip59Wrap({
   required UnsignedEvent rumor,
   required Uint8List senderPrivkey,
@@ -110,7 +94,7 @@ NostrEvent pqNip59Wrap({
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
 
-  // Seal (kind 13), signed by the real sender key.
+  // Seal (kind 13) signed by the real sender key.
   final seal = finalizeEvent(
     UnsignedEvent(
       pubkey: senderPub,
@@ -123,7 +107,7 @@ NostrEvent pqNip59Wrap({
     senderPrivkey,
   );
 
-  // Wrap (kind 1059), signed by a fresh ephemeral key.
+  // Wrap (kind 1059) signed by a fresh ephemeral key.
   final ephSk = generatePrivateKey();
   final tags = <List<String>>[
     ['p', recipientPubkey],
@@ -183,12 +167,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   );
 }
 
-/// Async, signer-driven bitchat wrap. Mirrors [bitchatWrap] but seals via the
-/// active [senderSigner] for the seal signature. The seal *content* still uses
-/// `encryptBitchat` keyed by the sender pubkey, so this requires a local key
-/// for the seal-content step; remote bitchat sealing is not part of the PWA
-/// flow (bitchat receipts use the local-key fast path). Provided for parity
-/// with the sync API.
+/// Signer-driven [bitchatWrap]; seal content still needs the local key via `encryptBitchat`.
 Future<NostrEvent> bitchatWrapAsync({
   required UnsignedEvent rumor,
   required Uint8List senderPrivkey,
@@ -196,8 +175,7 @@ Future<NostrEvent> bitchatWrapAsync({
   required String recipientPubkey,
   int? expiration,
 }) async {
-  // bitchat seal content is keyed by the sender's local key; the seal signature
-  // goes through the signer for parity with the publish path.
+  // Seal content uses the local key; the seal signature goes through the signer.
   final senderPub = senderSigner.pubkey;
   final rumorMap = _buildRumorMap(rumor, senderPub);
 
@@ -230,8 +208,7 @@ Future<NostrEvent> bitchatWrapAsync({
   );
 }
 
-/// Wraps [rumor] for [recipientPubkey] using the bitchat transport. Both the
-/// seal and wrap content use `encryptBitchat`.
+/// Bitchat transport: seal and wrap content both use `encryptBitchat`.
 Future<NostrEvent> bitchatWrap({
   required UnsignedEvent rumor,
   required Uint8List senderPrivkey,
@@ -271,12 +248,7 @@ Future<NostrEvent> bitchatWrap({
   );
 }
 
-/// A decrypt candidate identity: a secret key, whether to try the bitchat
-/// transport for it, and optionally the ML-KEM keypair that lets it open hybrid
-/// post-quantum wraps. A candidate with null KEM material simply cannot match a
-/// `pq1.` payload and falls through to the next one, so mixed-capability key
-/// sets (e.g. rotating group ephemeral keys, only some of which are PQ) are
-/// safe.
+/// A decrypt candidate; one with null KEM material simply cannot match a `pq1.` payload.
 typedef UnwrapCandidate = ({
   Uint8List sk,
   bool bitchat,
@@ -284,20 +256,12 @@ typedef UnwrapCandidate = ({
   Uint8List? kemPk,
 });
 
-/// Builds a classical-only candidate. Convenience for the many call sites that
-/// have no ML-KEM material.
 UnwrapCandidate classicalCandidate(Uint8List sk, {bool bitchat = false}) =>
     (sk: sk, bitchat: bitchat, kemSk: null, kemPk: null);
 
 bool _isV2(String? content) => content != null && content.startsWith('v2:');
 
-/// Attempts to decrypt + parse a kind-1059 gift [wrap] against ordered
-/// [candidates]. Returns the recovered seal event, the rumor map, and which
-/// transport was used, or null if no candidate succeeds.
-///
-/// The transport is chosen by inspecting the payload, never by trusting a tag:
-/// `pq1.` selects the hybrid post-quantum path, `v2:` bitchat, and anything
-/// else plain NIP-44.
+/// Transport is chosen from the payload prefix (`pq1.`, `v2:`, else NIP-44), never from a tag; null if none match.
 Future<
     ({
       NostrEvent seal,
@@ -337,8 +301,7 @@ Future<
         seal = NostrEvent.fromJson(
             jsonDecode(pq.pqDecrypt(wrap.content, wrap.pubkey, self))
                 as Map<String, dynamic>);
-        // The seal is expected to be PQ too (pqNip59Wrap writes both layers),
-        // but accept a NIP-44 seal so a future wrap-only variant stays readable.
+        // Also accept a NIP-44 seal so a wrap-only variant stays readable.
         final rumorJson = pq.isPqPayload(seal.content)
             ? pq.pqDecrypt(seal.content, seal.pubkey, self)
             : nip44.decrypt(
@@ -370,7 +333,6 @@ Future<
 
       return (seal: seal, rumor: rumor, isBitchat: isBitchat, isPq: isPq);
     } catch (_) {
-      // try next candidate
     }
   }
   return null;

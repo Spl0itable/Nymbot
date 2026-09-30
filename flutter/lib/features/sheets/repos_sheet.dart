@@ -76,7 +76,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     });
   }
 
-  /// Reads a NIP-34 announcement and fills the form in from it.
+  /// Reads a NIP-34 announcement and fills the form from it.
   Future<void> _disconnect(AppController app, GitRepo r) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -176,8 +176,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     return (typed.isNotEmpty ? typed : (fallback[provider] ?? '')).toLowerCase();
   }
 
-  /// The announcement only rides along if the form still points at what it
-  /// resolved to — editing the host or repo by hand means it no longer does.
+  /// The announcement only applies while the form still points at what it resolved to.
   NgitOrigin? _originFor(String repo, String host) {
     final found = _announced;
     if (found == null || found.forge == null) return null;
@@ -185,9 +184,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     return found.origin;
   }
 
-  /// Asks the forge what the token in the form can reach, so a chat is wired
-  /// to a repository by ticking it rather than by typing its name exactly
-  /// right. The request goes from this device straight to the forge.
+  /// Asks the forge directly from this device which repos the form's token can reach.
   Future<void> _browse(AppController app) async {
     final token = _token.text.trim();
     if (token.isEmpty) {
@@ -230,8 +227,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     }
   }
 
-  /// Connects every ticked repository, carrying the token, provider, host and
-  /// writes flag from the form, and puts them all in this chat.
+  /// Connects every ticked repo with the form's token, provider, host and writes flag.
   Future<void> _link(AppController app) async {
     final found = _found;
     if (found == null) return;
@@ -307,8 +303,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                           contentPadding: EdgeInsets.zero,
                           controlAffinity: ListTileControlAffinity.leading,
                           value: _picked.contains(r.repo),
-                          // Connecting one already connected would make a
-                          // duplicate, so it is shown as connected instead.
+                          // An already connected repo shows as connected rather than being duplicated.
                           onChanged: known.contains(r.repo.toLowerCase())
                               ? null
                               : (on) => setState(() {
@@ -478,8 +473,7 @@ class _ReposSheetState extends State<_ReposSheet> {
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 10),
-            // A repository announced on Nostr (NIP-34) fills the rest of this
-            // form in from its announcement: where it is cloned from, and which
+            // A NIP-34 announcement fills in the rest of this form.
             TextField(
               controller: _ngit,
               decoration: InputDecoration(

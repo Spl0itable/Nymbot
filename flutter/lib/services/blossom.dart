@@ -10,22 +10,19 @@ import '../features/i18n/i18n.dart';
 import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
 
-/// Uploading a file so the model can actually see it.
 class Blossom {
   Blossom({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
 
-  /// The same hosts Nymchat mirrors across, so a blob uploaded in one app
-  /// resolves in the other.
+  /// Same hosts Nymchat mirrors across, so a blob resolves in both apps.
   static const List<String> hosts = [
     'https://blossom.band',
     'https://blossom.primal.net',
     'https://nostr.download',
   ];
 
-  /// Uploads go through the worker's media proxy: it holds the CORS headers the
-  /// hosts do not all send, and it keeps the uploader's address off them.
+  /// Via the worker's media proxy for CORS and to keep the uploader's address off the hosts.
   static String uploadUrl(String host) =>
       'https://${NymbotConfig.apiHost}/api/proxy'
       '?action=upload&server=${Uri.encodeComponent(host)}';

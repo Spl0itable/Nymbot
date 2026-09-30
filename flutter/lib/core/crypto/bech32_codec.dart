@@ -4,16 +4,11 @@ import 'package:bech32/bech32.dart' as b32;
 
 import 'keys.dart';
 
-/// NIP-19 bech32 encoding for simple (non-TLV) Nostr entities:
-/// `npub` (pubkey), `nsec` (secret key), `note` (event id).
-///
-/// All three wrap a single 32-byte payload, so they share the 8->5 bit
-/// conversion and bech32 framing.
+/// NIP-19 bech32 for single 32-byte payloads: `npub`, `nsec` and `note`.
 
 const int _maxLen = 1000; // generous; npub/nsec are ~63 chars.
 
-/// Converts a stream of [from]-bit groups to [to]-bit groups.
-/// When [pad] is true, the final group is zero-padded (used for encoding).
+/// Regroups [from]-bit groups into [to]-bit groups; [pad] zero-pads the last group when encoding.
 List<int> _convertBits(List<int> data, int from, int to, {required bool pad}) {
   var acc = 0;
   var bits = 0;
@@ -51,10 +46,8 @@ String _encode(String hrp, List<int> data8) {
   return (hrp: decoded.hrp, data: Uint8List.fromList(data8));
 }
 
-/// Encodes a 64-char hex x-only pubkey as an `npub`.
 String encodeNpub(String hexPubkey) => _encode('npub', hexToBytes(hexPubkey));
 
-/// Decodes an `npub` to its 64-char hex pubkey.
 String decodeNpub(String npub) {
   final r = _decode(npub);
   if (r.hrp != 'npub') {
@@ -63,10 +56,7 @@ String decodeNpub(String npub) {
   return bytesToHex(r.data);
 }
 
-/// Pulls the pubkey out of an `nprofile`. Unlike npub/nsec/note, nprofile wraps
-/// a TLV payload — a run of (type, length, value) records — where type 0 is the
-/// 32-byte pubkey and the rest are relay hints we don't need here. Supported so
-/// that anywhere the app accepts a public key, a pasted nprofile works too.
+/// Pubkey from an `nprofile` TLV payload (type 0); relay hints are ignored.
 String decodeNprofilePubkey(String nprofile) {
   final r = _decode(nprofile);
   if (r.hrp != 'nprofile') {
@@ -90,13 +80,10 @@ String decodeNprofilePubkey(String nprofile) {
   throw const FormatException('nprofile has no pubkey record');
 }
 
-/// Encodes a 64-char hex private key as an `nsec`.
 String encodeNsec(String hexPrivkey) => _encode('nsec', hexToBytes(hexPrivkey));
 
-/// Encodes raw 32 private-key bytes as an `nsec`.
 String encodeNsecBytes(Uint8List privkey) => _encode('nsec', privkey);
 
-/// Decodes an `nsec` to its 32 raw private-key bytes.
 Uint8List decodeNsec(String nsec) {
   final r = _decode(nsec);
   if (r.hrp != 'nsec') {
@@ -105,10 +92,8 @@ Uint8List decodeNsec(String nsec) {
   return r.data;
 }
 
-/// Encodes a 64-char hex event id as a `note`.
 String encodeNote(String hexId) => _encode('note', hexToBytes(hexId));
 
-/// Decodes a `note` to its 64-char hex event id.
 String decodeNote(String note) {
   final r = _decode(note);
   if (r.hrp != 'note') {
@@ -117,9 +102,7 @@ String decodeNote(String note) {
   return bytesToHex(r.data);
 }
 
-/// Encodes an addressable event as an `naddr`: the NIP-19 TLV form carrying the
-/// `d` tag, the author and the kind, which is what makes a replaceable event
-/// referable by address rather than by id.
+/// NIP-19 `naddr` TLV carrying the `d` tag, author and kind.
 String encodeNaddr({
   required String identifier,
   required String pubkey,
@@ -148,14 +131,12 @@ String encodeNaddr({
   return _encode('naddr', out);
 }
 
-/// HRP for a post-quantum root secret (PQ-ROOT-SPEC §1), matching the PWA's
-/// `nip19.encodeBytes('nympq', bytes)`.
+/// HRP for a PQ root secret (PQ-ROOT-SPEC §1), matching the PWA's `nip19.encodeBytes('nympq', bytes)`.
 const String nymPqHrp = 'nympq';
 
-/// Encodes a 32-byte post-quantum root secret as `nympq1…`.
 String encodeNymPq(Uint8List root) => _encode(nymPqHrp, root);
 
-/// Decodes a `nympq1…` string. Throws on a wrong HRP or checksum failure.
+/// Throws on a wrong HRP or checksum failure.
 Uint8List decodeNymPq(String code) {
   final r = _decode(code.trim());
   if (r.hrp != nymPqHrp) {
@@ -164,10 +145,9 @@ Uint8List decodeNymPq(String code) {
   return r.data;
 }
 
-/// What a NIP-19 reference points at, once decoded.
 enum NostrRefKind { event, profile, addr }
 
-/// A decoded NIP-19 reference (or a bare 64-hex event id).
+/// A decoded NIP-19 reference, or a bare 64-hex event id.
 class NostrRef {
   const NostrRef({
     required this.kind,
@@ -180,23 +160,20 @@ class NostrRef {
 
   final NostrRefKind kind;
 
-  /// Event id, for [NostrRefKind.event].
   final String id;
 
   /// Author (nevent), subject (npub/nprofile) or addressable author (naddr).
   final String pubkey;
 
-  /// Event kind, when the reference carries one (nevent's optional hint, or
-  /// naddr's required one).
+  /// Kind hint from nevent (optional) or naddr (required).
   final int? eventKind;
 
   /// naddr's `d` tag.
   final String identifier;
 
-  /// Relay hints the reference travelled with.
   final List<String> relays;
 
-  /// The cache/lookup identity of this reference.
+  /// Cache and lookup identity of this reference.
   String get key => switch (kind) {
         NostrRefKind.event => 'e:$id',
         NostrRefKind.profile => 'p:$pubkey',
@@ -204,7 +181,6 @@ class NostrRef {
       };
 }
 
-/// Walks a NIP-19 TLV payload into (type, value) records.
 List<({int type, Uint8List value})> _tlv(Uint8List data) {
   final out = <({int type, Uint8List value})>[];
   var i = 0;
@@ -227,9 +203,7 @@ int _int32(Uint8List b) {
   return v;
 }
 
-/// Decodes any NIP-19 entity this app renders a card for — `nevent`, `note`,
-/// `naddr`, `npub`, `nprofile` — plus a bare 64-hex event id. Returns null for
-/// anything else (an `nsec` included: a secret key is never a reference).
+/// Decodes renderable NIP-19 entities or a bare hex id; null otherwise, including for `nsec`.
 NostrRef? decodeNostrRef(String token) {
   var raw = token.trim();
   if (raw.toLowerCase().startsWith('nostr:')) raw = raw.substring(6);
@@ -320,8 +294,7 @@ NostrRef? decodeNostrRef(String token) {
   }
 }
 
-/// Encodes an `nevent`: TLV 0 = 32-byte event id, TLV 1 = each relay hint,
-/// TLV 2 = author pubkey. Returns the bare hex id if [hexId] is not one.
+/// TLV 0 = event id, 1 = each relay hint, 2 = author; returns [hexId] unchanged if it is not hex.
 String encodeNevent(String hexId,
     {String author = '', List<String> relays = const []}) {
   if (!RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(hexId)) {

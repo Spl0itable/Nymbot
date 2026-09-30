@@ -1,5 +1,3 @@
-// Writes one app's language packs to the other
-
 import { readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -34,9 +32,7 @@ function args(argv) {
   return out;
 }
 
-/// Removes `<code>.json` for languages that no longer ship, so a directory
-/// cannot keep serving a pack the index has stopped listing. Only ever touches
-/// files named after a language this repo knows about.
+/// Removes packs for dropped languages; only touches files named after a language this repo knows.
 async function prune(dir, keep) {
   const known = new Set(LANGUAGES.map((l) => l.code));
   let removed = 0;

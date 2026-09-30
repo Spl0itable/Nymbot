@@ -16,12 +16,7 @@ typedef PqKey = ({Uint8List pk, String fmt, int epoch});
 
 typedef PqKeyServer = Future<Map<String, dynamic>?> Function(String pubkey);
 
-/// Post-quantum capability announcements (kind 30078, d-tag `nym-pq`).
-///
-/// Each side publishes the ML-KEM public key it can decapsulate with; the other
-/// seals to it. Ours also rides along with every worker request, signed, so the
-/// reply is sealed to it deterministically instead of depending on a lookup
-/// that could lose a race and leave the answer classical.
+/// Post-quantum capability announcements (kind 30078, d-tag `nym-pq`) carrying our ML-KEM public key.
 class PqAnnounce {
   PqAnnounce(this.relays, {this.store, String? botPubkey, this.keyServer})
       : botPubkey = botPubkey ?? NymbotConfig.botPubkey;
@@ -52,8 +47,7 @@ class PqAnnounce {
     }
   }
 
-  /// The newest signed, id-valid announcement by [author]. Relays are never
-  /// trusted for key material.
+  /// The newest signed, id-valid announcement by [author]; relays are never trusted for key material.
   NostrEvent? _verifiedNewest(List<NostrEvent> events, String author) {
     NostrEvent? newest;
     for (final evt in events) {
@@ -180,7 +174,6 @@ class PqAnnounce {
     return botKey;
   }
 
-  /// Builds a signed announcement for [kem], signed by [signer].
   Future<NostrEvent> build(EventSigner signer, MlKemKeyPair kem,
       {int epoch = 0}) async {
     final nowSec = [
@@ -213,13 +206,7 @@ class PqAnnounce {
     ));
   }
 
-  /// Publishes our announcement, unless the account already advertises a key we
-  /// cannot derive — that one belongs to another device holding a different
-  /// root, and kind 30078 is replaceable, so publishing over it would strand
-  /// every message sealed to it.
-  ///
-  /// Returns false when it withheld, which the caller surfaces as a locked
-  /// identity rather than a silent downgrade.
+  /// Publishes ours unless the account advertises a key we cannot derive; returns false when it withheld.
   Future<bool> announce(EventSigner signer, MlKemKeyPair kem,
       {int epoch = 0}) async {
     final existing = await resolve(signer.pubkey);

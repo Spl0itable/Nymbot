@@ -35,8 +35,6 @@
 </head>
 
 <body>
-    <!-- The app needs script to do anything at all, so this is what a reader
-         without it, and any crawler that does not run it, is given instead. -->
     <noscript>
         <div class="gate">
             <div class="gate-card">
@@ -51,7 +49,6 @@
         </div>
     </noscript>
 
-    <!-- Onboarding. Shown until there is a key. -->
     <section class="gate" id="gate" hidden>
         <div class="gate-card">
             <pre class="wordmark" aria-label="Nymbot">
@@ -189,7 +186,6 @@
         </div>
     </div>
 
-    <!-- The one-time recovery reveal, after a key is created. -->
     <section class="gate" id="reveal" hidden>
         <div class="gate-card">
             <h1 class="gate-title">Back these up now</h1>
@@ -563,7 +559,6 @@
 
     <div class="scrim" id="scrim" hidden></div>
 
-    <!-- Command palette -->
     <div class="palette" id="palette" hidden>
         <div class="palette-card">
             <input type="search" id="paletteInput" placeholder="Type a command, or search your chats" autocomplete="off" spellcheck="false">
@@ -576,7 +571,6 @@
         </div>
     </div>
 
-    <!-- Model picker -->
     <div class="modal" id="modalModels" hidden>
         <div class="modal-card">
             <header><h2 id="modelsTitle">Nymbot Pro model</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -613,7 +607,6 @@
         </div>
     </div>
 
-    <!-- What a reply cost -->
     <div class="modal" id="modalCost" hidden>
         <div class="modal-card">
             <header><h2>What this reply cost</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -626,7 +619,6 @@
         </div>
     </div>
 
-    <!-- Help -->
     <div class="modal" id="modalHelp" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Help</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -645,7 +637,6 @@
         </div>
     </div>
 
-    <!-- Scheduled prompts -->
     <div class="modal" id="modalSchedules" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Scheduled prompts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -685,7 +676,6 @@
         </div>
     </div>
 
-    <!-- Bots -->
     <div class="modal" id="modalBots" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Bots</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -720,7 +710,6 @@
         </div>
     </div>
 
-    <!-- Sharing a bot -->
     <div class="modal" id="modalShareBot" hidden>
         <div class="modal-card">
             <header><h2 id="shareBotTitle">Share this bot</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -771,7 +760,6 @@
         </div>
     </div>
 
-    <!-- Adding a shared bot -->
     <div class="modal" id="modalAddBot" hidden>
         <div class="modal-card">
             <header><h2>Add a bot</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -796,7 +784,6 @@
         </div>
     </div>
 
-    <!-- Workspaces -->
     <div class="modal" id="modalWorkspaces" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Workspaces</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -827,7 +814,6 @@
         </div>
     </div>
 
-    <!-- Compare two models -->
     <div class="modal" id="modalCompare" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Ask two models at once</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -850,7 +836,6 @@
         </div>
     </div>
 
-    <!-- Repositories -->
     <div class="modal" id="modalRepos" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Repositories</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -983,7 +968,6 @@
         </div>
     </div>
 
-    <!-- Personas -->
     <div class="modal" id="modalChipMenu" hidden>
         <div class="modal-card">
             <header><h2>This chat</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1023,7 +1007,6 @@
         </div>
     </div>
 
-    <!-- Custom instructions -->
     <div class="modal" id="modalSystem" hidden>
         <div class="modal-card">
             <header><h2>Custom instructions</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1037,7 +1020,6 @@
         </div>
     </div>
 
-    <!-- Prompt library -->
     <div class="modal" id="modalPrompts" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Prompt library</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1058,7 +1040,6 @@
         </div>
     </div>
 
-    <!-- Artifacts -->
     <div class="modal" id="modalArtifacts" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Artifacts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1085,7 +1066,6 @@
         </div>
     </div>
 
-    <!-- Saved messages -->
     <div class="modal" id="modalPinned" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Saved messages</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1093,7 +1073,6 @@
         </div>
     </div>
 
-    <!-- What Nymbot remembers about you -->
     <div class="modal" id="modalMemory" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Memory</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1129,7 +1108,6 @@
         </div>
     </div>
 
-    <!-- Search everything -->
     <div class="modal" id="modalSearch" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Search everything</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1139,7 +1117,6 @@
         </div>
     </div>
 
-    <!-- Tags and folder -->
     <div class="modal" id="modalTags" hidden>
         <div class="modal-card">
             <header><h2>Tags and folder</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1160,7 +1137,6 @@
         </div>
     </div>
 
-    <!-- Chat statistics -->
     <div class="modal" id="modalStats" hidden>
         <div class="modal-card">
             <header><h2>Chat statistics</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1228,7 +1204,6 @@
         </div>
     </div>
 
-    <!-- Settings: appearance and behavior -->
     <div class="modal" id="modalAppearance" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Settings</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1358,7 +1333,6 @@
         </div>
     </div>
 
-    <!-- Keyboard shortcuts -->
     <div class="modal" id="modalShortcuts" hidden>
         <div class="modal-card">
             <header><h2>Keyboard shortcuts</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1366,7 +1340,6 @@
         </div>
     </div>
 
-    <!-- Artifact preview -->
     <div class="modal" id="modalPreview" hidden>
         <div class="modal-card modal-wide">
             <header><h2>Preview</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1374,7 +1347,6 @@
         </div>
     </div>
 
-    <!-- Anonymous mode -->
     <div class="modal" id="modalAnon" hidden>
         <div class="modal-card">
             <header><h2>Anonymous chat</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1425,7 +1397,6 @@
         </div>
     </div>
 
-    <!-- Credits -->
     <div class="modal" id="modalCredits" hidden>
         <div class="modal-card">
             <header><h2>Buy credits</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1438,6 +1409,7 @@
             <div class="amount-grid" id="amountGrid"></div>
             <label for="creditAmount">Credits</label>
             <input type="number" id="creditAmount" min="1" value="50">
+            <label class="check" id="creditAnonRow"><input type="checkbox" id="creditAnon"> Put them on a throwaway key, not your nym</label>
             <p class="modal-status" id="creditSats"></p>
             <p class="hint" id="creditPricingNote"></p>
             <div class="invoice" id="invoiceBox" hidden>
@@ -1509,7 +1481,6 @@
         </div>
     </div>
 
-    <!-- Settings and identity -->
     <div class="modal" id="modalSettings" hidden>
         <div class="modal-card">
             <header><h2>Identity</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>

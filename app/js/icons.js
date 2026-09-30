@@ -98,9 +98,7 @@
         return svg;
     }
 
-    /// The app icon, drawn rather than loaded, traced off images/nymbot-icon.png at 700x700 and divided
-    /// by 29.1667 into a 24-unit box, so the sidebar, the tab and the avatar
-    /// are the same drawing rather than three impressions of it.
+    /// Traced from images/nymbot-icon.png at 700x700, divided by 29.1667 into a 24-unit box.
     const MARK = [
         '<path d="M7.96 1.37 9.57 5.07"></path>',
         '<path d="M15.98 1.37 14.40 5.07"></path>',
@@ -429,9 +427,7 @@
         svg.setAttribute('height', String(size));
         svg.setAttribute('fill', 'none');
         svg.setAttribute('stroke', 'currentColor');
-        // The artwork's own strokes are 16/700 of the canvas, which is under a
-        // pixel at this size. Widened just enough to survive it; every
-        // coordinate below is the measured one.
+        // Widened from the artwork's 16/700 stroke so it survives at this size; coordinates are as measured.
         svg.setAttribute('stroke-width', '1');
         svg.setAttribute('stroke-linecap', 'butt');
         svg.setAttribute('stroke-linejoin', 'miter');

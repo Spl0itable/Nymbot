@@ -1,13 +1,4 @@
-// The key, and everything that signs or decrypts with it.
-//
-// Two logins. A LOCAL key (generated here, or an nsec pasted in) can do
-// everything itself. A NIP-07 EXTENSION holds the key and performs the seal's
-// NIP-44 on our behalf; the wrap's ephemeral key is minted here either way, so
-// both logins get the same post-quantum layer.
-//
-// The ML-KEM keypair comes from a root generated independently of the signing
-// key (docs/PQ-ROOT-SPEC.md in nym-staging): the signing pubkey is published on
-// every wrap, so a KEM key derived from it would fall with secp256k1.
+// The KEM key comes from a root independent of the signing key, whose pubkey is public (PQ-ROOT-SPEC.md).
 (function () {
     'use strict';
 
@@ -34,13 +25,10 @@
         method: null,     // 'local' | 'nip07'
         remote: null,
         _sk: null,        // Uint8Array, local logins only
-        _root: null,      // Uint8Array
+        _root: null,
         _kem: null,       // { publicKey, secretKey }
-        // Which epoch of the root this account's KEM key is derived at.
         _epoch: 0,
-        // True when the account already advertises a KEM key this device cannot
-        // derive. Announcing over it would strand every other device, so we do
-        // not, and the reply comes back classical until the root is linked.
+        // Set when the account advertises a KEM key this device cannot derive; announcing over it strands other devices.
         rootLocked: false,
 
         get skHex() { return this._sk ? hex(this._sk) : null; },
@@ -48,8 +36,7 @@
         get isRemote() { return this.method === 'nip46'; },
         get kemPk() { return this._kem ? this._kem.publicKey : null; },
 
-        /// Restores whatever the last session left. Returns false when there is
-        /// no identity yet and the caller should show the welcome screen.
+        /// Returns false when there is no identity yet.
         restore() {
             const saved = Store.identity();
             if (!saved || !saved.pubkey) return false;
@@ -73,8 +60,7 @@
             return this.rootCode();
         },
 
-        /// Reads a key without adopting it, so the caller can ask what the
-        /// account already has before deciding what root to give it.
+        /// Reads a key without adopting it, so the caller can check the account's root first.
         readSecret(input) {
             if (input instanceof Uint8Array && input.length === 32) return Uint8Array.from(input);
             const text = String(input || '').trim();
@@ -87,15 +73,7 @@
             throw new Error(t('Paste an nsec, or its 64-character hex form.'));
         },
 
-        /// Accepts an `nsec1…` or a raw 64-character hex key.
-        ///
-        /// `root` decides the post-quantum half. Minting one unasked is what
-        /// this used to do, and it is wrong for a key that has been used
-        /// before: the account's announcement is replaceable, so a second root
-        /// published over the first strands every settings row, every synced
-        /// conversation and every reply sealed to the one it replaced. The
-        /// caller looks the account up first and passes null to say "this
-        /// account already has one, do not invent another".
+        /// Pass `root` null when the account already has one; a second root strands everything sealed to the first.
         importSecret(input, root, epoch) {
             const sk = this.readSecret(input);
             const next = root === null ? null : (root || this._root || NC().pqGenerateRoot());
@@ -217,8 +195,6 @@
             return out;
         },
 
-        // --- the post-quantum root -----------------------------------------
-
         rootCode() {
             if (!this._root) return null;
             try { return NC().pqRootEncode(this._root); } catch (_) { return null; }
@@ -229,8 +205,7 @@
             try { return NC().pqRootFingerprint(this._root); } catch (_) { return null; }
         },
 
-        /// Links this device to an existing account's root, pasted from the
-        /// other app's identity settings.
+        /// Links this device to an existing account's root, pasted from the other app.
         adoptRootCode(code, epoch) {
             const bytes = NC().pqRootDecode(String(code || '').trim());
             this._root = bytes;
@@ -240,8 +215,7 @@
             this._persist();
         },
 
-        /// The KEM key a given code would produce, without adopting it — so a
-        /// pasted code can be checked against what the account actually
+        /// The KEM key a code would produce, without adopting it.
         kemForCode(code, epoch) {
             try {
                 const bytes = NC().pqRootDecode(String(code || '').trim());
@@ -254,7 +228,6 @@
             return NC().pqRootEncode(NC().pqGenerateRoot());
         },
 
-        /// Mints one now, for an account that turns out not to have one.
         mintRoot(root) {
             this._root = root || NC().pqGenerateRoot();
             this._epoch = 0;
@@ -263,8 +236,6 @@
             this._persist();
             return this.rootCode();
         },
-
-        // --- signing --------------------------------------------------------
 
         async signEvent(event) {
             const evt = Object.assign({ pubkey: this.pubkey }, event);
@@ -275,7 +246,6 @@
             return signed;
         },
 
-        /// NIP-44 to a peer, done by whoever holds the key.
         async encryptTo(peerPubkey, plaintext) {
             if (this._sk) {
                 const T = NT();

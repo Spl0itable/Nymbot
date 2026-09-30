@@ -43,12 +43,10 @@ class NymbotConfig {
 
   static const Map<String, int> satsPerCredit = {'standard': 10, 'pro': 100};
 
-  /// A reply can outlast the request that asked for it; the worker holds the
-  /// answer and hands it back on a resend.
+  /// A reply can outlast its request; the worker holds the answer for a resend.
   static const Duration pmTimeout = Duration(seconds: 180);
 
-  /// The shape the worker's client gate looks for (`_client.js`), so the
-  /// native builds reach the API the way the Nymchat apps do.
+  /// Matches the worker's client gate (`_client.js`).
   static const String userAgent = 'NymbotApp/1.0';
 
   static const String googleIosClientId = String.fromEnvironment(

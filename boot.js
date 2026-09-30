@@ -1,28 +1,14 @@
-// The tiny runtime every page on the site carries.
-//
-// Three jobs, none of them worth a second request: mark that scripting is
-// available, hand `t()` the translation table for this language, and keep a
-// visitor on the language they asked for.
-//
-// It exists as a file rather than as an inline <script> so the site can be
-// served under `script-src 'self'` with no `unsafe-inline` — see `_headers`.
-// The data it needs is inlined instead, as a `type="application/json"` block
-// the browser parses but never executes.
+// A file rather than an inline script so the site can be served under `script-src 'self'`.
 
 (function () {
     'use strict';
 
-    // Progressive enhancement marker. The stylesheet keys the knowledge base's
-    // off-canvas nav and filter box off this, so with scripting off the nav
-    // stays in flow rather than vanishing off-screen.
+    // The stylesheet keys the off-canvas docs nav off this, so with scripting off the nav stays in flow.
     document.documentElement.className += ' js';
 
     var el = document.getElementById('nym-i18n');
     if (!el) return;
 
-    // Copy that is written into the page at runtime rather than being in the
-    // markup — the animated chat in the phone mockup. English ships an empty
-    // table and `t()` falls through to the literal.
     var table = {};
     try { table = JSON.parse(el.textContent) || {}; } catch (e) { }
     window.NYM_I18N = table;
@@ -31,19 +17,14 @@
     var page = el.getAttribute('data-page') || '';
     var codes = (el.getAttribute('data-langs') || 'en').split(',');
 
-    // An explicit pick from the footer selector is remembered, and always wins
-    // over the browser's setting. Recorded on every page, so choosing English
-    // from a translated page is not undone by the root's redirect next visit.
+    // An explicit footer pick is recorded on every page and always beats the browser's setting.
     document.addEventListener('click', function (e) {
         var a = e.target.closest && e.target.closest('.lang-picker a[data-lang]');
         if (!a) return;
         try { localStorage.setItem('nym_lang', a.getAttribute('data-lang')); } catch (err) { }
     });
 
-    // Only ever runs on an English URL. A translated URL — chosen by a visitor,
-    // or fetched by a crawler — is never redirected away from, and the page is
-    // kept: someone on /terms/ goes to /es/terms/, never to the Spanish home
-    // page. `?lang=en` pins English for good.
+    // Only runs on English URLs; a translated URL is never redirected away from, and `?lang=en` pins English.
     if (lang !== 'en') return;
 
     var pinned = null;

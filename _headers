@@ -1,11 +1,4 @@
-# `script-src` carries one `sha256-` beyond 'self', and only for the Cloudflare
-# error pages under /errors/. They cannot link a script: Cloudflare stores one
-# copy of each and serves it when this origin is unreachable, so anything they
-# do not already contain is unavailable exactly when they are shown. It is one
-# script (errors/runtime.js), byte-identical across all eight pages, so it is
-# one hash rather than a per-page-per-language explosion. `ERROR-PAGE-RUNTIME`
-# is a placeholder: `npm run build` replaces it with the real hash of what it
-# just minified, and fails if it has gone missing.
+# The one extra sha256 is errors/runtime.js; `npm run build` swaps in the real hash for ERROR-PAGE-RUNTIME.
 
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
@@ -101,11 +94,7 @@
   Content-Security-Policy: default-src 'none'; script-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob: 'wasm-unsafe-eval'; connect-src https://nymbot.ai/pyodide/ https://nymbot.ai/app/js/vendor/pdfjs/; worker-src https://nymbot.ai/app/js/sandbox.js https://nymbot.ai/app/js/pdftext.js https://nymbot.ai/app/sandbox-worker.js https://nymbot.ai/app/js/vendor/pdfjs/ https://nymbot.ai/pyodide/ blob:; img-src data: blob:; style-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
   Cross-Origin-Resource-Policy: cross-origin
 
-# The Cloudflare error pages. These are not browsed to — Cloudflare fetches each
-# one, stores its own copy and serves that when this origin cannot be reached —
-# so what this governs is the re-fetch. An error page whose copy changed should
-# be picked up the next time Cloudflare asks for it, not served from a cache,
-# and nothing here belongs in a search index.
+# Cloudflare fetches and stores its own copy of these; keep them uncached and out of search indexes.
 /errors/*
   Cache-Control: public, max-age=0, must-revalidate
   X-Robots-Tag: noindex

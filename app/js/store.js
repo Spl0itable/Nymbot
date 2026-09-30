@@ -3,9 +3,7 @@
 
     const P = window.NymbotConfig.storagePrefix;
     const MSG_CAP = 800;
-    // A memory is one standing fact, not a transcript: short enough that a
-    // handful of them cost a paragraph of context, and capped in number so the
-    // list stays something a person can actually read through.
+    // A memory is one standing fact: short, and capped in number so the list stays readable.
     const MEMORY_TEXT_CAP = 400;
     const MEMORY_MAX = 200;
 
@@ -42,13 +40,10 @@
         write('settings', scrub('settings', held));
     }
 
-    // Anything that wants to know when this device changed something.
     const QUIET = /^(?:draft_|thread_|sync_|free_|view_)/;
     const watchers = [];
 
-    // Applying what the server just sent is not a local change. Without this
-    // the sync fed itself: every pulled value was written, every write woke the
-    // watcher, and the watcher scheduled the next pull.
+    // Applying server data is not a local change; without this the sync fed itself.
     let muted = 0;
 
     function announce(key) {
@@ -69,7 +64,6 @@
         }
         try {
             const next = JSON.stringify(value);
-            // A write that changes nothing is not news.
             if (localStorage.getItem(P + key) === next) return true;
             localStorage.setItem(P + key, next);
             announce(key);
@@ -98,17 +92,13 @@
         anonAutoTopAmount: 25,
         anonAutoTopTier: 'both',
         autoDeleteDays: 0,
-        // Whether a durable fact you mention in passing is offered to memory.
-        // Explicit saves work either way; this is only the noticing.
+        // Only the passive noticing; explicit saves work either way.
         memoryCapture: true,
-        // A repo task can stop at its tool-call cap with work left. This is
-        // how much you are willing to spend letting it carry on: 0 is never,
-        // -1 is whatever the balance holds.
+        // Spend limit for continuing a repo task past its tool-call cap: 0 is never, -1 is the whole balance.
         autoContinue: 0,
         showProgress: true,
         notices: true,
-        // Your settings, library and conversations, sealed to your own key and
-        // kept where every device you sign in on can read them back.
+        // Sealed to your own key and readable from every device you sign in on.
         sync: true,
         theme: 'system',
         density: 'comfortable',
@@ -218,8 +208,7 @@
         write,
         drop,
 
-        /// Called with the storage key whenever this device changes something worth keeping.
-        /// Runs `fn` without waking the watchers. Nestable; never swallows.
+        /// Runs `fn` without waking the watchers; nestable, never swallows.
         quiet(fn) {
             muted++;
             try { return fn(); } finally { muted--; }
@@ -320,7 +309,7 @@
         savePersona(persona) {
             const list = this.customPersonas();
             const entry = Object.assign({ id: persona.id || uid() }, persona, { builtin: false });
-            // Anything stored before the icon set existed carried an emoji.
+            // Entries from before the icon set carried an emoji.
             if (!entry.icon || !/^[a-z]+$/.test(entry.icon)) entry.icon = 'robot';
             delete entry.emoji;
             const i = list.findIndex(p => p.id === entry.id);
@@ -406,10 +395,7 @@
             write('schedules', this.schedules().filter(s => s.id !== id));
         },
 
-        /// What Nymbot has been told to remember about you: standing facts, kept
-        /// as separate readable entries rather than one summary, so each can be
-        /// read, corrected or thrown away on its own. Never leaves the device
-        /// except as the handful of entries that bear on a question.
+        /// Separate entries so each can be corrected; only those relevant to a question ever leave the device.
         memories() {
             const list = read('memories', []);
             return Array.isArray(list) ? list : [];
@@ -428,8 +414,6 @@
             entry.topic = String(entry.topic || '').trim().slice(0, 60);
             entry.updatedAt = Date.now();
             if (!entry.text) return null;
-            // The same fact told twice is one fact. Matching on the text keeps
-            // a chat that repeats itself from filling memory with copies.
             const same = list.findIndex(m => m.id !== entry.id
                 && m.scope === entry.scope
                 && m.text.toLowerCase() === entry.text.toLowerCase());
@@ -573,12 +557,10 @@
             return copy;
         },
 
-        /// Ghost chats live here and nowhere else: the map goes when the tab
-        /// does, which is the whole promise.
+        /// Ghost chats live only in memory and vanish with the tab.
         _ghosts: new Map(),
 
-        /// A record this device deleted, remembered for long enough that every
-        /// other device has been online since.
+        /// Remembered long enough that every other device has been online since.
         bury(id) {
             if (!id) return;
             const Sync = window.NymbotSync;
@@ -609,8 +591,6 @@
             write('msgs_' + convId, kept);
         },
 
-        /// Moves what a chat has already said into memory and off the disk,
-        /// which is what turning ghost mode on part-way through has to mean.
         makeGhost(convId) {
             const list = read('msgs_' + convId, []);
             this._ghosts.set(convId, Array.isArray(list) ? list : []);
@@ -623,8 +603,6 @@
             }
         },
 
-        /// Writes a ghost chat back, so turning the mode off keeps what is on
-        /// screen rather than dropping it.
         unmakeGhost(convId) {
             const kept = this._ghosts.get(convId) || [];
             this._ghosts.delete(convId);
@@ -637,9 +615,6 @@
             }
         },
 
-        /// Two sweeps, both at startup: a ghost chat has nothing left to show
-        /// once the tab it lived in is gone, and a chat older than the
-        /// auto-delete window is one you have already said you do not want.
         sweepOldChats(days) {
             const cutoff = Date.now() - (days || 0) * 86400000;
             const doomed = this.conversations().filter(c => c.ephemeral

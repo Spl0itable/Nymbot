@@ -2,9 +2,7 @@ import 'dart:convert';
 
 import 'workspace.dart';
 
-/// One chat. [rootId] is the `nymthread` marker every rumor in it carries: the
-/// worker scopes a reply's context to the messages sharing it, which is what
-/// keeps two conversations from seeing each other's turns.
+/// One chat; [rootId] is the `nymthread` marker the worker scopes reply context by.
 class Conversation {
   Conversation({
     required this.id,
@@ -48,13 +46,10 @@ class Conversation {
   bool anon;
   String? anonPk;
 
-  /// A ghost chat: nothing it says is written to this device, and no archive
-  /// copy is published for it. It exists for as long as the app is open.
+  /// Ghost chat: nothing is stored on device and no archive copy is published.
   bool ephemeral;
 
-  /// How hard each reply in this chat is asked to think: 'normal', 'careful'
-  /// or 'deep'. Each step is another model call the reply takes and the
-  /// balance pays for.
+  /// 'normal', 'careful' or 'deep'; each step is another billed model call.
   String effort;
 
   bool pinned;
@@ -215,16 +210,13 @@ class ChatMessage {
   final String? modelMaker;
   final String? modelMakerName;
 
-  /// Which tier answered.
   final bool? pro;
 
-  /// What the worker said it did to earn the charge, kept so the cost
-  /// breakdown reports it rather than re-deriving a guess after the fact.
+  /// What the worker reported for the charge, for the cost breakdown.
   final int calls;
   final String? task;
 
-  /// What this reply changed in a repository, and where the branch stood
-  /// before it did, so the run can be put back.
+  /// Repo changes and the prior branch head, so the run can be reverted.
   final Map<String, dynamic>? checkpoint;
   final Map<String, dynamic>? pendingTool;
   final Map<String, dynamic>? staged;

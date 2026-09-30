@@ -79,8 +79,7 @@ class _AnonSheetState extends State<_AnonSheet> {
       );
       if (!mounted) return;
       setState(() {
-        // Four whole sentences rather than a stem plus a plural `s`: the
-        // agreement rules differ per language and a stem cannot carry them.
+        // Whole sentences per case because plural agreement differs per language.
         _status = _tier == 'pro'
             ? (credited == 1
                 ? t('Moved 1 Pro credit onto the throwaway key.')

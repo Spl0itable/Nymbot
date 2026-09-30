@@ -83,8 +83,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  // Styles the markdown you write while you write it, so what is in the
-  // field looks like what will be sent.
+  // Styles markdown in the composer as you type.
   final _input = MarkdownEditingController();
   late final _inputFocus = FocusNode(onKeyEvent: _composerKey);
   final _inputScroll = ScrollController();
@@ -100,13 +99,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _hasText = false;
   bool _inputEmpty = true;
 
-  /// What the composer held before the last change, so a paste can be told
-  /// apart from typing by how much one change added.
+  /// Previous composer text, so a paste can be told from typing by its size.
   String _lastInput = '';
   String? _highlighted;
 
-  /// Which message has its action row open. One at a time, so a thread does
-  /// not fill up with them.
+  /// Only one message's action row is open at a time.
   String? _openActions;
   bool _atBottom = true;
   bool _makerLookup = false;
@@ -696,9 +693,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
   }
 
-  /// A message that can be taken back. Anything the app decides to keep on your
-  /// behalf says so this way, so undoing it is one tap rather than a hunt
-  /// through a settings screen.
+  /// Shows an undoable notice for anything the app keeps on your behalf.
   void _sayUndo(String text, VoidCallback undo) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -710,7 +705,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ));
   }
 
-  /// Commands handled here, free of charge, never sent anywhere.
+  /// Local commands: free and never sent anywhere.
   Future<bool> _localCommand(String text) async {
     final app = AppScope.read(context);
     final m = RegExp(r'^\?(\w+|8ball)\s*(.*)$', dotAll: true).firstMatch(text);
@@ -721,6 +716,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
       await app.setMediaModel(null, forChat: app.current?.mediaModel != null);
       await app.note(t('Back to answering in words.'));
+      return true;
+    }
+    if (app.freeOnly && paidOnlyCommand(cmd, arg)) {
+      await offerCredits(context, anon: cmd == 'anon');
       return true;
     }
     if (cmd == 'research') {
@@ -1057,8 +1056,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return true;
   }
 
-  /// What one change added, when it added anything. A paste arrives as a
-  /// single insert at one point, so the common prefix and suffix bracket it.
+  /// The run one change inserted, bracketed by the common prefix and suffix.
   static String? _insertedRun(String before, String after) {
     if (after.length <= before.length) return null;
     var head = 0;
@@ -1182,6 +1180,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await app.open(hit.first);
         if (parts.last.isNotEmpty) _scrollToMessage(parts.last);
       case 'action':
+        if (app.freeOnly && const {'models', 'repos', 'anon'}.contains(choice.value)) {
+          await offerCredits(context, anon: choice.value == 'anon');
+          return;
+        }
         switch (choice.value) {
           case 'new':
             await app.newConversation();
@@ -1298,8 +1300,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     _toBottom();
-    // Read for standing facts before the reply comes back, so what is
-    // remembered is offered while the message is still on screen.
+    // Scan for standing facts before the reply arrives.
     if (!bare) {
       final noticed = await app.noticeMemories(text);
       if (noticed.isNotEmpty && mounted) {
@@ -1315,8 +1316,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
     }
-    // A message typed while it was still writing is held, not sent, so nothing
-    // below should read out a reply that has not happened yet.
+    // A message typed mid-reply is queued, so nothing below may read a reply yet.
     final asked = app.current?.id;
     final went = await app.send(text, bare: bare);
     final back = app.takeCapReturned();
@@ -1407,8 +1407,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await app.togglePinMessage(m);
         _say(m.pinned ? t('Removed from saved messages.') : t('Saved.'));
       case MessageAction.remember:
-        // The words, not the markup: what is remembered has to read as a
-        // sentence when it comes back in another chat.
+        // Plain text, not markup, so a memory reads as a sentence elsewhere.
         final words = MarkdownBody.plain(m.content).trim();
         if (words.isEmpty) {
           _say(t('There is nothing in that to remember.'));
@@ -1435,11 +1434,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Asking the question differently. By default that happens on a branch: the
-  /// chat you had is worth keeping, and rewriting in place threw away
-  /// everything said after the edited message with no way back.
-  /// Putting a repo run back, once it is asked for out loud: it writes to
-  /// someone's repository, so it is confirmed rather than done on a tap.
+  /// Reverting a repo run writes to someone's repository, so it is confirmed first.
   Future<void> _undo(ChatMessage m) async {
     final app = AppScope.read(context);
     final mark = m.checkpoint;
@@ -1917,9 +1912,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _messages(BuildContext context, AppController app) {
     if (app.messages.isEmpty && !app.sending) return _empty(context, app);
-    // An anonymous chat deliberately shows the throwaway key's own generated
-    // nym, never the published profile: the avatar would give away exactly
-    // what the mode exists to hide.
+    // Anonymous chats show the throwaway key's nym, never the published profile.
     final anonymous = app.current?.anon ?? false;
     final selfPubkey =
         anonymous ? (app.shownAnonPk ?? app.identity.pubkey) : app.identity.pubkey;
@@ -2185,8 +2178,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    // A picture is on its way to a media host the moment it is
-                    // attached, because the message carries the link rather than
+                    // Pictures upload as soon as they are attached, since the message carries the link.
                     for (final a in app.attachments)
                       InputChip(
                         avatar: a.uploading
@@ -2230,9 +2222,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-            // What you typed while it was still writing. Shown so the queue is
-            // never a surprise, and each one can be taken back out while it
-            // waits.
+            // Queued messages stay visible and can be removed while they wait.
             for (var i = 0; i < app.queued.length; i++)
               if (app.editingQueued == i)
                 _queueEditorRow(context, app)
@@ -2347,10 +2337,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ? TextInputAction.send
                           : TextInputAction.newline,
                       onChanged: (v) {
-                        // A wall of pasted text is a document, not a sentence:
-                        // it goes in as an attachment so the question you are
-                        // asking about it stays readable. Only a paste can add
-                        // this much in one change; typing cannot.
+                        // Only a paste can add this much in one change; it becomes an attachment.
                         final run = _insertedRun(_lastInput, v);
                         if (run != null && Attachments.pasteIsLong(run)) {
                           final rest = _input.markdown.replaceFirst(run, '');
@@ -2519,16 +2506,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-/// One item from the chat menu, run against [conv] — which need not be the chat
-/// on screen, since the sidebar opens this menu on a row. The items that open
-/// an editor bound to the chat in view select it first; everything else acts
-/// where it stands. 'find' belongs to the chat screen and is handled there.
+/// Runs a chat-menu item against [conv], which may not be the chat on screen.
 Future<void> runChatMenuChoice(BuildContext context, AppController app,
     Conversation conv, String choice) async {
   final elsewhere = conv.id != app.current?.id;
   final messenger = ScaffoldMessenger.of(context);
-  // Selecting the chat first is an await, so the context that opens the sheet
-  // afterwards has to be checked rather than assumed.
+  // Selecting is awaited, so the context must be rechecked afterwards.
   Future<bool> select() async {
     if (elsewhere) await app.open(conv);
     return context.mounted;
@@ -2789,8 +2772,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             : Text(bits.join(' · '),
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11)),
-        // The same menu the chat header carries, on the row, so renaming or
-        // deleting a chat does not mean opening it first.
+        // The chat header's menu, on the row, so a chat need not be opened first.
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2837,9 +2819,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           children: [
             const NymbotMark(size: 26),
             const SizedBox(width: 6),
-            // Optical, not geometric: the drawn body sits a hair below
-            // its box because of the antennae, so the word is nudged to
-            // match its middle.
+            // Nudged optically: the antennae push the drawn body below its box's center.
             Flexible(
               child: Transform.translate(
                 offset: const Offset(0, 1.5),
@@ -3210,8 +3190,7 @@ class _FadedChatListState extends State<_FadedChatList> {
   }
 }
 
-/// What the feed under the spinner reads as: the steps that still say something
-/// new, and never the same line twice in a row.
+/// Steps that still say something new, never the same line twice in a row.
 List<String> _progressLines(List<TurnStep> steps) {
   final out = <String>[];
   for (final s in trimProgress(steps)) {

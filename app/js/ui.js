@@ -11,6 +11,12 @@
     const Chat = window.NymbotChat;
 
     const NON_SETTING_CONTROLS = new Set(['langSelect', 'importPicker']);
+    const FREE_LOCKED_CHIPS = ['chipModel', 'chipGit', 'chipServerRuns', 'chipConnectors', 'chipEffort',
+        'chipResearch', 'chipTeam', 'chipWeb', 'chipAnon', 'chipCompare'];
+    const FREE_LOCKED_ACTS = new Set(['open-models', 'open-repos', 'toggle-server-runs', 'open-connectors',
+        'cycle-effort', 'toggle-research', 'open-team', 'toggle-web', 'open-anon', 'open-compare']);
+    const FREE_LOCKED_COMMANDS = new Set(['web', 'model', 'compare', 'anon', 'git', 'repo', 'effort',
+        'research', 'image', 'video', 'speak', 'review']);
 
     const LEG_GAP_MS = 3500;
     const LEG_GAP_JITTER_MS = 1500;
@@ -47,8 +53,7 @@
     const KB = window.NymbotKeyBackup;
     const NT = () => window.NostrTools;
 
-    /// Credits and sats, with their thousands separated. Never abbreviated —
-    /// they are money, and every digit stays.
+    /// Never abbreviated: every digit of money stays.
     const num = (v) => window.NymbotI18n.count(v);
     const NOMINAL_TURN_IN = 3000;
     const EST_TYPICAL_OUT = 400;
@@ -188,11 +193,10 @@
         _lastKey: null,
         _pinnedReply: null,
 
-        // --- boot -----------------------------------------------------------
+        // Boot
 
         async start() {
-            // The pack decides what every string below reads as, so nothing is
-            // rendered until it has landed (or failed, which is English).
+            // Nothing renders until the pack lands, or fails, which means English.
             await window.NymbotI18n.ready;
             this.favourites = Store.read('favouriteModels', []) || [];
             const brand = $('brand');
@@ -235,9 +239,7 @@
             });
             Relays.connect();
 
-            // Before anything is drawn: a ghost chat has nothing left to show
-            // now the tab it lived in is gone, and a chat past the auto-delete
-            // window is one you have already said you do not want kept.
+            // Sweeps ghost chats and chats past the auto-delete window before anything is drawn.
             const swept = Store.sweepOldChats(this.settings.autoDeleteDays || 0);
 
             const list = Store.conversations().filter(c => !c.archived);
@@ -254,8 +256,7 @@
             this.restoreLibrary();
             if (ServerRun) ServerRun.load().catch(() => { });
 
-            // The announcement and the bot's key are what make a reply
-            // post-quantum; neither blocks the first message.
+            // Neither blocks the first message.
             setTimeout(async () => {
                 try { await PQ.resolveBot(); } catch (_) { }
                 try { await this.settleRoot(); } catch (_) { }
@@ -268,9 +269,6 @@
 
             Chat.onStatus = (text) => this.status(text);
 
-            // A published profile is what the account already tells the world;
-            // showing it here costs no privacy and makes the app feel signed
-            // in rather than anonymous-by-accident.
             Profile.onChange = (pubkey) => {
                 if (pubkey === Identity.pubkey) {
                     this.renderIdentity();
@@ -378,9 +376,8 @@
             this.openModels(n.model);
         },
 
-        // --- the same app on every device --------------------------------------
+        // Sync
 
-        /// Pulls what this account has on the server and folds it in, then keeps it up to date.
         startSync() {
             if (!Sync.enabled()) return;
             Sync.onChange = (touched) => this.afterSync(touched);
@@ -395,15 +392,13 @@
             // A device left open for a day should still pick up what another one did.
             if (this._syncTimer) clearInterval(this._syncTimer);
             this._syncTimer = setInterval(() => Sync.run({ quiet: true }).catch(() => { }), 300000);
-            // And whenever the tab is looked at again, since that is exactly when
-            // somebody has been using the other device.
+            // Also on tab focus, when another device has likely been in use.
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) Sync.touch(1500);
             });
             window.addEventListener('focus', () => Sync.touch(1500));
         },
 
-        /// Something arrived from another device.
         afterSync(touched) {
             const set = new Set(touched || []);
             if (set.has('settings')) {
@@ -462,7 +457,7 @@
             return this.settings;
         },
 
-        // --- conversations ---------------------------------------------------
+        // Conversations
 
         newConversation(patch) {
             const conv = Store.createConversation(Object.assign({
@@ -589,8 +584,6 @@
                 btn.addEventListener('click', () => this.open(Store.conversation(conv.id)));
                 li.className = 'conv-row';
                 li.appendChild(btn);
-                // The same menu the chat header carries, on the row, so
-                // renaming or deleting a chat does not mean opening it first.
                 const more = el('button', 'conv-menu');
                 more.type = 'button';
                 more.title = t('Chat options');
@@ -612,10 +605,7 @@
             this.updateConvFade();
         },
 
-        /// Who the messages in this chat are from. An anonymous chat is
-        /// deliberately NOT the account: it shows the throwaway key's own
-        /// generated nym, never the published profile, or the whole point of
-        /// the mode would be undone by the avatar.
+        /// An anonymous chat shows the throwaway key's generated nym, never the published profile.
         selfIdentity() {
             const payer = this.conv && this.conv.anon ? Anon.forConv(this.conv) : null;
             const anon = !!payer;
@@ -777,7 +767,6 @@
             return { group, grouped: false };
         },
 
-        /// PRO or STD, from what the worker said answered the message.
         tierBadge(m) {
             const pro = m.pro != null ? !!m.pro : !!m.model;
             const badge = el('span', 'tier-badge' + (pro ? ' is-pro' : ''), pro ? t('PRO') : t('STD'));
@@ -879,7 +868,6 @@
                 const who = el('span', 'message-author' + (m.role === 'bot' ? ' bot-author' : ''));
                 if (m.role === 'bot') {
                     who.appendChild(document.createTextNode(C.botName));
-                    // Which tier wrote this.
                     who.appendChild(this.tierBadge(m));
                     if (m.model) who.appendChild(this.modelTitle(m));
                 } else {
@@ -927,11 +915,7 @@
 
             const text = el('div', 'msg-text');
             if (m.role === 'bot' || m.role === 'self') {
-                // Your own messages render the same way the replies do. Typing
-                // a fenced block and watching it come out as literal backticks
-                // is the wrong answer to "can I paste code in here". The
-                // renderer escapes HTML, so this is no more dangerous than
-                // showing the text was.
+                // User messages render markdown too; the renderer escapes HTML.
                 text.innerHTML = MD.render(m.content, {
                     wrap: this.settings.codeWrap,
                     lineNumbers: this.settings.lineNumbers,
@@ -991,9 +975,6 @@
                 body.appendChild(tray);
             }
 
-            // The time and the price share the bubble's last line, the price to
-            // the right of it, so a reply's cost reads as part of its footer
-            // rather than as a chip wedged into the byline.
             const foot = el('span', 'bubble-foot');
             foot.appendChild(el('span', 'bubble-time-inner', this.timeLabel(m.ts)));
             const paid = window.NymbotServerRun ? window.NymbotServerRun.totalCost(m) : m.cost;
@@ -1012,9 +993,7 @@
             const actions = this.actionsFor(m);
             node.appendChild(actions);
 
-            // On a touch screen there is no hover to reveal a row with, so a
-            // tap on the bubble does it — and only one row is open at a time,
-            // so the thread does not fill up with them.
+            // No hover on touch, so a tap opens the row, one at a time.
             body.addEventListener('click', (e) => {
                 if (!matchMedia('(pointer: coarse)').matches) return;
                 if (e.target.closest('a, button, input, textarea, .code-block, .artifact-card')) return;
@@ -1032,8 +1011,7 @@
             const add = (icon, title, act, extra) => {
                 const b = el('button', 'msg-action' + (extra && extra.cls ? ' ' + extra.cls : ''));
                 b.type = 'button';
-                // data-tip draws the label; title is kept so a screen reader
-                // and a native tooltip still have it.
+                // data-tip draws the label; title stays for screen readers.
                 b.title = title;
                 b.dataset.tip = title;
                 b.setAttribute('aria-label', title);
@@ -1128,16 +1106,13 @@
             head.appendChild(el('span', 'typing-dot'));
             head.appendChild(el('span', 'typing-dot'));
             node.appendChild(head);
-            // Filled in as the worker reports what it is doing.
             node.appendChild(el('div', 'bot-progress', ''));
             return node;
         },
 
-        // --- carrying a capped run on ------------------------------------------
+        // Continuing a capped run
 
-        /// What is left of this chat's continuation budget. A budget of -1 is
-        /// "whatever the balance holds", which is still a real ceiling — it is
-        /// just the user's own balance rather than a number they typed.
+        /// -1 means the user's whole balance, which is still a real ceiling.
         continueBudget(turn) {
             const cap = Number(this.settings.autoContinue) || 0;
             const spent = (turn && turn.continued) || 0;
@@ -1158,9 +1133,7 @@
             }
         },
 
-        /// A repo run stopped at its tool-call cap with work left. Spend the
-        /// budget the user set on carrying it on, one leg at a time, and say
-        /// what each leg cost as it goes — never silently.
+        /// Spends the user's budget one leg at a time, reporting each leg's cost.
         async continueRun(turn, res) {
             const convId = turn.convId;
             let token = res.resumeToken;
@@ -1213,7 +1186,7 @@
                 this.turnLabel(turn, t('Carrying on where it left off'));
                 let next;
                 try {
-                    next = await Chat.send(conv, t('Continue.'), this.settings, {
+                    next = await Chat.send(conv, t('Continue.'), this.turnSettings(), {
                         resume: token,
                         maxCost: Caps.maxCost(conv, true, this.models),
                         research,
@@ -1337,10 +1310,9 @@
             this.turnStatus(turn, null);
         },
 
-        // --- watching a turn as it runs ----------------------------------------
+        // Turn progress
 
-        /// What one progress step reads as. The worker sends facts; the words
-        /// are the client's, so they translate with everything else.
+        /// The worker sends facts; the wording is client-side so it translates.
         progressLine(step) {
             switch (step && step.kind) {
                 case 'routing':
@@ -1401,7 +1373,6 @@
             }
         },
 
-        /// Drops the steps that say what the line above already said.
         trimProgress(steps) {
             const out = [];
             for (const step of steps) {
@@ -1449,7 +1420,7 @@
                 return;
             }
             box.innerHTML = '';
-            // The last few only: this sits under a spinner, not in a log view.
+            // Only the last few: this sits under a spinner.
             let last = '';
             for (const step of this.trimProgress(turn.steps).slice(-4)) {
                 const line = this.progressLine(step);
@@ -1462,8 +1433,7 @@
             this.followTurn(turn);
         },
 
-        /// Polls the worker for what the turn is doing. Stops the moment the
-        /// turn is over, and never keeps the send waiting on it.
+        /// Stops when the turn ends and never blocks the send.
         watchTurn(turn, eventId, signer) {
             this.stopWatchingTurn(turn);
             turn.eventId = eventId;
@@ -1661,7 +1631,7 @@
             });
         },
 
-        // --- sending ----------------------------------------------------------
+        // Sending
 
         async send(override, target, opts) {
             const conv = target || this.conv;
@@ -1674,8 +1644,7 @@
             this._pinnedReply = null;
             const here = () => !!(this.conv && this.conv.id === conv.id);
 
-            // Commands run whatever else is happening: they are free, instant,
-            // and one of them is how you stop the thing you are waiting on.
+            // Commands always run: they are free, instant, and one of them stops the pending reply.
             if (override == null && await this.handleCommand(typed)) {
                 input.value = '';
                 Store.setDraft(conv.id, '');
@@ -1703,9 +1672,7 @@
             const asked = mention && mention.model ? Mention.pinned(mention.model) : null;
             let text = asked ? mention.text : (bare ? typed : this.withMediaModel(typed, conv));
 
-            // Typing while it is still writing used to do nothing at all — the
-            // message was dropped on the floor with no sign it had been. It
-            // waits its turn instead, and says that it is waiting.
+            // Messages typed during a reply queue visibly rather than being dropped.
             if (this.sendingIn(conv.id) || (override == null && this.queueEdit && this.queueEdit.convId === conv.id)) {
                 if (bare) return;
                 this.queueFor(conv.id, true).push(typed);
@@ -1748,19 +1715,7 @@
             const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
             const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
 
-            // One gift wrap carries about 23 KB once the standing context and
-            // the attachments are counted. Checked before the message joins
-            // the transcript, so an over-long one is still in the composer to
-            // shorten rather than stranded in the chat having failed.
-            // The free allowance, as this device sees it. The worker counts
-            // per key, and making another key is a keystroke in this app's own
-            // gate — so the device keeps a count of its own and stops offering
-            // free replies once it is spent, whichever key is signed in.
-            //
-            // It is a speed bump, not a control: clearing site data walks past
-            // it. What it must never do is reach the worker, because a device
-            // counter the server could see would link a person's keys to each
-            // other, which is the one thing this app is built not to do.
+            // The device's free count is a speed bump that must never reach the worker, or it would link a person's keys.
             if (!asked && !this.freeAllows()) {
                 this.offerUpgrade();
                 if (override == null) {
@@ -1771,8 +1726,7 @@
                 return;
             }
 
-            // A picture has to be uploaded before the message is priced, since it
-            // is the link that travels and the link that is charged for.
+            // Pictures upload before pricing, since the link is what travels and is charged.
             if (attachments.some(a => (a.kind === 'image' || a.kind === 'video') && !a.url)) {
                 const stranded = await this.settleAttachments(attachments);
                 if (stranded.length) {
@@ -1859,8 +1813,7 @@
                 window.NymbotDocs.keep(conv.id, attachments)
                     .then(() => { if (here()) window.NymbotDocs.renderTray(this.conv); });
             }
-            // Read for standing facts before the reply comes back, so what is
-            // remembered is offered while the message is still on screen.
+            // Read for facts before the reply returns, so the offer shows while the message is on screen.
             if (!bare) this.noticeMemories(typed, conv);
 
             let live = conv;
@@ -1894,7 +1847,7 @@
                         text, { attachments, quote });
                 }
                 const res = await Chat.send(asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live,
-                    text, this.settings, {
+                    text, this.turnSettings(), {
                     attachments, quote, maxCost,
                     research: research ? research.payload : null,
                     team,
@@ -1922,12 +1875,9 @@
                     serverRuns: res.serverRuns || null,
                     serverRunCredits: res.serverRunCredits || 0,
                     repos: (res.repos && res.repos.length > 1) ? res.repos : null,
-                    // Kept so the cost breakdown reports what the worker said
-                    // it did rather than re-deriving a guess after the fact.
+                    // What the worker said it did, not a re-derived guess.
                     calls: res.modelCalls || 1,
                     task: res.taskType || null,
-                    // What it changed in a repository, and where the branch
-                    // stood before it did — so the run can be put back.
                     checkpoint: res.checkpoint || null,
                     pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(res) : null,
                     staged: res.staged || null,
@@ -1947,8 +1897,7 @@
                 this.notifyReply(reply);
 
                 if (res.free) {
-                    // Counted on this device as well as on the key, so a fresh
-                    // key does not start the day over.
+                    // Counted on this device too, so a fresh key does not reset the day.
                     this.free = res.free;
                     Free.spent();
                     Free.observe(res.free.used);
@@ -1963,9 +1912,7 @@
                     this.refreshBalance().catch(() => { });
                 }
                 if (res.lowBalance) {
-                    // In an anonymous chat a low balance is usually the
-                    // throwaway key running dry rather than the nym, and that
-                    // is exactly what the automatic transfer is for.
+                    // In an anonymous chat a low balance usually means the throwaway key ran dry.
                     const topped = live.anon ? await this.runAutoTopUp({ conv: live }) : null;
                     if (!topped) {
                         this.note(res.pro
@@ -1998,8 +1945,7 @@
                         const payer = Anon.forConv(live);
                         if (payer) Anon.remember(payer.pk, e.pro ? 'pro' : 'standard', e.balanceCredits != null ? e.balanceCredits : e.balance);
                     }
-                    // The worker says the day is spent. Believe it over the
-                    // device's own count, which can only ever be behind.
+                    // Trust the worker over the device count, which can only lag.
                     if (e.free) {
                         this.free = e.free;
                         Free.observe(e.free.used);
@@ -2117,8 +2063,6 @@
             this.updateHints();
         },
 
-        /// Renders what is waiting to be sent. Each one can be taken back out
-        /// while it waits, which is the whole reason for showing them.
         renderQueue() {
             const strip = $('queueStrip');
             const active = document.activeElement;
@@ -2720,9 +2664,7 @@
             clearTimeout(this._typeTimer);
             const conv = this.conv;
             if (!conv) return;
-            // Stop means stop: a run carrying itself on must not start another
-            // leg after the one being aborted, and nothing that was waiting
-            // behind it should go either.
+            // Stop means stop: no further leg, and nothing queued goes either.
             const queue = this.queues.get(conv.id);
             this.queues.delete(conv.id);
             if (this.queueEdit && this.queueEdit.convId === conv.id) this.queueEdit = null;
@@ -2838,8 +2780,7 @@
                     return;
                 }
                 case 'msg-remember': {
-                    // The words, not the markup: what is remembered has to read
-                    // as a sentence when it comes back in another chat.
+                    // Plain text so a memory reads as a sentence in another chat.
                     const text = MD.plain(m.content || '').trim();
                     if (!text) {
                         this.toast(t('There is nothing in that to remember.'));
@@ -2880,9 +2821,7 @@
             await this.send(question.content, null, this.carriedFrom(question.attachments, question.quote));
         },
 
-        /// Asking the question differently. By default that happens on a branch:
-        /// the chat you had is worth keeping, and rewriting in place threw away
-        /// everything said after the edited message with no way back.
+        /// Edits branch by default so the original conversation is kept.
         async editMessage(m) {
             const value = await this.ask({
                 title: t('Ask this differently'),
@@ -2931,11 +2870,7 @@
             return { attachments, quote: quote || null };
         },
 
-        /// A copy of this chat carrying everything up to a point, on a thread of
-        /// its own, with the whole standing setup — repositories, persona,
-        /// workspace, bot, model, effort — so the branch answers the way the
-        /// chat it came from does. The original is untouched, which is the
-        /// whole point of a branch.
+        /// Carries the full standing setup so the branch answers like its source; the original is untouched.
         branchFrom(kept) {
             const seed = this.seedFrom(kept);
             const copy = Store.createConversation({
@@ -2957,8 +2892,7 @@
                 seed
             });
             Store.saveMessages(copy.id, kept);
-            // The files a branch was built on belong to it as much as the words
-            // that produced them, and they are cheap to carry.
+            // Artifacts travel with the branch.
             const ids = new Set(kept.map(x => x.id));
             const carried = Artifacts.all(this.conv.id).filter(a => ids.has(a.messageId));
             if (carried.length) Artifacts.save(copy.id, carried);
@@ -2981,6 +2915,10 @@
             if ((cmd === 'image' || cmd === 'video' || cmd === 'speak') && /^off$/i.test(arg)) {
                 this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
                 this.note(t('Back to answering in words.'));
+                return true;
+            }
+            if (this.freeOnly() && FREE_LOCKED_COMMANDS.has(cmd) && !/^(off|disconnect|normal)$/i.test(arg)) {
+                this.offerCredits({ anon: cmd === 'anon' });
                 return true;
             }
             if (cmd === 'research') return Research.handle(this, arg);
@@ -3393,15 +3331,13 @@
                     this._pricingTriedAt = Date.now();
                     this.loadMentionModels();
                 }
-                const est = Chat.estimateCredits(text, this.settings, this.conv, opts, this.models);
+                const est = Chat.estimateCredits(text, this.turnSettings(), this.conv, opts, this.models);
                 hint.textContent = Chat.estimateLine(est, creditAmount);
             } else {
                 hint.textContent = '';
             }
             const room = text.trim() ? Caps.roomLine(this.conv, this.models) : '';
             if (room) hint.textContent = hint.textContent ? hint.textContent + ' · ' + room : room;
-            // What a message too long for one wrap will cost, said before it is
-            // sent rather than on the receipt.
             const len = $('lenHint');
             const parts = text.trim() ? Chat.partSurcharge(this.conv, text, opts) : 0;
             if (parts > 0) {
@@ -3453,8 +3389,7 @@
             for (const a of added) this.uploadAttachment(a);
         },
 
-        /// A picture has to be somewhere the worker can fetch it before the model
-        /// can be handed the image rather than the file's name.
+        /// Uploaded first so the model receives the image rather than its filename.
         async uploadAttachment(attachment) {
             if (!attachment || (attachment.kind !== 'image' && attachment.kind !== 'video') || attachment.url) return;
             if (attachment.uploading) return attachment.uploading;
@@ -3475,7 +3410,6 @@
             return Blossom.throwaway();
         },
 
-        /// Everything still on its way up, finished before the message goes.
         async settleAttachments(list) {
             await Promise.all(list.map(a => this.uploadAttachment(a)));
             return list.filter(a => (a.kind === 'image' || a.kind === 'video') && !a.url);
@@ -3526,7 +3460,7 @@
             strip.hidden = false;
         },
 
-        // --- balances --------------------------------------------------------
+        // Balances
 
         async refreshBalance(announce) {
             const inAnonChat = !!(this.conv && this.conv.anon);
@@ -3555,9 +3489,6 @@
                 this.anonBalance = { standard: null, pro: null };
                 this.anonBalancePk = null;
             }
-            // The worker is the authority on what this key has used; the
-            // device keeps its own count so signing in with a fresh key does
-            // not start the day over.
             this.free = data.free || this.free || null;
             if (this.free) Free.observe(this.free.used);
             this.renderBalance();
@@ -3577,7 +3508,7 @@
             if (!conv || !conv.anon) return null;
             const payer = Anon.forConv(conv);
             if (!payer) return null;
-            const est = Chat.estimateCredits(text, this.settings, conv, opts || {}, this.models);
+            const est = Chat.estimateCredits(text, this.turnSettings(), conv, opts || {}, this.models);
             const pro = est.tier === 'pro';
             const known = this.anonBalancePk === payer.pk ? this.anonBalance[pro ? 'pro' : 'standard'] : null;
             const moved = await Anon.fund(payer, est.tier, est.high, known).catch(() => null);
@@ -3612,15 +3543,13 @@
             const anon = this.spendingAnon();
             const wallet = anon ? this.anonBalance : this.balance;
             const value = wallet[pro ? 'pro' : 'standard'];
-            // With nothing to spend, the chip counts what the day has left
-            // rather than showing a zero — which is a wall, where the free
-            // tier is a thing that is still working.
+            // With no balance, show the free replies left rather than a zero.
             const free = this.freeLeft();
             $('chipBuy').classList.toggle('is-anon', anon);
             $('chipBuy').title = anon
                 ? t('This chat spends the throwaway key')
                 : t('Buy credits');
-            $('chipBuyLabel').textContent = (!pro && !anon && !this.balance.standard && free != null)
+            $('chipBuyLabel').textContent = (!pro && free != null && (this.freeOnly() || (!anon && !this.balance.standard)))
                 ? t('{n} free', { n: num(free) })
                 : (value == null ? t('Buy') : creditAmount(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
@@ -3628,10 +3557,7 @@
                     { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) });
         },
 
-        /// Whether a message may go at all. Only ever false on the free tier
-        /// with the day spent — a balance is never gated by the device count,
-        /// because someone who has paid is not on the free tier and must never
-        /// be told they are.
+        /// A paid balance is never gated by the device count.
         freeAllows() {
             if (this.proTier()) return true;
             if (this.balance.standard > 0) return true;
@@ -3639,7 +3565,6 @@
             return Free.allows(this.free.limit, this.balance.standard || 0);
         },
 
-        /// The day is spent. Said as a time and a price rather than as a wall.
         offerUpgrade() {
             const when = this.free && this.free.resetsAt
                 ? new Date(this.free.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -3656,9 +3581,41 @@
                 : t('That is today\'s free replies used. Tap Buy for credits, which also unlock the sharper models, repositories, images and web search.'));
         },
 
-        /// How many free replies are actually available: the lower of what the
-        /// worker says this key has left and what this device has left. Null
-        /// when the free tier is not in play.
+        /// True only once the balances are known and neither the nym nor any throwaway key holds credits.
+        freeOnly() {
+            const b = this.balance;
+            if (b.standard == null || b.pro == null) return false;
+            if (b.standard > 0 || b.pro > 0) return false;
+            const a = this.anonBalance || {};
+            const held = Anon.lastKnown().total;
+            return !(a.standard > 0 || a.pro > 0 || held.standard > 0 || held.pro > 0);
+        },
+
+        turnSettings() {
+            return this.freeOnly() && this.settings.webSearch
+                ? Object.assign({}, this.settings, { webSearch: false })
+                : this.settings;
+        },
+
+        lockedAct(act, target) {
+            if (!this.freeOnly()) return false;
+            if (act === 'tier') return target.dataset.tier === 'pro';
+            return FREE_LOCKED_ACTS.has(act);
+        },
+
+        offerCredits(opts) {
+            this.openCredits();
+            if (!this.invoice) {
+                $('creditAnon').checked = !!(opts && opts.anon);
+                this.modalStatus('creditStatus', t('That needs credits. Free replies run one small model, without web search, tools or anon mode.'));
+            }
+        },
+
+        paidOnly(run, anon) {
+            return () => (this.freeOnly() ? this.offerCredits({ anon }) : run());
+        },
+
+        /// The lower of the worker's count for this key and the device's; null off the free tier.
         freeLeft() {
             if (!this.free || !this.free.limit) return null;
             const here = Free.state(this.free.limit);
@@ -3683,7 +3640,7 @@
             }
         },
 
-        // --- toolbar ----------------------------------------------------------
+        // Toolbar
 
         refreshToolbar() {
             Caps.renderBadge(this);
@@ -3757,9 +3714,7 @@
 
             const effortChip = $('chipEffort');
             const effort = Chat.effortOf(conv);
-            // Only a Pro reply outside a repo task can be asked to think
-            // harder: standard replies are one routed call, and a repo task
-            // already loops on a budget of its own.
+            // Only Pro replies outside repo tasks take effort; repo tasks already loop on their own budget.
             const canEffort = !!model && !media && !repos.length;
             effortChip.hidden = !canEffort;
             effortChip.classList.toggle('is-active', canEffort && effort !== 'normal');
@@ -3782,6 +3737,17 @@
 
             if (window.NymbotConnectors) window.NymbotConnectors.refreshChip(this);
             if (ServerRun) ServerRun.refreshChip(this);
+            const locked = this.freeOnly();
+            for (const id of FREE_LOCKED_CHIPS) {
+                const chip = $(id);
+                if (!chip) continue;
+                chip.classList.toggle('is-locked', locked);
+                if (locked) chip.classList.remove('is-active');
+                chip.setAttribute('aria-disabled', locked ? 'true' : 'false');
+            }
+            for (const b of document.querySelectorAll('#toolbar .tier-btn[data-tier="pro"]')) {
+                b.classList.toggle('is-locked', locked);
+            }
             this.groupChips();
             this.renderContextBar(repos, persona, hasSystem);
             this.renderBalance();
@@ -3820,10 +3786,6 @@
             return this._mentionLoading;
         },
 
-        /// Sorts whatever is on for this chat to the front of the rail, with a
-        /// rule after it, so the settings in force are the ones you see first
-        /// rather than the ones you scroll to. Order within each half is the
-        /// order the markup gives, so a chip never wanders between refreshes.
         effortLabel(name) {
             switch (name) {
                 case 'careful': return t('Careful');
@@ -3832,9 +3794,7 @@
             }
         },
 
-        /// Normal, careful, deep and back. Each step is another model call the
-        /// reply takes and the balance pays for, so the toolbar's own estimate
-        /// moves with it.
+        /// Each step adds a model call the balance pays for.
         cycleEffort(to) {
             const order = ['normal', 'careful', 'deep'];
             const at = order.indexOf(Chat.effortOf(this.conv));
@@ -3928,8 +3888,7 @@
             }
             const order = [...on, split, ...off];
             if (order.every((node, i) => rail.children[i] === node)) return;
-            // Moving nodes resets the rail's scroll; putting it back keeps a
-            // refresh mid-scroll from yanking the reader to the start.
+            // Moving nodes resets the rail's scroll, so restore it.
             const left = rail.scrollLeft;
             for (const node of order) rail.appendChild(node);
             rail.scrollLeft = left;
@@ -3951,8 +3910,7 @@
                     w.appendChild(Icons.node('pencil', { size: 10 }));
                     chip.appendChild(w);
                 }
-                // A repository the workspace carries is not this chat's to drop:
-                // it goes when the workspace does.
+                // Workspace repositories go with the workspace, not the chat.
                 const own = (this.conv.repoIds || []).includes(r.id);
                 if (own) {
                     chip.appendChild(Icons.node('close', { size: 11, cls: 'x' }));
@@ -4137,7 +4095,7 @@
             return command + ' ' + rest;
         },
 
-        // --- models -----------------------------------------------------------
+        // Models
 
         async openModels(filter, pick) {
             const picking = pick && typeof pick.pick === 'function' ? pick : null;
@@ -4243,8 +4201,7 @@
             });
         },
 
-        /// "3 credits", or "1–4 credits" where the reply's length moves it.
-        /// A bare number said nothing about what it counted.
+        /// A range where the reply's length moves the price.
         modelTurnCredits(m) {
             const usd = Number(this.models && this.models.usdPerCredit) || 0;
             const pin = Number(m.inUsdPerMTok);
@@ -4330,7 +4287,6 @@
                         ? Object.assign({}, m, { credits: chosen.entry.credits, max: chosen.entry.credits })
                         : m;
                     if (blocked) row.disabled = true;
-                    // Who makes it, on the left, so the list scans by maker.
                     row.appendChild(Icons.brand(m.authorSlug || group.authorSlug, { size: 22 }));
                     const name = el('span', 'model-name');
                     name.appendChild(el('span', 'model-title', m.label));
@@ -4459,8 +4415,7 @@
                 }
                 row.appendChild(main);
 
-                // Announced on Nostr rather than typed in: worth saying, since it
-                // is the announcement that decides where this points.
+                // Noted because the announcement decides where this points.
                 if (r.ngit) {
                     const mark = el('span', 'repo-ngit', t('ngit'));
                     mark.title = r.ngit.naddr
@@ -4555,10 +4510,7 @@
             this.modalStatus('gitStatus', '');
         },
 
-        /// Asks the forge what the token in the form can reach, so a chat is
-        /// wired to a repository by ticking it rather than by typing its name
-        /// exactly right. The request goes from this device straight to the
-        /// forge: the token is not sent anywhere it does not already go.
+        /// Asked directly from this device, so the token goes nowhere it does not already go.
         async browseRepos() {
             const cfg = {
                 provider: $('gitProvider').value,
@@ -4641,8 +4593,6 @@
             }
         },
 
-        /// Connects every ticked repository, carrying the token, provider, host
-        /// and writes flag from the form, and ticks them all into this chat.
         linkBrowsedRepos() {
             const picked = (this.browsed || []).filter(r => this.browsedPicked.has(r.repo));
             if (!picked.length) {
@@ -4690,7 +4640,6 @@
             return (String(host || '').trim() || fallback[provider || 'github'] || '').toLowerCase();
         },
 
-        /// Reads a NIP-34 announcement and fills the form in from it.
         async resolveNgit() {
             const typed = ($('ngitAddress').value || '').trim();
             if (!typed) {
@@ -4751,8 +4700,7 @@
                 allowWrites: $('gitWrites').checked,
                 approve: $('gitApprove').checked
             };
-            // Where it was announced, kept alongside the forge it actually lives
-            // on — so the app can say a repository came from Nostr, and point at
+            // Keeps where it was announced alongside the forge it lives on.
             const found = this.ngitFound;
             if (found && found.forge
                 && found.forge.repo === cfg.repo && found.forge.host === cfg.host) {
@@ -4939,8 +4887,7 @@
             this.openModal('modalSystem');
         },
 
-        /// The chat an open editor belongs to, which is not always the one on
-        /// screen: these can be reached from a row in the sidebar.
+        /// Not always the chat on screen: editors open from sidebar rows.
         editChat() {
             return (this.editConvId && Store.conversation(this.editConvId)) || this.conv;
         },
@@ -5161,8 +5108,7 @@
             this.modalStatus('memoryStatus', t('Forgotten.'), 'ok');
         },
 
-        /// Saves what a message said worth keeping. Used by the message action
-        /// and by ?remember, so both land in the same place.
+        /// Shared by the message action and ?remember.
         rememberText(text, topic) {
             const entry = Store.saveMemory({
                 text: String(text || '').trim(),
@@ -5178,9 +5124,7 @@
             return entry;
         },
 
-        /// Reads a message for standing facts and saves what it finds, saying
-        /// so with a way to take it straight back. Nothing enters memory
-        /// without the writer seeing it happen.
+        /// Nothing enters memory without the writer seeing it, with a way to undo.
         noticeMemories(text, conv) {
             if (this.settings.memoryCapture === false) return;
             const Memory = window.NymbotMemory;
@@ -5478,8 +5422,7 @@
                 sync: $('setSync').checked
             });
             this.refreshNotices(true);
-            // Turning it on mid-session starts it; turning it off stops writing,
-            // and leaves what is already there for another device.
+            // Turning it off stops writing and leaves server data for other devices.
             if (this.settings.sync !== false) this.startSync();
             this.renderList();
             this.renderMessages();
@@ -5647,12 +5590,7 @@
             const made = Artifacts.all(this.conv.id);
             const chip = $('chipArtifacts');
             chip.hidden = made.length === 0;
-            // Files this chat has made are a thing this chat carries, the same
-            // way a persona or a repository is, so the chip groups with the
-            // rest of what is on. It used to mark the canvas being open
-            // instead — which is view state, not a setting in force, and it
-            // left the chip sorting to the far end of the rail behind every
-            // switch that was off.
+            // Made files count as a setting in force, so the chip sorts with the active ones.
             chip.classList.toggle('is-active', made.length > 0);
             chip.querySelector('.chip-label').textContent = made.length === 1
                 ? t('1 artifact')
@@ -5926,10 +5864,7 @@
             if (messageId) setTimeout(() => this.jumpToMessage(messageId), 60);
         },
 
-        /// What a repo run changed, and the way back. Turning writes on is a
-        /// promise you can take back: the card says what was touched, and undo
-        /// reads each of those paths at the commit the branch stood on before
-        /// the run and commits them as they were.
+        /// Undo restores each touched path from the commit the branch stood on before the run.
         checkpointCard(m) {
             const mark = m.checkpoint;
             const card = el('div', 'checkpoint-card' + (mark.undone ? ' is-undone' : ''));
@@ -5955,8 +5890,7 @@
             if ((mark.paths || []).length) {
                 card.appendChild(el('div', 'checkpoint-paths', mark.paths.join(', ')));
             }
-            // A run across several repositories reports one it can put back and
-            // names the rest, so nothing it changed goes unmentioned.
+            // A multi-repo run names the repositories it cannot put back.
             for (const other of mark.also || []) {
                 const line = [other.repo + (other.branch ? ' · ' + other.branch : '')];
                 if ((other.paths || []).length) line.push(other.paths.join(', '));
@@ -6068,9 +6002,6 @@
             }
         },
 
-        /// A chip only ever showed a title. A card shows where it came from
-        /// and what it said, which is what makes a citation checkable rather
-        /// than decorative.
         citationCards(sources, id) {
             const cards = sources.filter(s => s && typeof s === 'object' && !Array.isArray(s)).slice(0, 8);
             if (!cards.length) return null;
@@ -6159,11 +6090,9 @@
             return card;
         },
 
-        // --- what a reply cost -------------------------------------------------
+        // Reply cost
 
-        /// Everything the device actually knows about one reply's price. It is
-        /// deliberately not an estimate re-run after the fact: what is shown is
-        /// what the worker charged and what it said it did to earn it.
+        /// What the worker charged and said it did, not a re-estimate.
         costRows(m) {
             const pro = !!m.model;
             const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
@@ -6205,7 +6134,7 @@
             this.openModal('modalCost');
         },
 
-        // --- help --------------------------------------------------------------
+        // Help
 
         helpTopics() {
             return [
@@ -6347,9 +6276,7 @@
             }
         },
 
-        /// Paints a scrollbar only while something is being scrolled. Capture,
-        /// because a scroll event does not bubble, and passive so it can never
-        /// hold up the scroll it is watching.
+        /// Capture because scroll does not bubble; passive so it never delays scrolling.
         watchScrolling() {
             const fades = new WeakMap();
             document.addEventListener('scroll', (e) => {
@@ -6363,7 +6290,7 @@
             }, { capture: true, passive: true });
         },
 
-        // --- scheduled prompts -------------------------------------------------
+        // Scheduled prompts
 
         openSchedules() {
             if (!this.scheduleEditing) this.resetScheduleForm();
@@ -6517,8 +6444,7 @@
         advance(entry) {
             const step = { hourly: 3600000, daily: 86400000, weekly: 604800000 }[entry.repeat];
             if (!step) return Object.assign({}, entry, { enabled: false, runs: (entry.runs || 0) + 1 });
-            // Forward to the next slot after now, so a run missed while the app
-            // was shut does not queue up every slot it went past.
+            // Skip to the next future slot so missed runs do not pile up.
             let next = entry.nextAt + step;
             while (next <= Date.now()) next += step;
             return Object.assign({}, entry, {
@@ -6526,8 +6452,7 @@
             });
         },
 
-        /// Nothing runs on a server, so a run happens here, in the open tab,
-        /// and only when the app is not already waiting on a reply.
+        /// Runs happen in the open tab, only when no reply is pending.
         async runSchedule(id) {
             const entry = Store.schedule(id);
             if (!entry || this.sending) return;
@@ -6561,11 +6486,9 @@
             }, 60000);
         },
 
-        // --- ghost mode --------------------------------------------------------
+        // Ghost mode
 
-        /// Turning it on moves what has already been said off the disk, and
-        /// turning it off writes back what is on screen — so the switch never
-        /// silently loses a conversation either way.
+        /// Moves or restores on-disk messages so toggling never loses a conversation.
         async toggleGhost() {
             if (!this.conv) return;
             const on = !this.conv.ephemeral;
@@ -6589,7 +6512,7 @@
                 : t('This chat is being kept again.'));
         },
 
-        // --- bots --------------------------------------------------------------
+        // Bots
 
         async openBots() {
             this.renderBotIcons();
@@ -6810,8 +6733,7 @@
             }
         },
 
-        /// Publishing is a claim of authorship, so it is always signed by the
-        /// account and never by a throwaway key, whatever mode the chat is in.
+        /// Always signed by the account, never a throwaway key: publishing claims authorship.
         async publishBot() {
             const bot = Bots.get(this.sharingBot);
             if (!bot) return;
@@ -6906,8 +6828,7 @@
             this.openBots();
         },
 
-        /// A link opened in the browser lands here. The fragment is dropped
-        /// straight away so a reload does not re-offer the same bot.
+        /// The fragment is dropped at once so a reload does not re-offer the bot.
         offerBotFromUrl() {
             const hash = location.hash || '';
             if (!/(^|[#&])bot=/.test(hash)) return;
@@ -7041,7 +6962,7 @@
             input.focus();
         },
 
-        // --- workspaces --------------------------------------------------------
+        // Workspaces
 
         openWorkspaces() {
             if (!this.workspaceDraft) this.resetWorkspaceForm();
@@ -7234,7 +7155,7 @@
                 : t('This chat is on its own again.'));
         },
 
-        // --- comparing two models ---------------------------------------------
+        // Compare
 
         async openCompare(prefill) {
             this.openModal('modalCompare');
@@ -7542,10 +7463,7 @@
             });
         },
 
-        /// Folds the winning answer into the chat. Neither reply was on this
-        /// chat's thread, so the worker has never seen this turn: the chat
-        /// takes a fresh thread and carries the transcript forward as its seed,
-        /// exactly as a branch does.
+        /// The worker never saw this turn, so the chat takes a fresh thread with the transcript as its seed.
         keepCompare(index) {
             const run = this.compare && this.compare.runs[index];
             if (!run || !run.ok) return;
@@ -7656,7 +7574,7 @@
             }
         },
 
-        // --- anonymous mode ------------------------------------------------------
+        // Anonymous mode
 
         openAnon() {
             const s = this.settings;
@@ -7731,8 +7649,6 @@
             if (on) this.runAutoTopUp({ announce: true });
         },
 
-        /// Tops the throwaway key up when it is running low, so anonymous mode
-        /// does not mean funding a key by hand before every chat.
         async runAutoTopUp(options) {
             const opts = options || {};
             const conv = opts.conv || (this.conv && this.conv.anon ? this.conv : null);
@@ -7774,7 +7690,7 @@
             }
         },
 
-        // --- credits --------------------------------------------------------------
+        // Credits
 
         openCredits() {
             if (!this.invoice && !this._invoiceRestored) this.invoice = this.restoreInvoice();
@@ -7800,6 +7716,8 @@
                 this.resetInvoice();
                 $('creditStatus').textContent = '';
             }
+            $('creditAnon').checked = false;
+            $('creditAnonRow').hidden = !!live || !!(this.conv && this.conv.anon);
             this.creditSats();
             this.renderCreditBalances();
             this.openModal('modalCredits');
@@ -8043,7 +7961,10 @@
             this.creditWorking(true);
             this.modalStatus('creditStatus', t('Creating an invoice…'));
 
-            const opts = this.conv && this.conv.anon ? { signer: Anon.signer(Anon.forConv(this.conv)) } : {};
+            const toAnon = !$('creditAnonRow').hidden && $('creditAnon').checked;
+            const opts = this.conv && this.conv.anon
+                ? { signer: Anon.signer(Anon.forConv(this.conv)) }
+                : (toAnon ? { signer: Anon.signer(Anon.forConv(null)) } : {});
             let data;
             try {
                 ({ data } = await Api.createInvoice(sats, tier, null, opts));
@@ -8078,15 +7999,23 @@
             if (this.invoice !== invoice) return true;
 
             if (data && !data.error) {
-                this.balance[invoice.tier] =
-                    data.balanceCredits != null ? data.balanceCredits : data.balance;
-                this.renderBalance();
-                // The modal is still open on top of all this, and its balances
-                // are what the buyer is looking at — the chip behind it is not.
+                const value = data.balanceCredits != null ? data.balanceCredits : data.balance;
+                const anonPk = invoice.opts && invoice.opts.signer ? invoice.opts.signer.pubkey : null;
+                const here = this.conv && this.conv.anon ? Anon.forConv(this.conv) : null;
+                if (anonPk) {
+                    Anon.remember(anonPk, invoice.tier, value);
+                    if (here && here.pk === anonPk) this.anonBalance[invoice.tier] = value;
+                } else {
+                    this.balance[invoice.tier] = value;
+                }
+                this.refreshToolbar();
+                // Refresh the modal's balances, which are what the buyer is looking at.
                 this.renderCreditBalances();
                 this.resetInvoice();
-                this.modalStatus('creditStatus',
-                    t('Credited. Balance: {balance}. Create a new invoice to buy more.',
+                this.modalStatus('creditStatus', anonPk && !here
+                    ? t('Credited to the throwaway key: {balance}. Start an anonymous chat to spend them.',
+                        { balance: creditAmount(data.balance) })
+                    : t('Credited. Balance: {balance}. Create a new invoice to buy more.',
                         { balance: creditAmount(data.balance) }), 'ok');
                 return true;
             }
@@ -8146,7 +8075,7 @@
                 t('Still waiting on this payment. If you have paid, tap I\u2019ve paid — otherwise create a new invoice.'), 'warn');
         },
 
-        // --- identity ---------------------------------------------------------------
+        // Identity
 
         openSettings() {
             $('settingsWho').textContent = Identity.method === 'nip07'
@@ -8172,12 +8101,10 @@
                 nsecRow.hidden = true;
             }
             $('setRoot').value = Identity.rootCode() || '';
-            // Covered again every time the sheet opens, so showing it once
-            // does not leave it on screen for the next person to open it.
+            // Covered on every open so a revealed secret is not left for the next viewer.
             $('setRoot').type = 'password';
             this.coverSecrets();
-            // One code per account, not per app: Nymbot and Nymchat derive the
-            // same key from it and publish the same announcement, so whichever
+            // One code per account: Nymbot and Nymchat derive the same key from it.
             $('rootHint').textContent = Identity.rootLocked
                 ? t('This account already advertises a key this device cannot derive. Paste the code from the device that made it — Nymbot or Nymchat, it is the same code — to link this one. Until then replies come back without the post-quantum layer, and anything another device saved will not open.')
                 : t('One code for the account, not for the app. Paste it into another device — or into Nymchat — and both hold the same post-quantum key.');
@@ -8189,9 +8116,6 @@
             this.openModal('modalSettings');
         },
 
-        /// Puts every revealed secret back behind its dots and its button back
-        /// to "Show", so a sheet reopened later does not carry the last
-        /// visit's decision.
         coverSecrets() {
             for (const btn of document.querySelectorAll('[data-act="toggle-secret"]')) {
                 const f = $(btn.dataset.target);
@@ -8200,8 +8124,7 @@
             }
         },
 
-        /// The languages with a published pack, plus English. A build that
-        /// shipped none leaves one option, which is the honest thing to show.
+        /// A build with no packs offers English only.
         renderLanguages() {
             const select = $('langSelect');
             const I18n = window.NymbotI18n;
@@ -8210,8 +8133,7 @@
             for (const lang of languages) {
                 const option = document.createElement('option');
                 option.value = lang.code;
-                // The endonym, so a reader who cannot read the current language
-                // can still find their own in the list.
+                // The endonym, so a reader can find their own language.
                 option.textContent = lang.native || lang.name || lang.code;
                 option.selected = lang.code === I18n.lang;
                 select.appendChild(option);
@@ -8344,8 +8266,7 @@
                 await this.writeClipboard(NT().nip19.nsecEncode(sk));
             }
             if (ok !== true) return;
-            // Signed while the key is still here; bounded so a signer that
-            // never answers cannot hold the wipe up.
+            // Signed while the key is here; bounded so an unresponsive signer cannot hold up the wipe.
             await Promise.race([
                 Sync.purge(),
                 new Promise((done) => setTimeout(done, 3000))
@@ -8374,11 +8295,9 @@
             } catch (_) { }
         },
 
-        // --- chat menu ------------------------------------------------------------
+        // Chat menu
 
-        /// Opens the chat menu against a row, or against the header when no
-        /// anchor is given. A row's menu acts on that row's chat, which need
-        /// not be the one on screen.
+        /// A row's menu acts on that row's chat, which need not be on screen.
         openChatMenu(convId, anchor) {
             const menu = $('chatMenu');
             const open = !menu.hidden && this.menuConvId === convId;
@@ -8389,8 +8308,7 @@
             if (!conv) return;
             this.paintChatMenu(conv);
             if (anchor) {
-                // Anchored to the row rather than to the header it lives in,
-                // and kept inside the viewport when the row is near the bottom.
+                // Anchored to the row and kept inside the viewport.
                 const box = anchor.getBoundingClientRect();
                 menu.classList.add('is-floating');
                 menu.hidden = false;
@@ -8445,13 +8363,11 @@
             this.menuConvId = null;
         },
 
-        /// The chat a menu action applies to.
         menuChat() {
             return (this.menuConvId && Store.conversation(this.menuConvId)) || this.conv;
         },
 
-        /// Writes to a chat a menu is acting on. When that chat is also the one
-        /// on screen, the screen's copy has to move with it.
+        /// Keeps the on-screen copy in step when it is the same chat.
         patchChat(conv, patch) {
             const next = Store.updateConversation(conv.id, patch);
             if (this.conv && next && next.id === this.conv.id) this.conv = next;
@@ -8461,8 +8377,7 @@
         async clearChat(target) {
             const conv = target || this.conv;
             const snap = this.chatSnapshot(conv);
-            // A fresh root id is what actually resets the model's context: the
-            // worker scopes history to the marker, so a new one is a new thread.
+            // A fresh root id resets the model's context, since the worker scopes history to it.
             const rootId = window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)));
             Store.saveMessages(conv.id, []);
             Store.setThread(conv.id, []);
@@ -8543,8 +8458,8 @@
             const actions = [
                 { label: t('New chat'), hint: MODIFIER + '+Shift+O', run: () => this.open(this.newConversation()) },
                 { label: t('Search every chat'), hint: MODIFIER + '+Shift+F', run: () => this.openSearch('') },
-                { label: t('Pick a model'), hint: MODIFIER + '+Shift+M', run: () => this.openModels() },
-                { label: t('Repositories'), hint: MODIFIER + '+Shift+G', run: () => this.openRepos() },
+                { label: t('Pick a model'), hint: MODIFIER + '+Shift+M', run: this.paidOnly(() => this.openModels()) },
+                { label: t('Repositories'), hint: MODIFIER + '+Shift+G', run: this.paidOnly(() => this.openRepos()) },
                 { label: t('Personas'), hint: '', run: () => this.openPersonas() },
                 { label: t('Custom instructions'), hint: '', run: () => this.openSystem() },
                 { label: t('Prompt library'), hint: MODIFIER + '+Shift+P', run: () => this.openPrompts() },
@@ -8553,7 +8468,7 @@
                 { label: t('Memory'), hint: '', run: () => this.openMemory() },
                 { label: t('Keyboard shortcuts'), hint: '', run: () => this.openShortcuts() },
                 { label: t('Buy credits'), hint: '', run: () => this.openCredits() },
-                { label: t('Anonymous chat'), hint: '', run: () => this.openAnon() },
+                { label: t('Anonymous chat'), hint: '', run: this.paidOnly(() => this.openAnon(), true) },
                 { label: t('Identity'), hint: '', run: () => this.openSettings() },
                 { label: t('Chat statistics'), hint: '', run: () => this.openStats() },
                 { label: t('Export this chat as Markdown'), hint: '', run: () => Exporter.conversation(this.conv, 'md') },
@@ -8653,10 +8568,9 @@
             row.run();
         },
 
-        // --- chrome ----------------------------------------------------------------
+        // Chrome
 
-        /// The drawer covers the button that opened it on a phone, so it gets the
-        /// scrim as its way out — otherwise the only exit is picking a chat.
+        /// On a phone the drawer covers its button, so the scrim is its way out.
         toggleSidebar(force) {
             const open = force === undefined
                 ? !$('sidebar').classList.contains('is-open')
@@ -8870,8 +8784,7 @@
             input.placeholder = o.placeholder || '';
             $('dialogLabel').textContent = o.label || '';
             $('dialogAreaLabel').textContent = o.label || '';
-            // An optional second question the dialog can ask alongside the
-            // first, read back afterwards as `dialogChecked`.
+            // Optional second question, read back as `dialogChecked`.
             $('dialogCheckRow').hidden = !o.check;
             $('dialogCheckLabel').textContent = o.check || '';
             $('dialogCheck').checked = !!o.checkOn;
@@ -8932,9 +8845,6 @@
             this._toastTimer = setTimeout(() => { node.hidden = true; }, 4000);
         },
 
-        /// A toast that can be taken back. Anything the app decides to keep on
-        /// your behalf says so this way, so undoing it is one tap and never a
-        /// hunt through a settings screen.
         toastUndo(text, undo) {
             const node = $('toast');
             node.innerHTML = '';
@@ -8952,10 +8862,7 @@
             this._toastTimer = setTimeout(() => { node.hidden = true; }, 8000);
         },
 
-        /// Wraps what is selected in the composer, or opens an empty pair and
-        /// puts the caret inside it. Pressing the same shortcut again on a
-        /// selection that already carries the marks takes them off, so it
-        /// toggles rather than nesting.
+        /// Toggles marks off a selection that already carries them instead of nesting.
         wrapSelection(mark) {
             const input = $('input');
             const value = input.value;
@@ -8964,8 +8871,7 @@
             const picked = value.slice(from, to);
 
             if (mark === 'fence') {
-                // A block wants its own lines, whatever the caret was sitting
-                // next to.
+                // A block wants its own lines, whatever the caret was next to.
                 const before = value.slice(0, from);
                 const after = value.slice(to);
                 const lead = (!before || /\n$/.test(before)) ? '' : '\n';
@@ -8994,9 +8900,7 @@
 
         autoGrow() {
             const input = $('input');
-            // Measured with the height released, otherwise the last height
-            // read is the one that gets measured again and the field never
-            // shrinks back after a long draft is cleared.
+            // Release the height before measuring or the field never shrinks.
             input.style.height = 'auto';
             const room = Math.max(120, window.innerHeight * 0.4);
             input.style.height = Math.min(input.scrollHeight, room) + 'px';
@@ -9016,7 +8920,7 @@
             }
         },
 
-        // --- wiring ------------------------------------------------------------------
+        // Wiring
 
         handlers() {
             return {
@@ -9048,8 +8952,7 @@
                 'close-sidebar': () => this.toggleSidebar(false),
                 'open-settings': () => this.openSettings(),
                 'open-palette': () => this.openPalette(),
-                // Every item below reads the chat before the menu closes, since
-                // closing it forgets which row it was opened from.
+                // Items read the chat before the menu closes, which forgets the row.
                 'chat-menu': () => this.openChatMenu(this.conv && this.conv.id, null),
                 'rename-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.renameChat(c); },
                 'pin-chat': () => { const c = this.menuChat(); this.closeChatMenu(); this.pinChat(c); },
@@ -9240,10 +9143,7 @@
                 'credit-tier': (target) => this.setCreditTier(target.dataset.tier),
                 'credit-buy': () => this.buyCredits(),
                 'credit-check': () => this.checkPaid(),
-                // Anything that grants the account is covered until it is
-                // asked for. The recovery code is one of those: it derives the
-                // post-quantum key, so a shoulder or a screen share reads it
-                // the same way it would read the nsec.
+                // The recovery code derives the PQ key, so it is covered like the nsec.
                 'toggle-secret': (target) => {
                     const f = $(target.dataset.target);
                     if (!f) return;
@@ -9296,6 +9196,11 @@
                     this.codeAction(act, target.dataset.codeId, target);
                     return;
                 }
+                if (handlers[act] && this.lockedAct(act, target)) {
+                    e.preventDefault();
+                    this.offerCredits({ anon: act === 'open-anon' });
+                    return;
+                }
                 if (handlers[act]) { e.preventDefault(); handlers[act](target); }
             });
 
@@ -9341,11 +9246,10 @@
                 if (mod && !e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); this.openFind(); return; }
                 if (mod && (e.key.toLowerCase() === 'n' || (e.shiftKey && e.key.toLowerCase() === 'o'))) { e.preventDefault(); this.open(this.newConversation()); return; }
                 if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); this.toggleSidebar(); return; }
-                if (mod && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); this.openModels(); return; }
-                if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); this.openRepos(); return; }
+                if (mod && e.shiftKey && e.key.toLowerCase() === 'm') { e.preventDefault(); this.paidOnly(() => this.openModels())(); return; }
+                if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); this.paidOnly(() => this.openRepos())(); return; }
                 if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); this.openPrompts(); return; }
-                // Not R: Ctrl/Cmd+Shift+R is the browser's hard refresh, and
-                // taking it away leaves no way to reload a stale shell.
+                // Not R: Ctrl/Cmd+Shift+R is the browser's hard refresh.
                 if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
                     e.preventDefault();
                     this.handleCommand('?retry');
@@ -9379,9 +9283,6 @@
             });
 
             const input = $('input');
-            // The composer is an editable surface, not a textarea: it renders
-            // the markdown you write as you write it, and hands back the same
-            // `value` and selection the rest of this file already asks for.
             if (window.NymbotCompose) window.NymbotCompose.attach(input);
             input.addEventListener('input', () => {
                 this.autoGrow();
@@ -9390,10 +9291,7 @@
                 if (this.conv) Store.setDraft(this.conv.id, input.value);
             });
             input.addEventListener('keydown', (e) => {
-                // Formatting, while the composer has focus. Cmd/Ctrl+B means
-                // bold in every other text field there is, so inside this one
-                // it means bold rather than the sidebar — the sidebar toggle is
-                // still there everywhere else.
+                // Inside the composer Cmd/Ctrl+B means bold, not the sidebar toggle.
                 const mod = e.metaKey || e.ctrlKey;
                 if (mod && !e.altKey) {
                     const key = e.key.toLowerCase();
@@ -9454,9 +9352,7 @@
                     for (const a of built) this.uploadAttachment(a);
                     return;
                 }
-                // A wall of pasted text is a document, not a sentence: it goes
-                // in as an attachment so the question you are asking about it
-                // stays readable.
+                // Long pastes become an attachment.
                 const pasted = data.getData('text/plain') || '';
                 if (!Attach.pasteIsLong(pasted)) return;
                 e.preventDefault();
@@ -9468,12 +9364,7 @@
 
             const drop = document.querySelector('.main');
             if (drop) {
-                // Dropping already worked and said nothing about it, which is
-                // the same as not working: with no target drawn there is
-                // nothing to tell you the drop will land. dragenter/dragleave
-                // fire for every child element, so the depth is counted rather
-                // than toggled — otherwise crossing a child clears the target
-                // while the file is still over the window.
+                // dragenter/dragleave fire per child, so depth is counted rather than toggled.
                 let depth = 0;
                 const carriesFiles = (e) => {
                     const dt = e.dataTransfer;
@@ -9513,8 +9404,6 @@
                         this.updateHints();
                         return;
                     }
-                    // Text dragged in from another window is a document too,
-                    // and goes in the way a long paste does.
                     const text = dt.getData('text/plain') || '';
                     if (!text.trim()) return;
                     if (Attach.pasteIsLong(text)) {
@@ -10248,11 +10137,7 @@
             location.reload();
         },
 
-        /// The same question the gate asks, asked again on every launch of a
-        /// device that is already signed in. A launch that could not reach the
-        /// worker settles nothing, so it has to be re-asked rather than
-        /// answered once: the row may have appeared since, and a root of ours
-        /// that never got a row leaves every other device reading "no root".
+        /// Re-asked on each signed-in launch until the worker answers; a rootless device leaves others reading "no root".
         async settleRoot() {
             if (!Identity.pubkey) return;
             let stored;
@@ -10269,9 +10154,7 @@
                     Identity.rootLocked = true;
                     return;
                 }
-                // A sign-in that could not reach the worker left this device
-                // without a root rather than minting one blind. The account
-                // turns out to have none, so this is the moment to make it.
+                // The account has no root, so mint it now.
                 const shown = Identity.mintRoot();
                 if (!shown) return;
                 await Sync.publishRootRecord();
@@ -10279,16 +10162,12 @@
                 this.toast(t('Your post-quantum recovery code is ready. Open Identity to save it — nobody can reissue it.'));
                 return;
             }
-            // A row we could not read is still proof a root exists; only a root
-            // whose fingerprint the record names is proof we hold THAT one.
+            // An unreadable row still proves a root exists; only a matching fingerprint proves we hold it.
             if (fingerprint && (!stored.record || stored.record.fp === fingerprint)) return;
             Identity.rootLocked = true;
         },
 
-        /// Stands in for the identity while there is not one yet. The gate has
-        /// to ask the account what it already holds before it decides what to
-        /// give this device, and that question is signed by the key being
-        /// signed in with — whether this app holds it or an extension does.
+        /// Stands in for the identity while the gate asks what the account already holds.
         signInAs(pubkey, sk, remote) {
             const T = NT();
             return {
@@ -10306,17 +10185,7 @@
             };
         },
 
-        /// Which post-quantum root a key signing back in should get.
-        ///
-        /// D1 answers this, not the relays: the root row is where an account
-        /// records that it HAS a root, it is written the moment one is minted,
-        /// and it survives an announcement expiring. The relay announcement is
-        /// the second opinion, for an account whose row predates this or whose
-        /// row could not be read.
-        ///
-        /// Returns null to stay on the gate, or the verdict: `link` with the
-        /// root to adopt, `locked` for an account whose root this device does
-        /// not have, `mint` for one that has none.
+        /// D1's root row decides, relays second; returns null, or a `link`, `locked` or `mint` verdict.
         async rootForSignIn(account, carried) {
             this.gateError('');
             this.gateBusy(t('Checking whether this key already has a post-quantum root…'));
@@ -10340,15 +10209,10 @@
             const advertised = (announced && announced.pk) || null;
             if (!rowPresent && !advertised) {
                 const own = carried ? window.NymCrypto.pqRootDecode(carried) : null;
-                // D1 answered and holds nothing, and the relays advertise
-                // nothing: a key that has never used Nymbot or Nymchat.
+                // Neither D1 nor the relays know a root: a never-used key.
                 if (stored) return { status: 'mint', root: null, adopt: own };
                 if (own) return { status: 'unknown', root: own, epoch: 0 };
-                // Neither source answered. Minting waits — a second root
-                // published over the first strands every settings row, every
-                // synced conversation and every reply sealed to the one it
-                // replaced. Sign in without one; the first launch that reaches
-                // the worker settles it.
+                // Neither source answered: sign in without minting, since a second root strands everything sealed to the first.
                 return { status: 'unknown', root: null };
             }
 
@@ -10369,8 +10233,7 @@
                 cancel: t('Carry on without it')
             });
             const typed = code == null ? '' : String(code).trim();
-            // Either way of saying "not now": sign in, do not mint, and leave
-            // the code to be pasted in Identity later.
+            // Either way of saying "not now": sign in, do not mint, paste the code in Identity later.
             if (!typed) return { status: 'locked', root: null, rowPresent, note };
             const checked = this.checkRootCode(typed, record, advertised);
             if (checked.error) {
@@ -10385,14 +10248,11 @@
                 return { error: t('That is not a recovery code. It starts with nympq1.') };
             }
             const bytes = window.NymCrypto.pqRootDecode(code);
-            // The record is the account's own statement of which root it uses:
-            // exact, and epoch-free.
+            // The record states the account's root exactly, epoch-free.
             if (record && record.fp
                 && window.NymCrypto.pqRootFingerprint(bytes) !== record.fp) {
                 return { error: t('That code does not match the root this account recorded. Check you copied it from the right account.') };
             }
-            // The root is one thing; which epoch of it the account currently
-            // advertises is another.
             let epoch = 0;
             if (advertised) {
                 const matched = this.epochMatching(code, advertised);
@@ -10404,8 +10264,7 @@
             return { root: bytes, epoch };
         },
 
-        /// Which epoch of `code` produces the key the account advertises, or null
-        /// if none of them does.
+        /// The epoch of `code` whose key the account advertises, or null.
         epochMatching(code, announced) {
             for (let epoch = 0; epoch <= PQ_EPOCH_SCAN; epoch++) {
                 const derived = Identity.kemForCode(code, epoch);
@@ -10427,23 +10286,19 @@
             node.hidden = !text;
         },
 
-        /// A key that turned out to have no root gets one made now, and is shown
-        /// it — the same reveal a brand new key gets, because it is the same
+        /// A key with no root gets one now, with the same reveal as a new key.
         afterSignIn(verdict, note) {
             const status = (verdict && verdict.status) || 'mint';
             const say = (text) => this.toast([note, text].filter(Boolean).join(' '));
             if (status === 'link' && Identity.kemPk) {
-                // Linked off an announcement the account never recorded a row
-                // for. Write it, so the next device asks for the code instead
-                // of minting a rival root.
+                // Record the row so the next device asks for the code instead of minting a rival root.
                 if (!verdict.rowPresent) Sync.publishRootRecord().catch(() => { });
                 this.enter();
                 if (note) say('');
                 return;
             }
             if (status === 'unknown') {
-                // Not locked — nothing says the account HAS a root, only that
-                // nobody could be asked. `settleRoot` picks it up.
+                // Not locked: nobody could be asked, and `settleRoot` picks it up.
                 Identity.rootLocked = false;
                 this.enter();
                 say(t('Could not check whether this key already has a post-quantum root. It will be settled the next time this device reaches the network.'));
@@ -10461,7 +10316,6 @@
                 $('reveal').hidden = false;
                 return;
             }
-            // Signed in without the code.
             this.enter();
             say(t('Linked without the post-quantum code. Open Identity to paste it when you have it.'));
         },

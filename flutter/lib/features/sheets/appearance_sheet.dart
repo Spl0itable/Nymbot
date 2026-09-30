@@ -57,8 +57,6 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
           children: [
             Text(t('Settings'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            // The language a reader wants is a setting like any other, not
-            // something to go looking for behind their keys.
             if (I18n.available.isNotEmpty) ...[
               InputDecorator(
                 decoration: InputDecoration(labelText: t('Language')),

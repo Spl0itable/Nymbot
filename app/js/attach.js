@@ -1,11 +1,7 @@
 (function () {
     'use strict';
 
-// A file travels inside the message rather than beside it, and a long message
-// is split across several wraps — so the cap is about what a model will
-// usefully read in one turn, not about what one event can hold. A document
-// past this belongs in a workspace, which searches the whole of it rather
-// than sending it.
+// Caps what a model usefully reads in one turn; longer documents belong in a workspace.
     const MAX_TEXT_BYTES = 96 * 1024;
     const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
     const MAX_IMAGE_SOURCE_BYTES = 25 * 1024 * 1024;
@@ -149,10 +145,6 @@
         };
     }
 
-    // A wall of pasted text is a document, not a sentence. Past this it goes in
-    // as an attachment rather than filling the composer, so the question you
-    // are asking about it stays readable — and so the composer does not become
-    // a scroll view of somebody's log file.
     const PASTE_AS_FILE_CHARS = 1500;
     const PASTE_AS_FILE_LINES = 30;
 
@@ -162,9 +154,6 @@
         return body.split('\n').length >= PASTE_AS_FILE_LINES;
     }
 
-    /// Wraps pasted or dropped text as an attachment. Named rather than
-    /// guessed at: calling it a .txt it is not would be worse than saying
-    /// plainly where it came from.
     function fromText(text, name) {
         const body = String(text || '');
         const kept = body.length > MAX_TEXT_BYTES ? body.slice(0, MAX_TEXT_BYTES) : body;
@@ -197,7 +186,6 @@
         return out;
     }
 
-    /// What an attachment looks like inside the message.
     function wireBlock(attachment) {
         if (!attachment) return '';
         if (attachment.kind === 'doc') return '';
@@ -211,7 +199,6 @@
         if (attachment.url) {
             return `\n\n--- attached image: ${attachment.name} ---\n${attachment.url}`;
         }
-        // Not uploaded, so say so rather than implying the model can see it.
         return `\n\n--- attached image: ${attachment.name} (${Math.round((attachment.size || 0) / 1024)} KB, could not be uploaded — you cannot see this one) ---`;
     }
 

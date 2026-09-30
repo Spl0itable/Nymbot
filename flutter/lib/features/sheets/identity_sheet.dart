@@ -35,9 +35,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
       TextEditingController(text: AppScope.read(context).nickname);
   String? _nicknameStatus;
   bool _showNsec = false;
-  // The recovery code derives the post-quantum key, so it grants the account
-  // the same way the nsec does and is covered the same way — a shoulder or a
-  // screen share reads one as easily as the other.
+  // The recovery code grants the account like the nsec, so it is hidden the same way.
   bool _showRoot = false;
   String? _status;
   bool _warn = false;

@@ -1,5 +1,3 @@
-# The Terms page used to publish under /tos/. Shipped app builds, App Store
-# listings and anything linked from outside still point there, and those links
-# outlive the rename — so the old slug keeps resolving instead of 404ing.
+# Old /tos/ links from shipped apps and store listings must keep resolving.
 /tos/ /terms/ 301
 /:lang/tos/ /:lang/terms/ 301

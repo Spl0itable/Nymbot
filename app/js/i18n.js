@@ -1,17 +1,10 @@
-// Translation at runtime.
-//
-// The app is one page, not one page per language, so the pack is fetched and
-// applied to the DOM rather than baked in at build time the way the marketing
-// site's pages are. Both surfaces translate BY THE ENGLISH STRING — the pack is
-// `{ english: translated }` — so one cache serves them and the same extractor
-// finds the same strings in both.
+// Packs are `{ english: translated }`, sharing the site's cache and extractor.
 (function () {
     'use strict';
 
     const C = window.NymbotConfig;
 
-    // The same rules the extractor applies, or the two would disagree about
-    // what a string is: i18n/extract.mjs.
+    // Must match the rules in i18n/extract.mjs.
     const SKIP_ELEMENTS = new Set(['SCRIPT', 'STYLE', 'SVG', 'PRE', 'CODE', 'TEXTAREA']);
     const TEXT_ATTRIBUTES = ['alt', 'title', 'placeholder', 'aria-label'];
 
@@ -20,8 +13,6 @@
         pack: null,
         ready: null,
 
-        /// The stored choice, else the closest published match for the
-        /// browser's languages, else English.
         pick(published) {
             const stored = (() => {
                 try { return localStorage.getItem(C.storagePrefix + 'lang'); } catch (_) { return null; }
@@ -42,9 +33,7 @@
             location.reload();
         },
 
-        /// Which languages have a pack, as `[{ code, name, native }]`. Absent
-        /// or unreadable means English only, which is what a local checkout
-        /// with no build looks like.
+        /// Absent or unreadable means English only, as in a local checkout with no build.
         async published() {
             try {
                 const resp = await fetch('/app/i18n/index.json', { cache: 'no-cache' });
@@ -68,16 +57,7 @@
             this.translateDom(document.body);
         },
 
-        /// A figure with its thousands separated, and nothing else done to it.
-        ///
-        /// Never abbreviated, however long it gets: these are balances and
-        /// prices, and rounding 12,500 credits to "12.5k" throws away digits
-        /// the reader is entitled to. Separators are all the legibility a
-        /// figure needs when every one of them has to stay.
-        ///
-        /// The grouping is done here rather than by `toLocaleString` so it is
-        /// deterministic: the same figure however the app has been translated,
-        /// and whatever the browser's own locale happens to be.
+        /// Never abbreviated, and grouped by hand rather than toLocaleString so it is locale-independent.
         count(value) {
             return String(Math.round(Number(value) || 0))
                 .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -94,12 +74,7 @@
             return grouped + frac;
         },
 
-        /// One string, with `{name}` placeholders filled from [vars].
-        ///
-        /// Untranslated text is returned as it came in, so a pack missing an
-        /// entry degrades to English rather than to a key. The whole sentence
-        /// is the unit on purpose: a translator handed fragments to join cannot
-        /// reorder them, and word order is most of what changes.
+        /// Whole sentences so translators can reorder; a missing entry falls back to English.
         t(text, vars) {
             const hit = this.pack && typeof this.pack[text] === 'string' ? this.pack[text] : text;
             if (!vars) return hit;
@@ -107,8 +82,6 @@
                 (Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : m));
         },
 
-        /// Replaces the prose already in the markup. Called once at boot and
-        /// again for anything rendered from the HTML afterwards.
         translateDom(root) {
             if (!this.pack || !root) return;
             const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
@@ -128,8 +101,6 @@
                 if (node.nodeType === Node.TEXT_NODE) texts.push(node);
             }
             for (const text of texts) {
-                // Whitespace around the run is layout, not prose: translate the
-                // trimmed value and put the padding back.
                 const raw = text.nodeValue;
                 const trimmed = raw.trim();
                 if (!trimmed) continue;
@@ -137,11 +108,7 @@
                 if (typeof hit !== 'string') continue;
                 text.nodeValue = raw.replace(trimmed, hit);
             }
-            // Walked separately from the text, because the two ask different
-            // questions of the same element: a <textarea> holds no prose to
-            // translate but its placeholder is prose, and the tree walk that
-            // skips the one would skip the other with it. Only
-            // `data-i18n-skip` covers both.
+            // Walked separately so a skipped <textarea> still gets its placeholder; only `data-i18n-skip` covers both.
             const selector = TEXT_ATTRIBUTES.map((a) => `[${a}]`).join(',');
             const scope = root.nodeType === Node.ELEMENT_NODE ? [root] : [];
             for (const el of [...scope, ...root.querySelectorAll(selector)]) {
@@ -160,7 +127,7 @@
 
     I18n.ready = I18n.init();
     window.NymbotI18n = I18n;
-    /// Shorthand the extractor looks for: `t('…')` in app/js/*.js.
+    /// The extractor looks for `t('…')` in app/js/*.js.
     window.t = (text, vars) => I18n.t(text, vars);
     window.amount = (value, places) => I18n.amount(value, places);
 })();

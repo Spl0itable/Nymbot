@@ -1,4 +1,4 @@
-// Per-turn usage records for the Nymbot
+// Per-turn usage records for the Nymbot.
 
 import { hasD1, replica } from "./_d1.js";
 
@@ -34,7 +34,7 @@ let usageReady = false;
 
 async function ensureUsage(db) {
   if (usageReady) return;
-  for (const ddl of USAGE_DDL) { try { await db.prepare(ddl).run(); } catch (e) { /* tolerated */ } }
+  for (const ddl of USAGE_DDL) { try { await db.prepare(ddl).run(); } catch (e) {} }
   usageReady = true;
 }
 
@@ -43,8 +43,7 @@ function num(v) {
   return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
-// Which product and surface the request came from, from the same headers the
-// origin gate reads. Never the address.
+// Product and surface from the same headers the origin gate reads; never the address.
 export function usageClient(request) {
   const ua = (request && request.headers && request.headers.get("User-Agent")) || "";
   if (/NymbotApp\//i.test(ua)) return "nymbot-app";
@@ -55,8 +54,7 @@ export function usageClient(request) {
   return "other";
 }
 
-// Fire-and-forget. `row` fields mirror the table; tokens come in the worker's
-// own usage shape ({fresh, read, wrote, out}).
+// Fire-and-forget; tokens come in the worker's usage shape ({fresh, read, wrote, out}).
 export function noteUsage(context, row) {
   const env = context && context.env;
   const db = env && env.DB_BOT;
@@ -86,7 +84,7 @@ export function noteUsage(context, row) {
   })();
   try {
     if (typeof context.waitUntil === "function") context.waitUntil(work);
-  } catch (e) { /* noop */ }
+  } catch (e) {}
 }
 
 let denyCache = { at: 0, set: new Set() };

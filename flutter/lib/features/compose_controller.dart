@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/theme/theme.dart';
 
-/// The composer, which shows the markdown you write as what it means.
+/// The composer, which renders markdown as you type it.
 class MarkdownEditingController extends TextEditingController {
   MarkdownEditingController({String? text}) : super() {
     if (text != null && text.isNotEmpty) setMarkdown(text);

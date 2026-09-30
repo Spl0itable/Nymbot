@@ -16,8 +16,7 @@ class NymAvatar extends StatelessWidget {
   final double size;
   final bool bot;
 
-  /// A published kind-0 picture, when the account has one. A broken or slow
-  /// URL falls back to the generated identicon rather than a blank circle.
+  /// Published kind-0 picture; a broken URL falls back to the identicon.
   final String picture;
 
   @override

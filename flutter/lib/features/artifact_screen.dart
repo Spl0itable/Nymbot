@@ -269,7 +269,6 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
   }
 }
 
-/// The card a reply shows for a file it produced.
 class ArtifactCard extends StatelessWidget {
   const ArtifactCard({super.key, required this.artifact, required this.onOpen});
 

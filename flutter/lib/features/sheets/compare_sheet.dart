@@ -118,7 +118,7 @@ class _CompareSheetState extends State<_CompareSheet> {
 
     final price = ((a['credits'] as num?)?.toInt() ?? 1) +
         ((b['credits'] as num?)?.toInt() ?? 1);
-    // Both answers come from frontier models, so both are charged to the Pro balance.
+    // Both answers come from frontier models, so both charge the Pro balance.
     final have = app.proBalance;
     if (have != null && have < price) {
       setState(() => _status = t(

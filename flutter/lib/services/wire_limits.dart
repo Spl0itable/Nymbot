@@ -2,30 +2,16 @@ import 'dart:convert';
 
 import '../features/i18n/i18n.dart';
 
-/// What one gift wrap can carry, and how a question too long for one is cut up.
-///
-/// NIP-44 v2 refuses a plaintext over 65535 bytes, and the wrap's plaintext is
-/// the serialized seal — which holds the base64 of the sealed rumor. So a
-/// message pays for base64 expansion (4/3), NIP-44's padding (up to 1/8) and
-/// the envelope's own fields, twice over. The post-quantum layer adds an ML-KEM
-/// ciphertext to each of those two encryptions, which is the other fifth.
-///
-/// Measured rather than guessed: the largest message that wraps is 40,537 bytes
-/// over NIP-44 alone and 32,345 with pq2, falling to 26,460 when every
-/// character needs a JSON escape. The cap below is that worst case with room
-/// left, and is applied to the escaped UTF-8 length so a message of quotes and
-/// newlines is measured as what it will really cost.
+/// Per-wrap size budget: NIP-44 v2 caps plaintext at 65535 bytes, and seal, base64, padding and pq2 eat into it.
 class WireLimits {
   WireLimits._();
 
   static const int bodyMax = 24000;
 
-  /// How many wraps one question may be split across. A message past this is
-  /// not a message, and eight of them is roughly 180 KB.
+  /// Most wraps one question may span (roughly 180 KB).
   static const int partsMax = 8;
 
-  /// What [text] costs on the wire: its JSON-escaped length in UTF-8 bytes. A
-  /// quote or a newline is two bytes there, not one, and an emoji is four.
+  /// JSON-escaped UTF-8 byte length, as it costs on the wire.
   static int bodyCost(String text) {
     final quoted = jsonEncode(text);
     return utf8.encode(quoted).length - 2;
@@ -33,12 +19,7 @@ class WireLimits {
 
   static bool fits(String text) => bodyCost(text) <= bodyMax;
 
-  /// Cuts [text] into pieces each of which fits in one wrap.
-  ///
-  /// The cut is taken at the last line break inside the budget rather than at
-  /// the byte, so a split lands between lines and a fenced block or a sentence
-  /// is not sawn in half. A single line longer than a whole wrap has nowhere
-  /// better to go and is cut where it must be.
+  /// Splits [text] into wrap-sized parts, cutting at line breaks where possible.
   static List<String> split(String text) {
     if (bodyCost(text) <= bodyMax) return [text];
     final parts = <String>[];
@@ -48,9 +29,7 @@ class WireLimits {
         parts.add(rest);
         break;
       }
-      // The largest prefix that still fits. Budget is spent in escaped UTF-8
-      // bytes, so the walk is a search on the character count rather than a
-      // count of characters.
+      // Binary search on character count, since the budget is in escaped UTF-8 bytes.
       var lo = 1;
       var hi = rest.length;
       while (lo < hi) {
@@ -62,8 +41,7 @@ class WireLimits {
         }
       }
       var cut = lo;
-      // Back up to a line break, but not so far that a part is mostly empty —
-      // a long unbroken run has to be cut somewhere.
+      // Back up to a line break unless that would leave the part mostly empty.
       final nl = rest.lastIndexOf('\n', cut - 1);
       if (nl > cut ~/ 2) cut = nl + 1;
       parts.add(rest.substring(0, cut));
@@ -72,11 +50,7 @@ class WireLimits {
     return parts;
   }
 
-  /// A question too long for one wrap travels as several, and the worker
-  /// charges a credit for each extra one. Splitting is a transport detail, but
-  /// the input it carries is real and the published price has never charged
-  /// for input — so the surcharge is counted here too, and quoted before it is
-  /// spent rather than after.
+  /// The worker charges a credit per extra wrap, so the surcharge is quoted before sending.
   static int partSurcharge(String wireText) {
     final n = split(wireText).length;
     return n > 1 ? n - 1 : 0;

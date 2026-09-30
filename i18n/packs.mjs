@@ -1,9 +1,4 @@
-// Per-language packs for the two apps.
-//
-// The marketing site substitutes translations into its pages at build time —
-// one page per language. An app is one page, so it fetches a pack instead and
-// applies it at runtime. Both read from the SAME cache, keyed by the English
-// string, so a sentence the site and the app share is translated once.
+// Apps fetch these packs at runtime; they share the site's cache, keyed by the English string.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -12,11 +7,7 @@ import { loadCache } from './translate.mjs';
 
 const byCode = new Map(LANGUAGES.map((l) => [l.code, l]));
 
-/// Builds `{ packs, published, partial }` for one surface's [sources].
-///
-/// A language ships only when the whole surface is covered. Half a pack is
-/// worse than none: it puts two languages in one sentence, and the reader
-/// cannot tell which half is the app's opinion and which is a gap.
+/// A language ships only when the whole surface is covered; half a pack mixes two languages.
 export async function buildPacks(sources) {
   const wanted = new Set(sources);
   const packs = new Map();
@@ -47,8 +38,6 @@ export async function buildPacks(sources) {
   return { packs, published, partial };
 }
 
-/// Writes `<dir>/<lang>.json` plus the `index.json` the app reads to find out
-/// which languages exist.
 export async function writePacks(dir, { packs, published }) {
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, 'index.json'), JSON.stringify(published));

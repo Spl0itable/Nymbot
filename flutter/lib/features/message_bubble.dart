@@ -74,8 +74,7 @@ class MessageBubble extends StatefulWidget {
   final int? reveal;
   final bool draft;
 
-  /// Puts back what a repo run changed. Absent when there is nothing to put
-  /// back, which is what decides whether the card offers a way.
+  /// Null when a repo run has nothing to revert, which hides the undo.
   final Future<void> Function()? onUndoCheckpoint;
   final VoidCallback? onAllowTool;
   final VoidCallback? onDenyTool;
@@ -87,8 +86,7 @@ class MessageBubble extends StatefulWidget {
   final ChatMessage message;
   final String selfPubkey;
 
-  /// A published kind-0 name and picture, when the account has them and the
-  /// chat is not anonymous.
+  /// Published kind-0 name and picture, unless the chat is anonymous.
   final String? selfName;
   final String selfPicture;
   final AppSettings settings;
@@ -102,9 +100,7 @@ class MessageBubble extends StatefulWidget {
   final List<Artifact> artifacts;
   final void Function(Artifact artifact)? onOpenArtifact;
 
-  /// There is no hover on a phone, so the action row is revealed by tapping
-  /// the bubble. Held by the list rather than the bubble so only one is ever
-  /// open at a time.
+  /// Phones have no hover, so tapping reveals the actions; held by the list so only one is open.
   final bool actionsOpen;
   final VoidCallback? onToggleActions;
   final List<String> followUps;
@@ -225,7 +221,6 @@ class _MessageBubbleState extends State<MessageBubble> {
               color: bot ? theme.colorScheme.primary : NymIdentity.colour(widget.selfPubkey),
             ),
           ),
-          // Which tier wrote this.
           if (bot) _tierBadge(theme, m),
           if (bot && m.model != null)
             Flexible(
@@ -269,7 +264,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
-  /// PRO or STD, from what the worker said answered the message.
+  /// PRO or STD, per what the worker said answered.
   Widget _tierBadge(ThemeData theme, ChatMessage m) {
     final isPro = m.pro ?? (m.model != null);
     final colour = isPro ? theme.colorScheme.secondary : theme.hintColor;
@@ -300,8 +295,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
-  /// The price of a reply belongs on the bubble's footer, to the right of the
-  /// time, rather than trailing the words it charged for.
+  /// Shown in the footer beside the time.
   Widget _cost(BuildContext context, ChatMessage m) => InkWell(
         borderRadius: BorderRadius.circular(4),
         onTap: () => showCostSheet(context, m, catalog: widget.modelCatalog),
@@ -421,9 +415,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             if (m.quote != null && m.quote!.isNotEmpty) _quoted(context, m.quote!),
             if (m.thinking != null) _reasoning(context, m),
-            // Your own messages render the same way the replies do. Typing a
-            // fenced block and watching it come out as literal backticks is
-            // the wrong answer to "can I paste code in here".
+            // Your own messages render as markdown too.
             if (m.role == ChatRole.bot || m.role == ChatRole.self)
               MarkdownBody(
                 revealed(m.content, widget.reveal),
@@ -718,8 +710,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
-  /// What a repo run changed, and the way back. Turning writes on is a promise
-  /// you can take back, so what it touched is stated rather than left in prose.
+  /// What a repo run changed, with a way to revert it.
   Widget _checkpoint(BuildContext context, ChatMessage m) {
     final theme = Theme.of(context);
     final mark = m.checkpoint!;
@@ -789,7 +780,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               Text(t('Put back.'),
                   style: TextStyle(fontSize: 11, color: theme.hintColor))
             else if (!undoable)
-              // Say why rather than showing a button that cannot work.
+              // Explains why instead of showing a button that cannot work.
               Text(
                 t('This one cannot be undone from here — no commit was '
                     'recorded to read the old files back from.'),
@@ -820,8 +811,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     final bot = m.role == ChatRole.bot;
     final buttons = <Widget>[];
 
-    // A long-press tooltip is no use when the row itself had to be tapped
-    // open, so each action wears its label rather than hiding it.
+    // Labels are shown inline, since tooltips need a long-press.
     void add(String glyph, String tip, MessageAction action,
         {bool on = false, bool solid = false}) {
       final colour = on
@@ -914,9 +904,7 @@ class TypingIndicator extends StatelessWidget {
   final String label;
   final bool showAvatar;
 
-  /// What the worker has reported doing, newest last. Shown under the label
-  /// rather than instead of it: the spinner is still the answer to "is it
-  /// working", and these are the answer to "on what".
+  /// Worker-reported steps, newest last, shown under the label.
   final List<String> steps;
 
   @override
@@ -934,11 +922,9 @@ class TypingIndicator extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
                 color: theme.dividerColor,
-                // Every corner the same.
                 borderRadius: BorderRadius.circular(16),
               ),
-              // Centered: this is a status, not a message, and the lines under
-              // it change length every couple of seconds — ragged against a left
+              // Centered, since it is a status with lines that change length.
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

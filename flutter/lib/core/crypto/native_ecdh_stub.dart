@@ -1,5 +1,4 @@
-// Web / no-FFI stand-in for native_ecdh_ffi.dart: the native library can
-// never load, so [sharedX] always defers to the caller's pure-Dart fallback.
+// No-FFI stand-in: [sharedX] always defers to the pure-Dart fallback.
 
 import 'dart:typed_data';
 

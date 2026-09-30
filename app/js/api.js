@@ -1,9 +1,4 @@
-// The Nymbot worker client.
-//
-// Every request carries a kind-27235 auth event bound to this endpoint, method
-// and action, so a captured signature cannot be replayed against a different
-// one. The money actions are signed fresh each time; the worker enforces
-// single-use for those.
+// Every request carries a kind-27235 auth event bound to endpoint, method and action, so it cannot be replayed.
 (function () {
     'use strict';
 
@@ -76,8 +71,7 @@
             const key = action + '|' + (signer ? signer.pubkey : Identity.pubkey) + '|' + (payload || '');
             if (!MONEY.has(action)) {
                 const hit = this._authCache.get(key);
-                // Well inside the worker's 120s window, so an edge-of-window
-                // reject is not something a cached signature can cause.
+                // Well inside the worker's 120s window.
                 if (hit && (nowSec - hit.created_at) < 90) return hit;
             }
             const event = {
@@ -102,8 +96,7 @@
             return signed;
         },
 
-        /// `signer` overrides the identity — anonymous mode signs as its
-        /// throwaway key, which is the whole point of it.
+        /// `signer` overrides the identity; anonymous mode signs as its throwaway key.
         async signedBody(action, extra, options) {
             const fields = Object.assign(
                 { action, pubkey: options.signer ? options.signer.pubkey : Identity.pubkey },
@@ -174,8 +167,6 @@
             return this.call('transcribe', { audio }, Object.assign({ timeout: 60000 }, opts || {}));
         },
 
-        /// Public catalog data: it has to render before anyone has a balance,
-        /// so it is the one call that needs no identity.
         async models() {
             try {
                 const resp = await Edge.fetch(url(), {

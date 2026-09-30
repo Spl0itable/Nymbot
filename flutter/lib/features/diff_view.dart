@@ -16,8 +16,7 @@ class DiffLine {
   final int? newNo;
 }
 
-/// One file's worth of a unified diff, already counted so the header can say
-/// what changed without the reader tallying `+` lines by eye.
+/// One file of a unified diff, with line counts precomputed.
 class DiffFile {
   DiffFile({required this.path, List<DiffLine>? lines})
       : lines = lines ?? [];
@@ -28,9 +27,7 @@ class DiffFile {
   int get added => lines.where((l) => l.kind == DiffLineKind.add).length;
   int get removed => lines.where((l) => l.kind == DiffLineKind.remove).length;
 
-  /// Splits a unified diff into files. Anything before the first file header
-  /// is kept under an empty path, so a bare hunk still renders rather than
-  /// being silently dropped.
+  /// Lines before the first file header go under an empty path so a bare hunk still renders.
   static List<DiffFile> parse(String source) {
     final files = <DiffFile>[];
     DiffFile? current;
@@ -100,8 +97,7 @@ class DiffFile {
   }
 }
 
-/// A ```diff block, read as a patch rather than as coloured text: one panel per
-/// file, each saying what it costs before you read a line of it.
+/// Renders a ```diff block as one panel per file.
 class DiffView extends StatelessWidget {
   const DiffView({super.key, required this.source});
 

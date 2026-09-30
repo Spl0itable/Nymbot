@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 12+ (dataExtractionRules): exclude everything from both cloud
-     backup and device-to-device transfer. Some transfer agents consult these
-     rules even when allowBackup is false, so the exclusions are explicit. -->
+<!-- Android 12+: exclude everything, since some transfer agents ignore allowBackup=false. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />

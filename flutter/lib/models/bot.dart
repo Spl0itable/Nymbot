@@ -2,10 +2,7 @@ import 'dart:convert';
 
 import '../core/crypto/bech32_codec.dart';
 
-/// A way of answering: a name, standing instructions, a model and a few
-/// openers. A bot is shareable precisely because it carries none of the things
-/// that would be dangerous to share — no repositories, no tokens, no knowledge
-/// files, no transcript.
+/// A shareable persona that carries no repositories, tokens, knowledge files or transcript.
 class Bot {
   Bot({
     required this.id,
@@ -115,8 +112,7 @@ class Bot {
   static String _cut(String value, int max) =>
       value.length > max ? value.substring(0, max) : value;
 
-  /// What travels when a bot is shared. Only the four things that make it what
-  /// it is; everything else is left behind on purpose.
+  /// Only the four defining fields travel when a bot is shared.
   Map<String, dynamic> get shareable => {
         'v': 1,
         'name': _cut(name, 60),
@@ -130,8 +126,7 @@ class Bot {
             starters.take(6).map((s) => _cut(s, 200)).toList(growable: false),
       };
 
-  /// A link anyone can open. The bot rides in the fragment, which browsers
-  /// never send to a server, so sharing one is not a request to anybody.
+  /// The bot rides in the URL fragment, which browsers never send to a server.
   String link({String origin = 'https://nymbot.com'}) {
     final payload = base64Url
         .encode(utf8.encode(jsonEncode(shareable)))
@@ -145,8 +140,7 @@ class Bot {
         kind: kind,
       );
 
-  /// Reads a bot out of a link or a raw payload. Returns null for anything that
-  /// is not one, so a stray fragment is ignored rather than trusted.
+  /// Returns null for anything that is not a bot payload.
   static Bot? fromLink(String text, {required String id}) {
     final raw = text.trim();
     final at = raw.indexOf('bot=');

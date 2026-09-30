@@ -1,5 +1,4 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Core connectivity: relay sockets and the Nymbot worker. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
@@ -9,20 +8,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
-    <!-- Android 11 package visibility: without this the text-to-speech engine
-         is invisible to the app even when installed, and silently reports
-         itself unavailable. -->
+    <!-- Android 11 package visibility: without this the TTS engine reports itself unavailable. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
         </intent>
     </queries>
 
-    <!-- Backups are fully disabled: Auto Backup would copy the conversation
-         store and SharedPreferences to the user's Google account, and adb
-         backup could extract the same data locally. allowBackup=false disables
-         both; the rule files are belt-and-braces for agents that consult rules
-         despite the flag. Identity secrets already live in the Keystore. -->
+    <!-- Backups fully disabled so decrypted conversations never leave the device; rule files cover agents ignoring the flag. -->
     <application
         android:label="Nymbot"
         android:name="${applicationName}"
@@ -107,12 +100,12 @@
             android:value="2" />
     </application>
     <queries>
-        <!-- url_launcher: pay a credit invoice in a Lightning wallet. -->
+        <!-- url_launcher: Lightning invoices. -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="lightning"/>
         </intent>
-        <!-- url_launcher: open a link a reply cited. -->
+        <!-- url_launcher: cited links. -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>

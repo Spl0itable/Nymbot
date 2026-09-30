@@ -1,22 +1,4 @@
-// The drawings on an error page, and the one rule for how wide they may be.
-//
-// Both are the 404's, generalized: `404.html` draws its own by hand, which is
-// fine for one page and would not survive eight of them drifting apart. The
-// window in particular is padded to the character — the generator counts the
-// columns so that a line of dialogue can be edited without recounting the
-// frame, and fails the build rather than shipping a crooked box.
-
-// Every hero a page can carry, with what it says out loud. The status codes are
-// figlet output in "Slant Relief", the font the 404 draws its own 404 in;
-// regenerate one, or add one, with:
-//
-//     npx figlet -f 'Slant Relief' 429
-//
-// figlet is not a dependency: the art is baked in here so that `npm run build`
-// stays offline, exactly like the translation cache. `logo` is the wordmark
-// from the top of index.html, copied rather than redrawn so the two cannot
-// drift apart. `String.raw` throughout, because both fonts are very nearly all
-// backslashes and every one of them is literal.
+// Status codes are figlet 'Slant Relief' (npx figlet -f 'Slant Relief' 429); String.raw keeps backslashes literal.
 export const HERO_ART = {
   "5XX": {
     label: "Error 5XX",
@@ -76,7 +58,7 @@ ____________/\\\_______/\\\\\\\\\__________/\\\\\\\\\____
 
   "logo": {
     label: "Nymbot",
-    // A name, not prose: never translated, and never sent to be.
+    // A name: never translated.
     fixed: true,
     art: String.raw`
                                   ##\                  ##\
@@ -93,36 +75,24 @@ ____________/\\\_______/\\\\\\\\\__________/\\\\\\\\\____
   },
 };
 
-// `text-align: center` centers each line of a `<pre>` on its own width, so a
-// drawing with ragged rows comes apart down the middle of the page. figlet pads
-// its output and the window generator below pads its own; the wordmark lifted
-// out of index.html sits inside a flex box there and does not, so every hero is
-// squared off here rather than trusting the source to carry trailing spaces
-// that an editor is free to strip.
+// Squared off because centered `<pre>` lines split ragged rows, and editors strip trailing spaces.
 export function squareOff(art) {
   const lines = art.split("\n");
   const width = Math.max(...lines.map((line) => line.length));
-  // An empty line is left empty: it has nothing to centre, and padding the one
-  // every entry opens with would turn the newline that `<pre>` drops into a row
-  // of spaces that it keeps.
+  // Empty lines stay empty so the newline `<pre>` drops does not become a row of spaces.
   return lines
     .map((line) => (line === "" ? line : line + " ".repeat(width - line.length)))
     .join("\n");
 }
 
-// The art is sized in `vw` capped by a pixel maximum so it scales down with the
-// viewport instead of wrapping — see the `.nf-art` comment in styles.css for
-// where this comes from. A monospace cell is 0.6em wide, so the widest a glyph
-// row may be rendered is 0.92 * 100vw / (columns * 0.6), and 5% is held back
-// from that so a rounding error is never a clipped column.
+// A monospace cell is 0.6em, so the cap is 0.92 * 100vw / (columns * 0.6), less 5% for rounding.
 export function codeFontSize(art) {
   const columns = Math.max(...art.split("\n").map((line) => line.length));
   const vw = Math.floor((0.92 * 100 / (columns * 0.6)) * 0.95 * 10) / 10;
   return `min(${vw}vw, 15px)`;
 }
 
-// Characters between the two frame pipes. The 404's window is this wide, and
-// every window here matches it so the pages look like one set.
+// Matches the 404 window's inner width.
 const INNER = 45;
 
 const esc = (text) =>
@@ -131,8 +101,7 @@ const esc = (text) =>
 const span = (cls, text) => `<span class="${cls}">${text}</span>`;
 const frame = (text) => span("nf-frame", text);
 
-// Every row is built from its visible text first and wrapped in markup after,
-// because the markup is invisible and would make the padding a guess.
+// Padding is computed on the visible text before markup is added.
 const pad = (visible, what) => {
   if (visible.length > INNER) {
     throw new Error(
@@ -142,13 +111,7 @@ const pad = (visible, what) => {
   return " ".repeat(INNER - visible.length);
 };
 
-/**
- * The ASCII chat window. `lines` is the transcript, top to bottom:
- *
- *   null                      a blank line
- *   { sys: "* … *" }          a system notice
- *   { nym: "you", text: "…" } someone saying something
- */
+/** `lines`: null for a blank line, { sys } for a notice, { nym, text } for speech. */
 export function windowArt({ channel, status, lines }) {
   const rows = [];
 

@@ -1,5 +1,4 @@
-// A byte-mode QR encoder, so a Lightning invoice can be scanned without
-// fetching a library or sending the invoice anywhere to be rendered.
+// Encoded locally so an invoice is never sent anywhere to be rendered.
 (function () {
     'use strict';
 
@@ -41,8 +40,7 @@
         return out;
     }
 
-    // Per version: [total codewords, ecc codewords per block, block count]
-    // for error-correction level L, which is what a one-off payment QR wants.
+    // Per version: [total codewords, ecc codewords per block, block count] for ECC level L.
     const ECC_L = [
         null,
         [26, 7, 1], [44, 10, 1], [70, 15, 1], [100, 20, 1], [134, 26, 1],
@@ -159,8 +157,7 @@
             m[i][6] = bit;
         }
 
-        // Every combination except the three that would sit on a finder. The
-        // ones crossing the timing pattern are drawn, and overwrite it.
+        // All combinations except the three on finders; those crossing the timing pattern overwrite it.
         const centers = ALIGN[version];
         const last = centers.length - 1;
         for (let i = 0; i <= last; i++) {
@@ -308,8 +305,7 @@
                 reserved.push([size - 11 + (i % 3), Math.floor(i / 3)]);
             }
         }
-        // Function modules are whatever the template already set; everything
-        // still -1 is a data module.
+        // Function modules are whatever the template set; anything still -1 is a data module.
         const fixed = base.map(row => Array.from(row, v => v !== -1));
         placeData(base, size, codewords, reserved);
 
@@ -328,7 +324,6 @@
         return { size, modules: best.modules };
     }
 
-    /// Paints onto a canvas, sized to fit its current width.
     function draw(canvas, text, opts) {
         const options = opts || {};
         const { size, modules } = encode(text);

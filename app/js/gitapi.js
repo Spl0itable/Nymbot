@@ -1,11 +1,7 @@
 (function () {
     'use strict';
 
-    /// Asking a forge what a token can see, from the device that holds the
-    /// token. Every provider below answers CORS, so the token never travels
-    /// anywhere it does not already go: not to the Nymbot worker, and not to a
-    /// relay. A host that refuses CORS simply fails, and the form still takes
-    /// a repository typed in by hand.
+    /// Queried from the device over CORS so the token never reaches the worker or a relay.
 
     const PROVIDERS = {
         github: {
@@ -54,8 +50,6 @@
         base: (host) => `https://${(host || 'codeberg.org').replace(/^https?:\/\//, '').replace(/\/+$/, '')}/api/v1`
     });
 
-    /// The host a provider needs before it can be asked anything. Only a
-    /// self-hosted forge has no default worth guessing.
     function needsHost(provider) {
         return provider === 'gitea';
     }
@@ -74,8 +68,7 @@
         try {
             res = await fetch(url, { headers: provider.headers(cfg.token) });
         } catch (e) {
-            // A network error and a CORS refusal are indistinguishable from
-            // here, so the message says what a reader can actually do.
+            // A network error and a CORS refusal are indistinguishable here.
             throw new Error('unreachable');
         }
         if (res.status === 401 || res.status === 403) throw new Error('denied');

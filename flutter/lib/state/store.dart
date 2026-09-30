@@ -16,13 +16,7 @@ import '../models/workspace.dart';
 import 'biometrics.dart';
 import 'vault.dart';
 
-/// Everything the app keeps on the device.
-///
-/// Secrets — the identity key, the post-quantum root, the anonymous-mode state
-/// and the git access token — go to the platform keystore. Conversations and
-/// preferences go to shared preferences: they are already encrypted to the key
-/// on the relays, and keeping them out of the keystore keeps its surface to the
-/// things that must not be readable at rest.
+/// Secrets go to the platform keystore; conversations and preferences to shared preferences.
 class Store {
   Store(this._prefs,
       {int vaultIterations = Vault.defaultIterations, Biometrics? biometrics})
@@ -92,12 +86,8 @@ class Store {
     return out;
   }
 
-  /// The free allowance this device has spent today, whichever key was signed
-  /// in. Handed the same preferences the rest of the store uses, so signing
-  /// out does not clear it — which is the whole point of it.
+  /// Shares the store's preferences so signing out does not clear it.
   FreeTier get freeTier => FreeTier(_prefs);
-
-  // --- secrets ---------------------------------------------------------------
 
   Future<String?> secret(String key) => vault.read(key);
   Future<void> setSecret(String key, String value) => vault.write(key, value);
@@ -107,8 +97,6 @@ class Store {
     await vault.remove(key);
     await _legacySecure.delete(key: key);
   }
-
-  // --- preferences -----------------------------------------------------------
 
   String? getString(String key) => _prefs.getString(key);
   Future<void> setString(String key, String value) => _prefs.setString(key, value);
@@ -202,14 +190,13 @@ class Store {
   Future<void> saveWorkspaces(List<Workspace> list) => _watched(_prefs.setString(
       'workspaces', Workspace.encodeList(list.take(40).toList())));
 
-  /// What Nymbot has been told to remember, newest first.
+  /// Newest first.
   List<Memory> memories() => Memory.decodeList(_prefs.getString('memories'));
 
   Future<void> saveMemories(List<Memory> list) => _watched(_prefs.setString(
       'memories', Memory.encodeList(list.take(Memory.maxKept).toList())));
 
-  /// Adds or replaces one entry. The same fact told twice is one fact: a chat
-  /// that repeats itself should not fill memory with copies.
+  /// Adds or replaces one entry, deduplicating repeated facts.
   Future<Memory?> saveMemory(Memory entry) async {
     entry.text = entry.text.trim();
     if (entry.text.length > Memory.textCap) {
@@ -253,16 +240,13 @@ class Store {
   Future<void> saveFolders(List<ChatFolder> list) => _watched(
       _prefs.setString('folders', ChatFolder.encodeList(list.take(100).toList())));
 
-  // --- conversations ---------------------------------------------------------
-
   List<Conversation> conversations() =>
       Conversation.decodeList(_prefs.getString('conversations'));
 
   Future<void> saveConversations(List<Conversation> list) => _watched(_prefs.setString(
       'conversations', Conversation.encodeList(list.take(500).toList())));
 
-  /// Ghost chats live here and nowhere else: the map goes when the process
-  /// does, which is the whole promise.
+  /// Ghost chats live only in this in-memory map.
   final Map<String, List<ChatMessage>> _ghosts = {};
 
   bool isGhost(String convId) {
@@ -285,8 +269,7 @@ class Store {
 
   Future<void> saveMessages(String convId, List<ChatMessage> list) async {
     _lowered.remove(convId);
-    // Capped so one long conversation cannot fill the store and start failing
-    // the writes it needs to make.
+    // Capped so one conversation cannot fill the store.
     final kept = list.length > _messageCap
         ? list.sublist(list.length - _messageCap)
         : list;
@@ -300,8 +283,7 @@ class Store {
     _touched();
   }
 
-  /// Moves what a chat has already said into memory and off the disk, which is
-  /// what turning ghost mode on part-way through has to mean.
+  /// Moves a chat's messages off disk into memory.
   Future<void> makeGhost(String convId) async {
     _lowered.remove(convId);
     _ghosts[convId] = ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
@@ -311,8 +293,7 @@ class Store {
     await _prefs.remove('artifacts_$convId');
   }
 
-  /// Writes a ghost chat back to disk, so turning the mode off keeps what is
-  /// on screen rather than dropping it.
+  /// Writes a ghost chat back to disk when the mode is turned off.
   Future<void> unmakeGhost(String convId) async {
     _lowered.remove(convId);
     final kept = _ghosts.remove(convId) ?? const <ChatMessage>[];
@@ -321,7 +302,7 @@ class Store {
     await _prefs.setString('artifacts_$convId', Artifact.encodeList(lifted));
   }
 
-  /// The wrap ids this conversation is made of, newest last.
+  /// Wrap ids for this conversation, newest last.
   List<String> thread(String convId) =>
       _prefs.getStringList('thread_$convId') ?? const [];
 
@@ -342,8 +323,7 @@ class Store {
 
   Future<void> saveArtifacts(String convId, List<Artifact> list) async {
     final kept = list.length > 60 ? list.sublist(list.length - 60) : list;
-    // A file lifted out of a ghost chat is still that chat: it stays in memory
-    // with the rest of it.
+    // A file from a ghost chat stays in memory with it.
     if (isGhost(convId)) {
       _ghostArtifacts[convId] = [...kept];
       await _prefs.remove('artifacts_$convId');
@@ -479,8 +459,7 @@ class Store {
     return out;
   }
 
-  /// Everything, gone. Not a logout: there is nothing on a server to log out
-  /// of, so this is the only kind of deletion there is.
+  /// Deletes everything local; there is no server account to log out of.
   Future<void> wipe() async {
     _lowered.clear();
     vault.forget();

@@ -1,18 +1,8 @@
-// The site's own documents, as markdown.
-//
-// Agents asking for a page would rather have prose than a stylesheet and a
-// navigation tree, so every page is also served as a `.md` twin and the whole
-// knowledge base as one `llms-full.txt`. Both are generated from the documents
-// themselves at build time, so they cannot drift from what the HTML says.
-//
-// This is not a general HTML-to-markdown converter and does not try to be. It
-// handles the vocabulary these hand-written pages actually use, and throws on
-// anything it does not recognise rather than quietly dropping content — a
-// silently missing paragraph is exactly the failure nobody notices.
+// Handles only these pages' vocabulary and throws on anything unknown rather than dropping content.
 
 const VOID = new Set(['br', 'img', 'input', 'meta', 'link', 'hr', 'source']);
 
-/// Entities the pages use. Anything else is left as written rather than guessed.
+/// Unknown entities are left as written.
 const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
   copy: '©', reg: '®', larr: '←', rarr: '→',
@@ -32,7 +22,6 @@ const decode = (text) => text.replace(
     return Object.prototype.hasOwnProperty.call(ENTITIES, body) ? ENTITIES[body] : whole;
   });
 
-/// A very small tree builder for well-formed, hand-written markup.
 function parse(html) {
   const root = { tag: null, attrs: {}, children: [] };
   const stack = [root];
@@ -47,8 +36,7 @@ function parse(html) {
       continue;
     }
     if (closeTag) {
-      // Unwind to the matching open tag; stray closers are ignored rather than
-      // corrupting the tree.
+      // Stray closers are ignored rather than corrupting the tree.
       for (let i = stack.length - 1; i > 0; i--) {
         if (stack[i].tag === closeTag.toLowerCase()) { stack.length = i; break; }
       }
@@ -69,11 +57,8 @@ function parse(html) {
 const cls = (node) => (node.attrs?.class || '').split(/\s+/);
 const has = (node, name) => cls(node).includes(name);
 
-/// Links are authored relative to the site root; an agent reading the markdown
-/// somewhere else needs them absolute.
 const absolute = (href, site) => (href.startsWith('/') ? site + href : href);
 
-/// Inline markdown for a node's children.
 function inline(node, ctx) {
   let out = '';
   for (const child of node.children) {
@@ -102,10 +87,7 @@ function inline(node, ctx) {
         out += `![${alt}](${absolute(child.attrs.src || '', ctx.site)})`;
         break;
       }
-      // Decorative inline SVG (the badge glyphs in the post-quantum table).
-      // It carries no text and is aria-hidden, so the adjacent label is
-      // already the whole meaning — emitting anything here would put raw path
-      // data into the plain-text rendering.
+      // Decorative aria-hidden SVG: emitting it would put raw path data into the text.
       case 'svg':
         break;
       default:
@@ -117,7 +99,6 @@ function inline(node, ctx) {
 
 const tidy = (s) => s.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
 
-/// Block markdown for a node's children.
 function blocks(node, ctx, depth = 0) {
   const out = [];
   for (const child of node.children) {
@@ -132,8 +113,7 @@ function blocks(node, ctx, depth = 0) {
       case 'h4': out.push(`#### ${tidy(inline(child, ctx))}`); break;
 
       case 'p': {
-        // The note that a page is machine-translated belongs only to a
-        // translated render; the markdown is the English original.
+        // The machine-translation note belongs only to a translated render.
         if ('data-i18n-translated-only' in child.attrs) break;
         const text = tidy(inline(child, ctx));
         if (text) out.push(text);
@@ -141,8 +121,7 @@ function blocks(node, ctx, depth = 0) {
       }
 
       case 'ul': case 'ol': {
-        // The card grids are navigation: a list of links reads better than a
-        // list of two-line blurbs.
+        // Card grids are navigation, so they render as a list of links.
         const ordered = child.tag === 'ol';
         const items = child.children.filter((c) => c.tag === 'li').map((li, i) => {
           const marker = ordered ? `${i + 1}. ` : '- ';
@@ -170,8 +149,7 @@ function blocks(node, ctx, depth = 0) {
         const caption = find(child, 'figcaption');
         const parts = [];
         if (img) parts.push(`![${decode(img.attrs.alt || '')}](${absolute(img.attrs.src || '', ctx.site)})`);
-        // Markdown has no video element. Link it, so a reader of the .md twin
-        // gets the film rather than a caption with nothing above it.
+        // Markdown has no video element, so link it.
         if (video) {
           const src = find(video, 'source');
           const url = absolute((src && src.attrs.src) || video.attrs.src || '', ctx.site);
@@ -186,7 +164,6 @@ function blocks(node, ctx, depth = 0) {
       case 'table': out.push(table(child, ctx)); break;
 
       case 'div': case 'section': case 'main': case 'article': case 'aside': case 'noscript': {
-        // A callout: its label is a heading-ish line, the rest is the body.
         if (has(child, 'docs-note')) {
           const label = child.children.find((c) => has(c, 'docs-note-label'));
           const rest = { ...child, children: child.children.filter((c) => c !== label) };
@@ -272,8 +249,7 @@ function find(node, tag) {
   return null;
 }
 
-/// The article out of a source document — everything inside `<main>`, which is
-/// the page minus the chrome the build fills in around it.
+/// Everything inside `<main>`: the page minus the chrome the build fills in.
 export function articleMarkdown(html, { site }) {
   const start = html.indexOf('<main');
   const end = html.lastIndexOf('</main>');

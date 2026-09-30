@@ -12,16 +12,19 @@ import '../purchase_policy.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
 
-Future<void> showCreditsSheet(BuildContext context, {int? credits}) =>
+Future<void> showCreditsSheet(BuildContext context,
+        {int? credits, String? reason, bool toAnon = false}) =>
     showNymSheet<void>(
       context,
-      (_) => _CreditsSheet(credits: credits),
+      (_) => _CreditsSheet(credits: credits, reason: reason, toAnon: toAnon),
     );
 
 class _CreditsSheet extends StatefulWidget {
-  const _CreditsSheet({this.credits});
+  const _CreditsSheet({this.credits, this.reason, this.toAnon = false});
 
   final int? credits;
+  final String? reason;
+  final bool toAnon;
 
   @override
   State<_CreditsSheet> createState() => _CreditsSheetState();
@@ -30,6 +33,7 @@ class _CreditsSheet extends StatefulWidget {
 class _CreditsSheetState extends State<_CreditsSheet> {
   final _amount = TextEditingController(text: '50');
   String _tier = 'standard';
+  late bool _toAnon = widget.toAnon;
 
   @override
   void initState() {
@@ -82,14 +86,12 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           'more, because they are routed to bigger models.');
 
   Future<void> _buy() =>
-      AppScope.read(context).createInvoice(_credits, _tier);
+      AppScope.read(context).createInvoice(_credits, _tier, toAnon: _toAnon);
 
   Future<void> _checkPaid() =>
       AppScope.read(context).checkInvoice(manual: true);
 
-  /// What the account holds right now, read through [AppScope.of] so a purchase
-  /// that lands while this is open is reflected here rather than only behind
-  /// it. This is the section a buyer is looking at when the credits arrive.
+  /// Read via [AppScope.of] so a purchase landing while open shows here.
   Widget _balances(BuildContext context, AppController app, {bool pick = false}) {
     Widget cell(String tier, String label, double? value, {bool freeTier = false}) {
       final free = app.freeLeft;
@@ -120,8 +122,6 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                   : t('{n} credits', {'n': creditFigure(value)}),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
-            // With nothing to spend, the day's allowance is what is left —
-            // which is a thing still working, where a zero is a wall.
             if (freeTier && (value ?? 0) == 0 && free != null)
               Text(t('{n} free left today', {'n': figure(free)}),
                   style: TextStyle(
@@ -162,10 +162,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
     );
   }
 
-  /// Where credits are bought on a platform that cannot sell them here.
-  /// Deliberately a STATEMENT: no button, no tappable link, nothing that reads
-  /// as a call to action pointing at an outside purchase — see
-  /// purchase_policy.dart.
+  /// Must stay a plain statement with no tap target; see purchase_policy.dart.
   Widget _purchasesDisabledNote(BuildContext context) {
     return Container(
       width: double.infinity,
@@ -186,8 +183,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    // Subscribed, not read: the balances below have to follow a purchase that
-    // lands while this sheet is still open.
+    // Subscribed so balances follow a purchase that lands while the sheet is open.
     final app = AppScope.of(context);
     final invoice = app.invoice?.pr;
     final paid = app.invoice?.paid ?? false;
@@ -208,6 +204,12 @@ class _CreditsSheetState extends State<_CreditsSheet> {
             children: [
               Text(t('Nymbot credits'),
                   style: Theme.of(context).textTheme.titleMedium),
+              if (widget.reason != null) ...[
+                const SizedBox(height: 8),
+                Text(widget.reason!,
+                    key: const ValueKey('credits-reason'),
+                    style: const TextStyle(fontSize: 13, height: 1.35)),
+              ],
               const SizedBox(height: 12),
               _balances(context, app),
               const SizedBox(height: 12),
@@ -230,6 +232,12 @@ class _CreditsSheetState extends State<_CreditsSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(t('Buy credits'), style: Theme.of(context).textTheme.titleMedium),
+            if (widget.reason != null) ...[
+              const SizedBox(height: 8),
+              Text(widget.reason!,
+                  key: const ValueKey('credits-reason'),
+                  style: const TextStyle(fontSize: 13, height: 1.35)),
+            ],
             const SizedBox(height: 12),
             _balances(context, app, pick: true),
             const SizedBox(height: 12),
@@ -266,6 +274,19 @@ class _CreditsSheetState extends State<_CreditsSheet> {
               decoration: InputDecoration(labelText: t('Credits')),
               onChanged: (_) => setState(() {}),
             ),
+            if (invoice == null && !app.spendingAnon)
+              SwitchListTile(
+                key: const ValueKey('credits-to-anon'),
+                contentPadding: EdgeInsets.zero,
+                value: _toAnon,
+                onChanged: (on) => setState(() => _toAnon = on),
+                title: Text(t('Put them on a throwaway key, not your nym'),
+                    style: const TextStyle(fontSize: 13)),
+                subtitle: Text(
+                    t('Your nym never touches the payment. Spend them from an '
+                        'anonymous chat.'),
+                    style: const TextStyle(fontSize: 11)),
+              ),
             const SizedBox(height: 6),
             if (_credits > 0) ...[
               Text(_priceLine(app), style: const TextStyle(fontSize: 12)),

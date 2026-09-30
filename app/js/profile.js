@@ -74,9 +74,7 @@
         };
     }
 
-    /// A relay never gets to say what a profile is: the event is signed, so its
-    /// own hash and signature decide, and the same test applies to the D1
-    /// mirror.
+    /// The event's own hash and signature decide, never the relay; the same test applies to the D1 mirror.
     function authentic(event, pubkey) {
         try {
             const T = NT();
@@ -86,9 +84,7 @@
         } catch (_) { return false; }
     }
 
-    /// The mirror Nymchat writes on every profile edit. Asked first because it
-    /// answers in one round trip, before a relay socket is even open — the
-    /// relays are the fallback, not the other way round.
+    /// Asked before the relays because it answers in one round trip.
     async function fromD1(pubkey) {
         const Sync = window.NymbotSync;
         if (!Sync || typeof Sync.profileEvents !== 'function') return null;
@@ -99,9 +95,6 @@
         return readMetadata(event);
     }
 
-    /// Waits for the pool to have a socket. Only the relay half needs it: the
-    /// mirror is one request to a worker and answers whether or not a relay is
-    /// up, which is the whole reason it is asked first.
     function whenConnected() {
         if (Relays.connected > 0) return Promise.resolve();
         return new Promise((resolve) => {
@@ -118,9 +111,7 @@
         onChange: null,
         _inflight: new Map(),
 
-        /// What to draw for a key right now: the published profile when there
-        /// is one, and the generated nym when there is not. Never blocks, so a
-        /// relay that is slow or unreachable costs nothing at render time.
+        /// Never blocks, so a slow or unreachable relay costs nothing at render time.
         for(pubkey) {
             const key = String(pubkey || '');
             const hit = cached(key);
@@ -136,9 +127,7 @@
             };
         },
 
-        /// Reads kind 0 from the D1 mirror, falling back to the relays, and
-        /// caches it. A miss is remembered too, so a key with no profile is not
-        /// re-asked on every render.
+        /// A miss is cached too, so a key with no profile is not re-asked on every render.
         async load(pubkey, options) {
             const opts = options || {};
             const key = String(pubkey || '');
@@ -175,10 +164,7 @@
             return run;
         },
 
-        /// The same read, but one that will not write a profile off as missing
-        /// because the app had only just started. The mirror is still asked
-        /// first and without waiting; only a miss falls through to the relays,
-        /// and only that waits for a socket.
+        /// Only a mirror miss falls through to the relays, and only that waits for a socket.
         loadWhenConnected(pubkey, options) {
             return this.load(pubkey, Object.assign({}, options, { wait: true }));
         },

@@ -1,15 +1,8 @@
-// The composer, which shows the markdown you write as what it means.
-//
-// The element it is given keeps the interface a textarea had: `value`,
-// `selectionStart`, `selectionEnd` and `setSelectionRange`, so everything that
-// already spoke to the composer carries on speaking to it.
+// The element keeps the textarea interface: `value`, `selectionStart`, `selectionEnd` and `setSelectionRange`.
 (function () {
     'use strict';
 
-    // Typing is intercepted rather than left to the browser, which would
-    // otherwise invent its own <div> and <span style> structure inside the
-    // field and leave the text unreadable. The exception is an IME, which has
-    // to be allowed to edit in place; that is picked up afterwards.
+    // Typing is intercepted so the browser cannot invent its own markup; IME input is read back afterwards.
     const EDITS = {
         insertText: 1, insertReplacementText: 1, insertFromPaste: 1,
         insertFromDrop: 1, insertFromYank: 1, insertCompositionText: 0,
@@ -23,8 +16,7 @@
 
     const UNDO_MAX = 100;
 
-    // Combining marks and the joiners that hold an emoji together: part of
-    // the character before them, not a keystroke of their own.
+    // Combining marks and emoji joiners belong to the preceding character.
     const COMBINING = /[\u0300-\u036f\u200d\ufe0f]/;
 
     function esc(s) {
@@ -35,9 +27,7 @@
     const mark = (s) => '<span class="ce-mark">' + esc(s) + '</span>';
     const hid = (s) => '<span class="ce-hidden">' + esc(s) + '</span>';
 
-    // One pass, left to right. Each alternative captures its marks separately
-    // from its body so both can be emitted, because dropping a mark would
-    // shift every offset after it.
+    // Marks are captured separately from their body because dropping one would shift every later offset.
     const INLINE = /(`+)([^`]*?)\1|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|\*([^*\n]+?)\*|_([^_\n]+?)_|~~([\s\S]+?)~~|\[([^\][]*)\]\(([^()\s]*)\)/g;
 
     function inline(text) {
@@ -171,9 +161,7 @@
         return out || '<div class="ce-line"><br></div>';
     }
 
-    /// The plain text behind the rendering. Every line is one child of the
-    /// root, and the <br> padding an empty line contributes nothing to
-    /// textContent, so the lines read back exactly as they were written.
+    /// Each line is one child of the root, and <br> padding adds nothing to textContent.
     function readText(root) {
         const lines = [];
         for (const node of root.childNodes) {
@@ -220,7 +208,6 @@
         return node.nodeType === 3 ? node.data.length : node.textContent.length;
     }
 
-    /// How far into the text a (node, offset) selection point sits.
     function offsetOf(root, node, off) {
         if (!node) return 0;
         if (node === root) {
@@ -258,8 +245,7 @@
             if (t === node) return total + off;
             total += t.data.length;
         }
-        // A caret parked on an element rather than in text: everything up to
-        // that element has already been counted.
+        // A caret on an element rather than in text: everything before it is already counted.
         if (node.nodeType === 1) {
             let sum = 0;
             const w2 = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
@@ -277,7 +263,6 @@
         return total;
     }
 
-    /// The reverse: which (node, offset) a text offset lands on.
     function pointAt(root, offset) {
         return snap(root, rawPointAt(root, offset));
     }
@@ -318,7 +303,6 @@
             return range;
         };
 
-        /// Reads where the caret is now, so an edit knows what it replaces.
         const readCaret = () => {
             const range = selection();
             if (!range) return;
@@ -390,10 +374,7 @@
             el.classList.toggle('is-empty', state.text === '');
         };
 
-        /// Puts the text on screen and the caret back where it belongs. The
-        /// rendering is thrown away and rebuilt, so the caret has to be
-        /// restored by offset — which is exactly why every mark stays in the
-        /// DOM.
+        /// The rendering is rebuilt, so the caret is restored by offset; that is why every mark stays in the DOM.
         const draw = (from, to) => {
             paint();
             state.start = from;
@@ -407,8 +388,6 @@
             state.redo.length = 0;
         };
 
-        /// Replaces the current selection with `text` and tells everything
-        /// downstream that the field changed.
         const replace = (text, from, to) => {
             const a = from === undefined ? state.start : from;
             const b = to === undefined ? state.end : to;
@@ -429,9 +408,6 @@
             el.dispatchEvent(new Event('input', { bubbles: true }));
         };
 
-        // How far a delete reaches when nothing is selected. The browser has
-        // already told us which flavour it is; all that is left is where the
-        // boundary sits in the text.
         const reach = (type) => {
             const t = state.text;
             let a = state.start, b = state.end;
@@ -462,8 +438,7 @@
             return [a, b];
         };
 
-        // A surrogate pair or a combining mark is one thing to a reader, so
-        // backspace takes the whole of it.
+        // A surrogate pair or combining mark is one thing to a reader, so backspace takes all of it.
         function backOne(t, at) {
             if (at <= 0) return 0;
             let i = at - 1;
@@ -588,8 +563,7 @@
             return true;
         };
 
-        // An IME needs the browser to edit in place; the text is read back off
-        // the DOM once it has finished and the rendering catches up then.
+        // An IME edits in place; the text is read back off the DOM when it finishes.
         el.addEventListener('compositionstart', () => { state.composing = true; });
         el.addEventListener('compositionend', () => {
             state.composing = false;
@@ -599,9 +573,7 @@
             el.dispatchEvent(new Event('input', { bubbles: true }));
         });
 
-        // Anything that still slipped past — a drag inside the field, an
-        // extension, a browser without beforeinput — leaves the DOM ahead of
-        // the model, so the model follows it rather than fighting it.
+        // Edits that slipped past beforeinput leave the DOM ahead, so the model follows it.
         el.addEventListener('input', () => {
             if (state.composing) return;
             const shown = readText(el);
@@ -667,9 +639,7 @@
         });
         el.addEventListener('keyup', () => { if (!state.composing) readCaret(); });
         el.addEventListener('mouseup', () => { if (!state.composing) readCaret(); });
-        // Focus lands the caret where the field was left, or where something
-        // else asked for it — reading the browser's idea of it would send the
-        // caret to the top every time a command filled the field in.
+        // Restore the stored caret; the browser's would jump to the top after a command filled the field.
         el.addEventListener('focus', () => {
             if (selection()) readCaret();
             else place(state.start, state.end);

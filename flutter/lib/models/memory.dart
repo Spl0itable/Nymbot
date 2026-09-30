@@ -1,12 +1,6 @@
 import 'dart:convert';
 
-/// One standing fact about the person using the app, carried between chats.
-///
-/// Kept as separate entries rather than one rolling summary, because a summary
-/// cannot be argued with: the list can be read line by line, the wrong one
-/// corrected and the unwanted one thrown away. Nothing here is uploaded — the
-/// entries that bear on a question travel inside that message, and the rest
-/// never leave the device.
+/// One standing fact about the user, kept on device; only relevant entries travel with a message.
 class Memory {
   Memory({
     required this.id,
@@ -19,8 +13,6 @@ class Memory {
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
-  /// A memory is one fact, not a transcript: short enough that a handful cost
-  /// a paragraph of context.
   static const textCap = 400;
   static const maxKept = 200;
 
@@ -28,11 +20,10 @@ class Memory {
   String text;
   String topic;
 
-  /// The workspace this belongs to, or null when it holds everywhere. A fact
-  /// about one project should not follow you into another.
+  /// Workspace this belongs to, or null for everywhere.
   String? scope;
 
-  /// 'you' when it was written or asked for, 'chat' when it was noticed.
+  /// 'you' when written or asked for, 'chat' when noticed.
   String source;
 
   DateTime createdAt;

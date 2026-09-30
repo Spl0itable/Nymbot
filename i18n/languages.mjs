@@ -1,13 +1,4 @@
-// The language list the landing page offers, mirroring the app's translate
-// menu (nym-staging js/modules/translate.js NYM_TRANSLATE_LANGUAGES and the
-// Flutter sortedTranslateLanguages). Keep the three in step.
-//
-// English is the site root (/); every other language is a static subdirectory
-// (/es/, /ja/, ...) so search engines index each translation separately.
-//
-// `native` is the endonym from CLDR (Intl.DisplayNames), baked in at
-// authoring time so the build does not depend on the runtime's ICU data. It is
-// omitted where the endonym matches the English name.
+// Mirrors nym-staging NYM_TRANSLATE_LANGUAGES and Flutter sortedTranslateLanguages; keep the three in step.
 
 export const LANGUAGES = [
   { code: 'af', name: "Afrikaans" },
@@ -145,20 +136,14 @@ export const LANGUAGES = [
   { code: 'zu', name: "Zulu", native: "isiZulu" },
 ];
 
-/// Languages that get their own subdirectory — everything except English.
 export const TRANSLATED_LANGUAGES = LANGUAGES.filter((l) => l.code !== 'en');
 
 export const LANGUAGE_BY_CODE = new Map(LANGUAGES.map((l) => [l.code, l]));
 
-/// Right-to-left languages need dir="rtl" on <html>.
 export const isRtl = (code) => !!(LANGUAGE_BY_CODE.get(code) || {}).rtl;
 
-/// What a speaker of the language calls it, falling back to the English name.
 export const displayName = (lang) => lang.native || lang.name;
 
-/// The public path for a page: '/' for the English landing page and '/<code>/'
-/// for its translations, with a named page hanging off that — '/tos/',
-/// '/es/tos/'.
 export const pathFor = (code, slug) => {
   const base = code === 'en' ? '/' : `/${code}/`;
   return slug ? `${base}${slug}/` : base;

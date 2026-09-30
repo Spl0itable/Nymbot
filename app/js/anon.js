@@ -1,9 +1,4 @@
-// Anonymous mode: a throwaway key the whole conversation runs under, and blind
-// vouchers that move credits onto it without handing the worker the link.
-//
-// Ported from the Nymchat client so both apps agree byte for byte — the domain
-// constants, the hash-to-curve, the DLEQ check and the denominations are all
-// part of the wire format (docs/ANON-NYMBOT-SPEC.md in nym-staging).
+// Ported from Nymchat; constants, hash-to-curve, DLEQ and denominations are wire format (ANON-NYMBOT-SPEC.md).
 (function () {
     'use strict';
 
@@ -131,8 +126,6 @@
         state: null,
         onKeysetChange: null,   // (oldId, newId) => Promise<boolean>
 
-        // --- identity -------------------------------------------------------
-
         load() {
             this.state = Store.read('anon', null) || { current: null, prev: [], tokens: [], pending: null, spent: [] };
             return this.state;
@@ -232,7 +225,6 @@
             });
         },
 
-        /// The signing key material, for wrapping and for opening replies.
         sender(identity) {
             const id = identity || this.ensure();
             return { sk: unhex(id.sk), pubkey: id.pk };
@@ -241,9 +233,7 @@
         kem(identity) {
             const id = identity || this.ensure();
             if (!id || !id.root) return null;
-            // Separate entropy from the signing key on purpose: the throwaway
-            // pubkey is published on every wrap, so a KEM key derived from it
-            // would fall with secp256k1.
+            // Separate entropy: the throwaway pubkey is public, so a KEM key derived from it would fall with secp256k1.
             try { return NC().pqKeypairFromRoot(unhex(id.root), 0); } catch (_) { return null; }
         },
 
@@ -263,16 +253,14 @@
             return out.map(id => this.recipient(id));
         },
 
-        /// The auth signer the worker sees: this key, never the account's.
+        /// The worker sees this key, never the account's.
         signer(identity) {
             const id = identity || this.ensure();
             const sk = unhex(id.sk);
             return { pubkey: id.pk, sign: (evt) => NT().finalizeEvent(Object.assign({ pubkey: id.pk }, evt), sk) };
         },
 
-        /// A signed announcement carrying the throwaway KEM key, handed to the
-        /// worker with each request so the reply comes back hybrid without a
-        /// lookup that would have nothing to find.
+        /// Sent with each request so the reply comes back hybrid without a lookup.
         announcement(identity) {
             const id = identity || this.ensure();
             const kp = this.kem(id);
@@ -396,8 +384,6 @@
             return JSON.stringify(this.syncCopy()) !== before;
         },
 
-        // --- vouchers -------------------------------------------------------
-
         async keyset(force) {
             if (this._keyset && !force) return this._keyset;
             const { status, data } = await Api.voucherKeys();
@@ -410,8 +396,7 @@
             }
             const pinned = Store.read('anon_keyset', null);
             if (pinned && pinned !== checked.id) {
-                // A per-user keyset is exactly how a mint would tag its users,
-                // so this is the user's call, not ours.
+                // A per-user keyset is how a mint would tag its users, so the user decides.
                 const ok = this.onKeysetChange ? await this.onKeysetChange(pinned, checked.id) : false;
                 if (!ok) throw new Error(t('Voucher keyset rejected.'));
             }
@@ -459,8 +444,7 @@
             return out;
         },
 
-        /// Finishes an issuance whose response was lost: the same reqId and the
-        /// same outputs re-sign without a second debit.
+        /// The same reqId and outputs re-sign without a second debit.
         async _finishIssue(pending) {
             const keyset = await this.keyset();
             const from = pending.from ? this.identity(pending.from) : null;
@@ -587,7 +571,6 @@
             return credited;
         },
 
-        /// Resumes anything a previous session left half-done.
         async flush() {
             if (this._flushing || !this.holds()) return;
             const st = this.state;
@@ -623,8 +606,7 @@
                     const B = hashToCurve(x).add(Pt.BASE.multiply(r));
                     return { d, x: hex(x), r: scalarHex(r), B: B.toHex(true) };
                 });
-                // Persisted BEFORE the call: a lost response has to be retried
-                // with the same reqId and the same outputs, or it pays twice.
+                // Persisted before the call: a lost response must be retried with the same reqId and outputs, or it pays twice.
                 this.state.pending = Object.assign({
                     tier,
                     reqId: hex(crypto.getRandomValues(new Uint8Array(32))),
@@ -651,13 +633,7 @@
             return credited;
         },
 
-        /// Moves credits across on its own, so anonymous mode does not mean
-        /// remembering to fund a key by hand before every chat.
-        ///
-        /// Only ever moves from the nym to the throwaway key, never the other
-        /// way, and never more than the nym actually holds. One call at a time:
-        /// a second while the first is still minting would spend the same
-        /// balance twice.
+        /// Only moves nym to throwaway key, never more than the nym holds, and one call at a time to avoid double-spending.
         async autoTopUp(options) {
             const opts = options || {};
             const settings = Store.settings();

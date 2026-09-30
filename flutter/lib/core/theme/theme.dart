@@ -11,7 +11,7 @@ const List<String> kMonoFallback = <String>[
   'monospace',
 ];
 
-/// The same palette as the web app, so the two read as one product.
+/// Same palette as the web app.
 class NymbotColors {
   static const primary = Color(0xFF00FF00);
   static const primaryLight = Color(0xFF0A7A2F);
@@ -25,15 +25,10 @@ class NymbotColors {
   static const sunkenDark = Color(0xFF070B14);
   static const textDark = Color(0xFFE8EDF4);
 
-  /// A button is squared off, not a pill. Material 3's default is a stadium;
-  /// Nymchat draws its own controls at 8px, and this is the same chat, so the
-  /// two have to agree. The toolbar's tier switch is the one exception — see
-  /// [switchRadius].
+  /// Squared 8px buttons to match Nymchat, not Material 3 stadiums.
   static const buttonRadius = 8.0;
 
-  /// A 10px track around a 7px tab: concentric at the toolbar's 2px padding,
-  /// which is what stops the track reading as a sticker behind the tab. Same
-  /// pair Nymchat uses.
+  /// Concentric with the 7px tab at the toolbar's 2px padding.
   static const switchRadius = 10.0;
   static const switchTabRadius = 7.0;
 
@@ -129,10 +124,8 @@ ThemeData nymbotTheme(Brightness brightness,
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
     ),
-    // A segmented button is a stadium by default in Material 3, which is the
-    // one control that would still read as a pill next to the toolbar.
+    // Material 3 draws segmented buttons as stadiums by default.
     segmentedButtonTheme: SegmentedButtonThemeData(style: _buttonStyle),
-    // Material 3 already draws a chip at 8; pinned so the two cannot drift.
     chipTheme: ChipThemeData(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),

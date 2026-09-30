@@ -59,8 +59,7 @@
 	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Nymbot uses Face ID to unlock your encrypted identity.</string>
-	<!-- App ships no proprietary/non-exempt encryption beyond standard TLS,
-	     so no annual self-classification export filing is required. -->
+	<!-- Only standard TLS encryption, so no export self-classification filing is required. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Attaching a photo or video to a message reads it from your library. When you send it, the file is uploaded to a media host under a one-time key and linked in your message.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

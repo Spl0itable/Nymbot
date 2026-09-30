@@ -101,8 +101,7 @@ class Artifact {
   }
 }
 
-/// Pulls the whole files out of a reply, so a page or a script opens beside
-/// the chat rather than scrolling away inside a bubble.
+/// Extracts whole files from a reply so they open beside the chat.
 class ArtifactHarvest {
   const ArtifactHarvest._();
 
@@ -131,8 +130,7 @@ class ArtifactHarvest {
       final h = heading.group(1)!;
       return h.length > 48 ? h.substring(0, 48) : h;
     }
-    // The word boundary matters: without it `<!doctype html>` reads as
-    // `type html` and every page is called "html".
+    // The word boundary keeps `<!doctype html>` from reading as `type html`.
     final named = RegExp(
             r'\b(?:class|function|def|const|interface|struct|fn|type)\s+([A-Za-z_$][\w$]*)')
         .firstMatch(body);

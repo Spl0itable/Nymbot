@@ -209,8 +209,6 @@ class MarkdownBody extends StatelessWidget {
           }
         }
         gap();
-        // A patch is read as a patch: per file, with what it costs on the
-        // header rather than counted off the `+` lines by eye.
         if (lang == 'diff' || lang == 'patch') {
           blocks.add(DiffView(source: body.join('\n')));
         } else {
@@ -336,8 +334,6 @@ class MarkdownBody extends StatelessWidget {
       }
       final text = para.join('\n');
       gap();
-      // Images and audio arrive as bare URLs the bot uploaded; showing them
-      // beats making someone open a link to find out what was generated.
       final bare = text.trim();
       final linked = _bareUrl.hasMatch(bare);
       final unlabelled = linked && !_anyExt.hasMatch(bare);

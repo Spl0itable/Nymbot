@@ -9,15 +9,7 @@ import 'package:pointycastle/api.dart' show KeyParameter;
 
 import 'keys.dart';
 
-/// bitchat interop transport (matches the PWA `encryptBitchat`/`decryptBitchat`
-/// in nym-crypto.js).
-///
-/// Layout: shared point = secp256k1.getSharedSecret(sk, '02'+recipientPub),
-/// i.e. the **33-byte compressed** encoding of `sk * liftEven(recipientPub)`.
-/// prk = HKDF-Extract(SHA256, ikm = sharedPoint(33), salt = empty);
-/// key = HKDF-Expand(prk, info = utf8('nip44-v2'), 32);
-/// XChaCha20-Poly1305 with a 24-byte random nonce;
-/// output `v2:<base64url(nonce || ciphertext_with_tag)>`.
+/// Bitchat transport (nym-crypto.js): HKDF of the 33-byte compressed shared point, XChaCha20-Poly1305, `v2:` payload.
 
 final _secp = ECCurve_secp256k1();
 final _xchacha = Xchacha20.poly1305Aead();
@@ -47,9 +39,7 @@ Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
   return okm.sublist(0, length);
 }
 
-/// Returns the 33-byte compressed shared point: `sk * liftEven(pubkeyHex)`
-/// where [parityPrefix] is '02' or '03' applied to the recipient pubkey before
-/// lifting. nostr-tools/noble defaults to lifting with even y ('02').
+/// 33-byte compressed `sk * lift(pubkeyHex)`, lifted with [parityPrefix] '02' or '03'.
 Uint8List _sharedPointCompressed(
     Uint8List sk, String pubkeyHex, String parityPrefix) {
   final compressed = hexToBytes('$parityPrefix${pubkeyHex.padLeft(64, '0')}');
@@ -59,7 +49,6 @@ Uint8List _sharedPointCompressed(
   }
   final d = _bytesToBigInt(sk);
   final shared = (point * d)!;
-  // Encode result as compressed (33 bytes) — getEncoded(true).
   return Uint8List.fromList(shared.getEncoded(true));
 }
 
@@ -88,7 +77,6 @@ Uint8List _b64UrlDecode(String s) {
   return base64.decode(t);
 }
 
-/// Encrypts [plaintext] to [recipientPub] using [sk]. Returns a `v2:` payload.
 Future<String> encryptBitchat(
     String plaintext, Uint8List sk, String recipientPub) async {
   final sharedPoint = _sharedPointCompressed(sk, recipientPub, '02');
@@ -99,13 +87,12 @@ Future<String> encryptBitchat(
     secretKey: SecretKey(key),
     nonce: nonce,
   );
-  // concatenation() => nonce || cipherText || mac, matching JS nonce||ct(+tag).
+  // nonce || cipherText || mac, matching JS nonce || ct(+tag).
   final payload = secretBox.concatenation();
   return 'v2:${_b64UrlNoPad(payload)}';
 }
 
-/// Decrypts a bitchat `v2:` payload from [senderPub] using [sk]. Tries both the
-/// even ('02') and odd ('03') lift of the sender pubkey, matching the PWA.
+/// Tries both even and odd lifts of the sender pubkey, matching the PWA.
 Future<String> decryptBitchat(
     String content, String senderPub, Uint8List sk) async {
   var c = content;
@@ -129,7 +116,6 @@ Future<String> decryptBitchat(
       );
       return utf8.decode(clear);
     } catch (_) {
-      // try next parity
     }
   }
   throw FormatException('bitchat decrypt failed');
@@ -143,12 +129,7 @@ BigInt _bytesToBigInt(Uint8List bytes) {
   return r;
 }
 
-/// A decoded bitchat `bitchat1:` payload (a NoisePayload inside a BitchatPacket).
-///
-/// [type] is the NoisePayloadType: 0x01 = PRIVATE_MESSAGE, 0x02 = READ_RECEIPT,
-/// 0x03 = DELIVERED. For a private message, [content] is the decoded text and
-/// [messageId] the bitchat UUID; for receipts, [content] is null and
-/// [messageId] identifies the original message.
+/// [type]: 0x01 PRIVATE_MESSAGE, 0x02 READ_RECEIPT, 0x03 DELIVERED; receipts have null [content].
 class BitchatPacket {
   const BitchatPacket({required this.type, this.content, this.messageId});
 
@@ -163,25 +144,10 @@ class BitchatPacket {
   static const int delivered = 0x03;
 }
 
-/// True when [content] is a bitchat-app message envelope (`bitchat1:` prefix).
-/// The actual text/receipt is extracted with [decodeBitchatPacket]; without it
-/// a bitchat PM would render as the raw `bitchat1:…` blob.
+/// Bitchat-app envelope; decode with [decodeBitchatPacket] rather than showing the raw blob.
 bool isBitchatPacket(String content) => content.startsWith('bitchat1:');
 
-/// Decodes a `bitchat1:<base64url>` BitchatPacket into its NoisePayload.
-///
-/// Mirrors the PWA `parseBitchatMessage` (pms.js): strip the prefix, base64url-
-/// decode, read the 14-byte header (version, type, TTL, 8-byte timestamp, flags,
-/// 2-byte payload length), skip the 8-byte sender id and optional 8-byte
-/// recipient id (HAS_RECIPIENT = flags & 0x01), then read the NoisePayloadType.
-///
-/// For PRIVATE_MESSAGE the payload is a TLV stream: `[type][len][value]` where
-/// a value > 255 bytes sets the high bit of the type byte (0x80) and uses a
-/// 2-byte big-endian length. Type 0x00 = MESSAGE_ID, 0x01 = CONTENT. For
-/// receipts (type != 0x01) the payload is `[type][raw UUID string]` (or a single
-/// `[0x00][len][id]` TLV). Trailing 0xBE padding is stripped before parsing.
-///
-/// Returns null when [content] is not `bitchat1:` or is too short/malformed.
+/// Port of the PWA `parseBitchatMessage` (pms.js); null when not `bitchat1:` or malformed.
 BitchatPacket? decodeBitchatPacket(String content) {
   if (!isBitchatPacket(content)) return null;
   Uint8List bytes;
@@ -190,7 +156,7 @@ BitchatPacket? decodeBitchatPacket(String content) {
   } catch (_) {
     return null;
   }
-  // Header(14) + senderId(8) at minimum; payload byte must exist.
+  // Header(14) + senderId(8) at minimum; the payload byte must exist.
   if (bytes.length < 14) return null;
   final flags = bytes[11];
   final hasRecipient = (flags & 0x01) != 0;
@@ -220,7 +186,7 @@ BitchatPacket? decodeBitchatPacket(String content) {
     return BitchatPacket(type: type, content: null, messageId: messageId);
   }
 
-  // PRIVATE_MESSAGE: parse TLV fields after the NoisePayloadType byte.
+  // PRIVATE_MESSAGE: TLV fields follow the NoisePayloadType byte.
   var pos = payloadStart + 1;
   String? messageContent;
   String? messageId;
@@ -268,24 +234,10 @@ bool _looksLikeUuid(String s) =>
             caseSensitive: false)
         .hasMatch(s);
 
-/// Encodes [content] as a bitchat `bitchat1:` PRIVATE_MESSAGE packet — the
-/// inverse of [decodeBitchatPacket] and a 1:1 port of the PWA's
-/// `encodeBitchatMessage` (nostr-core.js:1024). The returned `content` is an
-/// UNENCRYPTED BitchatPacket (base64url); the encryption to the recipient
-/// happens in the gift wrap ([bitchatWrap]). `messageId` is a fresh UUID used
-/// for bitchat-native delivery/read receipt matching.
-///
-/// [senderPubkey] / [recipientPubkey] are 64-hex. When [recipientPubkey] is
-/// non-empty the HAS_RECIPIENT flag is set and its first 8 bytes ride the
-/// header (bitchat routing). [messageId] and [nowMs] are injectable for tests.
-/// Bitchat caps a TLV value at 255 bytes: `PrivateMessagePacket` writes a
-/// 1-byte length and `encode()` refuses anything longer, so long text is sent
-/// as several messages. Same constant the mesh path uses.
+/// Bitchat TLV values have a 1-byte length, so longer text is sent as several messages.
 const int kBitchatMaxContentBytes = 255;
 
-/// Splits [content] into pieces that each fit one bitchat packet, never cutting
-/// a multi-byte character in half. Mirrors the mesh chunker, which has always
-/// done this correctly.
+/// Splits [content] into packet-sized pieces without cutting a multi-byte character.
 List<String> chunkBitchatContent(String content) {
   final bytes = utf8.encode(content);
   if (bytes.length <= kBitchatMaxContentBytes) return [content];
@@ -315,14 +267,7 @@ List<String> chunkBitchatContent(String content) {
   final messageBytes = utf8.encode(content);
   final messageIdBytes = utf8.encode(msgId);
 
-  // ONE-BYTE LENGTHS ONLY, because that is the whole of bitchat's TLV.
-  //
-  // This used to set the high bit of the type byte and follow it with a 2-byte
-  // length for values over 255. That convention does not exist in bitchat:
-  // `PrivateMessagePacket.decode` reads a 1-byte length, meets type 0x81, falls
-  // into its unknown-type branch and discards the ENTIRE packet. Every message
-  // over 255 bytes ever sent to a bitchat user was dropped on arrival. Callers
-  // chunk with [chunkBitchatContent] instead.
+  // One-byte TLV lengths only: bitchat drops any packet with an extended-length type byte.
   final tlv = <int>[];
   void pushTlv(int type, List<int> value) {
     if (value.length > 0xFF) {
@@ -363,7 +308,7 @@ List<String> chunkBitchatContent(String content) {
   for (var i = 0; i < 8; i++) {
     parts.add(int.parse(senderPubkey.substring(i * 2, i * 2 + 2), radix: 16));
   }
-  // Recipient id: first 8 bytes of their pubkey (when HAS_RECIPIENT).
+  // Recipient id: first 8 bytes of their pubkey.
   if (hasRecipient) {
     for (var i = 0; i < 8; i++) {
       parts.add(
@@ -373,7 +318,7 @@ List<String> chunkBitchatContent(String content) {
 
   parts.addAll(noisePayload);
 
-  // Pad to the next block size (256/512/1024/2048) with 0xBE.
+  // Pad to the next block size with 0xBE.
   const blockSizes = [256, 512, 1024, 2048];
   var target = 2048;
   for (final s in blockSizes) {
@@ -392,8 +337,6 @@ List<String> chunkBitchatContent(String content) {
   );
 }
 
-/// A random v4 UUID (bitchat message id). Uses [randomBytes] so no extra
-/// dependency is pulled into this crypto module.
 String _uuidV4() {
   final b = randomBytes(16);
   b[6] = (b[6] & 0x0f) | 0x40; // version 4

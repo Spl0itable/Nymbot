@@ -1,8 +1,4 @@
-// Landing page behavior: the FAQ accordion, and the Nymbot conversation that
-// plays inside the phone mockup.
-
-// FAQ accordion. Delegated rather than an inline onclick so the page stays
-// within `script-src 'self'` (see _headers).
+// Delegated rather than an inline onclick to stay within `script-src 'self'`.
 document.addEventListener('click', (e) => {
     const question = e.target.closest('.faq-question');
     if (!question) return;
@@ -12,7 +8,7 @@ document.addEventListener('click', (e) => {
     if (!wasActive) item.classList.add('active');
 });
 
-// Fancy style: adjective_noun name generation (matching the app)
+// Adjective_noun name generation, matching the app.
 const adjectives = [
     'quantum', 'neon', 'cyber', 'shadow', 'plasma',
     'echo', 'nexus', 'void', 'flux', 'ghost',
@@ -50,8 +46,7 @@ function generateNym() {
     return { name: `${adj}_${noun}` };
 }
 
-// Demo copy, localized at build time. build.mjs injects window.NYM_I18N for the
-// page's language; the English source is the fallback.
+// build.mjs injects window.NYM_I18N for the page's language; the English source is the fallback.
 function t(text) {
     const map = typeof window !== 'undefined' && window.NYM_I18N;
     return (map && map[text]) || text;
@@ -430,7 +425,6 @@ if (messagesContainer && draftEl && placeholderEl && sendEl) {
     });
 }
 
-// Add subtle interactivity
 document.querySelectorAll('.feature-card').forEach((card) => {
     card.addEventListener('mouseenter', function () {
         this.style.borderColor = 'rgba(0, 255, 0, 0.2)';
@@ -440,7 +434,6 @@ document.querySelectorAll('.feature-card').forEach((card) => {
     });
 });
 
-// Smooth scroll for anchor links
 document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
     anchor.addEventListener('click', function (e) {
         e.preventDefault();

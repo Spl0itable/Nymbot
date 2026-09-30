@@ -14,12 +14,7 @@ import 'signed_body.dart';
 
 typedef ApiResult = ({int status, Map<String, dynamic> data});
 
-/// The Nymbot worker client.
-///
-/// Every request carries a kind-27235 auth event bound to this endpoint, method
-/// and action, so a captured signature cannot be replayed against a different
-/// one. The money actions are signed fresh each time; the worker enforces
-/// single-use for those.
+/// Nymbot worker client; each request carries a kind-27235 auth event bound to endpoint, method and action.
 class NymbotApi {
   NymbotApi({http.Client? client}) : _client = client ?? http.Client();
 
@@ -81,8 +76,7 @@ class NymbotApi {
     final fresh = _money.contains(action);
     if (!fresh) {
       final hit = _authCache[key];
-      // Well inside the worker's 120s window, so an edge-of-window reject is
-      // not something a cached signature can cause.
+      // Well inside the worker's 120s window.
       if (hit != null && nowSec - hit.createdAt < 90) return hit;
     }
     final signed = await signer.sign(UnsignedEvent(
@@ -112,9 +106,7 @@ class NymbotApi {
     return SignedBody.withAuth(text, auth.toJson());
   }
 
-  /// Deletes this account's Nymbot rows on the server, on the way out of a
-  /// wipe. Signed while the key is still here; the worker verifies the
-  /// signature, so nobody can purge a pubkey they do not hold.
+  /// Deletes this account's server rows; signed while the key is still here.
   Future<bool> purgeAccount(EventSigner signer, {Duration? timeout}) async {
     try {
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -200,8 +192,7 @@ class NymbotApi {
   Future<ApiResult> clearHistory(EventSigner signer) =>
       call('clear-history', signer);
 
-  /// Public catalog data: it has to render before anyone has a balance, so it
-  /// is the one call that needs no identity.
+  /// Public catalog; the one call that needs no identity.
   Future<Map<String, dynamic>?> models() async {
     try {
       final resp = await _client

@@ -47,8 +47,7 @@ class NostrProfile {
       );
 }
 
-/// What to draw for a key: the published kind-0 profile when the account has
-/// one, and the generated nym when it does not.
+/// The published kind-0 profile when there is one, else the generated nym.
 class DisplayIdentity {
   const DisplayIdentity({
     required this.pubkey,
@@ -109,11 +108,7 @@ class Profiles extends ChangeNotifier {
     );
   }
 
-  /// The mirror Nymchat writes on every profile edit. Asked first because it
-  /// answers in one round trip, before a relay socket is even open — the relays
-  /// are the fallback, not the other way round. A relay never gets to say what
-  /// a profile is, and neither does the mirror: the event is signed, so its own
-  /// hash and signature decide.
+  /// The D1 mirror is asked before relays; neither is trusted, the signed event decides.
   Future<NostrProfile?> _fromD1(String pubkey) async {
     Map<String, NostrEvent>? events;
     try {
@@ -132,9 +127,7 @@ class Profiles extends ChangeNotifier {
     return schnorr.verifyEvent(event);
   }
 
-  /// Waits for the pool to have a socket. Only the relay half needs it: the
-  /// mirror is one request to a worker and answers whether or not a relay is
-  /// up, which is the whole reason it is asked first.
+  /// Only the relay half needs a socket; the mirror is a single worker request.
   Future<void> _whenConnected() async {
     final deadline = DateTime.now().add(const Duration(seconds: 6));
     while (_relays.connected == 0 && DateTime.now().isBefore(deadline)) {
@@ -142,14 +135,7 @@ class Profiles extends ChangeNotifier {
     }
   }
 
-  /// Reads kind 0 from the D1 mirror, falling back to the relays. A miss is
-  /// remembered too, so a key with no profile is not re-asked on every rebuild.
-  ///
-  /// [mirrorOnly] asks the mirror and stops there, for the boot path: it
-  /// answers in one round trip, so the name and avatar are drawn before
-  /// anything else waits on a relay. A miss is NOT remembered in that mode —
-  /// the relays have not been asked yet, and remembering it would suppress the
-  /// question for [_maxAge].
+  /// Reads kind 0 from the D1 mirror, then relays; [mirrorOnly] stops at the mirror and does not cache a miss.
   Future<void> load(String pubkey,
       {bool force = false, bool mirrorOnly = false}) async {
     _hydrate();
@@ -178,8 +164,7 @@ class Profiles extends ChangeNotifier {
       await _persist();
       notifyListeners();
     } catch (_) {
-      // A relay that is slow or unreachable is not worth a visible failure;
-      // the generated nym is a complete fallback.
+      // A slow relay is not a visible failure; the generated nym is a complete fallback.
     } finally {
       _inflight.remove(pubkey);
     }

@@ -12,22 +12,14 @@ class _Relay {
 
   final String url;
   final WebSocketChannel channel;
-  // A socket's stream can only be listened to once, so the one listener fans
-  // out to everything that wants frames from this relay.
+  // A socket stream allows one listener, so this fans frames out.
   final StreamController<List<dynamic>> frames =
       StreamController<List<dynamic>>.broadcast();
   StreamSubscription? tap;
   bool retired = false;
 }
 
-/// A small relay pool: publish, one-shot fetch, and a live subscription.
-///
-/// The worker's multiplexed proxy carries all of it when it can reach it — one
-/// socket instead of ten, and relays never see the reader's address. Direct
-/// sockets are the fallback, and the proxy is retried in the background.
-///
-/// The relay set is the one the Nymbot worker itself reads from, because a wrap
-/// published anywhere else is one it can never fetch and open.
+/// Publish, fetch and subscribe via the worker's proxy, falling back to direct sockets on the worker's relay set.
 class RelayPool {
   RelayPool({WebSocketChannel Function(Uri uri)? connect})
       : _connect = connect ?? WebSocketChannel.connect;
@@ -59,7 +51,7 @@ class RelayPool {
       ? (_upstream.isEmpty ? 1 : _upstream.length)
       : _relays.length;
 
-  /// Whoever the frames go to: the proxy while it is up, our own sockets otherwise.
+  /// The proxy while it is up, else our own sockets.
   List<_Relay> get _targets => pooled ? [_pool!] : _relays.values.toList();
 
   void onStatus(void Function(int, int) fn) => _listeners.add(fn);
@@ -100,8 +92,7 @@ class RelayPool {
     }
   }
 
-  /// The proxy speaks the same frames as a relay, so everything below works
-  /// unchanged once it is the target.
+  /// The proxy speaks relay frames, so everything below works unchanged.
   bool _openPool() {
     final url = poolUrl;
     if (url == null || _closed || _pool != null) return _pool != null;
@@ -187,8 +178,7 @@ class RelayPool {
     _track(timer);
   }
 
-  /// Lets go of the sockets the proxy has made redundant, without letting a
-  /// reconnect already in flight bring them back.
+  /// Closes redundant direct sockets without letting an in-flight reconnect revive them.
   void _retireDirect() {
     _direct = false;
     for (final relay in _relays.values.toList()) {
@@ -249,13 +239,11 @@ class RelayPool {
     if (relay != null && !relay.frames.isClosed) relay.frames.close();
     _emit();
     if (_closed || _poolUp || (relay?.retired ?? false)) return;
-    // Staggered, so a relay that drops everyone at once is not met with a
-    // synchronised stampede.
+    // Jittered to avoid a reconnect stampede.
     _track(Timer(Duration(milliseconds: 4000 + _rng.nextInt(6000)), () => _open(url)));
   }
 
-  /// Held so [close] can cancel it. Without this a reconnect scheduled just
-  /// before shutdown outlives the pool.
+  /// Tracked so [close] can cancel reconnects scheduled before shutdown.
   void _track(Timer timer) => _timers.add(timer);
 
   void _send(_Relay relay, List<dynamic> frame) {
@@ -264,15 +252,11 @@ class RelayPool {
     } catch (_) {}
   }
 
-  /// Publishes to every open relay and completes with how many said OK.
-  ///
-  /// One acceptance is enough for the worker to find the wrap, so this waits
-  /// for the first couple rather than for all of them.
+  /// Completes with the OK count after the first couple of acceptances.
   Future<int> publish(NostrEvent event, {Duration? timeout}) {
     final open = _targets;
     if (open.isEmpty) return Future.value(0);
-    // The proxy forwards one OK per event however many relays took it, so there
-    // one is the pair.
+    // The proxy sends one OK per event regardless of relay count.
     final need = pooled ? 1 : 2;
     final done = Completer<int>();
     final taps = <StreamSubscription>[];
@@ -302,7 +286,7 @@ class RelayPool {
     return done.future;
   }
 
-  /// One-shot query across the pool, de-duplicated by event id.
+  /// One-shot query across the pool, deduplicated by event id.
   Future<List<NostrEvent>> fetch(Map<String, dynamic> filter,
       {Duration? timeout}) {
     final open = _targets;
@@ -342,7 +326,7 @@ class RelayPool {
     return done.future;
   }
 
-  /// A one-shot query against relays this app does not keep open.
+  /// One-shot query against relays not kept open.
   Future<List<NostrEvent>> fetchFrom(
       List<String> urls, Map<String, dynamic> filter,
       {Duration? timeout}) {

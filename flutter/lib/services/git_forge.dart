@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// One repository a token can reach, as the forge described it.
 class ForgeRepo {
   const ForgeRepo({
     required this.repo,
@@ -17,7 +16,6 @@ class ForgeRepo {
   final String description;
 }
 
-/// Why an attempt to list repositories failed, in terms a reader can act on.
 enum ForgeFailure { noToken, noHost, unsupported, denied, unreachable, failed }
 
 class ForgeException implements Exception {
@@ -29,15 +27,13 @@ class ForgeException implements Exception {
   String toString() => 'ForgeException(${reason.name})';
 }
 
-/// Asking a forge what a token can see, from the device that holds the token.
-/// The request goes straight from here to the forge: the token is not sent to
-/// the Nymbot worker, and never to a relay.
+/// Lists repos a token can reach; the token goes straight to the forge, never to the worker or a relay.
 class GitForge {
   const GitForge._();
 
   static const supported = {'github', 'gitlab', 'gitea', 'codeberg'};
 
-  /// Only a self-hosted forge has no default host worth guessing.
+  /// Only a self-hosted forge has no default host.
   static bool needsHost(String provider) => provider == 'gitea';
 
   static String _clean(String host) =>

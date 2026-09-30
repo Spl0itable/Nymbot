@@ -1,19 +1,4 @@
-// Screenshot entrypoint. NOT shipped — a development harness for producing
-// store artwork and knowledge-base figures from the real app.
-//
-// It boots the same `NymbotApp` widget tree that `main.dart` boots, with the
-// same controller, the same theme and the same widgets. The only difference is
-// where the data comes from: instead of relays and the worker (neither of which
-// exists on the web target used to render these), the store is seeded through
-// the very same public entry points the app uses when restoring its own cache
-// — `store.saveConversations`, `store.saveMessages`, `open`.
-//
-// `enter()` is deliberately never called: that is what opens relay sockets and
-// starts polling the worker. Everything these captures show is drawn by the
-// app's own widgets from its own state.
-//
-// Which screen to render is read from the URL, so each capture is one page load
-// with no scripted tapping: /?shot=chat, ?shot=models, ?shot=buy, ...
+// Screenshot entrypoint (not shipped): real app widgets on seeded state, never calling `enter()`; pick via ?shot=.
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -26,8 +11,7 @@ import 'models/conversation.dart';
 import 'models/workspace.dart';
 import 'state/app_controller.dart';
 
-/// A fixed key, so the npub, the avatar and every colour derived from them are
-/// the same in every capture rather than reshuffling per run.
+/// Fixed key so derived npub, avatar and colors are stable across captures.
 const _nsec =
     '5a705a100000000000000000000000000000000000000000000000000000000e';
 
@@ -64,8 +48,6 @@ ChatMessage _bot(
       at: DateTime.fromMillisecondsSinceEpoch(_ts(minutesAgo)),
     );
 
-/// The chat the artwork leads with: a real question with a real answer, priced
-/// the way the app prices one.
 List<ChatMessage> _mainThread() => [
       _self('m1', 'Explain ML-KEM in three sentences, then tell me what it '
           'does not protect.', 14),
@@ -108,8 +90,6 @@ List<ChatMessage> _mainThread() => [
       ),
     ];
 
-/// A repository task, which is the app at its most capable: several model
-/// calls against real files, and a cost that says so.
 List<ChatMessage> _repoThread() => [
       _self('r1', 'Why is the balance not updating after a standard reply?', 22),
       _bot(
@@ -164,23 +144,18 @@ Future<void> main() async {
 
   final c = await AppController.boot();
 
-  // A real key through the app's own import path, so `signedIn` is genuine and
-  // the npub on screen is derived rather than typed in.
+  // Through the app's own import path so `signedIn` is genuine.
   await c.identity.import(_nsec);
   c.signIn();
 
-  // Dark by default: the store artwork, the site and the app's own brand all
-  // sit on the same near-black. `?theme=light` renders the other one for the
-  // appearance figures.
+  // Dark by default; `?theme=light` renders the light variant.
   await c.saveSettings(AppSettings(
     theme: light ? ChatTheme.light : ChatTheme.dark,
     showCostEstimate: true,
     showProgress: true,
   ));
 
-  // Balances the toolbar and the buy sheet read. Fractional on purpose: a
-  // metered reply costs a fraction of a credit, and the artwork should show
-  // that rather than a whole number that implies per-message pricing.
+  // Fractional on purpose: a metered reply costs a fraction of a credit.
   c.standardBalance = 128.5;
   c.proBalance = 42.75;
   c.free = null;
@@ -222,9 +197,7 @@ Future<void> main() async {
   ));
 }
 
-/// Boots the real app, then opens whichever of its own sheets this capture
-/// wants, once the first frame is up. The sheets are the app's — this taps
-/// them open the way a finger would, so nothing about them is redrawn here.
+/// Boots the real app, then opens the requested sheet after the first frame.
 class _Shots extends StatefulWidget {
   const _Shots(
       {required this.controller, required this.shot, required this.open});
@@ -249,8 +222,7 @@ class _ShotsState extends State<_Shots> {
     if (!_opened) {
       _opened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        // A beat for the first frame to settle before the sheet animates in,
-        // so a capture never catches it mid-transition.
+        // Lets the first frame settle so a capture never catches a transition.
         await Future<void>.delayed(const Duration(milliseconds: 900));
         await widget.controller.open(widget.open);
         if (!_sheets.contains(widget.shot)) return;

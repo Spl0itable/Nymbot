@@ -2,9 +2,7 @@ import '../services/chat_engine.dart';
 import '../services/connectors.dart';
 import 'i18n/i18n.dart';
 
-/// What one progress step reads as. The worker sends facts; the words are the
-/// client's, so they translate with everything else — and so both apps say the
-/// same thing about the same step.
+/// The client words each progress step from the worker's facts so it translates and matches the web app.
 String progressLine(TurnStep step) {
   switch (step.kind) {
     case 'routing':
@@ -58,7 +56,7 @@ String progressLine(TurnStep step) {
   }
 }
 
-/// Drops the steps that say what the line above already said.
+/// Drops steps that repeat the line above.
 List<TurnStep> trimProgress(List<TurnStep> steps) {
   final out = <TurnStep>[];
   for (final step in steps) {

@@ -34,9 +34,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-// FlutterFragmentActivity rather than FlutterActivity: platform plugins that
-// present system dialogs (the keystore's biometric prompt among them) require a
-// FragmentActivity host.
+// FragmentActivity host is required by plugins that show system dialogs such as the biometric prompt.
 class MainActivity : FlutterFragmentActivity() {
     private var intents: MethodChannel? = null
     private val pending = mutableListOf<Map<String, Any?>>()

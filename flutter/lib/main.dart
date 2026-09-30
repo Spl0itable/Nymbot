@@ -22,12 +22,10 @@ class _NymbotHttpOverrides extends HttpOverrides {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   HttpOverrides.global = _NymbotHttpOverrides();
-  // Loads the bundled libsecp256k1 that signing, verification and NIP-44's
-  // raw-X ECDH prefer. It never throws: the pure-Dart paths stay correct if the
-  // library is unavailable, just slower.
+  // Loads the bundled libsecp256k1; never throws, and pure-Dart paths remain as fallback.
   await NativeSchnorr.ensureLoaded();
   final store = await Store.open();
-  // Before the first frame, so the app never shows English and then repaints.
+  // Before the first frame so the app never paints English first.
   await I18n.load(preferred: store.getString('lang'));
   if (store.vault.locked) {
     runApp(LockedApp(store: store));

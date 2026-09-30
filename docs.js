@@ -1,15 +1,3 @@
-// Behavior for the knowledge base at /docs/.
-//
-// Three small things, none of which the page depends on to be readable: the
-// off-canvas nav on narrow screens, the filter box in the top bar, and the
-// "on this page" rail following the reader down the article. Everything here
-// is progressive — with scripting off the stylesheet leaves the nav in flow
-// and hides the filter box, so the page is still a complete document.
-//
-// No user-visible strings live in this file. Copy that a reader can see stays
-// in the markup, where the build's extractor finds and translates it without
-// anything having to be marked up by hand.
-
 (function () {
     'use strict';
 
@@ -17,18 +5,10 @@
     var main = document.getElementById('docs-main');
     if (!nav || !main) return;
 
-    // --- off-canvas nav ----------------------------------------------------
-
     var toggle = document.querySelector('.docs-nav-toggle');
     var scrim = null;
 
-    // The scrim has to go inside the shell, not on the body. `.docs-shell` is
-    // `position: relative; z-index: 1` — it lifts the page off the fixed grid
-    // background — and that makes it a stacking context, so the drawer's
-    // `z-index: 40` is scoped to it. A scrim parented to the body is compared
-    // against the whole shell at z-index 1 instead, wins, and swallows every
-    // click meant for the nav underneath it. Same context, and the topbar (30),
-    // scrim (35) and drawer (40) layer in the order the stylesheet says.
+    // The scrim must sit inside `.docs-shell`, a stacking context, or it covers the drawer and swallows its clicks.
     var scrimHost = document.querySelector('.docs-shell') || document.body;
 
     var isOffCanvas = function () {
@@ -79,10 +59,7 @@
         if (!isOffCanvas() && nav.classList.contains('is-open')) closeNav();
     });
 
-    // The nav is taller than the viewport once every section is listed, and it
-    // is its own scroll container. Landing halfway down the knowledge base with
-    // the sidebar showing its first entries hides where you actually are, so
-    // bring the current page into view — without moving the page itself.
+    // The nav scrolls on its own; bring the current page into view without moving the page.
     var here = nav.querySelector('a[aria-current="page"]');
     if (here) {
         var navBox = nav.getBoundingClientRect();
@@ -92,20 +69,12 @@
         }
     }
 
-    // --- filter ------------------------------------------------------------
-    //
-    // Every docs page ships the whole navigation tree, headings included, so
-    // filtering it is a site-wide search that needs no index — and one that is
-    // translated for free, because the tree is ordinary markup the build
-    // already translates. The stylesheet hides other pages' headings until a
-    // filter is running.
+    // Every page ships the whole nav tree, so filtering it is a site-wide search needing no index.
 
     var search = document.getElementById('docs-search');
     var empty = document.querySelector('.docs-nav-empty');
 
-    // Match the way a reader types: case-folded, and with accents dropped so
-    // "reves" finds "révès". A browser without Unicode normalisation just gets
-    // the case-folded comparison.
+    // Case-folded with accents dropped; without Unicode normalization only case is folded.
     var fold = function (text) {
         var lower = String(text).toLowerCase();
         return lower.normalize ? lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '') : lower;
@@ -151,8 +120,7 @@
             runFilter();
         });
 
-        // "/" is the search shortcut everyone already knows, but only when the
-        // reader is not typing into something else.
+        // `/` focuses search unless the reader is typing elsewhere.
         document.addEventListener('keydown', function (e) {
             if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
             var el = document.activeElement;
@@ -166,8 +134,6 @@
         // A filter typed, then restored from the back-forward cache.
         if (search.value) runFilter();
     }
-
-    // --- on this page ------------------------------------------------------
 
     var tocLinks = [].slice.call(document.querySelectorAll('.docs-toc a[href^="#"]'));
     if (tocLinks.length === 0) return;
@@ -187,9 +153,7 @@
         current = pair;
     };
 
-    // Plain measurement rather than IntersectionObserver: headings here are
-    // zero-height anchors between blocks of prose, so "which heading did I last
-    // scroll past" is the question, and an observer answers a different one.
+    // Plain measurement: headings are zero-height anchors, so an IntersectionObserver answers the wrong question.
     var update = function () {
         var line = window.scrollY + 120;
         var found = targets[0];
@@ -197,8 +161,7 @@
             if (targets[i].el.getBoundingClientRect().top + window.scrollY <= line) found = targets[i];
             else break;
         }
-        // At the very bottom the last section may be too short to ever cross
-        // the line; the reader is plainly in it, so say so.
+        // At the bottom the last section may never cross the line, so mark it current.
         if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
             found = targets[targets.length - 1];
         }

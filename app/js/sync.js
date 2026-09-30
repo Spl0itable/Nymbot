@@ -1,4 +1,3 @@
-// Your settings and your conversations, on every device you sign in on.
 (function () {
     'use strict';
 
@@ -28,10 +27,7 @@
     // Deleting on one device must not be undone by another that still has the record.
     const TOMBSTONE_MS = 60 * 24 * 3600 * 1000;
 
-    // The row that says which post-quantum root the ACCOUNT uses. Written by
-    // Nymchat under its own name, so the category is hashed the way Nymchat
-    // hashes it rather than the way this app hashes its own rows — one account,
-    // one root, whichever app reached it first.
+    // Nymchat's row name, hashed its way: one account, one root, whichever app reached it first.
     const PQ_ROOT_D_TAG = 'nymchat-pq-root';
 
     const LIBRARY = [
@@ -54,22 +50,16 @@
         return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
     }
 
-    /// The name the row is stored under.
     async function categoryFor(dTag) {
         return 'nymbot-' + (await sha256Hex(Identity.pubkey + '|d1:' + dTag)).slice(0, 48);
     }
 
-    /// The name Nymchat stores one of its rows under, for the account whose key
-    /// this is. Byte-for-byte its `_d1Category`, or the root row is invisible to
-    /// whichever app did not write it.
+    /// Must match Nymchat's `_d1Category` byte for byte, or the root row is invisible to the other app.
     async function nymchatCategoryFor(pubkey, dTag) {
         return 'nymchat-' + await sha256Hex(pubkey + ':d1:' + dTag);
     }
 
-    /// Sealing hybrid is only worth it if this device can also open it again: the
-    /// KEM secret is derived from the root, which a signer login does not have.
-    /// A locked device holds a root that is not this account's, so sealing to it
-    /// would write rows the account's real devices could never read.
+    /// Hybrid only if this device can reopen it: signer logins lack the root, and a locked device holds a foreign one.
     function selfKem() {
         if (Identity.rootLocked) return null;
         return Identity._kem ? Identity.kemPk : null;
@@ -217,9 +207,7 @@
         return Identity.decryptFrom(Identity.pubkey, blob);
     }
 
-    /// Never hybrid, whatever this device can do. The root row is the one row
-    /// that may not be sealed to a root-derived key: it is what tells a device
-    /// which root to derive, so sealing it that way locks it behind itself.
+    /// Never hybrid: the root row says which root to derive, so sealing it that way locks it behind itself.
     async function sealClassical(plaintext) {
         if (Identity._sk) {
             const T = NT();
@@ -228,10 +216,7 @@
         return Identity.encryptTo(Identity.pubkey, plaintext);
     }
 
-    /// `account` stands in for the signed-in identity when there is not one
-    /// yet: the sign-in gate has to ask what the account already holds before it
-    /// decides what to give this device. It carries the pubkey, something that
-    /// signs, and something that opens a classical blob addressed to it.
+    /// `account` stands in for the identity during sign-in, before this device is given a root.
     async function auth(action, account, payload) {
         const event = {
             kind: 27235,
@@ -273,10 +258,7 @@
         }
     }
 
-    /// A public batch read of the D1 profile mirror. No identity and no auth:
-    /// a kind 0 is public by definition, and this has to answer before the
-    /// relays are up. Returns the signed events by pubkey; unverified, since
-    /// the caller is the one that knows what it will do with them.
+    /// Public and unauthenticated since kind 0 is public; returns unverified events for the caller to check.
     async function profileEventsFromD1(pubkeys) {
         const wanted = (pubkeys || [])
             .filter(pk => /^[0-9a-f]{64}$/i.test(pk || ''))
@@ -310,11 +292,7 @@
         }
     }
 
-    /// What the account's root row says. Null when the read did not complete —
-    /// which is not the same answer as "there is no root", and the caller must
-    /// not treat it as one. `present` is the row's existence, decided without
-    /// decrypting: a row this device cannot open is still proof a root exists,
-    /// and minting a second one over it splits the account.
+    /// Null means the read failed, not "no root"; `present` counts rows this device cannot open.
     async function rootRecordFor(account) {
         const pubkey = account ? account.pubkey : Identity.pubkey;
         if (!pubkey) return null;
@@ -337,8 +315,7 @@
         return { present: true, record };
     }
 
-    /// Writes the row for the root this device holds. Without it every other
-    /// device reads "no root" and mints a rival one.
+    /// Without this row every other device reads "no root" and mints a rival one.
     async function publishRootRecord() {
         const fingerprint = Identity.rootFingerprint();
         if (!Identity.pubkey || !fingerprint) return false;
@@ -358,14 +335,11 @@
         return !!(resp && !resp.error);
     }
 
-    /// Newest wins, by whatever each record calls its clock.
     function stamp(record) {
         if (!record || typeof record !== 'object') return 0;
         return Number(record.updatedAt || record.at || record.createdAt || record.ts) || 0;
     }
 
-    /// Merges two lists of {id} records: the union, newest of each, minus
-    /// anything either side has since deleted.
     function fitArtifacts(convId, list) {
         let arts = list.map(a => Object.assign({}, a, { versions: (a.versions || []).slice(-ART_VERSIONS) }));
         const size = () => JSON.stringify({ id: convId, artifacts: arts }).length;
@@ -433,8 +407,7 @@
     const Sync = {
         pickSecret,
 
-        /// Set once a pull has come back with rows this device could not open — a
-        /// key that has not been linked yet.
+        /// Set once a pull returns rows this device cannot open, i.e. an unlinked key.
         blocked: false,
         lastAt: 0,
         _timer: null,
@@ -515,8 +488,7 @@
             Store.drop('sync_hashes');
         },
 
-        /// Every record this device has deleted, so a device that still holds it
-        /// does not push it back.
+        /// So a device that still holds a deleted record does not push it back.
         graves() {
             const held = Store.read('sync_graves', {}) || {};
             const cutoff = Date.now() - TOMBSTONE_MS;
@@ -535,7 +507,6 @@
             Store.write('sync_graves', held);
         },
 
-        /// What this device would put on the server right now.
         snapshot() {
             const graves = this.graves();
             const out = {};
@@ -578,9 +549,7 @@
             return out;
         },
 
-        /// Folds what came back into what is here. Muted: what the server sent
-        /// is not a local change, and treating it as one made the sync chase
-        /// its own tail.
+        /// Muted: server data is not a local change, or the sync chases its own tail.
         apply(remote) {
             return Store.quiet(() => this._apply(remote));
         },
@@ -592,8 +561,7 @@
             Store.write('sync_graves', graves);
 
             if (remote.settings && typeof remote.settings === 'object') {
-                // The local ones win on the keys this device has changed since
-                // its last push; everything else comes across.
+                // Local values win on keys changed here since the last push.
                 const local = Store.read('settings', {}) || {};
                 const theirs = Object.assign({}, remote.settings);
                 delete theirs.git;
@@ -612,8 +580,7 @@
                     const theirs = remote.library[name];
                     if (!Array.isArray(theirs)) continue;
                     const mine = get() || [];
-                    // A list of ids merges by id; a list of plain values (the
-                    // favourites) is a set.
+                    // Lists of ids merge by id; lists of plain values (favorites) merge as a set.
                     const merged = theirs.length && typeof theirs[0] === 'object'
                         ? mergeById(mine, theirs, graves)
                         : Array.from(new Set([].concat(mine, theirs)));
@@ -712,9 +679,7 @@
                 if (!payload || typeof payload !== 'object') continue;
                 const name = typeof payload.__cat === 'string' ? payload.__cat : null;
                 if (!name) continue;
-                // Key material, not a settings payload. It has its own reader
-                // and its own writer, and letting it through here would put it
-                // in the sync's snapshot — and in what a remote wipe empties.
+                // Key material has its own reader and writer; keep it out of the snapshot and remote wipes.
                 if (name === PQ_ROOT_D_TAG) continue;
                 delete payload.__cat;
                 out[name] = payload.v !== undefined ? payload.v : payload;
@@ -725,8 +690,7 @@
                     this._names.set(category, name);
                 }
             }
-            // Rows exist and none of them opened: this device holds a key that
-            // cannot read the account's own settings, so it must not write.
+            // Rows exist but none opened: this key cannot read the account's settings, so it must not write.
             if (full) this.blocked = unreadable > 0 && Object.keys(out).length === 0;
             this._pending = Number.isFinite(data.cursor) && Number.isFinite(data.now)
                 ? { pk: Identity.pubkey, cursor: data.cursor, now: data.now, full, at: Date.now() }
@@ -753,7 +717,6 @@
             return true;
         },
 
-        /// One round: read what is there, fold it in, write back what changed.
         async run(opts) {
             if (!this.enabled()) return { skipped: true };
             // Already going.
@@ -772,8 +735,7 @@
                     if (this.blocked) return { blocked: true };
                     this._commit();
                     const local = this.snapshot();
-                    // A row the server holds for a conversation this device has
-                    // since deleted is emptied rather than left behind.
+                    // Server rows for conversations deleted here are emptied rather than left behind.
                     for (const key of new Set(Object.keys(remote).concat([...this._names.values()]))) {
                         if (key.indexOf('chat-') === 0 && !local[key]) local[key] = { id: '', messages: [] };
                     }
@@ -803,13 +765,11 @@
             return this._running;
         },
 
-        /// Follows the store, so nothing has to remember to call touch().
         follow() {
             if (this._following) return;
             this._following = Store.watch(() => this.touch());
         },
 
-        /// Something changed here.
         touch(delay) {
             if (!this.enabled()) return;
             if (this._timer) clearTimeout(this._timer);
@@ -819,9 +779,7 @@
             }, delay || 4000);
         },
 
-        /// Deletes this account's rows on the server, on the way out. Signed
-        /// while the key is still here, sent keepalive so a reload cannot
-        /// cancel it.
+        /// Signed while the key is still here and sent keepalive so a reload cannot cancel it.
         async purge() {
             if (!Identity.pubkey) return false;
             let body;
@@ -844,7 +802,6 @@
             } catch (_) { return false; }
         },
 
-        /// Everything this account has on the server, gone.
         async wipeRemote() {
             if (!Identity.pubkey) return false;
             const remote = await this.pull({ full: true });

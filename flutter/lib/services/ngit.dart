@@ -16,7 +16,7 @@ class Ngit {
   static const int kindRepo = 30617;
   static const int kindState = 30618;
 
-  /// The relays an address does not name.
+  /// Relays used when an address names none.
   static const List<String> fallbackRelays = [
     'wss://relay.ngit.dev',
     'wss://relay.damus.io',
@@ -40,13 +40,11 @@ class Ngit {
         return null;
       }
     }
-    // A NIP-05 name needs a lookup this service does not do; the caller is told
-    // what is missing rather than handed a silent failure.
+    // NIP-05 names need a lookup this service does not do.
     return null;
   }
 
-  /// Reads whatever somebody pasted: an naddr, a `nostr://` clone URL, or the
-  /// npub-and- identifier the URL is made of.
+  /// Accepts an naddr, a `nostr://` clone URL, or its npub-and-identifier parts.
   static NgitAddress? parseAddress(String input) {
     final text = input.trim();
     if (text.isEmpty) return null;
@@ -91,7 +89,6 @@ class Ngit {
     );
   }
 
-  /// Which forge a clone URL points at, and what to call the repo there.
   static NgitForge? forgeFor(String cloneUrl) {
     Uri parsed;
     try {
@@ -113,7 +110,7 @@ class Ngit {
           provider: 'github', host: 'github.com', repo: segments.take(2).join('/'));
     }
     if (host == 'gitlab.com' || host == 'www.gitlab.com') {
-      // GitLab allows nested groups, which the worker accepts up to four.
+      // GitLab allows nested groups; the worker accepts up to four.
       return NgitForge(
           provider: 'gitlab', host: 'gitlab.com', repo: segments.take(4).join('/'));
     }
@@ -121,7 +118,6 @@ class Ngit {
       return NgitForge(
           provider: 'gitea', host: 'codeberg.org', repo: segments.take(2).join('/'));
     }
-    // Self-hosted.
     final provider = host.contains('gitlab') ? 'gitlab' : 'gitea';
     return NgitForge(
       provider: provider,
@@ -165,8 +161,7 @@ class Ngit {
       .toSet()
       .toList();
 
-  /// Looks an announcement up and reads everything off it, or throws with a
-  /// reason a person can act on.
+  /// Throws with an actionable reason when it cannot resolve.
   Future<NgitRepo> resolve(String input) async {
     final address = parseAddress(input);
     if (address == null) {
@@ -179,8 +174,7 @@ class Ngit {
       '#d': [address.identifier],
       'limit': 4,
     };
-    // Both: the pool for anything mirrored to the usual relays, and the
-    // announcement's own for anything that is not.
+    // Both the pool and the announcement's own relays.
     final events = [
       ...await relays.fetch(filter, timeout: const Duration(seconds: 5)),
       ...await relays.fetchFrom(where, filter, timeout: const Duration(seconds: 6)),
@@ -225,7 +219,7 @@ class Ngit {
     );
   }
 
-  /// The branch the repository says is current, from its kind-30618.
+  /// The current branch per the repo's kind-30618.
   Future<({String head, Map<String, String> refs})> _state(
       NgitAddress address, List<String> extraRelays) async {
     final where = secureRelays([...address.relays, ...extraRelays, ...fallbackRelays]);
@@ -295,7 +289,7 @@ class NgitForge {
   final String host;
   final String repo;
 
-  /// True when the provider was inferred from a self-hosted hostname rather than known.
+  /// True when the provider was inferred from a self-hosted hostname.
   final bool guessed;
 }
 

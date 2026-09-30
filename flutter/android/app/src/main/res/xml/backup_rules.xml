@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 and below (fullBackupContent): exclude everything from Auto
-     Backup. The app's local data is a cleartext mirror of end-to-end encrypted
-     conversations; it must never leave the device via backup. -->
+<!-- Android 11 and below: exclude everything, since local data is a cleartext mirror of E2EE chats. -->
 <full-backup-content>
     <exclude domain="root" path="." />
     <exclude domain="file" path="." />

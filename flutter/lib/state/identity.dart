@@ -13,11 +13,7 @@ import '../services/nostr/event_signer.dart';
 import 'store.dart';
 import '../features/i18n/i18n.dart';
 
-/// The key, and the post-quantum root the ML-KEM keypair is derived from.
-///
-/// The root is generated independently of the signing key on purpose: the
-/// signing pubkey is published on every wrap, so a KEM key derived from it
-/// would fall with secp256k1.
+/// The PQ root is independent of the signing key, so the KEM key does not fall with secp256k1.
 typedef SignerRestore = RemoteSigner? Function(Map<String, dynamic> session);
 
 class Identity {
@@ -41,13 +37,10 @@ class Identity {
   MlKemKeyPair? _kem;
   String? _pubkey;
 
-  /// Which epoch of the root this account's KEM key is derived at. Rotation
-  /// happens in Nymchat; this device follows whatever the account advertises.
+  /// Root epoch the KEM key is derived at; rotation happens in Nymchat.
   int _epoch = 0;
 
-  /// True when the account already advertises a KEM key this device cannot
-  /// derive. Announcing over it would strand every other device, so we do not,
-  /// and replies come back classical until the root is linked.
+  /// The account advertises a KEM key we cannot derive; we do not announce over it.
   bool rootLocked = false;
 
   bool _rootUnreadable = false;
@@ -132,9 +125,7 @@ class Identity {
     _deriveKem();
   }
 
-  /// The root this device already holds, or null. Deliberately does not mint
-  /// one: minting is a decision about the ACCOUNT, and it belongs to whoever
-  /// has asked D1 whether the account already has one.
+  /// Never mints: that decision belongs to whoever asked D1 about the account.
   Future<Uint8List?> _readRoot() async {
     final code = await _store.secret(_rootKey);
     _rootUnreadable = false;
@@ -142,8 +133,7 @@ class Identity {
     try {
       return bech32.decodeNymPq(code);
     } catch (_) {
-      // Unreadable is not "no root": generating over it would split the
-      // account. Say nothing and let the record check decide.
+      // Unreadable is not "no root": generating over it would split the account.
       _rootUnreadable = true;
       return null;
     }
@@ -223,8 +213,7 @@ class Identity {
     return true;
   }
 
-  /// Whether this device has settled what the account's root is — either it
-  /// holds it, or it knows it must be given the code.
+  /// Either holds the root or knows it needs the code.
   bool get rootSettled => _root != null || rootLocked;
 
   Future<String> generate({Uint8List? secret, Uint8List? root}) async {
@@ -236,13 +225,7 @@ class Identity {
     return rootCode;
   }
 
-  /// Accepts an `nsec1…` or a raw 64-character hex key.
-  ///
-  /// [root] decides the post-quantum half. Minting one unasked is wrong for a
-  /// key that has been used before: the account's announcement is replaceable,
-  /// so a second root published over the first strands every settings row,
-  /// every synced conversation and every reply sealed to the one it replaced.
-  /// The caller looks the account up first and passes null to say "not yet".
+  /// Accepts `nsec1…` or 64-char hex; a null [root] means the account has not been checked yet.
   Future<void> import(String input, {Uint8List? root, int epoch = 0}) async {
     final text = input.trim();
     Uint8List sk;
@@ -259,8 +242,7 @@ class Identity {
     rootLocked = root == null;
   }
 
-  /// Reads a key without adopting it, so the caller can ask what the account
-  /// already has before deciding what root to give it.
+  /// Reads a key without adopting it.
   Uint8List readSecret(String input) {
     final text = input.trim();
     if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(text)) {
@@ -270,7 +252,7 @@ class Identity {
     throw FormatException(t('Paste an nsec, or its 64-character hex form.'));
   }
 
-  /// Mints one now, for an account that turns out not to have one.
+  /// Mints a root for an account confirmed to have none.
   Future<String> mintRoot() async {
     final root = pq.pqGenerateRoot();
     _rootUnreadable = false;
@@ -288,7 +270,7 @@ class Identity {
     await _store.setSecret(_skKey, convert.hex.encode(sk));
     await _store.setInt(_epochKey, _epoch);
     if (root == null) {
-      // A root left over from another identity opens nothing this one saved.
+      // A root left from another identity opens nothing of this one.
       await _store.dropSecret(_rootKey);
       return;
     }
@@ -322,8 +304,7 @@ class Identity {
   String get rootFingerprint =>
       _root == null ? '' : pq.pqRootFingerprint(_root!);
 
-  /// Links this device to an existing account's root, pasted from the other
-  /// app's identity settings.
+  /// Links this device to an existing root pasted from the other app.
   Future<void> adoptRootCode(String code, {int? epoch}) async {
     final bytes = bech32.decodeNymPq(code.trim());
     if (epoch != null) _epoch = epoch < 0 ? 0 : epoch;
@@ -335,9 +316,7 @@ class Identity {
     await _store.setSecret(_rootKey, bech32.encodeNymPq(bytes));
   }
 
-  /// The root a pasted `nympq1…` code carries, or null on a wrong prefix, bad
-  /// checksum or wrong length. Adopting a wrong root is worse than adopting
-  /// none.
+  /// Null on a wrong prefix, bad checksum or wrong length.
   static Uint8List? rootFromCode(String code) {
     try {
       final bytes = bech32.decodeNymPq(code.trim());
@@ -347,8 +326,7 @@ class Identity {
     }
   }
 
-  /// The fingerprint a pasted code would carry, without adopting it — so it can
-  /// be checked against the one the account recorded.
+  /// Fingerprint of a pasted code, without adopting it.
   static String? fingerprintOfCode(String code) {
     try {
       return pq.pqRootFingerprint(bech32.decodeNymPq(code.trim()));
@@ -357,8 +335,7 @@ class Identity {
     }
   }
 
-  /// The KEM key a given code would produce at [epoch], without adopting it —
-  /// so a pasted code can be checked against what the account advertises.
+  /// KEM key a code would produce at [epoch], without adopting it.
   static Uint8List? kemForCode(String code, int epoch) {
     try {
       return pq

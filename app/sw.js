@@ -1,6 +1,3 @@
-// Caches the shell so the app opens offline. Conversations are read from local
-// storage, so what you have already said is there without a network; a reply is
-// not, because the model is not on the device.
 const CACHE = 'nymbot-shell-v76';
 const SHELL = [
     '/app/',

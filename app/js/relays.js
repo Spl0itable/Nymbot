@@ -1,6 +1,4 @@
-// A small relay pool: publish, one-shot fetch, and a live subscription.
 // Through the worker's proxy when it answers, direct sockets when it does not.
-// The relay set is the one the worker itself reads from.
 (function () {
     'use strict';
 
@@ -14,7 +12,7 @@
     const Relays = {
         sockets: new Map(),      // url -> WebSocket
         _subs: new Map(),        // subId -> { filter, onEvent }
-        _listeners: new Set(),   // status change callbacks
+        _listeners: new Set(),
         _upstream: [],           // relays the proxy says it has
         _direct: false,          // proxy unreachable, on our own sockets
         _tries: 0,
@@ -118,7 +116,6 @@
             }, wait + Math.random() * 4000);
         },
 
-        /// Drops the direct sockets the proxy replaced, reconnects included.
         _retireDirect() {
             this._direct = false;
             const keep = this.poolUrl;
@@ -157,16 +154,13 @@
                 if (this.sockets.get(url) === ws) this.sockets.delete(url);
                 this._emit();
                 if (ws._retired || this.pooled) return;
-                // Staggered so a relay that drops everyone at once is not met
-                // with a synchronised stampede.
+                // Staggered to avoid a synchronized reconnect stampede.
                 setTimeout(() => this._open(url), 4000 + Math.random() * 6000);
             });
             ws.addEventListener('error', () => { try { ws.close(); } catch (_) { } });
         },
 
-        /// Publishes to every open relay and resolves with how many said OK.
-        /// One acceptance is enough for the worker to find the wrap, so the
-        /// caller waits for the first rather than for all of them.
+        /// One acceptance is enough for the worker to find the wrap.
         publish(event, timeoutMs) {
             const open = [...this.sockets.entries()].filter(([, ws]) => ws.readyState === 1);
             if (open.length === 0) return Promise.resolve(0);
@@ -185,8 +179,7 @@
                     try { data = JSON.parse(m.data); } catch (_) { return; }
                     if (Array.isArray(data) && data[0] === 'OK' && data[1] === event.id && data[2] !== false) {
                         accepted++;
-                        // Two is enough redundancy; the proxy sends one OK per
-                        // event however many relays took it, so there one is.
+                        // The proxy sends one OK per event however many relays took it.
                         if (accepted >= need) finish();
                     }
                 };
@@ -198,7 +191,6 @@
             });
         },
 
-        /// One-shot query against relays this app does not keep open.
         fetchFrom(urls, filter, timeoutMs) {
             if (!C.apiHost) return Promise.resolve([]);
             const list = Array.from(new Set((urls || []).filter(u => typeof u === 'string' && /^wss:\/\//i.test(u)))).slice(0, 8);
@@ -297,7 +289,6 @@
             return [...seen.values()];
         },
 
-        /// One-shot query across the pool, de-duplicated by event id.
         fetch(filter, timeoutMs) {
             const open = [...this.sockets.entries()].filter(([, ws]) => ws.readyState === 1);
             if (open.length === 0) return Promise.resolve([]);
@@ -330,7 +321,6 @@
             });
         },
 
-        /// A standing subscription, replayed onto relays as they reconnect.
         subscribe(filter, onEvent) {
             const id = subId();
             this._subs.set(id, { filter, onEvent });

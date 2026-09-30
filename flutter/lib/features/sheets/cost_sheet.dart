@@ -7,9 +7,7 @@ import '../i18n/i18n.dart';
 import 'credits_sheet.dart';
 import 'sheet.dart';
 
-/// Everything the device actually knows about one reply's price. Deliberately
-/// not an estimate re-run after the fact: what is shown is what the worker
-/// charged and what it said it did to earn it.
+/// What the worker actually charged for one reply, not a re-run estimate.
 List<(String, String)> costRows(BuildContext context, ChatMessage m,
     {Map<String, dynamic>? catalog}) {
   final pro = m.model != null;

@@ -19,8 +19,7 @@ class HelpTopic {
       body.toLowerCase().contains(needle);
 }
 
-/// The same guide the web app carries, so an answer found on one device is the
-/// answer on the other.
+/// Same guide as the web app.
 List<HelpTopic> helpTopics() => [
       HelpTopic(
         t('Asking, and what it costs'),

@@ -1,36 +1,9 @@
-// The error pages Cloudflare serves for nymbot.ai, and the one template they
-// are all cut from.
-//
-// Two mechanisms use these, and the difference decides the shape of the file:
-//
-//   Error Pages         A page per error class, configured on the zone. The
-//                       HTML must contain a token — `::CLOUDFLARE_ERROR_500S_BOX::`
-//                       and friends — which Cloudflare replaces with the error
-//                       details or the challenge widget.
-//   Custom Error Rules  A rule points at a stored copy of a page and serves it
-//                       for chosen status codes. Tokens are not substituted
-//                       here, so a rule needs a page with none — that is what
-//                       `server-error.html` is for.
-//
-// Everything else they have in common with `404.html`: the same hero, the same
-// quip, the same fake shell prompt, the same link cards, the same footer. See
-// `errors/style.mjs` for why the styling is inlined instead of linked, and
-// README.md for which page goes in which dashboard slot.
-//
-// The set is the twin of the one in nym-web, the way this 404 page is the twin
-// of that one. The two are kept in step by hand, like the legal copy: separate
-// sites, separate zones, separate wording, one look.
+// Error Pages substitute `::CLOUDFLARE_…_BOX::` tokens; Custom Error Rules do not (see server-error.html).
 import { codeFontSize, HERO_ART, squareOff, windowArt } from "./art.mjs";
 
 const SITE = "https://nymbot.ai";
 
-// The links at the bottom. An outage page cannot honestly send a reader to a
-// page on the host that is failing — /app included, which is served from this
-// origin — so those pages lead with the destinations that are somewhere else.
-//
-// Every link here is absolute. A stored error page is served under whichever
-// hostname the request was for, and `/docs/` would follow the reader to the
-// wrong one of them.
+// Absolute and off-host first: a stored page is served under any requested hostname, often during an outage.
 const CARDS = {
   home: {
     href: `${SITE}/`,
@@ -50,9 +23,7 @@ const CARDS = {
   nymchat: {
     href: "https://nymchat.app",
     title: "Nymchat",
-    // A brand name on its own. The site's own extractor protects these from
-    // being sent out to be transliterated; these pages collect their strings
-    // from the renderer instead, so they say it here.
+    // Marked fixed here because these pages collect strings from the renderer, not the extractor.
     fixed: true,
     desc: "The messenger on the same key, on a domain of its own.",
   },
@@ -211,9 +182,7 @@ export const ERROR_PAGES = [
       "Error Pages → Managed Challenge, Interactive Challenge, Basic security challenge, Country challenge",
     token: "::CAPTCHA_BOX::",
     title: "One moment, checking your browser",
-    // The wordmark rather than a status code. A challenge is not an error and
-    // has no code to print, and the question a held-up visitor actually has is
-    // whose site is holding them up.
+    // A challenge has no status code, so show whose site is holding the visitor up.
     hero: "logo",
     window: {
       channel: "#gate",
@@ -261,11 +230,7 @@ export const ERROR_PAGES = [
   },
   {
     file: "server-error.html",
-    // The token-free one. Error Pages deliberately do not apply to 500, 501,
-    // 503 or 505, and a custom error rule does not substitute tokens, so this
-    // is the page a rule points at. On this site that is the one that matters
-    // most: the backend under /functions answers on this origin, and a 500 from
-    // there is exactly the case Error Pages will not cover.
+    // Token-free: Error Pages skip 500/501/503/505 and custom rules do not substitute tokens.
     slot: "Custom Error Rules (any status code, no token substituted)",
     token: null,
     title: "That request did not go through",
@@ -297,9 +262,7 @@ const esc = (text) =>
 
 const attr = (text) => esc(text).replace(/"/g, "&quot;");
 
-// The site's own favicon lives at /images/, and a page that has to survive this
-// host being unreachable cannot go and fetch it. This one is the terminal
-// prompt the pages already draw, small enough to carry.
+// Inline favicon, since /images/ is unreachable when these pages show.
 const FAVICON =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E" +
   "%3Crect width='32' height='32' rx='6' fill='%23050810'/%3E" +
@@ -314,11 +277,7 @@ const card = (key, mark) => {
             </a></li>`;
 };
 
-// Kept in step with the footer in 404.html and in the rendered pages by hand,
-// the same way the legal copy is.
-//
-// Every link label is a slot: the footer is the same seven words on all eight
-// pages, so it is seven strings the cache already has to hold, not fifty-six.
+// Kept in step with the 404.html footer by hand.
 const footer = (mark) => `    <footer>
         <div style="margin-top: 1rem;">
             <p${mark("Nymbot - your AI, on your key")}>Nymbot - your AI, on your key</p>
@@ -333,21 +292,12 @@ const footer = (mark) => `    <footer>
         </div>
     </footer>`;
 
-// The translatable strings on a page, numbered in the order the markup uses
-// them. `data-i18n="7"` is the whole of the contract with errors/runtime.js:
-// the renderer decides what is prose, here, once, and the runtime only ever
-// looks a number up.
-//
-// The set this produces is also the set sent for translation — errorStrings()
-// below renders every page to collect it — so the strings the cache is asked
-// to cover cannot drift from the strings the page can actually show.
+// `data-i18n="N"` numbering is the whole contract with errors/runtime.js.
 function slots() {
   const strings = [];
   let sealed = false;
   const mark = (text) => {
-    // Every slot has to exist before the translations are looked up, or the
-    // rows come back shorter than the markup and the last few strings quietly
-    // stay English. Sealing turns "quietly" into a failed build.
+    // Sealed so a slot added after the table is built fails the build instead of staying English.
     if (sealed) throw new Error(`slot "${text}" was added after the table was built`);
     return ` data-i18n="${strings.push(text) - 1}"`;
   };
@@ -356,17 +306,7 @@ function slots() {
   return { strings, mark, markAttr, seal };
 }
 
-/// One finished error page, plus the English strings it turned out to need.
-///
-/// [assets] carries the two things the page inlines rather than links: the
-/// stylesheet subset from errors/style.mjs and the minified errors/runtime.js.
-/// Both arrive already built, because the runtime's exact bytes are what
-/// `_headers` hashes and the build is the one place that can know them.
-///
-/// [translate] is handed the strings once they are all known and returns the
-/// table to embed: `{ t: { es: [...] }, rtl: [...] }`. It is a callback rather
-/// than an argument because the strings are a result of rendering, not an input
-/// to it — the page is written first, and only then is there a list to look up.
+/// [assets] arrive prebuilt since `_headers` hashes the runtime's bytes; [translate] runs once all strings are known.
 export function renderErrorPage(page, assets = {}, translate = () => ({})) {
   const { css = "", runtime = "" } = assets;
   const hero = HERO_ART[page.hero];
@@ -376,17 +316,13 @@ export function renderErrorPage(page, assets = {}, translate = () => ({})) {
   const art = squareOff(hero.art);
   const { strings, mark, markAttr, seal } = slots();
 
-  // One extra rule per page: each drawing is a different number of columns
-  // wide, so each one gets its own cap.
+  // Each drawing has its own column count, so each gets its own cap.
   const sizing = `\n.nf-art-code{font-size:${codeFontSize(art)}}`;
 
   const title = `${page.title} - Nymbot`;
   const parts = [];
 
-  // The wordmark's label is a name, not prose. Everything else a screen reader
-  // is read here is copy, and is translated — the drawings themselves stay as
-  // they are, because they are `<pre>` padded to the column and a translation
-  // would take the frame apart.
+  // `<pre>` drawings stay untranslated; a translation would break the padded frame.
   parts.push(
     `        <pre class="nf-art nf-art-code" role="img" aria-label="${attr(hero.label)}"`
     + `${hero.fixed ? "" : markAttr(hero.label, "aria-label")}>${art}</pre>`
@@ -399,15 +335,7 @@ export function renderErrorPage(page, assets = {}, translate = () => ({})) {
     + `${markAttr(page.label, "aria-label")}>${windowArt(page.window)}</pre>`
   );
 
-  // Cloudflare replaces the token with its own markup. On a page served any
-  // other way the token would be visible text, so it is the only thing in the
-  // box and the box hides itself when it is empty.
-  //
-  // `data-i18n-skip` is belt and braces. Nothing translates these pages by
-  // walking them — the slots above are the whole source set — but this is the
-  // one string on the site where a translator being helpful would break the
-  // page silently: a mangled token is a box Cloudflare never fills in, on a
-  // page nobody visits deliberately.
+  // The token sits alone in a box that hides when empty; `data-i18n-skip` keeps translators from mangling it.
   if (page.token) {
     parts.push(`        <div class="nf-box" data-i18n-skip>${page.token}</div>`);
   }
@@ -415,10 +343,7 @@ export function renderErrorPage(page, assets = {}, translate = () => ({})) {
   parts.push(`        <p class="nf-quip"${mark(page.quip)}>${esc(page.quip)}</p>`);
 
   if (page.term) {
-    // The prompt and the command are typed at a shell, not read as prose, and
-    // carry the skip marker for the same reason the token does. The argument is
-    // either a host — never translated, and the site's own extractor would
-    // reject it too — or a phrase, which is.
+    // Shell text carries the skip marker; a host argument is never translated, a phrase is.
     const argument = page.term.host ?? page.term.argument;
     const argumentMark = page.term.host
       ? ' data-i18n-skip'
@@ -436,13 +361,11 @@ export function renderErrorPage(page, assets = {}, translate = () => ({})) {
 ${page.cards.map((key) => card(key, mark)).join("\n")}
         </ul>`);
 
-  // The last two pieces of markup that carry copy, written before the table is
-  // asked for so that every slot on the page is numbered by the time it is.
+  // Written before the table is requested so every slot is numbered first.
   const titleTag = `<title${mark(title)}>${esc(title)}</title>`;
   const footerHtml = footer(mark);
 
-  // Parsed, never executed, so it costs the script policy nothing — the same
-  // arrangement every other page on the site uses for its runtime strings.
+  // Parsed, never executed, so it costs the script policy nothing.
   seal();
   const table = translate(strings);
   for (const [code, row] of Object.entries(table.t ?? {})) {
@@ -487,11 +410,7 @@ ${data}
   return { html, strings };
 }
 
-/// Every English string the eight pages between them need translated.
-///
-/// Collected by rendering them, rather than by listing them, so a string can
-/// never be added to a page and forgotten here — the page that shows it is the
-/// page that declares it.
+/// Collected by rendering, so a string added to a page cannot be forgotten here.
 export function errorStrings() {
   const all = new Set();
   for (const page of ERROR_PAGES) {

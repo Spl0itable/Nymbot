@@ -23,8 +23,6 @@ import 'sheets/workspaces_sheet.dart';
 import 'nym_glyph.dart';
 import 'research_view.dart';
 
-/// The AI toolbar: which balance this chat spends, which model answers, the
-/// connected repository, anonymous mode, and the credit balance.
 class NymbotToolbar extends StatelessWidget {
   const NymbotToolbar({super.key});
 
@@ -42,11 +40,12 @@ class NymbotToolbar extends StatelessWidget {
     final repos = app.activeRepos;
     final persona = app.activePersona;
     final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
+    final locked = app.freeOnly;
 
-    // Every chip that can be on for this chat, in the order the bar reads.
     final chips = <_ChipSpec>[
       _ChipSpec(
         glyph: 'auto-routed',
+        paidOnly: true,
         label: shown == null
             ? t('Auto-routed')
             : media != null
@@ -58,6 +57,7 @@ class NymbotToolbar extends StatelessWidget {
       ),
       _ChipSpec(
         glyph: 'git',
+        paidOnly: true,
         label: repos.isEmpty
             ? t('Git')
             : repos.length == 1
@@ -69,12 +69,14 @@ class NymbotToolbar extends StatelessWidget {
       if (app.runnerAvailable && repos.isNotEmpty)
         _ChipSpec(
           glyph: 'server-runs',
+          paidOnly: true,
           label: t('Server runs'),
           active: app.current?.serverRuns == true,
           onTap: () => _toggleServerRuns(context, app),
         ),
       _ChipSpec(
         glyph: 'connectors',
+        paidOnly: true,
         label: app.activeConnectors.isEmpty
             ? t('Connectors')
             : app.activeConnectors.length == 1
@@ -122,6 +124,7 @@ class NymbotToolbar extends StatelessWidget {
       ),
       _ChipSpec(
         glyph: 'compare',
+        paidOnly: true,
         label: t('Compare'),
         active: false,
         onTap: () => showCompareSheet(context),
@@ -135,12 +138,11 @@ class NymbotToolbar extends StatelessWidget {
           active: true,
           onTap: () => showArtifactsSheet(context),
         ),
-      // Only a Pro reply outside a repo task can be asked to think harder:
-      // standard replies are one routed call, and a repo task already loops on
-      // a budget of its own.
+      // Only Pro replies outside repo tasks can think harder; repo tasks have their own budget.
       if (pro && repos.isEmpty)
         _ChipSpec(
           glyph: 'effort',
+          paidOnly: true,
           label: switch (ChatEngine.effortOf(app.current)) {
             'careful' => t('Careful'),
             'deep' => t('Deep'),
@@ -151,6 +153,7 @@ class NymbotToolbar extends StatelessWidget {
         ),
       _ChipSpec(
         glyph: 'research',
+        paidOnly: true,
         label: t('Research'),
         active: app.researchNext,
         onTap: () => toggleResearchChip(context, app),
@@ -158,6 +161,7 @@ class NymbotToolbar extends StatelessWidget {
       if (app.teamAvailable)
         _ChipSpec(
           glyph: 'team',
+          paidOnly: true,
           label: app.teamSetting == null
               ? t('Team')
               : t('Team of {n}', {'n': app.teamSetting!.workers}),
@@ -166,20 +170,21 @@ class NymbotToolbar extends StatelessWidget {
         ),
       _ChipSpec(
         glyph: 'web',
+        paidOnly: true,
         label: t('Web'),
         active: app.settings.webSearch,
         onTap: () => app.setWebSearch(!app.settings.webSearch),
       ),
       _ChipSpec(
         glyph: 'anon',
+        paidOnly: true,
         label: t('Anon'),
         active: app.current?.anon ?? false,
         onTap: () => _anonChip(context, app),
       ),
-    ];
+    ].map((c) => c.paidOnly && locked ? c.locked(context) : c).toList();
 
-    // Whatever is on for this chat sorts to the front, with a rule after it,
-    // so the settings in force are the ones you see before you scroll.
+    // Active chips sort to the front, followed by a divider.
     final on = chips.where((c) => c.active).toList();
     final off = chips.where((c) => !c.active).toList();
 
@@ -206,9 +211,9 @@ class NymbotToolbar extends StatelessWidget {
       key: const ValueKey('balance-chip'),
       glyph: app.spendingAnon ? 'anon' : 'bolt',
       label: (!app.proTier &&
-              !app.spendingAnon &&
-              (app.standardBalance ?? 0) == 0 &&
-              app.freeLeft != null)
+              app.freeLeft != null &&
+              (app.freeOnly ||
+                  (!app.spendingAnon && (app.standardBalance ?? 0) == 0)))
           ? t('{n} free', {'n': figure(app.freeLeft)})
           : (app.shownBalance == null
               ? t('Buy')
@@ -242,9 +247,7 @@ class NymbotToolbar extends StatelessWidget {
         border: Border(bottom: BorderSide(color: theme.dividerColor)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      // Only the chips scroll. The tier switch and the balance are anchored
-      // either side of them, so a chat with a long model name or a shelf of
-      // repositories can never push the button that buys credits out of reach.
+      // Only the chips scroll, so the buy button can never be pushed out of reach.
       child: Row(
         children: [
           _TierSwitch(pro: pro, accent: accent),
@@ -359,8 +362,7 @@ Future<void> _showChipMenu(
   });
 }
 
-/// One toolbar chip, described rather than built, so the bar can sort the ones
-/// that are on to the front before any of them is laid out.
+/// Described rather than built, so active chips can be sorted first.
 class _ChipSpec {
   const _ChipSpec({
     required this.glyph,
@@ -368,6 +370,8 @@ class _ChipSpec {
     required this.active,
     required this.onTap,
     this.brand,
+    this.paidOnly = false,
+    this.dimmed = false,
   });
 
   final String glyph;
@@ -375,10 +379,44 @@ class _ChipSpec {
   final bool active;
   final VoidCallback onTap;
   final String? brand;
+  final bool paidOnly;
+  final bool dimmed;
+
+  _ChipSpec locked(BuildContext context) => _ChipSpec(
+        glyph: glyph,
+        label: label,
+        active: false,
+        onTap: () => offerCredits(context, anon: glyph == 'anon'),
+        brand: brand,
+        paidOnly: paidOnly,
+        dimmed: true,
+      );
 
   Widget build(BuildContext context) => _Chip(
-      glyph: glyph, label: label, active: active, onTap: onTap, brand: brand);
+      key: ValueKey('chip-$glyph'),
+      glyph: glyph,
+      label: label,
+      active: active,
+      onTap: onTap,
+      brand: brand,
+      dimmed: dimmed);
 }
+
+Future<void> offerCredits(BuildContext context, {bool anon = false}) =>
+    showCreditsSheet(context,
+        toAnon: anon,
+        reason: t('That needs credits. Free replies run one small model, '
+            'without web search, tools or anon mode.'));
+
+const _paidCommands = {
+  'web', 'model', 'compare', 'anon', 'git', 'repo', 'effort', 'research',
+  'image', 'video', 'speak', 'review',
+};
+
+/// Turning a paid feature off stays allowed on the free tier.
+bool paidOnlyCommand(String cmd, String arg) =>
+    _paidCommands.contains(cmd) &&
+    !RegExp(r'^(off|disconnect|normal)$', caseSensitive: false).hasMatch(arg);
 
 Future<void> _toggleServerRuns(BuildContext context, AppController app) async {
   final messenger = ScaffoldMessenger.of(context);
@@ -393,8 +431,7 @@ Future<void> _toggleServerRuns(BuildContext context, AppController app) async {
     ));
 }
 
-/// Each step is another model call the reply takes and the balance pays for,
-/// so what it costs is said rather than left to be discovered on the bill.
+/// Each step is another billed model call, so its cost is stated up front.
 Future<void> _cycleEffort(BuildContext context, AppController app) async {
   final messenger = ScaffoldMessenger.of(context);
   final next = await app.cycleEffort();
@@ -431,8 +468,7 @@ Future<void> _anonChip(BuildContext context, AppController app) async {
   await showAnonSheet(context);
 }
 
-/// Turning ghost mode on is a promise about what is kept, so it is asked for
-/// rather than toggled by accident.
+/// Confirmed rather than toggled, since it is a promise about what is kept.
 Future<void> _confirmGhost(BuildContext context, AppController app) async {
   final conv = app.current;
   if (conv == null) return;
@@ -662,7 +698,9 @@ class _TierSwitch extends StatelessWidget {
         );
 
     Future<void> pick(bool isPro) async {
-      if (isPro) {
+      if (isPro && app.freeOnly) {
+        await offerCredits(context);
+      } else if (isPro) {
         await showModelsSheet(context);
       } else {
         await app.dropProMedia();
@@ -729,6 +767,7 @@ class _Chip extends StatelessWidget {
     required this.onTap,
     this.color,
     this.brand,
+    this.dimmed = false,
   });
 
   final String glyph;
@@ -737,13 +776,14 @@ class _Chip extends StatelessWidget {
   final VoidCallback onTap;
   final Color? color;
   final String? brand;
+  final bool dimmed;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final tint = color ??
         (active ? theme.colorScheme.secondary : theme.textTheme.bodySmall?.color);
-    return InkWell(
+    final chip = InkWell(
       borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),
       onTap: onTap,
       child: _TapHeight(
@@ -778,6 +818,7 @@ class _Chip extends StatelessWidget {
         ),
       ),
     );
+    return dimmed ? Opacity(opacity: 0.45, child: chip) : chip;
   }
 }
 

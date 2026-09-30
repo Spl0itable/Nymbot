@@ -3,7 +3,6 @@ import '../models/memory.dart';
 import '../models/workspace.dart';
 import 'chat_engine.dart';
 
-/// What a message might be worth remembering, before anything is saved.
 class MemoryProposal {
   const MemoryProposal({required this.text, required this.topic});
 
@@ -11,24 +10,15 @@ class MemoryProposal {
   final String topic;
 }
 
-/// Reads messages for standing facts, and decides which of the ones already
-/// kept belong in the message being sent.
-///
-/// Nothing here saves anything: proposals go to the caller, which shows them
-/// and lets them be taken back. A false save is a line of nonsense carried
-/// into every later chat, so it has to be visible and easy to undo.
+/// Proposes memories and picks relevant ones to send; never saves on its own.
 class MemoryKeeper {
   const MemoryKeeper._();
 
-  /// What memory may cost the context window. Enough for a handful of short
-  /// entries; memory that crowds out the conversation makes answers worse.
+  /// Context budget for memory, in characters.
   static const sendCap = 1200;
   static const maxSent = 8;
 
-  /// Patterns that read as a durable fact about the person typing rather than
-  /// as part of the question they are asking. Deliberately narrow: they only
-  /// fire on sentences explicitly about the speaker and explicitly in the
-  /// present.
+  /// Deliberately narrow: only present-tense statements about the speaker.
   static final _rules = <(RegExp, String)>[
     (RegExp(r"\b(?:call me|my name(?:'s| is)|i(?:'m| am) called)\s+([^.,;!?\n]{2,60})",
         caseSensitive: false), 'Name'),
@@ -48,7 +38,6 @@ class MemoryKeeper {
         caseSensitive: false), 'Where'),
   ];
 
-  /// A question is not a statement about yourself, however it is phrased.
   static final _asking = RegExp(
       r'^\s*(?:what|who|when|where|why|how|which|can|could|would|should|does|do|did|is|are|was|were|will)\b',
       caseSensitive: false);
@@ -75,9 +64,7 @@ class MemoryKeeper {
     return out;
   }
 
-  /// Everything a chat may see: what was saved with no workspace, plus what
-  /// was saved inside this one. A ghost chat sees nothing — the whole point of
-  /// it is that it is not part of a record.
+  /// Global entries plus this workspace's; a ghost chat sees none.
   static List<Memory> forConv(List<Memory> all, Conversation? conv) {
     if (conv == null || conv.ephemeral) return const [];
     return all
@@ -85,9 +72,7 @@ class MemoryKeeper {
         .toList();
   }
 
-  /// The entries that bear on this question, plus the ones that say who you
-  /// are and how to answer — those apply to every message rather than the ones
-  /// that happen to mention them.
+  /// Relevant entries plus the always-on ones about who you are and how to answer.
   static String block(List<Memory> all, Conversation? conv, String query) {
     final mine = forConv(all, conv);
     if (mine.isEmpty) return '';
@@ -95,10 +80,7 @@ class MemoryKeeper {
         .where((m) => m.topic == 'How to answer' || m.topic == 'Name')
         .toList();
     final rest = mine.where((m) => !always.contains(m)).toList();
-    // Ranked with the same search the workspace files use, so what is
-    // remembered arrives for the same reason and by the same rule. The index
-    // rides along as the chunk's position, which is how a hit maps back to the
-    // entry it came from.
+    // Ranked like workspace files; the chunk position maps a hit back to its entry.
     final ranked = ChatEngine.rankChunks(
       [
         for (var i = 0; i < rest.length; i++)

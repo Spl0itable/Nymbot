@@ -1,9 +1,4 @@
-// Post-quantum capability announcements (kind 30078, d-tag `nym-pq`).
-//
-// Each side publishes the ML-KEM public key it can decapsulate with; the other
-// seals to it. Ours also rides along with every worker request, signed, so the
-// reply is sealed to it deterministically instead of depending on a lookup that
-// could lose a race and leave the answer classical.
+// Kind 30078 d=`nym-pq` ML-KEM key announcements; ours also rides signed with every worker request.
 (function () {
     'use strict';
 
@@ -25,8 +20,7 @@
         return (k instanceof Uint8Array && k.length === KEM_PK_LEN) ? k : null;
     }
 
-    /// The newest signed, id-valid announcement by `author`. Relays are never
-    /// trusted for key material.
+    /// Relays are never trusted for key material.
     function verifiedNewest(events, author) {
         const T = NT();
         let newest = null;
@@ -105,7 +99,7 @@
 
     const PQ = {
         botKey: null,            // { pk, fmt } or null
-        selfAnnouncement: null,  // the signed event the worker is handed
+        selfAnnouncement: null,
 
         resolve(pubkey) {
             const key = String(pubkey || '');
@@ -144,15 +138,11 @@
             return this.botKey;
         },
 
-        /// Publishes our announcement, unless the account already advertises a
-        /// key we cannot derive — that one belongs to another device holding a
-        /// different root, and kind 30078 is replaceable, so publishing over it
-        /// would strand every message sealed to it.
+        /// Never publishes over another root's key: kind 30078 is replaceable and that would strand messages sealed to it.
         async announce(opts) {
             if (!Identity.pubkey || !Identity.kemPk) return false;
             const force = !!(opts && opts.force);
-            // Already known to be the wrong root — from the account's own D1
-            // record, which the relays cannot contradict.
+            // Known wrong root from the account's D1 record, which relays cannot contradict.
             if (Identity.rootLocked && !force) return false;
             let mine = Identity.kemPk;
             const existing = force ? null : await this.resolve(Identity.pubkey);
@@ -175,10 +165,8 @@
                 src: 'root',
                 alg: C.pqAlg,
                 nym: 1,
-                // Which epoch of the root this key came from.
                 epoch: Identity._epoch || 0,
-                // A local key can open either format; a signer login can only
-                // do the layered one, and says so by advertising pk2 alone.
+                // A signer login can only open the layered format, so it advertises pk2 alone.
                 ...(Identity.isLocal ? { pk: NC()._b64uEncode(mine) } : {}),
                 pk2: NC()._b64uEncode(mine),
                 exp,
@@ -195,7 +183,6 @@
             return true;
         },
 
-        /// Our own KEM material, for opening replies and self-addressed copies.
         selfKeys() {
             if (!Identity._kem) return null;
             return { kemSk: Identity._kem.secretKey, kemPk: Identity._kem.publicKey };

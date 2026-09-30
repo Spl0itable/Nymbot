@@ -2,9 +2,7 @@ import 'dart:convert';
 
 enum ScheduleRepeat { once, hourly, daily, weekly }
 
-/// A prompt Nymbot sends for you on a schedule. There is no server doing this:
-/// a run happens in the app while it is open, which is why a missed run catches
-/// up once rather than firing for every slot it went past.
+/// A prompt sent on a schedule, run in the app while open; a missed run catches up once.
 class Schedule {
   Schedule({
     required this.id,
@@ -42,8 +40,7 @@ class Schedule {
         ScheduleRepeat.once => null,
       };
 
-  /// Forward to the next slot after now, so a run missed while the app was shut
-  /// does not queue up every slot it went past.
+  /// Moves to the next slot after now so missed slots do not queue up.
   void advance() {
     runs += 1;
     lastRunAt = DateTime.now();

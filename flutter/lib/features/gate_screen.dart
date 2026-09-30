@@ -39,7 +39,7 @@ const String nymbotWordmark = r'''                                  ##\         
           \######  |
            \______/''';
 
-/// Onboarding, and the one-time reveal of the two things nobody can reissue.
+/// Onboarding, and the one-time reveal of the nsec and recovery code.
 class GateScreen extends StatefulWidget {
   const GateScreen({super.key});
 
@@ -48,7 +48,7 @@ class GateScreen extends StatefulWidget {
 }
 
 class _GateScreenState extends State<GateScreen> {
-  /// How far to look for the epoch an account's announced key sits at.
+  /// How many epochs to scan for the account's announced key.
   static const int _epochScan = 12;
 
   final _nsec = TextEditingController();
@@ -298,9 +298,7 @@ class _GateScreenState extends State<GateScreen> {
     try {
       await app.identity.generate(secret: secret, root: pqRoot);
       await _takeNickname(app);
-      // A key nobody has seen before cannot already have a root, so there is
-      // nothing to ask D1 — only a row to write, so the next device to sign in
-      // finds it and asks for the code instead of minting a second one.
+      // A brand-new key cannot have a root yet, so just write the row for later devices.
       final root = app.identity.root;
       if (root != null) {
         unawaited(app.storage
@@ -316,13 +314,7 @@ class _GateScreenState extends State<GateScreen> {
     }
   }
 
-  /// Signing in with a key that has been used before.
-  ///
-  /// The account is asked what it already holds BEFORE this device decides what
-  /// post-quantum root to give it: minting one unasked is wrong for a key that
-  /// has been used, since the announcement is replaceable and a second root
-  /// published over the first strands every settings row, every synced
-  /// conversation and every reply sealed to the one it replaced.
+  /// Asks the account what it holds before choosing a PQ root, since publishing a second root strands the first.
   Future<void> _import() => _importKey(_nsec.text);
 
   void _notice(String text) {
@@ -370,11 +362,7 @@ class _GateScreenState extends State<GateScreen> {
       }
       await _takeNickname(app);
       if (!mounted) return;
-      // Neither source answered. Minting waits — a second root published over
-      // the first strands every settings row, every synced conversation and
-      // every reply sealed to the one it replaced. Sign in without one; the
-      // first launch that reaches the worker settles it. Not locked either:
-      // nothing says the account HAS a root, only that nobody could be asked.
+      // Neither source answered: sign in without minting, and without locking.
       if (!probe.read) {
         if (carried != null) await app.identity.adoptRootCode(pq!);
         if (!mounted) return;
@@ -388,9 +376,7 @@ class _GateScreenState extends State<GateScreen> {
         }
         return;
       }
-      // D1 answered and holds nothing, and the relays advertise nothing: a key
-      // that has never used Nymbot or Nymchat. One is minted now and shown, the
-      // same reveal a brand new key gets, because it is the same thing to lose.
+      // D1 and relays both hold nothing, so mint and reveal a root as for a new key.
       await app.mintAndRecordRoot(existing: carried == null ? null : pq);
       if (fresh) await app.carryNewKey();
       if (!mounted) return;
@@ -638,9 +624,7 @@ class _GateScreenState extends State<GateScreen> {
     await _importKey(hex, pq: code, fresh: true);
   }
 
-  /// The prompt: this account already has a root, and this device does not have
-  /// it. Null when the user carried on without it — signed in, nothing minted,
-  /// and the code can be pasted in Identity later.
+  /// Null when the user continued without the code; it can be pasted in Identity later.
   Future<({Uint8List root, int epoch})?> _askForCode(AccountRoot probe,
       {String? note}) async {
     var entered = '';
@@ -687,7 +671,6 @@ class _GateScreenState extends State<GateScreen> {
             FilledButton(
               onPressed: () {
                 final typed = entered.trim();
-                // Either way of saying "not now".
                 if (typed.isEmpty) {
                   Navigator.of(context).pop(null);
                   return;
@@ -708,19 +691,15 @@ class _GateScreenState extends State<GateScreen> {
     return result;
   }
 
-  /// The root a pasted code carries, once it is the one this account uses, and
-  /// the epoch of it the account currently advertises.
+  /// The root a pasted code carries, if it is this account's, with the currently advertised epoch.
   ({Uint8List root, int epoch})? _checkCode(String typed, AccountRoot probe) {
     final root = Identity.rootFromCode(typed);
     if (root == null) return null;
-    // The record is the account's own statement of which root it uses: exact,
-    // and epoch-free.
+    // The record states the account's root exactly, without an epoch.
     final recorded = probe.fingerprint;
     if (recorded != null && Identity.fingerprintOfCode(typed) != recorded) {
       return null;
     }
-    // The root is one thing; which epoch of it the account currently advertises
-    // is another.
     final announced = probe.announced;
     if (announced != null) {
       for (var epoch = 0; epoch <= _epochScan; epoch++) {

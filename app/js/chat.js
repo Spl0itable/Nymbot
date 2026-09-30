@@ -59,23 +59,14 @@
         return (space > 24 ? cut.slice(0, space) : cut).replace(/[,;:.\-]$/, '') + '…';
     }
 
-    // Project knowledge is retrieved per message rather than poured into the
-    // first one. The old caps sent up to 90,000 characters in turn one, where
-    // the worker cut it to 1000 the moment it became history — so a workspace
-    // stopped applying after a single reply. A few relevant passages, sent
-    // every turn, are both smaller on the wire and actually there when the
-    // question needs them.
+    // Knowledge is retrieved per message because the worker truncates historical turns.
     const KNOWLEDGE_CHUNK_MAX = 1200;
     const KNOWLEDGE_SEND_CAP = 5000;
     const KNOWLEDGE_FILE_CAP = 24000;
 
-    // Marks where the context the client repeats every turn ends and the
-    // message begins, so the worker can drop the repeats from historical
-    // turns. A block of knowledge has blank lines in it, so the boundary
-    // cannot be found by looking — it has to be written down.
+    // Knowledge contains blank lines, so the end of the per-turn context is marked explicitly for the worker to strip.
     const STANDING_END = '[end of standing context]';
 
-    // Words too common to say anything about which passage is wanted.
     const STOP_WORDS = new Set(('a an and are as at be but by can could did do does for from '
         + 'had has have how i if in is it its me my not of on or our so than that the their '
         + 'them then there these they this to was we were what when where which who why will '
@@ -95,8 +86,7 @@
         return conv && conv.botId && Bots ? Bots.get(conv.botId) : null;
     }
 
-    /// A chat sees its own repositories plus the ones its workspace carries, in
-    /// that order and without duplicates.
+    /// Own repositories first, then the workspace's, deduplicated.
     function reposFor(conv) {
         const space = workspaceFor(conv);
         const ids = (Array.isArray(conv.repoIds) ? conv.repoIds : [])
@@ -118,10 +108,7 @@
         return out;
     }
 
-    /// Splits one file into retrievable passages, on blank lines and headings,
-    /// each under a ceiling. A markdown heading is carried onto the passages
-    /// beneath it, so a passage still says what it is about once it has been
-    /// lifted out of the file it came from.
+    /// Markdown headings are carried onto the passages beneath them.
     function chunkFile(file) {
         const body = String(file.body || '').slice(0, KNOWLEDGE_FILE_CAP);
         const name = file.name || 'untitled';
@@ -145,8 +132,7 @@
                 flush();
                 heading = head[2].trim();
             }
-            // A single paragraph over the ceiling is cut into pieces rather
-            // than dropped: a long table or code block is often the answer.
+            // Oversized paragraphs are cut rather than dropped; a long table or code block is often the answer.
             if (block.length > KNOWLEDGE_CHUNK_MAX) {
                 flush();
                 for (let i = 0; i < block.length; i += KNOWLEDGE_CHUNK_MAX) {
@@ -163,12 +149,7 @@
         return chunks;
     }
 
-    /// Ranks passages against the question with BM25 over plain terms.
-    ///
-    /// Deliberately not embeddings: this runs on the device, for every message,
-    /// with no model to call and nothing downloaded. Term overlap is weaker
-    /// than a vector search and enormously better than sending the first
-    /// 90,000 characters and hoping.
+    /// BM25 on device, deliberately not embeddings: no model call or download per message.
     function rankChunks(chunks, query) {
         const want = terms(query);
         if (!want.length || !chunks.length) return [];
@@ -197,10 +178,7 @@
         return scored.filter(x => x.score > 0).sort((a, b) => b.score - a.score);
     }
 
-    /// The passages of the workspace's files that bear on this question, plus
-    /// the names of every file so the model knows what else it could be told
-    /// about. When nothing matches, the opening of each file goes instead —
-    /// enough to say what the project is rather than nothing at all.
+    /// When nothing matches, each file's opening goes instead.
     function knowledgeBlock(space, query) {
         const files = (space && space.files) || [];
         if (!files.length) return '';
@@ -253,7 +231,6 @@
             approve: !!repo.approve,
             paths: repo.paths || '',
             label: repo.label || repo.repo,
-            // Where it was announced, when it was.
             ...(repo.ngit ? {
                 ngit: {
                     naddr: repo.ngit.naddr || '',
@@ -266,15 +243,7 @@
         };
     }
 
-    /// The context that holds for every message in a chat: who the bot is being,
-    /// what it can read, and the part of the workspace that bears on what was
-    /// just asked.
-    ///
-    /// Sent on every message rather than only the first. It used to go once, at
-    /// the top of turn one, and the worker cut that turn to 1000 characters the
-    /// moment it became history — so instructions and project knowledge stopped
-    /// applying after a single reply, silently. The worker strips these blocks
-    /// from historical turns, so repeating them costs one copy, not twenty.
+    /// Sent every message; the worker strips these blocks from historical turns.
     function standingContext(conv, repos, query) {
         const parts = [];
         const space = workspaceFor(conv);
@@ -319,9 +288,6 @@
         return preamble + quoted + text + attachText + docText;
     }
 
-    /// Says what is too big and by how much, rather than the byte count the
-    /// crypto would have thrown. A file is named as the thing to move,
-    /// because a workspace holds a document the wire cannot.
     function connectorsFor(conv) {
         return window.NymbotConnectors ? window.NymbotConnectors.forConv(conv) : [];
     }
@@ -342,19 +308,14 @@
         const parts = standing.length
             ? [standing.join('\n\n') + '\n\n' + STANDING_END]
             : [];
-        // Past the marker, because nothing re-sends it: the client clears the
-        // seed after the first message, so stripping it from history would
-        // lose what the branch was branched from.
+        // Past the marker because the seed is cleared after the first message and nothing re-sends it.
         if (conv.seed) {
             parts.push('[earlier in this conversation]\n' + conv.seed);
         }
         return parts.length ? parts.join('\n\n') + '\n\n' : '';
     }
 
-    // How hard a reply is asked to think, as the number of model calls it takes.
-    // A careful reply plans before it answers; a deep one also reads its answer
-    // back against the question before sending it. Both are charged as what
-    // they are — more model calls — so the price says what the work was.
+    // Model calls per reply: careful plans first, deep also checks its answer; charged per call.
     const EFFORT = { normal: 1, careful: 2, deep: 3 };
 
     const BUSY_WAITS = [4000, 9000, 16000];
@@ -405,11 +366,7 @@
 
     function effortCalls(conv) { return EFFORT[effortOf(conv)] || 1; }
 
-    /// A question too long for one wrap travels as several, and the worker
-    /// charges a credit for each extra one. Splitting is a transport detail,
-    /// but the input it carries is real and the published price has never
-    /// charged for input — so the surcharge is counted here too, against the
-    /// same text, and quoted before it is spent rather than after.
+    /// Each extra wrap costs a credit, so the surcharge is quoted before sending.
     function partSurcharge(conv, text, options) {
         const parts = Wire.split(wireTextFor(conv || {}, text || '', options || {})).length;
         return Math.max(0, parts - 1);
@@ -673,15 +630,11 @@
             return false;
         },
 
-        /// Exactly what `send` will put on the wire: the standing context, the
-        /// quoted line, the message and the attachments, assembled the same
-        /// way. Split out so the composer can price a message before it is
-        /// committed to the transcript rather than after.
+        /// Assembled exactly as `send` does, so the composer can price a message before committing it.
         wireTextFor(conv, text, options) {
             return wireTextFor(conv, text, options || {});
         },
 
-        /// What the message would cost on the wire, and what is left.
         wireCost(conv, text, options) {
             const used = Wire.bodyCost(wireTextFor(conv, text, options || {}));
             const max = Wire.BODY_MAX * Wire.PARTS_MAX;
@@ -717,26 +670,16 @@
             // A '!' question is answered outside the conversation.
             const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
             const wireText = wireTextFor(conv, text, opts);
-            // NIP-44 caps one plaintext, and a gift wrap holds two of them
-            // nested, so a long message does not fit in one event. Rather than
-            // refuse it, it travels as several — each tagged with where it
-            // sits, all sharing one message id, joined back into one question
-            // by the worker. What stays capped is how many: past that it is
-            // not a message.
+            // NIP-44 caps each plaintext, so a long message splits across wraps sharing one id; the part count stays capped.
             const bodies = Wire.split(wireText);
             if (bodies.length > Wire.PARTS_MAX) {
                 throw new Error(overLimitMessage(wireText));
             }
 
             const botKem = PQ.botKey ? PQ.botKey.pk : null;
-            // A continued leg is a new message on the wire, so it needs an id
-            // of its own — reusing the first leg's would land it in the
-            // de-duplicator and replay the answer we are trying to move past.
+            // A continued leg needs its own id, or the de-duplicator replays the previous answer.
             const msgId = Wire.sharedId();
-            // A ghost chat publishes nothing it does not have to. The wrap to
-            // the bot is how the message gets there at all; the archive copy
-            // and the reply's re-publish are for restoring a conversation
-            // later, which is exactly what a ghost chat is refusing.
+            // A ghost chat skips the archive copy and reply re-publish, which exist only for restoring conversations.
             const ghost = !!conv.ephemeral;
             if (typeof opts.onStep === 'function') {
                 try { opts.onStep({ kind: 'stage', stage: 'encrypting', local: true }); } catch (_) { }
@@ -761,8 +704,6 @@
 
             const model = conv.proModel || settings.proModel;
             const media = conv.mediaModel || settings.mediaModel;
-            // The turn is now identifiable, so anything watching it can start
-            // before the answer comes back.
             if (typeof opts.onTurn === 'function') {
                 try { opts.onTurn(wrap.id, anon ? Anon.signer(payer) : null); } catch (_) { }
             }
@@ -778,16 +719,12 @@
                 const handed = heldHistory(conv.id, Store.thread(conv.id));
                 if (handed.length) extra.history = handed;
             }
-            // Every event the question was split across, in order. The last is
-            // `eventId`, which is what a single-event message has always sent
-            // and what an older worker will still answer from.
+            // The last id is `eventId`, which older workers still answer from.
             if (partIds.length > 1) {
                 extra.parts = partIds;
                 extra.wraps = partWraps;
             }
-            // Continuing a run that stopped at its tool-call cap. The token is
-            // single-use and the worker only redeems it for the key that made
-            // it, so nothing here is worth intercepting.
+            // The resume token is single-use and redeemable only by the key that made it.
             if (opts.resume) extra.resume = opts.resume;
             if (Number(opts.maxCost) > 0) extra.maxCost = Number(opts.maxCost);
             const proTurn = !!(model || (media && media.proKey));
@@ -809,9 +746,7 @@
             if (!model && media && media.proKey) extra.proModel = media.proKey;
             if (model) {
                 extra.proModel = model.key;
-                // How hard this chat asked the reply to think. Only meaningful
-                // on Pro, and only outside a repo task, which does its own
-                // looping and is charged for that.
+                // Only meaningful on Pro and outside repo tasks, which loop and are charged on their own.
                 const effort = effortOf(conv);
                 if (effort !== 'normal' && !repos.length && !connectors.length) extra.effort = effort;
                 if (repos.length) {
@@ -871,8 +806,7 @@
                 err.balance = data.balanceCredits != null
                     ? data.balanceCredits : (data.balance || 0);
                 err.balanceCredits = data.balanceCredits;
-                // Present when it was the day's free allowance that ran out
-                // rather than a balance, which is a time rather than a wall.
+                // Set when the free daily allowance ran out rather than a balance.
                 err.free = data.free || null;
                 err.team = !!data.team;
                 err.required = Number(data.required) || 0;
@@ -909,9 +843,7 @@
                 : await Wire.unwrap(data.event, null, { from: C.botPubkey });
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
-            // A '!' question is answered without the conversation and stays out
-            // of it, on this side as on the worker's: it was asked that way so
-            // it would not become context. The chat still shows it.
+            // A '!' question stays out of the conversation on both sides, though the chat still shows it.
             if (!isFresh) {
                 const ids = Store.thread(conv.id);
                 ids.push(wrap.id);
@@ -934,12 +866,9 @@
                 pro: !!data.pro,
                 modelCalls: data.modelCalls || 1,
                 lowBalance: !!data.lowBalance,
-                // Set when the run hit its cap with work left. The token buys
-                // one more leg; the client decides whether to spend it.
+                // The token buys one more leg; the client decides whether to spend it.
                 truncated: !!data.truncated,
                 capStopped: !!data.capStopped,
-                // What this reply changed in a repository, and where the
-                // branch stood before it did.
                 checkpoint: data.checkpoint || null,
                 pendingTool: data.pendingTool || null,
                 staged: data.staged && typeof data.staged === 'object' ? data.staged : null,
@@ -956,17 +885,13 @@
                 followUps: followUpsOf(data.followUps),
                 serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
                 serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
-                // What the day's free allowance has left, when this reply came
-                // out of it rather than out of a balance.
                 free: data.free || null,
                 repos: repos.map(r => r.repo),
                 eventId: wrap.id
             };
         },
 
-        /// Runs one prompt past two models at once, each on a thread of its own
-        /// so neither answer is in the other's context and the real chat is not
-        /// touched until you keep one. Two replies, so two charges.
+        /// Each model runs on its own thread so neither sees the other; two replies, two charges.
         async compare(conv, text, settings, models, options) {
             const opts = options || {};
             const runs = models.filter(Boolean).map(model => ({
@@ -989,8 +914,7 @@
                     {
                         attachments: opts.attachments || [], quote: opts.quote, controller,
                         maxCost: opts.maxCost || null,
-                        // Neither run touches the conversation's stored thread:
-                        // the seed carries what was said, and the real chat is
+                        // Neither run touches the conversation's stored thread.
                         fresh: true
                     }
                 )));
@@ -1009,8 +933,7 @@
             }));
         },
 
-        /// Asks the worker what the turn answering [eventId] is doing. Purely
-        /// advisory: a failure returns nothing rather than disturbing the turn.
+        /// Advisory: a failure returns nothing rather than disturbing the turn.
         async progress(eventId, after, opts) {
             const options = opts || {};
             try {
@@ -1049,11 +972,7 @@
             return null;
         },
 
-        /// Puts a repo run back: each path the run wrote is read at the commit
-        /// the branch stood on before it and committed as it was. A revert,
-        /// not a rewrite — what the model did stays in the history, it is
-        /// simply no longer the state of the branch. Costs nothing: it touches
-        /// no model.
+        /// Reverts each written path to the pre-run commit; history is kept and no model is charged.
         async revert(conv, checkpoint) {
             const repos = reposFor(conv);
             const repo = repos.find(r => r.repo === checkpoint.repo) || repos[0];

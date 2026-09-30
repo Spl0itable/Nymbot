@@ -1,18 +1,4 @@
-// Fills i18n/cache/<lang>.json for every language this project offers.
-//
-// Run this whenever the copy changes:  npm run i18n
-//
-// It covers all three surfaces at once — the marketing site, the web app and
-// the Flutter app — because they share one cache, keyed by the English string.
-// A sentence two of them use is translated once and paid for once.
-// It only sends strings that are not already cached, so a copy tweak costs a
-// handful of requests rather than a full re-translation. The cache is COMMITTED
-// — that is what makes `npm run build` offline, reproducible, and free, and it
-// means every contributor and every deploy reuses work already paid for once.
-//
-// Optional args:
-//   --only=es,ja,fr   restrict to these languages
-//   --list            report cache coverage and exit
+// Fills i18n/cache/<lang>.json with uncached strings (npm run i18n); args: --only=es,ja,fr, --list.
 
 import { TRANSLATED_LANGUAGES } from './languages.mjs';
 import { allSurfaces } from './surfaces.mjs';
@@ -30,8 +16,6 @@ console.log(`${sources.length} source strings (`
   + surfaces.map((s) => `${s.sources.length} ${s.label}`).join(', ')
   + `), ${targets.length} languages`);
 
-// Reported per surface, because each one publishes on its own coverage: a
-// complete site is not held back by an app string, and vice versa.
 if (listOnly) {
   for (const surface of surfaces) {
     let complete = 0;
@@ -49,10 +33,6 @@ if (listOnly) {
   process.exit(0);
 }
 
-// Languages ran strictly one after another, which is what made a sync of a
-// handful of new strings take the better part of an hour: a copy tweak is only
-// a batch or two per language, so almost all of the wall time was 132 waits in
-// a row rather than any real work. They share nothing, so they overlap freely.
 const LANG_CONCURRENCY = Number(process.env.NYM_I18N_LANG_CONCURRENCY || 8);
 
 let failed = 0;

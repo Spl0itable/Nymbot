@@ -16,39 +16,24 @@ import { errorStyles } from "./errors/style.mjs";
 
 const outDir = "dist";
 
-// Static assets copied through verbatim (referenced by absolute URLs in the HTML,
-// or read by the host — `_redirects` keeps retired slugs resolving and
-// `_headers` carries the security and caching policy). `app` is the standalone
-// Nymbot web app, copied through as built rather than rebuilt here. `media` is
-// the promo video the knowledge base opens with; it is served from this origin,
-// which is what `default-src 'self'` in `_headers` requires of it.
+// `media` is served from this origin because `_headers` sets `default-src 'self'`.
 const staticAssets = ["images", "app", "media", "robots.txt", "_redirects", "_headers", "_routes.json", ".well-known"];
 
-// Local assets that get minified and content-hashed for cache busting.
 const hashedAssets = [
   { src: "styles.css", ref: "styles.css" },
   { src: "script.js", ref: "script.js" },
-  // Every page carries this one: it installs the translation table, keeps a
-  // first-time visitor on their language, and marks that scripting is on. It is
-  // a file rather than an inline script so the site can be served under
-  // `script-src 'self'` — see `_headers`.
   { src: "boot.js", ref: "boot.js" },
-  // Only the knowledge base loads this one; the landing and legal pages never
-  // reference it, so they never pay for it.
   { src: "docs.js", ref: "docs.js" },
   { src: "brand-marks.js", ref: "brand-marks.js" },
   { src: "models-band.js", ref: "models-band.js" },
   { src: "models-band.css", ref: "models-band.css" },
-  // Same again for the not-found page: it is the only page that loads this.
   { src: "404.js", ref: "404.js" },
 ];
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 
-// Emitted into a directory of their own so `_headers` can pin them for a year
-// by prefix. A bare `/*.js` rule would also match the app's un-hashed files
-// under /app and freeze a stale deploy in every cache for a year.
+// A directory of their own so `_headers` can pin them for a year without freezing /app's unhashed files.
 const assetDir = "assets";
 
 const result = await build({
@@ -60,7 +45,6 @@ const result = await build({
   metafile: true,
 });
 
-// Map each source file to its hashed output filename.
 const rename = new Map();
 for (const [outPath, meta] of Object.entries(result.metafile.outputs)) {
   if (meta.entryPoint) {
@@ -90,8 +74,7 @@ const modelsFallback = (() => {
   return JSON.stringify({ models, groups }).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 })();
 
-// Point every document at the hashed asset filenames. Absolute, so a page
-// served from /es/terms/ still resolves them.
+// Absolute, so a page served from /es/terms/ still resolves them.
 const documents = site.documents.map((doc) => {
   let html = doc.html.replace('data-models-fallback=""', `data-models-fallback="${modelsFallback}"`);
   for (const asset of hashedAssets) {
@@ -102,16 +85,11 @@ const documents = site.documents.map((doc) => {
   return { ...doc, html };
 });
 
-// A language ships only when its cache covers every string on the site. A
-// partial cache would publish a half-English page under a localized URL, which
-// is worse for a reader and for search than not publishing it at all. The gate
-// is site-wide on purpose: a language whose terms of service is still English
-// should not have a translated home page linking to it as if it were not.
+// A language ships only when its cache covers every site string; a half-English page is worse than none.
 const available = new Set();
 const partial = [];
 const caches = new Map();
-// The error pages are gated on their own strings rather than on the site's, so
-// they need every cache, not only the ones that cleared the site-wide bar.
+// Error pages are gated on their own strings, so they need every cache.
 const everyCache = new Map();
 for (const lang of TRANSLATED_LANGUAGES) {
   const cache = await loadCache(lang.code);
@@ -126,8 +104,7 @@ for (const lang of TRANSLATED_LANGUAGES) {
   available.add(lang.code);
 }
 
-// The demo chat is only on the landing page, so only that page carries the
-// runtime string table.
+// Only the landing page carries the runtime string table, for the demo chat.
 const emit = async (doc, lang, cache) => {
   const dir = path.join(outDir, lang === "en" ? "" : lang, doc.slug ?? "");
   await mkdir(dir, { recursive: true });
@@ -143,8 +120,6 @@ for (const doc of documents) {
   for (const [code, cache] of caches) await emit(doc, code, cache);
 }
 
-// A sitemap index plus one file per language — see renderSitemap for why the
-// single file could not stay.
 const sitemaps = renderSitemap(available, slugs, ["/app"]);
 for (const file of sitemaps) {
   const out = path.join(outDir, file.path);
@@ -152,15 +127,9 @@ for (const file of sitemaps) {
   await writeFile(out, file.xml);
 }
 
-// A markdown index of the site at a well-known path, for agents that would
-// otherwise have to crawl and strip HTML to find out what is here.
 await writeFile(path.join(outDir, "llms.txt"), renderLlmsTxt(site.documents));
 
-// The whole knowledge base as one markdown file, and a markdown twin beside
-// every page — /docs/mesh/ is also /docs/mesh.md. An agent asking for a page
-// would rather have the prose than the stylesheet and the navigation tree.
-// English only: the convention is one document at one path, and a reader who
-// wants another language has the hreflang set on every page.
+// English only: agents wanting another language can follow each page's hreflang set.
 await writeFile(path.join(outDir, "llms-full.txt"), renderLlmsFull(site.documents));
 let markdownPages = 0;
 for (const doc of site.documents) {
@@ -176,10 +145,7 @@ for (const asset of staticAssets) {
   await cp(asset, path.join(outDir, asset), { recursive: true });
 }
 
-// The host serves this for anything that does not resolve. It is not a page in
-// the site's sense — no canonical, no hreflang, not in the sitemap, and marked
-// noindex — so it does not go through the localized render. It does still need
-// the hashed stylesheet name, which is the whole reason it is not just copied.
+// Not a localized page (noindex, no sitemap), but it needs the hashed stylesheet name.
 {
   let notFound = await readFile("404.html", "utf8");
   for (const asset of hashedAssets) {
@@ -188,29 +154,17 @@ for (const asset of staticAssets) {
   await writeFile(path.join(outDir, "404.html"), notFound);
 }
 
-// The pages Cloudflare serves when it cannot reach this origin, or will not:
-// a 5xx, a DNS fault, a firewall block, a challenge. They are deliberately
-// unlike everything above — no hashed asset names, no localized render, no
-// sitemap entry — because each one has to stand on its own with this host
-// unreachable, so it links to nothing and inlines its styling. See
-// errors/pages.mjs for which page covers which Cloudflare slot.
+// Self-contained, with no hashed assets or localized render, since this host is unreachable when they show.
 const errorCss = await errorStyles();
 
-// The page's only executing script, minified here because these exact bytes are
-// what the policy below has to hash — a page and a `_headers` that disagree by
-// one character is a page whose script never runs.
+// Minified here because these exact bytes are what `_headers` hashes.
 const errorRuntime = (await transform(await readFile("errors/runtime.js", "utf8"), {
   loader: "js",
   minify: true,
 })).code.trim();
 const errorHash = `sha256-${createHash("sha256").update(errorRuntime).digest("base64")}`;
 
-// A language rides along on an error page when the cache covers THAT PAGE's
-// strings. The site's own gate is site-wide on purpose — a translated home page
-// should not link to an untranslated terms of service as if it were translated
-// — but that reasoning does not reach here. An error page is self-contained and
-// is shown at the moment the rest of the site cannot be reached at all, so
-// holding its translation back until a docs page catches up helps nobody.
+// An error page takes a language when its own strings are covered, unlike the site-wide gate.
 const errorTranslations = (strings) => {
   const t = {};
   const rtl = [];
@@ -240,9 +194,7 @@ for (const page of ERROR_PAGES) {
   errorLanguages.set(page.file, carried);
 }
 
-// The hash of the inline runtime, written into the copy of `_headers` that
-// ships rather than kept by hand in the source: it changes whenever that script
-// does, and nobody would remember.
+// Written into the shipped `_headers` because it changes whenever the script does.
 {
   const headersFile = path.join(outDir, "_headers");
   const headers = await readFile(headersFile, "utf8");
@@ -259,10 +211,7 @@ for (const asset of hashedAssets) {
   console.log(`  ${asset.src} -> ${rename.get(asset.src)}`);
 }
 console.log(`  ${documents.length} pages: ${documents.map((d) => d.slug ?? "/").join(", ")}`);
-// The apps' packs. Emitted here rather than checked in: they are derived from
-// the cache, and a stale copy in the tree is a translation nobody can explain.
-// The Flutter pack goes to its asset directory in the working tree, because a
-// Flutter build reads assets from there, not from dist/.
+// Derived from the cache, not checked in; the Flutter pack goes to its asset directory, where Flutter builds read.
 {
   const app = await buildPacks((await appSources()).sources);
   await writePacks(path.join(outDir, "app", "i18n"), app);

@@ -17,12 +17,7 @@ import 'nymbot_api.dart';
 import 'pq_announce.dart';
 import '../features/i18n/i18n.dart';
 
-/// Anonymous mode: a throwaway key the whole conversation runs under, and blind
-/// vouchers that move credits onto it without handing the worker the link.
-///
-/// Ported from the Nymchat client so both apps agree byte for byte — the domain
-/// constants, the hash-to-curve, the DLEQ check and the denominations are all
-/// part of the wire format (docs/ANON-NYMBOT-SPEC.md in nym-staging).
+/// Anonymous mode: a throwaway key plus blind vouchers; wire format must match Nymchat (docs/ANON-NYMBOT-SPEC.md).
 class AnonMode {
   AnonMode(this._store, this._api, this._pq);
 
@@ -43,9 +38,7 @@ class AnonMode {
   Map<String, dynamic>? _keyset;
   final Map<String, NostrEvent> _annCache = {};
 
-  /// Asked before using a keyset that changed since credits last moved: a
-  /// per-user keyset is exactly how a mint would tag its users, so it is the
-  /// user's call, not ours.
+  /// Asked before using a changed keyset, since a per-user keyset could tag users.
   Future<bool> Function(String oldId, String newId)? onKeysetChange;
 
   bool get enabled => _store.getBool(_enabledKey);
@@ -186,9 +179,7 @@ class AnonMode {
 
   LocalSigner signerOf(Map<String, dynamic> id) => LocalSigner(_skOf(id));
 
-  /// Separate entropy from the signing key on purpose: the throwaway pubkey is
-  /// published on every wrap, so a KEM key derived from it would fall with
-  /// secp256k1.
+  /// Separate entropy from the published throwaway key so the KEM key does not fall with secp256k1.
   MlKemKeyPair? kemOf(Map<String, dynamic> id) {
     try {
       return pq.pqKeypairFromRoot(
@@ -212,9 +203,7 @@ class AnonMode {
     );
   }
 
-  /// A signed announcement carrying the throwaway KEM key, handed to the worker
-  /// with each request so the reply comes back hybrid without a lookup that
-  /// would have nothing to find.
+  /// Signed announcement of the throwaway KEM key, sent with each request so the reply is hybrid.
   Future<NostrEvent?> announcement({String? pk}) async {
     final id = await identityFor(pk);
     final kem = kemOf(id);
@@ -458,8 +447,6 @@ class AnonMode {
     return true;
   }
 
-  // --- vouchers ---------------------------------------------------------------
-
   Future<Map<String, dynamic>> keyset({bool force = false}) async {
     final cached = _keyset;
     if (cached != null && !force) return cached;
@@ -506,8 +493,7 @@ class AnonMode {
     return from == null ? identity : signerOf(from);
   }
 
-  /// Finishes an issuance whose response was lost: the same reqId and the same
-  /// outputs re-sign without a second debit.
+  /// Retries a lost issuance with the same reqId and outputs so it re-signs without a second debit.
   Future<void> _finishIssue(
       EventSigner identity, Map<String, dynamic> pending) async {
     final keys = await keyset();
@@ -680,7 +666,7 @@ class AnonMode {
         }
       }
     } catch (_) {
-      // Left in place; the next flush picks it up.
+      // Left in place for the next flush.
     }
   }
 
@@ -706,8 +692,7 @@ class AnonMode {
       };
     }).toList();
 
-    // Persisted BEFORE the call: a lost response has to be retried with the
-    // same reqId and the same outputs, or it pays twice.
+    // Persisted before the call so a lost response is retried with the same reqId and outputs.
     _state['pending'] = {
       'tier': tier,
       'reqId': bytesToHex(randomBytes(32)),

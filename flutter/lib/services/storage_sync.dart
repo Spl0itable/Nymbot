@@ -11,22 +11,14 @@ import '../models/nostr_event.dart';
 import 'nostr/event_signer.dart';
 import 'signed_body.dart';
 
-/// What the account's post-quantum root row says. [present] is the row's
-/// existence, decided without decrypting: a row this device cannot open is
-/// still proof a root exists. [fingerprint] is filled in only when the record
-/// itself opened and parsed.
+/// [present] is decided without decrypting; [fingerprint] only when the record opened.
 typedef PqRootLookup = ({bool present, String? fingerprint});
 
-/// The account's shared rows in D1, as they matter before there is a session:
-/// which post-quantum root the account uses, and the profile it publishes.
-///
-/// The worker is Nymchat's, so these are Nymchat's rows. The root row in
-/// particular is written under the name Nymchat gives it, hashed the way
-/// Nymchat hashes it — one account, one root, whichever app reached it first.
+/// The account's shared Nymchat D1 rows (PQ root and profile), readable before a session.
 class StorageSync {
   StorageSync({http.Client? client}) : _client = client ?? http.Client();
 
-  /// The row that says which post-quantum root the ACCOUNT uses.
+  /// The row naming which post-quantum root the account uses.
   static const String pqRootDTag = 'nymchat-pq-root';
 
   final http.Client _client;
@@ -34,8 +26,7 @@ class StorageSync {
   static String _sha256Hex(String text) =>
       crypto.sha256.convert(utf8.encode(text)).toString();
 
-  /// Byte-for-byte Nymchat's `_d1Category`, or the root row is invisible to
-  /// whichever app did not write it.
+  /// Must match Nymchat's `_d1Category` byte for byte.
   static String categoryFor(String pubkey, String dTag) =>
       'nymchat-${_sha256Hex('$pubkey:d1:$dTag')}';
 
@@ -106,8 +97,7 @@ class StorageSync {
     }
   }
 
-  /// Null when the read did not complete — which is not the same answer as
-  /// "there is no root", and the caller must not treat it as one.
+  /// Null when the read did not complete, which is not the same as "no root".
   Future<PqRootLookup?> pqRootRecord(EventSigner signer) async {
     final hashed = categoryFor(signer.pubkey, pqRootDTag);
     final data =
@@ -133,17 +123,12 @@ class StorageSync {
         return (present: true, fingerprint: payload['fp'] as String);
       }
     } catch (_) {
-      // A row we cannot open is still a row.
+      // A row we cannot open still proves a root exists.
     }
     return (present: true, fingerprint: null);
   }
 
-  /// Writes the row for the root this device holds. Without it every other
-  /// device reads "no root" and mints a rival one.
-  ///
-  /// Never hybrid, whatever this device can do: this is the one row that may
-  /// not be sealed to a root-derived key, since it is what tells a device which
-  /// root to derive.
+  /// Never hybrid: this row tells a device which root to derive, so it cannot be sealed to a root-derived key.
   Future<bool> publishPqRootRecord(EventSigner signer, Uint8List root) async {
     final plain = jsonEncode({
       'v': 2,
@@ -166,10 +151,7 @@ class StorageSync {
     return resp != null && resp['error'] == null;
   }
 
-  /// A public batch read of the D1 profile mirror. No identity and no auth: a
-  /// kind 0 is public by definition, and this has to answer before the relays
-  /// are up. Null when the read did not complete. The events are returned
-  /// unverified; the caller is the one that knows what it will do with them.
+  /// Public, unauthenticated read of the D1 profile mirror; events are returned unverified.
   Future<Map<String, NostrEvent>?> profileEvents(List<String> pubkeys) async {
     final hex = RegExp(r'^[0-9a-f]{64}$');
     final wanted = pubkeys

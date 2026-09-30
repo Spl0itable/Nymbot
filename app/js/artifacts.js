@@ -54,8 +54,7 @@
     }
 
     const Artifacts = {
-        // A file lifted out of a ghost chat is still that chat: it stays in
-        // memory with the rest of it.
+        // Artifacts from a ghost chat stay in memory only, like the chat itself.
         _ghosts: new Map(),
 
         all(convId) {
@@ -140,9 +139,7 @@
             Store.drop('artifacts_' + convId);
         },
 
-        /// Lifts the substantial code blocks out of a reply. A block already
-        /// carried by an earlier version of the same artifact updates it
-        /// rather than piling up a second copy of the same file.
+        /// A block already carried by an earlier version of the same artifact updates it instead of duplicating.
         harvest(convId, message) {
             if (!message || message.role !== 'bot') return [];
             const made = [];

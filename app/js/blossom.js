@@ -1,12 +1,10 @@
-// Uploading a file so the model can actually see it.
 (function () {
     'use strict';
 
     const C = window.NymbotConfig;
     const Edge = window.NymbotEdge;
 
-    // The same hosts Nymchat mirrors across, so a blob uploaded in one app
-    // resolves in the other.
+    // The same hosts Nymchat mirrors across, so a blob resolves in either app.
     const HOSTS = [
         'https://blossom.band',
         'https://blossom.primal.net',
@@ -14,8 +12,7 @@
     ];
 
 
-    // Uploads go through the worker's media proxy: it holds the CORS headers the
-    // hosts do not all send, and it keeps the uploader's address off them.
+    // Proxied through the worker for CORS and to keep the uploader's address off the hosts.
     const proxyBase = () => `https://${C.apiHost}/api/proxy`;
 
     function hex(bytes) {
@@ -86,7 +83,6 @@
         HOSTS,
         throwaway,
 
-        /// Uploads bytes and returns the public URL.
         async put(bytes, mime, opts) {
             return (await this.place(bytes, mime, opts)).url;
         },
@@ -115,7 +111,6 @@
             return resp.status;
         },
 
-        /// Uploads one attachment and records where it landed.
         async upload(attachment, opts) {
             if (!attachment || (attachment.kind !== 'image' && attachment.kind !== 'video')) return attachment;
             if (attachment.url) return attachment;
@@ -130,7 +125,6 @@
             return attachment;
         },
 
-        /// Uploads everything a message carries.
         async uploadAll(attachments, opts) {
             const list = attachments || [];
             const failed = [];
