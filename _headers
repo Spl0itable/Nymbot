@@ -32,6 +32,18 @@
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: public, max-age=0, must-revalidate
 
+/app/build-manifest.json
+  ! Cache-Control
+  Cache-Control: no-cache
+
+/app/bundle-hash.txt
+  ! Cache-Control
+  Cache-Control: no-cache
+
+/app/version.json
+  ! Cache-Control
+  Cache-Control: no-cache
+
 /app/sandbox.html
   ! Content-Security-Policy
   ! X-Frame-Options

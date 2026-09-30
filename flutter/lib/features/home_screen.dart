@@ -59,6 +59,7 @@ import 'message_bubble.dart';
 import 'notice_banner.dart';
 import 'nym_avatar.dart';
 import 'nym_icons.dart';
+import 'sheets/about_sheet.dart';
 import 'sheets/anon_sheet.dart';
 import 'sheets/artifact_library_sheet.dart';
 import 'sheets/appearance_sheet.dart';
@@ -1229,6 +1230,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (app.current != null) await exportChat(app, app.current!, 'md');
           case 'tags':
             await showTagsSheet(context);
+          case 'about':
+            await showAboutSheet(context);
           case 'clear':
             final before = await app.clearCurrent();
             if (before != null) {
@@ -2838,13 +2841,23 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             ),
           ],
         ),
-        trailing: IconButton(
-          icon: const NymGlyph('plus', size: 20),
-          tooltip: t('New chat'),
-          onPressed: () async {
-            await app.newConversation();
-            if (context.mounted) Navigator.pop(context);
-          },
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const NymGlyph('info', size: 20),
+              tooltip: t('About Nymbot'),
+              onPressed: () => showAboutSheet(context),
+            ),
+            IconButton(
+              icon: const NymGlyph('plus', size: 20),
+              tooltip: t('New chat'),
+              onPressed: () async {
+                await app.newConversation();
+                if (context.mounted) Navigator.pop(context);
+              },
+            ),
+          ],
         ),
       ),
       Padding(

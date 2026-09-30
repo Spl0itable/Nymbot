@@ -51,6 +51,8 @@ const SHELL = [
     '/app/js/keybackup.js',
     '/app/js/notify.js',
     '/app/js/viewer.js',
+    '/app/js/integrity.js',
+    '/app/js/canary.js',
     '/app/js/ui.js',
     '/app/share.html',
     '/app/js/share-view.js',
@@ -524,6 +526,7 @@ self.addEventListener('fetch', (e) => {
     }
     if (url.origin !== location.origin) return;
     if (!url.pathname.startsWith('/app/')) return;
+    if (e.request.cache === 'no-store') return;
     if (url.searchParams.has('edge-probe') || url.searchParams.has('edge-reload')) return;
     const navigate = e.request.mode === 'navigate';
     if (!navigate && STATIC.test(url.pathname)) {

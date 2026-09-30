@@ -1,0 +1,14 @@
+{
+  "kind": 30078,
+  "created_at": 1790737823,
+  "tags": [
+    [
+      "d",
+      "nymbot-warrant-canary"
+    ]
+  ],
+  "content": "{\"statement\":\"As of the date below, 21 Million LLC has not received any National Security Letters, FISA court orders, gag orders, warrants, subpoenas, or other secret government requests for Nymbot user data, and has not been compelled to modify its systems or surrender cryptographic keys.\",\"allClear\":true,\"updatedAt\":\"2026-09-30T03:10:20.848Z\",\"nextUpdateBy\":\"2026-12-29T03:10:20.849Z\",\"signedBy\":\"Nymbot developer\",\"btcBlock\":{\"height\":969244,\"hash\":\"0000000000000000000105c6a4a635f3f75e932a855a5f07eb00b0fa2400b8dc\"}}",
+  "pubkey": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+  "id": "3e78ae5429d6289097d347cebc23c820a428d8cc3e589799ffdc65db8147d39f",
+  "sig": "1f339cb75698c3aad9ea8c2a614daca3b8516bd176f02aea3b3a29f3c852387857e893443937ba5d1d3ccef422fa4c88dac0bc819e9b6f73a1138f8495a3677b"
+}

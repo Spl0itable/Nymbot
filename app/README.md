@@ -40,6 +40,8 @@ never fetch and open, so the list is not a preference.
 | `js/commands.js` | Every `?` command, and the matcher the composer and the palette share. |
 | `js/export.js` | A conversation as Markdown, plain text or JSON, and the backup that restores all of them. |
 | `js/qr.js` | A byte-mode QR encoder, so an invoice is rendered here rather than sent somewhere to be drawn. |
+| `js/integrity.js` | Build integrity for the About sheet: re-hashes every shipped file against `build-manifest.json` and looks the bundle hash up in the repository's signed attestations. |
+| `js/canary.js` | The warrant canary: fetches `canary.json` from GitHub and checks its signature, key and d tag. |
 | `js/ui.js` | The shell. |
 
 ## What the app can do

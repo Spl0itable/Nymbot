@@ -2298,6 +2298,25 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .modal-status.is-warn { color: var(--danger); }
 .modal-status.is-ok { color: var(--primary); }
 
+.about-version { color: var(--text-dim); font-family: var(--mono); font-size: 0.85rem; font-weight: 400; margin-left: 0.35rem; }
+.about-panel { margin-top: 0.6rem; padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: var(--radius-btn); background: var(--bg-sunken); }
+.about-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; font-size: 0.85rem; }
+.about-title { color: var(--text-dim); }
+.about-status { font-weight: 600; text-align: right; }
+.about-status.is-ok { color: var(--primary); }
+.about-status.is-warn { color: var(--lightning); }
+.about-status.is-bad { color: var(--danger); }
+.about-status.is-checking { color: var(--text-dim); font-weight: 400; }
+.about-note { color: var(--text-dim); font-size: 0.8rem; margin-top: 0.35rem; }
+.about-note:empty { display: none; }
+.about-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.9rem; margin-top: 0.35rem; font-size: 0.75rem; }
+.about-hash, .about-date, .about-sig { color: var(--text-faint); font-family: var(--mono); overflow-wrap: anywhere; }
+.about-sig.is-ok { color: var(--primary); }
+.about-sig.is-bad { color: var(--danger); }
+.about-links { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0.9rem 0 0.4rem; font-size: 0.85rem; }
+#modalAbout .section-head { margin-top: 0.9rem; }
+#modalAbout select, #modalAbout textarea { width: 100%; }
+
 .lang-list { max-height: 50vh; overflow-y: auto; margin-top: 0.6rem; display: grid; gap: 0.25rem; }
 .lang-row {
     display: flex;

@@ -73,6 +73,53 @@ Relays only ever carry ciphertext. [The protocol page](https://nymbot.ai/docs/pr
 | `/pages` | The docs, legal and press pages. |
 | `/i18n` | Translations for every supported language. |
 
+## Verify build
+
+The web app has no build step of its own: every file under [`app/`](app/) is what the browser runs. So anyone can confirm that what `nymbot.ai/app` serves is exactly what is published here.
+
+How it works:
+
+- `npm run build` writes `dist/app/build-manifest.json`, holding the source `commit`, a `sha256-` hash of every file the app shell loads (the page, the service worker, and every script and stylesheet the page or the service worker's offline list names), and one `bundleHash` over that set. `dist/app/bundle-hash.txt` holds just the `bundleHash`, and `dist/app/version.json` the app version. The output depends only on source content (`builtAt` is the commit time), so rebuilding a commit gives the same hashes.
+- The [Build provenance](../../actions/workflows/build-provenance.yml) action rebuilds each commit on `main`, prints the `bundleHash` to the run summary, and signs build-provenance attestations for `bundle-hash.txt` and the manifest.
+- The app's **About** sheet re-fetches each file, hashes it in the browser with the Web Crypto API, and compares it with the manifest. It then recomputes the `bundleHash` from those local hashes, not from the manifest's claims, and looks it up in this repository's signed attestations through the GitHub API, so a deployment cannot vouch for itself with a manifest of its own. It reads **Verified** only when every file matches, the recomputed hash is attested here, and the page is served from `nymbot.ai`. A byte-identical copy on another domain reads **Verified build, not the official app**; modified files read **Mismatch** (naming an unrecognized inline script if one was injected); a self-made manifest reads **Unofficial build**; and **Provenance unreachable** means the GitHub API could not be reached.
+
+To verify a running build yourself:
+
+```sh
+git clone https://github.com/Spl0itable/Nymbot
+cd Nymbot
+git checkout <commit shown in the About sheet>
+npm ci
+npm run build
+cat dist/app/bundle-hash.txt
+```
+
+The hash should match the one in the About sheet and in that commit's Build provenance run. You can also check the attestation with the GitHub CLI:
+
+```sh
+gh attestation verify dist/app/build-manifest.json --repo Spl0itable/Nymbot
+```
+
+### Android
+
+The Android app hashes the APK it is running from and compares it with the NIP-82 kind 3063 asset events published for `ai.nymbot` on `wss://relay.zapstore.dev`, keeping only events signed by the pinned developer key. Google Play installs are re-signed and split by Google, so they cannot be checked this way and say so.
+
+### iOS
+
+App Store binaries are encrypted and re-signed per install, so a hash taken on the device matches nothing that could be published. The About sheet says so rather than implying a check it never ran. Use the web app to check Nymbot's code on Apple hardware.
+
+## Warrant canary
+
+A warrant canary is a statement, refreshed on a fixed schedule, that 21 Million LLC has *not* received any secret government request for Nymbot user data (such as a National Security Letter or FISA order). The developer can be compelled to stay silent about such a request but not to lie, so a canary that goes stale or disappears is itself the signal.
+
+The canary is [`canary.json`](canary.json) at the root of this repository, fetched straight from GitHub so its history is auditable apart from the deployed site. It is a Nostr event of kind 30078 with the d tag `nymbot-warrant-canary`, signed by the developer key `d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df` (the same key signs Nymchat's canary under a different d tag, so neither can stand in for the other). The About sheet verifies the signature, the key and the d tag, and shows:
+
+- **All clear** (green): signed by the developer key, current, and all clear.
+- **Not signed yet**, **Update overdue** or **Not all clear** (amber or red): the canary is unsigned, was not refreshed by its `nextUpdateBy` date, or no longer says all clear. A silenced request cannot be ruled out.
+- **Signature invalid** or **Canary removed** (red): the signature does not match the developer key, or the file is gone. Treat this as a serious warning.
+
+Each signed canary embeds the latest Bitcoin block height and hash at signing time. That hash could not be known before the block existed, so it proves the canary was signed after that point and not pre-signed in bulk.
+
 ## Changelog
 
 See the [releases page](https://github.com/Spl0itable/Nymbot/releases) for each update's changes.

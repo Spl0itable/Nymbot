@@ -1,4 +1,5 @@
 import { build, transform } from "esbuild";
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -241,6 +242,44 @@ console.log(`  ${documents.length} pages: ${documents.map((d) => d.slug ?? "/").
   if (!cacheLine.test(sw)) throw new Error("app/sw.js has no `const CACHE = '...';` line to stamp");
   await writeFile(swFile, sw.replace(cacheLine, `const CACHE = 'nymbot-shell-${version}';`));
   console.log(`  app cache: nymbot-shell-${version} (${files.length} files)`);
+}
+
+{
+  const appDir = path.join(outDir, "app");
+  const git = (args) => {
+    try { return execSync(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch (_) { return ""; }
+  };
+  const commit = (process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA || git("rev-parse HEAD") || "unknown").trim();
+  const shell = await readFile(path.join(appDir, "index.html"), "utf8");
+  const sw = await readFile(path.join(appDir, "sw.js"), "utf8");
+  const shellList = /const SHELL = \[([\s\S]*?)\];/.exec(sw);
+  if (!shellList) throw new Error("app/sw.js has no SHELL list to read the app shell from");
+  const shipped = new Set(["/app/index.html", "/app/sw.js"]);
+  for (const m of shell.matchAll(/<script src="(\/app\/[^"]+\.js)"><\/script>/g)) shipped.add(m[1]);
+  for (const m of shell.matchAll(/<link rel="stylesheet" href="(\/app\/[^"]+\.css)">/g)) shipped.add(m[1]);
+  for (const m of shellList[1].matchAll(/'(\/app\/[^']+\.(?:js|css|html))'/g)) shipped.add(m[1]);
+  const manifestFiles = {};
+  for (const p of [...shipped].sort()) {
+    const bytes = await readFile(path.join(outDir, p));
+    manifestFiles[p] = `sha256-${createHash("sha256").update(bytes).digest("base64")}`;
+  }
+  const bundleHash = createHash("sha256")
+    .update(Object.keys(manifestFiles).sort().map((p) => `${p}:${manifestFiles[p]}`).join("\n"))
+    .digest("hex");
+  const appVersion = /version:\s*'([^']+)'/.exec(await readFile("app/js/config.js", "utf8"));
+  if (!appVersion) throw new Error("app/js/config.js has no version");
+  await writeFile(path.join(appDir, "version.json"), JSON.stringify({ version: appVersion[1] }));
+  await writeFile(path.join(appDir, "bundle-hash.txt"), `${bundleHash}\n`);
+  await writeFile(path.join(appDir, "build-manifest.json"), JSON.stringify({
+    app: "nymbot",
+    version: appVersion[1],
+    commit,
+    builtAt: git("log -1 --format=%cI"),
+    algo: "sha256",
+    bundleHash,
+    files: manifestFiles,
+  }, null, 2));
+  console.log(`  build manifest: ${Object.keys(manifestFiles).length} files, bundle hash ${bundleHash}`);
 }
 
 console.log(`  sitemap.xml (index over ${sitemaps.length - 1} language sitemaps), llms.txt, llms-full.txt, 404.html`);

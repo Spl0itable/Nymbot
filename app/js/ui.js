@@ -6276,6 +6276,175 @@
             }
         },
 
+        openAbout() {
+            $('aboutVersion').textContent = C.version;
+            this.modalStatus('aboutContactStatus', '');
+            this.renderBuildCheck();
+            this.renderCanaryCheck();
+            this.openModal('modalAbout');
+        },
+
+        aboutStatus(id, text, kind) {
+            const node = $(id);
+            node.textContent = text || '';
+            node.className = 'about-status' + (kind ? ' is-' + kind : '');
+        },
+
+        renderBuildCheck() {
+            const Integrity = window.NymbotIntegrity;
+            if (!Integrity) return;
+            this.aboutStatus('aboutBuildStatus', t('Verifying…'), 'checking');
+            Integrity.verify().then((r) => {
+                const known = r.commit && r.commit !== 'unknown';
+                const commit = $('aboutBuildCommit');
+                if (known) {
+                    commit.href = C.sourceRepo + '/commit/' + r.commit;
+                    commit.textContent = t('Commit {commit}', { commit: r.commit.slice(0, 7) });
+                    $('aboutBuildProvenance').href = C.sourceRepo + '/commit/' + r.commit + '/checks';
+                }
+                const hash = $('aboutBuildHash');
+                hash.textContent = r.bundleHash ? r.bundleHash.slice(0, 12) : '';
+                hash.title = r.bundleHash || '';
+                const counts = { n: r.verified, total: r.total };
+                if (r.state === 'verified') {
+                    this.aboutStatus('aboutBuildStatus', t('Verified ({n}/{total})', counts), 'ok');
+                } else if (r.state === 'mirror') {
+                    this.aboutStatus('aboutBuildStatus', t('Verified build, not the official app'), 'warn');
+                } else if (r.state === 'mismatch') {
+                    this.aboutStatus('aboutBuildStatus', r.strayScripts > 0
+                        ? t('Mismatch ({n}/{total}), unrecognized inline script', counts)
+                        : t('Mismatch ({n}/{total})', counts), 'bad');
+                } else if (r.state === 'unofficial') {
+                    this.aboutStatus('aboutBuildStatus', t('Unofficial build ({n}/{total})', counts), 'bad');
+                } else {
+                    this.aboutStatus('aboutBuildStatus', t('Provenance unreachable ({n}/{total})', counts), 'warn');
+                }
+            }).catch(() => {
+                this.aboutStatus('aboutBuildStatus', t('Unavailable offline'), 'checking');
+            });
+        },
+
+        renderCanaryCheck() {
+            const Canary = window.NymbotCanary;
+            if (!Canary) return;
+            const note = $('aboutCanaryNote');
+            const sig = $('aboutCanarySig');
+            const date = $('aboutCanaryDate');
+            const eventLink = $('aboutCanaryEvent');
+            const anchor = $('aboutCanaryAnchor');
+            this.aboutStatus('aboutCanaryStatus', t('Checking…'), 'checking');
+            note.textContent = '';
+            sig.textContent = '';
+            sig.className = 'about-sig';
+            date.textContent = '';
+            eventLink.hidden = true;
+            anchor.hidden = true;
+            const day = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '');
+            Canary.check().then((c) => {
+                if (c.state === 'gone') {
+                    this.aboutStatus('aboutCanaryStatus', t('Canary removed'), 'bad');
+                    note.textContent = t('The signed canary is no longer published. Treat this as a serious warning.');
+                    return;
+                }
+                date.textContent = [
+                    c.updatedAt ? t('updated {date}', { date: day(c.updatedAt) }) : '',
+                    c.dueBy ? t('due {date}', { date: day(c.dueBy) }) : ''
+                ].filter(Boolean).join(' \u00b7 ');
+                if (c.sig === 'valid') {
+                    sig.textContent = t('signature valid');
+                    sig.className = 'about-sig is-ok';
+                } else if (c.sig === 'invalid') {
+                    sig.textContent = t('signature invalid');
+                    sig.className = 'about-sig is-bad';
+                } else {
+                    sig.textContent = t('unsigned');
+                }
+                if (c.id && c.sig === 'valid') {
+                    let ref = c.id;
+                    try {
+                        ref = NT().nip19.neventEncode({ id: c.id, author: c.pubkey, relays: C.relays.slice(0, 2) });
+                    } catch (_) { }
+                    eventLink.href = 'https://njump.me/' + ref;
+                    eventLink.hidden = false;
+                }
+                const block = c.btcBlock;
+                if (block && block.height && /^[0-9a-f]{64}$/.test(String(block.hash || ''))) {
+                    anchor.textContent = t('Bitcoin block {height}', { height: num(block.height) });
+                    anchor.href = 'https://mempool.space/block/' + block.hash;
+                    anchor.hidden = false;
+                }
+                if (c.state === 'forged') {
+                    this.aboutStatus('aboutCanaryStatus', t('Signature invalid'), 'bad');
+                    note.textContent = t('The canary signature does not match the Nymbot developer key. Do not trust this canary.');
+                } else if (c.state === 'unsigned') {
+                    this.aboutStatus('aboutCanaryStatus', t('Not signed yet'), 'warn');
+                    note.textContent = t('The canary has not been signed by the Nymbot developer yet, so it does not vouch for anything.');
+                } else if (c.state === 'ok') {
+                    this.aboutStatus('aboutCanaryStatus', t('All clear'), 'ok');
+                    note.textContent = c.statement || t('No secret government requests have been received.');
+                } else if (c.overdue) {
+                    this.aboutStatus('aboutCanaryStatus', t('Update overdue'), 'warn');
+                    note.textContent = t('The canary was not refreshed on schedule, so a silenced request such as a National Security Letter or FISA order cannot be ruled out.');
+                } else {
+                    this.aboutStatus('aboutCanaryStatus', t('Not all clear'), 'bad');
+                    note.textContent = t('The developer no longer states that no secret government request has been received.');
+                }
+            }).catch(() => {
+                this.aboutStatus('aboutCanaryStatus', t('Unavailable offline'), 'checking');
+            });
+        },
+
+        async sendDeveloperMessage(topic, text) {
+            const Wire = window.NymbotWire;
+            const to = C.developerPubkey;
+            let kem = null;
+            try {
+                const key = await PQ.resolve(to);
+                kem = key && key.pk ? key.pk : null;
+            } catch (_) { kem = null; }
+            const body = '[Nymbot contact \u2014 ' + topic + ']\n\n' + text;
+            const rumor = Wire.rumor(body, to, null, null, Identity.pubkey);
+            const wrap = await Wire.wrap(rumor, to, kem);
+            return Relays.publish(wrap, 5000);
+        },
+
+        async sendAboutContact() {
+            if (this._aboutSending) return;
+            const input = $('aboutContactMessage');
+            const text = (input.value || '').trim();
+            if (!text) {
+                this.modalStatus('aboutContactStatus', t('Write a message first.'), 'warn');
+                return;
+            }
+            if (text.length > 2000) {
+                this.modalStatus('aboutContactStatus', t('That is over 2000 characters. Shorten it and send it again.'), 'warn');
+                return;
+            }
+            if (!Relays.connected) {
+                this.modalStatus('aboutContactStatus', t('Not connected to a relay. Try again once connected.'), 'warn');
+                return;
+            }
+            const topic = $('aboutContactTopic').value || 'General feedback';
+            const button = $('aboutContactSend');
+            this._aboutSending = true;
+            button.disabled = true;
+            this.modalStatus('aboutContactStatus', t('Sending…'));
+            try {
+                const accepted = await this.sendDeveloperMessage(topic, text);
+                if (accepted > 0) {
+                    input.value = '';
+                    this.modalStatus('aboutContactStatus', t('Message sent. Thanks for reaching out.'), 'ok');
+                } else {
+                    this.modalStatus('aboutContactStatus', t('No relay took the message. Try again.'), 'warn');
+                }
+            } catch (_) {
+                this.modalStatus('aboutContactStatus', t('Could not send the message. Try again.'), 'warn');
+            } finally {
+                this._aboutSending = false;
+                button.disabled = false;
+            }
+        },
+
         /// Capture because scroll does not bubble; passive so it never delays scrolling.
         watchScrolling() {
             const fades = new WeakMap();
@@ -8467,6 +8636,7 @@
                 { label: t('Settings'), hint: '', run: () => this.openAppearance() },
                 { label: t('Memory'), hint: '', run: () => this.openMemory() },
                 { label: t('Keyboard shortcuts'), hint: '', run: () => this.openShortcuts() },
+                { label: t('About Nymbot'), hint: '', run: () => this.openAbout() },
                 { label: t('Buy credits'), hint: '', run: () => this.openCredits() },
                 { label: t('Anonymous chat'), hint: '', run: this.paidOnly(() => this.openAnon(), true) },
                 { label: t('Identity'), hint: '', run: () => this.openSettings() },
@@ -9010,6 +9180,8 @@
                 },
                 'open-models': () => this.openModels(),
                 'open-help': () => this.openHelp(),
+                'open-about': () => this.openAbout(),
+                'about-send': () => this.sendAboutContact(),
                 'open-schedules': () => this.openSchedules(),
                 'schedule-save': () => this.saveScheduleForm(),
                 'schedule-reset': () => this.resetScheduleForm(),

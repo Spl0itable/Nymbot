@@ -106,6 +106,27 @@ class MainActivity : FlutterFragmentActivity() {
             .setMethodCallHandler { call, result -> vaultKey(call, Reply(result)) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/signer")
             .setMethodCallHandler { call, result -> signer(call, result) }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/build_integrity")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "inspect") {
+                    Thread {
+                        val payload = try {
+                            BuildIntegrity.inspect(applicationContext)
+                        } catch (e: Throwable) {
+                            null
+                        }
+                        runOnUiThread {
+                            if (payload == null) {
+                                result.error("inspect_failed", null, null)
+                            } else {
+                                result.success(payload)
+                            }
+                        }
+                    }.start()
+                } else {
+                    result.notImplemented()
+                }
+            }
         ReplyNotifier.attach(this, flutterEngine)
         PasskeyBridge.attach(this, flutterEngine)
     }

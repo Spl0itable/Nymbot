@@ -47,6 +47,7 @@ List<(String, String, String)> paletteActions() => [
       ('export-md', t('Export this chat as Markdown'), ''),
       ('tags', t('Tags and folder'), ''),
       ('clear', t('Clear this chat'), ''),
+      ('about', t('About Nymbot'), ''),
     ];
 
 List<PaletteRow> paletteRows(BuildContext context, String term) {

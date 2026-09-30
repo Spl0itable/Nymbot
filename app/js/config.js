@@ -1,4 +1,5 @@
 window.NymbotConfig = {
+    version: 'v1.0.7',
     apiHost: 'nymbot.ai',
 
     botPubkey: 'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2',
@@ -43,5 +44,12 @@ window.NymbotConfig = {
 
     googleClientId: '435441872913-q30ml0k3dlgl65qu9qo6i5obb1v14t0d.apps.googleusercontent.com',
 
-    storagePrefix: 'nymbot_'
+    storagePrefix: 'nymbot_',
+
+    developerPubkey: 'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df',
+    sourceRepo: 'https://github.com/Spl0itable/Nymbot',
+    attestationApi: 'https://api.github.com/repos/Spl0itable/Nymbot/attestations/sha256:',
+    officialHosts: ['nymbot.ai'],
+    canaryUrl: 'https://raw.githubusercontent.com/Spl0itable/Nymbot/main/canary.json',
+    canaryDTag: 'nymbot-warrant-canary'
 };

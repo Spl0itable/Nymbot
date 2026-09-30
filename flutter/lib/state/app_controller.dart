@@ -28,6 +28,7 @@ import '../services/backup.dart';
 import '../services/blossom.dart';
 import '../services/chat_engine.dart';
 import '../services/connectors.dart';
+import '../services/dev_contact.dart';
 import '../services/doc_library.dart';
 import '../services/free_tier.dart';
 import '../services/gifts.dart';
@@ -729,6 +730,18 @@ class AppController extends ChangeNotifier {
     await store.saveFavouriteModels(favouriteModels);
     notifyListeners();
   }
+
+  DevContact developerContact({ContactPublish? publish, ContactKem? kem}) =>
+      DevContact(
+        signer: identity.signer,
+        publish: publish ?? relays.publish,
+        kem: kem ??
+            (pubkey) async => (await pq.resolve(pubkey, viaProxy: true))?.pk,
+      );
+
+  Future<ContactOutcome> contactDeveloper(String topic, String message,
+          {ContactPublish? publish, ContactKem? kem}) =>
+      developerContact(publish: publish, kem: kem).send(topic, message);
 
   Future<void> setAnonEnabled(bool on) async {
     await anon.setEnabled(on);

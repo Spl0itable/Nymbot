@@ -220,6 +220,9 @@
             <div class="sidebar-head">
                 <span class="brand" id="brand" title="Nymbot" role="img" aria-label="Nymbot"></span>
                 <div class="sidebar-head-actions">
+                    <button class="icon-btn" type="button" data-act="open-about" title="About Nymbot" aria-label="About Nymbot">
+                        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16.5"></line><line x1="12" y1="7.5" x2="12.01" y2="7.5"></line></svg>
+                    </button>
                     <button class="icon-btn" type="button" data-act="open-palette" title="Command palette" aria-label="Command palette">
                         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     </button>
@@ -634,6 +637,64 @@
                     <a class="btn btn-small" href="/docs/" target="_blank" rel="noopener">Full knowledge base</a>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="modal" id="modalAbout" hidden>
+        <div class="modal-card">
+            <header><h2>Nymbot <span class="about-version" id="aboutVersion" data-i18n-skip></span></h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Private AI chat with no account, end-to-end encrypted, and paid per reply in Bitcoin over Lightning.</p>
+            <div class="about-panel">
+                <div class="about-row">
+                    <span class="about-title">Build integrity</span>
+                    <span class="about-status" id="aboutBuildStatus"></span>
+                </div>
+                <div class="about-meta">
+                    <a id="aboutBuildCommit" href="https://github.com/Spl0itable/Nymbot" target="_blank" rel="noopener">Source</a>
+                    <span class="about-hash" id="aboutBuildHash" data-i18n-skip></span>
+                </div>
+                <div class="about-meta">
+                    <a id="aboutBuildProvenance" href="https://github.com/Spl0itable/Nymbot/actions/workflows/build-provenance.yml" target="_blank" rel="noopener">Build provenance</a>
+                    <a href="https://github.com/Spl0itable/Nymbot#verify-build" target="_blank" rel="noopener">How to verify</a>
+                </div>
+            </div>
+            <div class="about-panel">
+                <div class="about-row">
+                    <span class="about-title">Warrant canary</span>
+                    <span class="about-status" id="aboutCanaryStatus"></span>
+                </div>
+                <p class="about-note" id="aboutCanaryNote"></p>
+                <div class="about-meta">
+                    <a href="https://github.com/Spl0itable/Nymbot/blob/main/canary.json" target="_blank" rel="noopener">Canary file</a>
+                    <span class="about-sig" id="aboutCanarySig"></span>
+                    <a id="aboutCanaryEvent" target="_blank" rel="noopener" hidden>Nostr event</a>
+                    <a id="aboutCanaryAnchor" target="_blank" rel="noopener" hidden></a>
+                    <span class="about-date" id="aboutCanaryDate"></span>
+                </div>
+            </div>
+            <nav class="about-links">
+                <a href="https://nymbot.ai/docs/" target="_blank" rel="noopener">Docs</a>
+                <a href="https://github.com/Spl0itable/Nymbot" target="_blank" rel="noopener">GitHub</a>
+                <a href="https://nymbot.ai/terms/" target="_blank" rel="noopener">Terms</a>
+                <a href="https://nymbot.ai/privacy/" target="_blank" rel="noopener">Privacy</a>
+                <a href="https://nymbot.ai/dmca/" target="_blank" rel="noopener">DMCA</a>
+            </nav>
+            <h3 class="section-head">Contact the developer</h3>
+            <p class="hint">Send feedback, a question or a bug report. It goes to the Nymbot developer as an end-to-end encrypted private message from your own key, never from a throwaway one.</p>
+            <label for="aboutContactTopic">Topic</label>
+            <select id="aboutContactTopic">
+                <option value="General feedback">General feedback</option>
+                <option value="Bug report">Bug report</option>
+                <option value="Feature request">Feature request</option>
+                <option value="Question">Question</option>
+            </select>
+            <label for="aboutContactMessage">Message</label>
+            <textarea id="aboutContactMessage" rows="4" maxlength="2000" placeholder="Write your message"></textarea>
+            <p class="modal-status" id="aboutContactStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="about-send" id="aboutContactSend">Send message</button>
+                <button class="btn btn-ghost" type="button" data-act="close-modal">Close</button>
+            </footer>
         </div>
     </div>
 
@@ -1713,6 +1774,8 @@
     <script src="/app/js/keybackup.js"></script>
     <script src="/app/js/notify.js"></script>
     <script src="/app/js/viewer.js"></script>
+    <script src="/app/js/integrity.js"></script>
+    <script src="/app/js/canary.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>
 </body>
