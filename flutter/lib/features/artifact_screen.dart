@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../app.dart';
 import '../models/artifact.dart';
+import '../services/bot_files.dart';
 import 'artifact_preview.dart';
 import 'code_highlight.dart';
 import 'markdown_body.dart';
@@ -121,6 +122,16 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
               tooltip: t('Share'),
               onPressed: () => Share.share(_body.text, subject: artifact.title),
             ),
+            PopupMenuButton<String>(
+              key: const ValueKey('artifact-export'),
+              tooltip: t('Download as'),
+              icon: const NymGlyph('save', size: 20),
+              onSelected: (format) => _export(context, artifact, format),
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'pdf', child: Text(t('Download as PDF'))),
+                PopupMenuItem(value: 'docx', child: Text(t('Download as DOCX'))),
+              ],
+            ),
           ],
         ),
         body: Column(
@@ -168,6 +179,34 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
             : null,
       ),
     );
+  }
+
+  bool _exporting = false;
+
+  Future<void> _export(BuildContext context, Artifact artifact, String format) async {
+    if (_exporting) return;
+    _exporting = true;
+    final app = AppScope.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(format == 'pdf' ? t('Making the PDF…') : t('Making the DOCX…'))));
+    try {
+      final made = await app.renderArtifactFile(artifact, format, _body.text);
+      final file = made.file;
+      if (file == null) {
+        if (made.error.isNotEmpty) {
+          messenger
+            ..clearSnackBars()
+            ..showSnackBar(SnackBar(content: Text(made.error)));
+        }
+        return;
+      }
+      messenger.clearSnackBars();
+      await BotFiles.share(file.bytes, file.name, file.type);
+    } finally {
+      _exporting = false;
+    }
   }
 
   Future<bool?> _askToKeep(BuildContext context) => showDialog<bool>(

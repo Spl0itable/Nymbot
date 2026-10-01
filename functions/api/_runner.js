@@ -45,10 +45,24 @@ export const RUNNER_IMAGES = {
     instanceType: "standard-3",
     maxInstances: 6,
     maxTimeoutSec: 1200
+  },
+  browser: {
+    label: "Browser tests (Playwright and Chromium)",
+    className: "BrowserRunner",
+    binding: "BROWSER_RUNNER",
+    instanceType: "standard-2",
+    maxInstances: 8,
+    maxTimeoutSec: 900,
+    browser: true,
+    artifacts: true
   }
 };
 
 export const RUNNER_MIN_TIMEOUT_SEC = 5;
+export const RUNNER_BROWSER_SURCHARGE_DEFAULT = 1.5;
+export const RUNNER_BROWSER_SURCHARGE_MIN = 1;
+export const RUNNER_BROWSER_SURCHARGE_MAX = 5;
+export const RUNNER_BROWSER_LINK = "nymbot-browser-link";
 export const RUNNER_MARGIN_DEFAULT = 1.4;
 export const RUNNER_MARGIN_MIN = 1.0;
 export const RUNNER_MARGIN_MAX = 3.0;
@@ -84,6 +98,21 @@ const SHELL_WORD = "(?:^|[\\s;&|(`!])";
 const SHELL_POLYGLOT = new RegExp(SHELL_WORD + "(?:go|cargo|rustc|rustup|javac|java|mvn|gradle)(?=[\\s;&|)`]|$)", "m");
 const SHELL_PYTHON = new RegExp(SHELL_WORD + "(?:pip3?|python3?|pytest|poetry|uv|pipx)(?=[\\s;&|)`]|$)", "m");
 const SHELL_NODE = new RegExp(SHELL_WORD + "(?:npm|npx|node|yarn|pnpm|tsx|corepack)(?=[\\s;&|)`]|$)", "m");
+
+const BROWSER_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["'](?:playwright(?:-core|-chromium)?|@playwright\/test|puppeteer(?:-core)?|selenium-webdriver|cypress)(?:\/[^"'\n]*)?["']/;
+const BROWSER_COMMAND = /(?:^|[\s;&|(`!/])(?:playwright|puppeteer|cypress)(?=[\s;&|)`.\-]|$)/m;
+
+export function runnerCommandNeedsBrowser(command) {
+  return BROWSER_COMMAND.test(String(command || "").replace(/^\s*#.*$/gm, ""));
+}
+
+export function runnerCodeNeedsBrowser(language, code) {
+  const lang = runnerLanguage(language);
+  if (!lang) return false;
+  if (lang.language === "javascript" || lang.language === "typescript") return BROWSER_IMPORT.test(String(code || ""));
+  if (lang.language === "bash" || lang.language === "sh") return runnerCommandNeedsBrowser(code);
+  return false;
+}
 
 export function runnerShellImage(code) {
   const text = String(code || "").replace(/^\s*#.*$/gm, "");
@@ -126,6 +155,25 @@ export function runnerUsdPerSecond(image) {
     + size.diskGB * RUNNER_RATES.diskUsdPerGBSecond;
 }
 
+function clampSurcharge(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || typeof v === "boolean" || !Number.isFinite(n)) return null;
+  return Math.min(RUNNER_BROWSER_SURCHARGE_MAX, Math.max(RUNNER_BROWSER_SURCHARGE_MIN, n));
+}
+
+export function runnerBrowserSurcharge(env, settings) {
+  const fromSettings = settings ? clampSurcharge(settings.browserSurcharge) : null;
+  if (fromSettings !== null) return fromSettings;
+  const fromEnv = clampSurcharge(env && env.RUNNER_BROWSER_SURCHARGE);
+  return fromEnv !== null ? fromEnv : RUNNER_BROWSER_SURCHARGE_DEFAULT;
+}
+
+export function runnerSurchargeFor(image, surcharge) {
+  if (!hasImage(image) || !RUNNER_IMAGES[image].browser) return 1;
+  const n = clampSurcharge(surcharge);
+  return n !== null ? n : 1;
+}
+
 function clampMargin(v) {
   const n = Number(v);
   if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return null;
@@ -159,7 +207,8 @@ export function runnerMaxMilli(image, timeoutSec, btcUsd, opts) {
   if (!hasImage(image)) return 0;
   const toMilli = converter(opts);
   const usd = runnerBilledMs(Number(timeoutSec) * 1000 + RUNNER_DEADLINE_SLACK_MS) / 1000 * runnerUsdPerSecond(image);
-  return Math.max(1, Math.ceil(Number(toMilli(usd * marginOf(opts), btcUsd)) || 0));
+  const factor = marginOf(opts) * runnerSurchargeFor(image, opts && opts.surcharge);
+  return Math.max(1, Math.ceil(Number(toMilli(usd * factor, btcUsd)) || 0));
 }
 
 export function runnerChargeMilli(image, billedMs, usd, btcUsd, opts) {
@@ -172,7 +221,8 @@ export function runnerChargeMilli(image, billedMs, usd, btcUsd, opts) {
   if (!Number.isFinite(cost) || cost < 0) cost = 0;
   if (cost === 0 && ms > 0) cost = ms / 1000 * runnerUsdPerSecond(image);
   if (cost === 0) return 0;
-  const milli = Math.max(1, Math.ceil(Number(toMilli(cost * marginOf(opts), btcUsd)) || 0));
+  const factor = marginOf(opts) * runnerSurchargeFor(image, opts && opts.surcharge);
+  const milli = Math.max(1, Math.ceil(Number(toMilli(cost * factor, btcUsd)) || 0));
   return Math.min(max, milli);
 }
 
@@ -194,7 +244,7 @@ export function runnerDefaultSettings() {
   for (const name of Object.keys(RUNNER_IMAGES)) {
     images[name] = { enabled: true, maxTimeoutSec: RUNNER_IMAGES[name].maxTimeoutSec };
   }
-  return { enabled: true, margin: null, images };
+  return { enabled: true, margin: null, browserSurcharge: null, siteCheck: { enabled: true, usdPerMinute: null }, images };
 }
 
 export function runnerParseSettings(rows) {
@@ -208,6 +258,19 @@ export function runnerParseSettings(rows) {
     }
     if (row.key === "runner.margin") {
       s.margin = clampMargin(value);
+      continue;
+    }
+    if (row.key === "runner.browserSurcharge") {
+      s.browserSurcharge = clampSurcharge(value);
+      continue;
+    }
+    if (row.key === "sitecheck.enabled") {
+      s.siteCheck.enabled = value !== "0";
+      continue;
+    }
+    if (row.key === "sitecheck.usdPerMinute") {
+      const n = Number(value);
+      s.siteCheck.usdPerMinute = value !== "" && Number.isFinite(n) && n > 0 ? Math.min(1, n) : null;
       continue;
     }
     const m = /^runner\.image\.([a-z]+)\.(enabled|maxTimeoutSec)$/.exec(row.key);
@@ -310,6 +373,10 @@ export function runnerBuildRequest(body, opts) {
     if (new TextEncoder().encode(body.code).length > RUNNER_CODE_MAX_BYTES) return refuse("The code is larger than 1 MiB.");
     image = lang.language === "bash" || lang.language === "sh" ? runnerShellImage(body.code) : lang.image;
     command = runnerSnippetCommand(lang);
+    if (runnerCodeNeedsBrowser(lang.language, body.code) && runnerImageOpen(settings, "browser")) {
+      image = "browser";
+      command = RUNNER_BROWSER_LINK + "; " + command;
+    }
     files.push({ path: lang.filename, data: runnerBase64(body.code) });
     const deps = runnerDepsFile(lang.deps);
     if (deps) files.push(deps);
@@ -442,20 +509,27 @@ export async function* callRunner(env, req, opts) {
 export function runnerInfo(env, btcUsd, opts) {
   const settings = (opts && opts.settings) || runnerDefaultSettings();
   const margin = runnerMargin(env, settings);
+  const surcharge = opts && opts.surcharge != null ? (clampSurcharge(opts.surcharge) || 1) : runnerBrowserSurcharge(env, settings);
   const toMilli = converter(opts);
   const images = [];
   for (const name of Object.keys(RUNNER_IMAGES)) {
     if (!runnerImageOpen(settings, name)) continue;
     const spec = RUNNER_IMAGES[name];
-    const milli = Number(toMilli(runnerUsdPerSecond(name) * 60 * margin, btcUsd)) || 0;
-    images.push({
+    const extra = runnerSurchargeFor(name, surcharge);
+    const milli = Number(toMilli(runnerUsdPerSecond(name) * 60 * margin * extra, btcUsd)) || 0;
+    const row = {
       name,
       label: spec.label,
       instanceType: spec.instanceType,
       maxTimeoutSec: runnerMaxTimeout(settings, name),
       creditsPerMinute: Math.round(milli) / 1000,
       setupSec: RUNNER_DEADLINE_SLACK_MS / 1000
-    });
+    };
+    if (spec.browser) {
+      row.browser = true;
+      row.surcharge = extra;
+    }
+    images.push(row);
   }
-  return { available: runnerAvailable(env, settings), margin, images };
+  return { available: runnerAvailable(env, settings), margin, browserSurcharge: surcharge, images };
 }

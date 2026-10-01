@@ -4,6 +4,7 @@ import '../app.dart';
 import '../core/theme/theme.dart';
 import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
+import 'server_run_artifacts.dart';
 
 class PendingToolCard extends StatefulWidget {
   const PendingToolCard({
@@ -97,6 +98,46 @@ class _PendingToolCardState extends State<PendingToolCard> {
     );
   }
 
+  Widget _actions(BuildContext context, String state) {
+    final hint = TextStyle(fontSize: 12, color: Theme.of(context).hintColor);
+    if (state == 'allowed') return Text(t('Allowed once.'), style: hint);
+    if (state == 'denied') return Text(t('Declined. Nothing was run.'), style: hint);
+    return Wrap(
+      spacing: 8,
+      children: [
+        FilledButton(onPressed: widget.onAllow, child: Text(t('Allow once'))),
+        OutlinedButton(onPressed: widget.onDeny, child: Text(t('Decline'))),
+      ],
+    );
+  }
+
+  Widget _siteCheck(BuildContext context) {
+    final theme = Theme.of(context);
+    final pending = widget.pending;
+    final state = pending['state'] as String? ?? 'waiting';
+    final hint = TextStyle(fontSize: 12, color: theme.hintColor);
+    const mono = TextStyle(fontSize: 12, fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback);
+    final steps = pending['steps'] is List ? (pending['steps'] as List).map((s) => '$s').toList() : const <String>[];
+    return _frame(context, state != 'waiting', [
+      Text(t('Nymbot wants to check a website in a headless browser'),
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 4),
+      SelectableText('${pending['url'] ?? pending['command'] ?? ''}', key: const ValueKey('site-check-url'), style: mono),
+      for (var i = 0; i < steps.length; i++)
+        Text('${i + 1}. ${steps[i]}', style: mono.copyWith(fontSize: 11)),
+      const SizedBox(height: 4),
+      Text(t('Time limit: {time}', {'time': ServerRuns.minutes((pending['timeoutSec'] as num?)?.toInt() ?? 0)}), style: hint),
+      if ((pending['surcharge'] as num? ?? 0) > 1)
+        ...serverRunSurchargeLines(context, (pending['creditsPerMinute'] as num?)?.toDouble() ?? 0),
+      Text(
+        t('Up to {credits} Pro credits', {'credits': ServerRuns.credits((pending['maxCredits'] as num?)?.toDouble() ?? 0)}),
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: 6),
+      _actions(context, state),
+    ]);
+  }
+
   Widget _serverRun(BuildContext context) {
     final theme = Theme.of(context);
     final pending = widget.pending;
@@ -142,6 +183,8 @@ class _PendingToolCardState extends State<PendingToolCard> {
       ),
       const SizedBox(height: 4),
       Text(t('Time limit: {time}', {'time': ServerRuns.minutes(timeout)}), style: hint),
+      if ((pending['surcharge'] as num? ?? 0) > 1)
+        ...serverRunSurchargeLines(context, (pending['creditsPerMinute'] as num?)?.toDouble() ?? 0),
       Text(
         t('Up to {credits} Pro credits', {'credits': ServerRuns.credits(credits)}),
         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
@@ -165,6 +208,7 @@ class _PendingToolCardState extends State<PendingToolCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.pending['kind'] == 'server-run' && widget.pending['check'] == true) return _siteCheck(context);
     if (widget.pending['kind'] == 'server-run') return _serverRun(context);
     final theme = Theme.of(context);
     final pending = widget.pending;

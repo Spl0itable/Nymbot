@@ -8,10 +8,14 @@ import {
 import { ApiError, apiBad, apiIso, apiJson, apiRound, apiParseTime } from "./_apihttp.js";
 import { apiKeyLimitError } from "./_apiauth.js";
 import { apiL402Open, apiL402Settle, apiL402Cost, apiL402Usage } from "./_apil402.js";
+import { bgVerify } from "./_background.js";
 
 export const API_HISTORY_DAYS = USAGE_KEEP_DAYS;
 export const API_HISTORY_MAX_PAGE = 1000;
-export const API_BILL_TIMING = { refreshMs: 300000, refreshMaxMs: 7200000 };
+export const API_BILL_TIMING = {
+  refreshMs: 300000, refreshMaxMs: 7200000, checkpointMs: 15000, sweepEveryMs: 10000, sweepAccountRows: 25, sweepCronRows: 200
+};
+export const API_HISTORY_SWEEP_RUN = "api-history-sweep";
 export const API_HISTORY_TYPES = ["chat", "responses", "messages", "image", "video", "speech", "transcription", "embedding"];
 
 export function apiSatsPer(tier) {
@@ -168,7 +172,8 @@ export async function apiBillOpen(api, o) {
   const bill = {
     id: bytesToHex(randomBytes(16)), tier, satsPer, holdCredits, pubkey: auth.pubkey,
     keyId: auth.keyId || null, keyLimited: !!(auth.key && auth.key.limit_sats != null), keyOpen: false, done: false,
-    keyPeriod: (auth.key && auth.key.reset_period) || null, timer: null, refreshing: null
+    keyPeriod: (auth.key && auth.key.reset_period) || null, timer: null, refreshing: null,
+    expireMilli: expiryMilli(o.expireMilli), checkpointing: null
   };
   if (bill.keyId) {
     const need = holdCredits * satsPer;
@@ -191,6 +196,7 @@ export async function apiBillOpen(api, o) {
   const held = await holdOp(api.env, bill);
   if (held && held.ok) {
     if (o.refresh) startRefresh(api, bill);
+    if (o.history) openRow(api, bill, o.history);
     return bill;
   }
   await apiKeyClose(api, bill, 0);
@@ -201,10 +207,47 @@ export async function apiBillOpen(api, o) {
   throw insufficient(tier, holdCredits, free, !!(held && held.held), 0);
 }
 
+function expiryMilli(v) {
+  const n = Math.ceil(Number(v) || 0);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+
 function holdOp(env, bill) {
-  return ledgerCall(env, {
+  const op = {
     op: "credit-hold", id: bill.id, pubkey: bill.pubkey, tier: bill.tier, amount: bill.holdCredits, ttl: BOT_HOLD_TTL_S, stamp: false
+  };
+  if (bill.expireMilli > 0) op.expireMilli = bill.expireMilli;
+  return ledgerCall(env, op);
+}
+
+function extendOp(bill) {
+  const op = { op: "credit-extend", id: bill.id, pubkey: bill.pubkey, tier: bill.tier, amount: bill.holdCredits, ttl: BOT_HOLD_TTL_S };
+  if (bill.expireMilli > 0) op.expireMilli = bill.expireMilli;
+  return op;
+}
+
+function holdLost(bill) {
+  if (bill.done) return;
+  bill.holdLost = true;
+  if (typeof bill.onHoldLost === "function") {
+    try { bill.onHoldLost(); } catch (e) { }
+  }
+}
+
+export function apiBillCheckpoint(api, bill, milliIn) {
+  const milli = expiryMilli(milliIn);
+  if (!bill || bill.l402 || bill.done || milli <= (bill.expireMilli || 0)) return Promise.resolve(false);
+  bill.expireMilli = milli;
+  const prior = bill.checkpointing || Promise.resolve();
+  const run = prior.then(async () => {
+    let held = null;
+    try { held = await ledgerCall(api.env, extendOp(bill)); } catch (e) { held = null; }
+    if (held && held.ok) return true;
+    if (held && held.lost) holdLost(bill);
+    return false;
   });
+  bill.checkpointing = run;
+  return run;
 }
 
 export async function apiDebtCollect(env, pubkey, tier) {
@@ -244,16 +287,9 @@ async function refreshHold(api, bill) {
   if (bill.done) return;
   let held = null;
   try {
-    held = await ledgerCall(env, {
-      op: "credit-extend", id: bill.id, pubkey: bill.pubkey, tier: bill.tier, amount: bill.holdCredits, ttl: BOT_HOLD_TTL_S
-    });
+    held = await ledgerCall(env, extendOp(bill));
   } catch (e) { held = null; }
-  if (!(held && held.ok) && !bill.done) {
-    bill.holdLost = true;
-    if (typeof bill.onHoldLost === "function") {
-      try { bill.onHoldLost(); } catch (e) { }
-    }
-  }
+  if (!(held && held.ok)) holdLost(bill);
 }
 
 async function stopRefresh(bill) {
@@ -262,6 +298,7 @@ async function stopRefresh(bill) {
     bill.timer = null;
   }
   if (bill.refreshing) await bill.refreshing;
+  if (bill.checkpointing) await bill.checkpointing;
 }
 
 async function apiKeyClose(api, bill, sats) {
@@ -277,9 +314,23 @@ export async function apiBillRelease(api, bill) {
   if (bill.done) return { chargedMilli: 0, balance: null, dust: null };
   bill.done = true;
   await stopRefresh(bill);
-  try { await ledgerCall(api.env, { op: "credit-release", id: bill.id }); } catch (e) { }
+  let rel = null;
+  try { rel = await ledgerCall(api.env, { op: "credit-release", id: bill.id }); } catch (e) { rel = null; }
+  const prior = spentOf(rel);
+  if (prior != null) {
+    const own = await claimRow(api, bill, prior);
+    await apiKeyClose(api, bill, own ? prior * bill.satsPer / 1000 : 0);
+    return { chargedMilli: prior, balance: null, dust: null };
+  }
+  if (bill.rowOpen && !bill.holdLost) api.waitUntil(dropRow(api, bill));
   await apiKeyClose(api, bill, 0);
   return { chargedMilli: 0, balance: null, dust: null };
+}
+
+function spentOf(r) {
+  if (!r || r.spentMilli == null) return null;
+  const n = Math.floor(Number(r.spentMilli));
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 export async function apiBillSettle(api, bill, milliIn, opts) {
@@ -293,8 +344,14 @@ export async function apiBillSettle(api, bill, milliIn, opts) {
   const got = await chargeOwing(env, bill.pubkey, bill.tier, milli, bill.id);
   let owed = got.owed;
   if (owed > 0 && !got.took && !(await debtAdd(env, bill.pubkey, bill.tier, owed))) owed = 0;
-  const billed = got.charged + owed;
-  await apiKeyClose(api, bill, billed * bill.satsPer / 1000);
+  let billed = got.charged + owed;
+  let keyMilli = billed;
+  const prior = spentOf(got.took);
+  if (prior != null) {
+    billed = Math.max(prior, billed);
+    keyMilli = (await claimRow(api, bill, billed)) ? billed : Math.max(0, billed - prior);
+  }
+  await apiKeyClose(api, bill, keyMilli * bill.satsPer / 1000);
   const took = got.took;
   const settled = {
     chargedMilli: billed, owedMilli: owed,
@@ -353,11 +410,15 @@ const HISTORY_DDL = [
   "CREATE TABLE IF NOT EXISTS api_queries (id TEXT PRIMARY KEY, at INTEGER NOT NULL, pubkey TEXT NOT NULL, key_id TEXT, " +
   "model TEXT, type TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, " +
   "cached_tokens INTEGER NOT NULL DEFAULT 0, cost_msat INTEGER NOT NULL DEFAULT 0, cost_usd REAL, balance TEXT, " +
-  "web_search INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL)",
+  "web_search INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, hold_id TEXT)",
+  "ALTER TABLE api_queries ADD COLUMN hold_id TEXT",
   "CREATE INDEX IF NOT EXISTS api_queries_pubkey ON api_queries (pubkey, at)",
   "CREATE INDEX IF NOT EXISTS api_queries_key ON api_queries (key_id, at)",
-  "CREATE INDEX IF NOT EXISTS api_queries_at ON api_queries (at)"
+  "CREATE INDEX IF NOT EXISTS api_queries_at ON api_queries (at)",
+  "CREATE INDEX IF NOT EXISTS api_queries_hold ON api_queries (hold_id)",
+  "CREATE INDEX IF NOT EXISTS api_queries_pending ON api_queries (pubkey, at) WHERE status = 'pending'"
 ];
+const HISTORY_PENDING = "pending";
 const historyReady = new WeakSet();
 
 async function historyDb(env) {
@@ -399,18 +460,165 @@ export async function apiRecordQuery(api, row) {
   } catch (e) { }
   const db = await historyDb(env);
   if (!db || !auth.pubkey) return;
+  const fields = [
+    at, auth.keyId || null, row.model ? String(row.model).slice(0, 160) : null,
+    API_HISTORY_TYPES.includes(row.type) ? row.type : "chat",
+    num(u.fresh) + num(u.read) + num(u.wrote), num(u.out), num(u.read), Math.round(milli * apiSatsPer(tier)),
+    btc ? apiUsd(sats, btc) : null, tier, row.web ? 1 : 0, row.status === "error" ? "error" : "ok"
+  ];
+  const bill = row.bill && row.bill.rowOpen ? row.bill : null;
   try {
-    await db.prepare("INSERT INTO api_queries (id, at, pubkey, key_id, model, type, input_tokens, output_tokens, cached_tokens, cost_msat, cost_usd, balance, web_search, status) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
-      "q_" + bytesToHex(randomBytes(12)), at, auth.pubkey, auth.keyId || null, row.model ? String(row.model).slice(0, 160) : null,
-      API_HISTORY_TYPES.includes(row.type) ? row.type : "chat",
-      num(u.fresh) + num(u.read) + num(u.wrote), num(u.out), num(u.read), Math.round(milli * apiSatsPer(tier)),
-      btc ? apiUsd(sats, btc) : null, tier, row.web ? 1 : 0, row.status === "error" ? "error" : "ok"
-    ).run();
+    const updated = bill ? await rowStep(bill, async () => {
+      const r = await db.prepare("UPDATE api_queries SET at = ?, key_id = ?, model = ?, type = ?, input_tokens = ?, output_tokens = ?, cached_tokens = ?, " +
+        "cost_msat = ?, cost_usd = ?, balance = ?, web_search = ?, status = ? WHERE hold_id = ? AND pubkey = ?").bind(...fields, bill.id, auth.pubkey).run();
+      return changed(r);
+    }) : false;
+    if (!updated) {
+      await db.prepare("INSERT INTO api_queries (id, pubkey, at, key_id, model, type, input_tokens, output_tokens, cached_tokens, cost_msat, cost_usd, balance, web_search, status, hold_id) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
+        "q_" + bytesToHex(randomBytes(12)), auth.pubkey, ...fields, bill ? bill.id : null
+      ).run();
+    }
     if (Math.random() < 0.02) {
       await db.prepare("DELETE FROM api_queries WHERE at < ?").bind(Date.now() - API_HISTORY_DAYS * 86400000).run();
     }
   } catch (e) { }
+}
+
+function changed(r) {
+  return !!(r && r.meta && Number(r.meta.changes) > 0);
+}
+
+function openRow(api, bill, h) {
+  const type = API_HISTORY_TYPES.includes(h.type) ? h.type : "chat";
+  bill.rowOpen = (async () => {
+    const db = await historyDb(api.env);
+    if (!db || !bill.pubkey) return false;
+    try {
+      await db.prepare("INSERT INTO api_queries (id, at, pubkey, key_id, model, type, balance, status, hold_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(
+        "q_" + bytesToHex(randomBytes(12)), Date.now(), bill.pubkey, bill.keyId || null, h.model ? String(h.model).slice(0, 160) : null,
+        type, bill.tier, HISTORY_PENDING, bill.id
+      ).run();
+      return true;
+    } catch (e) { return false; }
+  })();
+  bill.rowChain = bill.rowOpen;
+  api.waitUntil(bill.rowOpen);
+}
+
+function rowStep(bill, fn) {
+  const run = Promise.resolve(bill.rowChain).catch(() => null).then(async () => {
+    if (!(await bill.rowOpen)) return null;
+    return fn();
+  });
+  bill.rowChain = run.catch(() => null);
+  return run;
+}
+
+function dropRow(api, bill) {
+  return rowStep(bill, async () => {
+    const db = await historyDb(api.env);
+    await db.prepare("DELETE FROM api_queries WHERE hold_id = ? AND pubkey = ? AND status = ?").bind(bill.id, bill.pubkey, HISTORY_PENDING).run();
+  }).catch(() => null);
+}
+
+async function claimRow(api, bill, milli) {
+  if (!bill.rowOpen) return true;
+  let own = null;
+  try {
+    own = await rowStep(bill, async () => {
+      const db = await historyDb(api.env);
+      const r = await db.prepare("UPDATE api_queries SET status = 'error', cost_msat = ? WHERE hold_id = ? AND pubkey = ? AND status = ?")
+        .bind(Math.round(milli * bill.satsPer), bill.id, bill.pubkey, HISTORY_PENDING).run();
+      if (changed(r)) return true;
+      return !(await db.prepare("SELECT id FROM api_queries WHERE hold_id = ? AND pubkey = ?").bind(bill.id, bill.pubkey).first());
+    });
+  } catch (e) { own = null; }
+  return own !== false;
+}
+
+export async function apiHistorySweep(env, o) {
+  const opt = o || {};
+  const out = { charged: 0, failed: 0 };
+  const db = await historyDb(env);
+  if (!db) return out;
+  const now = Date.now();
+  const ttlMs = BOT_HOLD_TTL_S * 1000;
+  const lifeMs = (Number(API_BILL_TIMING.refreshMaxMs) || 0) + ttlMs;
+  const limit = Math.max(1, Math.floor(Number(opt.limit) || API_BILL_TIMING.sweepCronRows));
+  let rows = [];
+  try {
+    const rs = opt.pubkey
+      ? await db.prepare("SELECT id, hold_id, pubkey, key_id, balance, at FROM api_queries INDEXED BY api_queries_pending " +
+        "WHERE status = 'pending' AND pubkey = ? AND at <= ? AND hold_id IS NOT NULL ORDER BY at LIMIT ?").bind(opt.pubkey, now - ttlMs, limit).all()
+      : await db.prepare("SELECT id, hold_id, pubkey, key_id, balance, at FROM api_queries INDEXED BY api_queries_pending " +
+        "WHERE status = 'pending' AND at <= ? AND hold_id IS NOT NULL ORDER BY at LIMIT ?").bind(now - ttlMs, limit).all();
+    rows = (rs && rs.results) || [];
+  } catch (e) { return out; }
+  const byKey = new Map();
+  for (const r of rows) {
+    if (!byKey.has(r.pubkey)) byKey.set(r.pubkey, []);
+    byKey.get(r.pubkey).push(r);
+  }
+  let btc = null;
+  for (const [pubkey, list] of byKey) {
+    let seen = null;
+    try { seen = await ledgerCall(env, { op: "hold-spent", pubkey, ids: list.map((r) => r.hold_id) }); } catch (e) { seen = null; }
+    if (!seen || !seen.ok) continue;
+    const spent = seen.spent || {};
+    const live = new Set(Array.isArray(seen.live) ? seen.live : []);
+    for (const r of list) {
+      const hit = spent[r.hold_id];
+      if (hit) {
+        const tier = r.balance === "pro" ? "pro" : "standard";
+        const milli = Math.max(0, Math.floor(Number(hit.milli) || 0));
+        const satsPer = apiSatsPer(tier);
+        if (btc == null) btc = (await btcOrNull()) || 0;
+        let res = null;
+        try {
+          res = await db.prepare("UPDATE api_queries SET status = 'error', cost_msat = ?, cost_usd = ? WHERE id = ? AND status = ?")
+            .bind(Math.round(milli * satsPer), btc ? apiUsd(milli * satsPer / 1000, btc) : null, r.id, HISTORY_PENDING).run();
+        } catch (e) { res = null; }
+        if (!changed(res)) continue;
+        out.charged++;
+        if (r.key_id) {
+          try {
+            await ledgerCall(env, { op: "key-settle", keyId: r.key_id, id: r.hold_id, sats: milli * satsPer / 1000, now: Date.now() });
+          } catch (e) { }
+        }
+      } else if (!live.has(r.hold_id) && Number(r.at) <= now - lifeMs) {
+        try {
+          const res = await db.prepare("UPDATE api_queries SET status = 'error', cost_msat = 0, cost_usd = 0 WHERE id = ? AND status = ?").bind(r.id, HISTORY_PENDING).run();
+          if (changed(res)) out.failed++;
+        } catch (e) { }
+      }
+    }
+  }
+  return out;
+}
+
+const sweptAt = new Map();
+
+export function apiHistoryNudge(api) {
+  const auth = api && api.auth;
+  if (!auth || !auth.pubkey || (auth.via !== "key" && auth.via !== "nostr")) return null;
+  const now = Date.now();
+  const last = sweptAt.get(auth.pubkey);
+  if (last != null && now >= last && now - last < (Number(API_BILL_TIMING.sweepEveryMs) || 0)) return null;
+  if (sweptAt.size >= 10000) sweptAt.clear();
+  sweptAt.set(auth.pubkey, now);
+  const run = apiHistorySweep(api.env, { pubkey: auth.pubkey, limit: API_BILL_TIMING.sweepAccountRows }).catch(() => null);
+  api.waitUntil(run);
+  return run;
+}
+
+async function sweepHandler(api) {
+  const b = api.body || {};
+  if (b.runId !== API_HISTORY_SWEEP_RUN || !(await bgVerify(api.env, b))) {
+    throw new ApiError(401, "authentication_error", "This endpoint is for Nymbot's own scheduler.", { code: "invalid_signature" });
+  }
+  const out = await apiHistorySweep(api.env, { limit: API_BILL_TIMING.sweepCronRows });
+  return apiJson(Object.assign({ ok: true }, out));
 }
 
 async function keyUsage(env, key) {
@@ -448,8 +656,9 @@ async function historyHandler(api) {
   const end = apiParseTime(q.get("end_date"), "end_date");
   const type = q.get("type");
   if (type && !API_HISTORY_TYPES.includes(type)) throw apiBad("`type` must be one of " + API_HISTORY_TYPES.join(", ") + ".", "type");
-  const where = ["pubkey = ?", "at >= ?"];
-  const bind = [api.auth.pubkey, Date.now() - API_HISTORY_DAYS * 86400000];
+  if (api.sweep) await api.sweep;
+  const where = ["pubkey = ?", "at >= ?", "status <> ?"];
+  const bind = [api.auth.pubkey, Date.now() - API_HISTORY_DAYS * 86400000, HISTORY_PENDING];
   if (api.auth.via === "key" && !flag(q.get("all_keys"))) { where.push("key_id = ?"); bind.push(api.auth.keyId); }
   else if (q.get("key_id")) { where.push("key_id = ?"); bind.push(String(q.get("key_id"))); }
   if (q.get("model")) { where.push("model = ?"); bind.push(String(q.get("model"))); }
@@ -482,4 +691,5 @@ export function registerAccount(r) {
   r.add("GET", "/credits/balance", balanceHandler, { auth: "key", spends: false });
   r.add("POST", "/credits/balance", balanceHandler, { auth: "key", spends: false });
   r.add("GET", "/queries/history", historyHandler, { auth: "key-or-nostr", spends: false });
+  r.add("POST", "/queries/sweep", sweepHandler, { auth: "none", spends: false, body: "json" });
 }

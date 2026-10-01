@@ -66,6 +66,34 @@ async function driverPost(env, pk, action, runId, leg, extra) {
   }
 }
 
+export async function driverHistorySweep(env) {
+  const origin = String(env.PAGES_ORIGIN || "").replace(/\/+$/, "");
+  const secret = String(env.BG_HMAC_KEY || "");
+  if (!origin || secret.length < 32) return { status: 0 };
+  const pk = "0".repeat(64);
+  const runId = "api-history-sweep";
+  const leg = "0";
+  const ts = Date.now();
+  const sig = await driverSign(secret, pk, runId, leg, ts);
+  let timer = null;
+  const ctl = new AbortController();
+  try {
+    timer = setTimeout(() => ctl.abort(), driverNum(env.DRIVER_CALL_MS, DRIVER_CALL_MS));
+    const res = await fetch(origin + "/api/v1/queries/sweep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "NymbotDriver/1" },
+      body: JSON.stringify({ pubkey: pk, runId: runId, leg: leg, ts: ts, sig: sig }),
+      signal: ctl.signal
+    });
+    try { await res.arrayBuffer(); } catch (e) { }
+    return { status: res.status };
+  } catch (e) {
+    return { status: 0 };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function driverOp(ns, pk, msg) {
   const stub = ns.get(ns.idFromName("u:" + pk));
   const res = await stub.fetch("https://driver/op", {

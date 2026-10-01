@@ -9,7 +9,7 @@
     const MONEY = new Set([
         'transfer-credits', 'create-invoice', 'claim-credits',
         'clear-history', 'voucher-issue', 'voucher-redeem',
-        'pm-revert', 'git-apply', 'git-branch', 'mcp-probe', 'runner-run',
+        'pm-revert', 'git-apply', 'git-branch', 'mcp-probe', 'runner-run', 'site-check',
         'gift-create', 'gift-redeem', 'gift-cancel',
         'schedule-put', 'schedule-delete', 'schedule-clear'
     ]);
@@ -243,6 +243,10 @@
 
         steerRun(replyTo, text, opts) {
             return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, opts || {}));
+        },
+
+        steerStatus(ids, opts) {
+            return this.call('pm-steer-status', { ids }, Object.assign({ timeout: 10000 }, opts || {}));
         },
 
         claimRun(eventId, opts) {

@@ -11,9 +11,9 @@
     const Chat = window.NymbotChat;
 
     const NON_SETTING_CONTROLS = new Set(['langSelect', 'importPicker']);
-    const FREE_LOCKED_CHIPS = ['chipModel', 'chipGit', 'chipServerRuns', 'chipConnectors', 'chipEffort',
+    const FREE_LOCKED_CHIPS = ['chipModel', 'chipGit', 'chipServerRuns', 'chipSiteCheck', 'chipConnectors', 'chipEffort',
         'chipResearch', 'chipTeam', 'chipWeb', 'chipAnon', 'chipCompare'];
-    const FREE_LOCKED_ACTS = new Set(['open-models', 'open-repos', 'toggle-server-runs', 'open-connectors',
+    const FREE_LOCKED_ACTS = new Set(['open-models', 'open-repos', 'toggle-server-runs', 'open-site-check', 'open-connectors',
         'cycle-effort', 'toggle-research', 'open-team', 'toggle-web', 'open-anon', 'open-compare']);
     const FREE_LOCKED_COMMANDS = new Set(['web', 'model', 'compare', 'anon', 'git', 'repo', 'effort',
         'research', 'image', 'video', 'speak', 'review']);
@@ -103,6 +103,7 @@
     const PQ_EPOCH_SCAN = 12;
 
     const CAP_WAIT_POLL_MS = 15000;
+    const STOPPED_BRANCH_WAIT_MS = 120000;
 
     const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
 
@@ -1580,6 +1581,7 @@
                 case 'create_branch': return t('Creating a branch');
                 case 'open_pull_request': return t('Opening a pull request');
                 case 'recall': return t('Looking back through this chat');
+                case 'create_file': return t('Making a file');
                 default: return t('Working');
             }
         },
@@ -2246,6 +2248,9 @@
             this.chargeFrom(live, res, reply);
             live = Store.conversation(live.id) || live;
             this.notifyReply(reply);
+            if (res.steerMissed && res.steerMissed.length && window.NymbotRuns) {
+                window.NymbotRuns.missed(this, live, res.steerMissed).catch(() => { });
+            }
             if (res.lowBalance) {
                 const topped = live.anon ? await this.runAutoTopUp({ conv: live }) : null;
                 if (!topped) {
@@ -3179,9 +3184,23 @@
             if (turn.runId && turn.sent && !turn.waiting) {
                 const conv = Store.conversation(turn.convId);
                 if (window.NymbotRuns) window.NymbotRuns.cancel(this, conv, turn.runId, turn.signer).catch(() => { });
+                if (conv && turn.eventId) this.keepStoppedBranches(conv, turn.eventId, turn.signer).catch(() => { });
             }
             if (!(opts && opts.quiet) && !turn.quiet && turn.asked) this.runNote(turn, t('Stopped.'));
             this.endTurn(turn);
+        },
+
+        async keepStoppedBranches(conv, eventId, signer) {
+            if (!Chat.reposFor(conv).some(r => r.allowWrites && GitRun.jobBranchesOn(r))) return;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), STOPPED_BRANCH_WAIT_MS);
+            try {
+                const res = await Chat.claim({ eventId }, { signer: signer || null, controller });
+                const mark = res && res.status === 200 && res.data ? res.data.checkpoint : null;
+                if (mark) Chat.rememberBranches(Store.conversation(conv.id) || conv, mark);
+            } finally {
+                clearTimeout(timer);
+            }
         },
 
         showAsked(convId, wire) {
@@ -4418,6 +4437,7 @@
             this._mentionLoading = Api.models().then((data) => {
                 if (data && data.models && !this.models) this.models = data;
                 this._mentionLoading = null;
+                this.fillMakerMarks();
                 this.updateSuggest();
                 this.updateHints();
                 return this.models;
@@ -4766,6 +4786,7 @@
                 list.innerHTML = '';
                 list.appendChild(el('div', 'catalog-wait'));
                 this.models = await Api.models();
+                if (this.models && this.models.models) this.fillMakerMarks();
             }
             if (!this.models || !this.models.models) {
                 this.models = null;

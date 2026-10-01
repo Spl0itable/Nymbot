@@ -218,11 +218,14 @@ CREATE TABLE IF NOT EXISTS api_queries (
   cost_usd REAL,
   balance TEXT,
   web_search INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL
+  status TEXT NOT NULL,
+  hold_id TEXT
 );
 CREATE INDEX IF NOT EXISTS api_queries_pubkey ON api_queries (pubkey, at);
 CREATE INDEX IF NOT EXISTS api_queries_key ON api_queries (key_id, at);
 CREATE INDEX IF NOT EXISTS api_queries_at ON api_queries (at);
+CREATE INDEX IF NOT EXISTS api_queries_hold ON api_queries (hold_id);
+CREATE INDEX IF NOT EXISTS api_queries_pending ON api_queries (pubkey, at) WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS api_video_jobs (
   id TEXT PRIMARY KEY,

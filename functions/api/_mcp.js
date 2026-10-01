@@ -627,6 +627,8 @@ export async function runMcpToolLoop(ctx) {
   var tools = (git ? git.tools : []).concat(runtime.tools);
   var planOn = typeof ctx.plan === "function" && ctx.planTool;
   if (planOn) tools = tools.concat([ctx.planTool]);
+  var filesOn = !!(ctx.files && typeof ctx.files.exec === "function" && ctx.files.tool);
+  if (filesOn) tools = tools.concat([ctx.files.tool]);
   var stopped = typeof ctx.stopped === "function" ? ctx.stopped : function () { return false; };
   var convo = ctx.messages.slice();
   var calls = 0;
@@ -654,6 +656,10 @@ export async function runMcpToolLoop(ctx) {
 
   async function execItem(item) {
     if (item.kind === "plan") return String(ctx.plan(item.args));
+    if (item.kind === "file") {
+      progress({ kind: "tool", tool: ctx.files.name, target: String((item.args && (item.args.filename || item.args.name)) || "").slice(0, 120) });
+      return String(await ctx.files.exec(item.args));
+    }
     if (item.kind === "git" && git) {
       progress({ kind: "tool", tool: item.name, target: git.target(item.name, item.args) });
       try { return String(await git.exec(item.name, item.args, item, usage)); } catch (e) { return "Error: " + ((e && e.message) || String(e)); }
@@ -794,7 +800,7 @@ export async function runMcpToolLoop(ctx) {
       try { fnArgs = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
       if (!fnArgs || typeof fnArgs !== "object" || Array.isArray(fnArgs)) fnArgs = {};
       queue.push({ id: tc.id, name: String(fnName || ""), args: fnArgs,
-        kind: planOn && fnName === "plan_update" ? "plan" : (gitNames[fnName] ? "git" : "mcp") });
+        kind: planOn && fnName === "plan_update" ? "plan" : (filesOn && fnName === ctx.files.name ? "file" : (gitNames[fnName] ? "git" : "mcp")) });
     }
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: fixed });
     var stop = await drain();

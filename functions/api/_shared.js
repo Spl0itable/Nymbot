@@ -2702,7 +2702,7 @@ var AUTH_PAYLOAD_REQUIRED = ["transfer-credits", "shop-transfer", "voucher-issue
 var AUTH_REPLAY_ACTIONS = [
   "transfer-credits", "create-invoice", "claim-credits", "clear-history",
   "voucher-issue", "voucher-redeem", "gift-create", "gift-redeem", "gift-cancel",
-  "pm-revert", "git-apply", "git-branch", "runner-run", "mcp-probe",
+  "pm-revert", "git-apply", "git-branch", "runner-run", "site-check", "mcp-probe",
   "shop-set-active", "shop-buy-invoice", "shop-claim", "shop-transfer", "shop-redeem",
   "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
   "channel-delete", "zap-put"

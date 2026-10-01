@@ -106,13 +106,18 @@ import { gitCompactConvo, gitReadRange, gitApplyEdits, gitStageEntry, gitStagePu
   gitScopeRefusal, gitScopeListing, gitScopeSnapshot, gitUntrusted,
   gitWhenDone, gitJobBranchName, gitIsJobBranch, gitJobOn, gitBranchHead, gitBranchCreate,
   gitPullOpen, gitPullFind, gitPullMerge, gitBranchUpdate, gitBranchDelete, gitBranchCleanup } from "./_gitrun.js";
-import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin } from "./_runner.js";
+import { runnerSettings, runnerAvailable, runnerInfo, runnerMargin, runnerBrowserSurcharge } from "./_runner.js";
 import { serverRunAction, serverRunTool, serverRunKeepAliveMs, serverRunPauseReply, SERVER_RUN_TOOL } from "./_serverrun.js";
+import { fileSession, filePrompt, fileRecallBlock, renderArtifact, FILE_TOOL } from "./_files.js";
+import {
+  siteCheckAvailable, siteCheckUsdPerMinute, siteCheckInfo, siteCheckAction, siteCheckTool, SITE_CHECK_TOOL,
+  SITE_CHECK_RATE_LIMIT, SITE_CHECK_RATE_WINDOW_MS
+} from "./_sitecheck.js";
 import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } from "./_gift.js";
 import { l402RefundToken, l402RefundPeek, l402RefundRedeem } from "./_l402refund.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runBatched, runRepoLockKey, runLockTake, runLockBeat, runLockDrop,
   runTurnsRecent, runTurnsThread, runThreadHolders, runTurnsCopy, runTurnAdd, runSummaryGet, runSummaryPut, runWrapsPrune, runResultPut, runResultGet, runResultDrop, runGet, runByResume, runCountLive, runStart, runContinue,
-  runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runForget, runSweep,
+  runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runForget, runSweep,
   RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS, RUN_STEER_CHARS, RUN_ROW_KEEP_MS, RUN_RESULT_KEEP_MS } from "./_runs.js";
 import { apnsSendReply } from "./_apns.js";
 import { webPushSendReply, webPushToken, webPushPublicKey, webPushConfigured } from "./_webpush.js";
@@ -1614,7 +1619,7 @@ async function botMediaBytes(result, field) {
   if (result instanceof ArrayBuffer) return new Uint8Array(result);
   if (result instanceof Uint8Array) return result;
   var b64 = result[field] || result.image || result.audio;
-  if (typeof b64 === "string" && b64) return botBase64Decode(b64);
+  if (typeof b64 === "string" && b64 && /^[A-Za-z0-9+/=\s]+$/.test(b64)) return botBase64Decode(b64);
   return null;
 }
 
@@ -1864,14 +1869,73 @@ function botRunnerBalanceOf(env, pubkey) {
   };
 }
 
-function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, progress, keepTurn, autoRun) {
+function botFileHost(env) {
+  return function (bytes, type) {
+    var sk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+    return botBlossomUpload(env, bytes, type, sk, getPublicKey(sk), "");
+  };
+}
+
+function botFileHostnames(env) {
+  return botBlossomHosts(env).map(function (h) {
+    try { return new URL(h).hostname.toLowerCase(); } catch (e) { return ""; }
+  }).filter(Boolean);
+}
+
+async function botFileFetch(url) {
+  var ctl = new AbortController();
+  var timer = setTimeout(function () { ctl.abort(); }, BOT_FILE_RECALL_MS);
+  try {
+    var res = await fetch(url, { signal: ctl.signal, headers: { "User-Agent": BOT_BROWSER_AGENT } });
+    if (!res.ok) return null;
+    var got = new Uint8Array(await res.arrayBuffer());
+    return got.length <= BOT_FILE_RECALL_BYTES ? got : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+var BOT_FILE_RECALL_MS = 5000;
+var BOT_FILE_RENDER_LIMIT = 20;
+var BOT_FILE_RECALL_BYTES = 512 * 1024;
+
+function botArtifactHost(env, privkey, pubkey) {
+  if (!privkey || !pubkey) return null;
+  return function (bytes, type) {
+    return botBlossomUpload(env, bytes, type, privkey, pubkey, "");
+  };
+}
+
+function botSiteCheckPrice(env, settings, btcUsd) {
+  var margin = runnerMargin(env, settings);
+  var surcharge = runnerBrowserSurcharge(env, settings);
+  return { margin: margin, surcharge: surcharge, usdPerMinute: siteCheckUsdPerMinute(env, settings, margin, surcharge), btcUsd: btcUsd, milliForUsd: botRunnerMilliForUsd };
+}
+
+function botSiteCheckOption(context, pubkey, settings, btcUsd, o) {
+  var env = context.env;
+  if (!siteCheckAvailable(env, settings)) return null;
+  return siteCheckTool(Object.assign(botSiteCheckPrice(env, settings, btcUsd), {
+    env: env, context: context, pubkey: pubkey, userText: String(o.userText || "").slice(0, 20000),
+    capGuard: o.capGuard, autoRun: o.autoRun === true, progress: o.progress, hostArtifact: o.hostArtifact || null,
+    rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS, balanceOf: botRunnerBalanceOf(env, pubkey)
+  }));
+}
+
+function botServerRunOption(context, pubkey, settings, btcUsd, capGuardRef, progress, keepTurn, autoRun, hostArtifact, userText) {
   var env = context.env;
   return {
     build: function (repos) {
       var bound = { git: null };
       var tool = serverRunTool({
+        siteCheck: botSiteCheckOption(context, pubkey, settings, btcUsd, {
+          userText: userText, capGuard: capGuardRef, autoRun: autoRun, progress: progress, hostArtifact: hostArtifact
+        }),
         env: env, context: context, pubkey: pubkey, settings: settings, repos: repos,
         btcUsd: btcUsd, margin: runnerMargin(env, settings), milliForUsd: botRunnerMilliForUsd,
+        surcharge: runnerBrowserSurcharge(env, settings), hostArtifact: hostArtifact || null,
         capGuard: capGuardRef, progress: progress, keepTurn: keepTurn, autoRun: autoRun === true,
         rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS,
         balanceOf: botRunnerBalanceOf(env, pubkey),
@@ -2562,6 +2626,7 @@ async function proHttpChat(url, headers, body, draft, shape) {
   var streaming = !!(draft && body && body.stream === true);
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   if (streaming && res.ok && res.body && /event-stream/i.test(res.headers.get("Content-Type") || "")) {
+    botDraftAccepted(draft);
     var onText = function (t) { draft.push(t); };
     var onDelta = typeof draft.delta === "function" ? function (kind, piece) { draft.delta(kind, piece); } : null;
     var streamed;
@@ -2759,6 +2824,12 @@ async function proAttempt(env, step, messages, maxTokens, tools, draft, cacheAt,
   }
 }
 
+function botDraftAccepted(draft) {
+  if (draft && typeof draft.accepted === "function") {
+    try { draft.accepted(); } catch (e) { }
+  }
+}
+
 function botStreamEmpty(got) {
   if (!got) return true;
   if (Array.isArray(got.content)) {
@@ -2812,6 +2883,7 @@ async function proAttemptOnce(env, step, messages, maxTokens, tools, draft, cach
     try {
       bound = await aiRun(env.AI, step.model, boundReq, opts);
       if (boundStream && botIsStream(bound)) {
+        botDraftAccepted(draft);
         var got;
         try {
           got = await botCollectChatStream(bound, function (t) { draft.push(t); },
@@ -3355,7 +3427,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
 
   var core;
   try {
-    core = await answer(convo, calls, of);
+    core = await answer(convo, calls, of, effort < 3);
   } catch (e) {
     throw proUsageCarry(e, usage);
   }
@@ -3377,6 +3449,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     var drafted = botTakeFollowUps(reply).text || reply;
     var checkFrom = Date.now();
     var revised = null;
+    if (opts && typeof opts.final === "function") await opts.final();
     try {
       revised = await effortChat(env, proModel,
         convo.concat([
@@ -3413,15 +3486,17 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
   // Progress lines count once across the effort passes rather than restarting.
   var priorCalls = Math.max(0, Math.floor(Number(opts && opts.priorCalls) || 0));
   var of = Math.max(budget, Math.floor(Number(opts && opts.of) || budget));
+  var recallChat = opts && typeof opts.chat === "function" ? opts.chat : proGatewayChat;
   while (true) {
     calls++;
     var lastTurn = calls >= budget;
     progress({ kind: "model", call: priorCalls + calls, of: of,
       model: proModel.label || proModel.model || "" });
+    if (lastTurn && opts && typeof opts.final === "function") await opts.final();
     var r;
     try {
-      r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
-        lastTurn ? null : recallToolDefs(), opts && opts.watch
+      r = await recallChat(env, proModel, convo, proModel.maxTokens,
+        lastTurn ? null : recallToolDefs().concat(opts && opts.files ? [opts.files.tool] : []), opts && opts.watch
           ? (lastTurn ? opts.watch : { clock: opts.watch.clock, cacheAt: opts.watch.cacheAt })
           : null);
     } catch (e) {
@@ -3446,6 +3521,11 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
       var tc = toolCalls[i];
       var args = {};
       try { args = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
+      if (opts && opts.files && tc.function && tc.function.name === FILE_TOOL) {
+        progress({ kind: "tool", tool: FILE_TOOL, target: truncateText(String(args.filename || ""), 120) });
+        convo.push({ role: "tool", tool_call_id: tc && tc.id, content: await opts.files.exec(args) });
+        continue;
+      }
       progress({ kind: "tool", tool: "recall", target: truncateText(String(args.query || ""), 120) });
       convo.push({
         role: "tool",
@@ -3456,8 +3536,8 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
   }
 }
 
-async function runProGatewayModel(env, proModel, messages, maxTokens, progress, watch) {
-  var r = await proGatewayChat(env, proModel, messages, maxTokens, null, watch);
+async function runProGatewayModel(env, proModel, messages, maxTokens, progress, watch, chat) {
+  var r = await (typeof chat === "function" ? chat : proGatewayChat)(env, proModel, messages, maxTokens, null, watch);
   // A provider's reasoning trace is the only record of what the model actually did.
   var thought = proMessageReasoning(r.msg);
   if (thought && progress) progress({ kind: "thinking", text: truncateText(thought, 600) });
@@ -4812,6 +4892,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
   var exploreOn = opts.explore != null ? !!opts.explore : gitExploreAvailable(env);
   var tools = gitToolDefs(anyWrites, all, { explore: exploreOn });
   if (typeof opts.plan === "function") tools = tools.concat([BOT_PLAN_TOOL]);
+  if (opts.files) tools = tools.concat([opts.files.tool]);
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
@@ -4990,6 +5071,7 @@ async function runProGitChat(env, proModel, repos, messages, options) {
       progress({ kind: "tool", tool: String(fnName || ""),
         target: gitToolTarget(fnName, fnArgs, all.length > 1) });
       if (fnName === "plan_update" && typeof opts.plan === "function") return opts.plan(fnArgs);
+      if (fnName === FILE_TOOL && opts.files) return await opts.files.exec(fnArgs);
       if (fnName === "explore") {
         return exploreOn
           ? await gitRunExplore(env, all, records, fnArgs, explorer, progress)
@@ -5041,7 +5123,7 @@ function mcpGitAdapter(all, env, parked, serverRun) {
     return marks[0];
   };
   var tools = gitToolDefs(anyWrites, all, { explore: false });
-  if (serverRun) tools = tools.concat([serverRun.tool]);
+  if (serverRun) tools = tools.concat([serverRun.tool], serverRun.extraTools || []);
   return {
     tools: tools,
     gate: serverRun ? serverRun.gate : null,
@@ -5059,7 +5141,7 @@ function mcpGitAdapter(all, env, parked, serverRun) {
     target: function (name, args) { return gitToolTarget(name, args, all.length > 1); },
     exec: async function (name, args, item) {
       if (name === "explore") return "Error: explore is not available here \u2014 search and read directly.";
-      if (name === SERVER_RUN_TOOL) {
+      if (name === SERVER_RUN_TOOL || name === SITE_CHECK_TOOL) {
         return serverRun ? await serverRun.exec(item) : "Error: server runs are off for this chat.";
       }
       var picked = gitPickRepo(all, args && args.repo);
@@ -5325,6 +5407,7 @@ async function runPmConnectors(context, proModel, messages, ghConfig, runOpts) {
     stopped: runOpts.run ? runOpts.run.stopped : null,
     plan: runOpts.run ? botPlanTool(runOpts.run, runOpts.progress) : null,
     planTool: BOT_PLAN_TOOL,
+    files: runOpts.files || null,
     outCeiling: botOutCeiling(proModel),
     stalledReply: ghConfig ? gitStalledReply(ghConfig) : null,
     deps: {
@@ -5561,7 +5644,7 @@ function buildNymbotPmSystemPrompt(proModel, webOn, freeTurn, inApp, webDenied, 
   var elsewhere = inApp ? [] : NYMBOT_PM_ELSEWHERE;
   var head = inApp ? NYMBOT_APP_PROMPT_HEAD : NYMBOT_PM_PROMPT_HEAD;
   var tail = inApp ? NYMBOT_APP_PROMPT_TAIL : NYMBOT_PM_PROMPT_TAIL;
-  return head.concat(tierSection, web, elsewhere, tail, followUps ? NYMBOT_PM_FOLLOW_UPS : [])
+  return head.concat(tierSection, web, elsewhere, tail, filePrompt().split("\n"), followUps ? NYMBOT_PM_FOLLOW_UPS : [])
     .filter(function (line) { return line !== ""; }).join("\n");
 }
 
@@ -5851,22 +5934,23 @@ function botTurnMsgKey(pubkey, msgId) {
 var BOT_RUN_FLUSH_MS = 1500;
 var BOT_RUN_BEAT_MS = 15000;
 var BOT_RUN_CHECK_MS = 1500;
-var BOT_RUN_STEER_MS = 2000;
 var BOT_RUN_LOCAL_MAX = 2000;
 var BOT_REPO_LOCK_WAIT_MS = 30000;
 var BOT_REPO_LOCK_POLL_MS = 2000;
 var BOT_STOPPED_TEXT = "Stopped.";
 var BOT_STEER_PASSED = "I passed that on to the running request.";
+var BOT_STEER_MISSED = "I could not pass that on: the request it was meant for is no longer taking instructions. Send it as a new message if it still applies.";
+var BOT_STEER_FINAL = "That request is already writing its answer, so it can't take instructions now. Send this as a new message instead.";
 var BOT_STEER_PREFIX = "Update from the user while you were working. Apply it from here on, and keep replying in the format asked for above:\n";
 var BOT_PENDING_TEXT = "Nymbot is still working on that message — ask again in a moment and the reply will be waiting.";
-var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*"?(R\d{1,2})"?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
+var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*["']?(R\d{1,2})["']?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
 var botRunLocal = new Map();
 
 function botRunLocalEntry(pk, asked) {
   var k = String(pk).toLowerCase() + ":" + String(asked).toLowerCase();
   var e = botRunLocal.get(k);
   if (!e) {
-    e = { cancel: false, steer: false };
+    e = { cancel: false };
     botRunLocal.set(k, e);
     if (botRunLocal.size > BOT_RUN_LOCAL_MAX) botRunLocal.delete(botRunLocal.keys().next().value);
   }
@@ -5914,7 +5998,7 @@ function botStoppedResult(e) {
     usage: src.usage || null,
     usageParts: src.usageParts || undefined,
     sideUsage: src.sideUsage || null,
-    modelCalls: Number(src.modelCalls) || 0,
+    modelCalls: Number(src.modelCalls) || (botUsageBilled(src.usage) ? 1 : 0),
     outputTokens: 0,
     team: src.team || undefined,
     teamMilli: src.teamMilli != null ? src.teamMilli : undefined
@@ -5932,8 +6016,9 @@ function botRunChat(runOpts) {
   };
 }
 
-function botRunPayload(line, plan, branches, legs, bg) {
+function botRunPayload(line, plan, branches, legs, bg, final) {
   var o = { p: line || "" };
+  if (final) o.f = 1;
   if (Array.isArray(plan) && plan.length) o.plan = plan;
   if (Array.isArray(branches) && branches.length) o.b = branches;
   if (Array.isArray(legs) && legs.length) o.l = legs.slice(-BOT_BG_LEGS_MAX);
@@ -6009,12 +6094,12 @@ function botRunBranches(raw) {
 
 function botRunUnpack(cipher, raw) {
   var text = cipher.open(raw);
-  if (!text) return { p: "", plan: [], branches: [], legs: [], bg: 0 };
+  if (!text) return { p: "", plan: [], branches: [], legs: [], bg: 0, final: false };
   try {
     var o = JSON.parse(text);
     return { p: typeof o.p === "string" ? o.p : "", plan: Array.isArray(o.plan) ? o.plan : [], branches: botRunBranches(o.b),
-      legs: botRunLegIds(o.l), bg: Number(o.bg) > 0 ? Number(o.bg) : 0 };
-  } catch (e) { return { p: "", plan: [], branches: [], legs: [], bg: 0 }; }
+      legs: botRunLegIds(o.l), bg: Number(o.bg) > 0 ? Number(o.bg) : 0, final: o.f === 1 };
+  } catch (e) { return { p: "", plan: [], branches: [], legs: [], bg: 0, final: false }; }
 }
 
 function botRunControl(env, context, pk, cipher) {
@@ -6022,11 +6107,11 @@ function botRunControl(env, context, pk, cipher) {
   var timer = null;
   var ctl = {
     asked: null, registered: false, line: "", plan: null, st: {}, dirty: false,
-    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, steerAt: 0,
+    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, final: false,
     notes: [], applied: {}, locks: [], branches: [], legs: [], bg: 0
   };
   var local = function () { return ctl.asked ? botRunLocalEntry(pk, ctl.asked) : null; };
-  ctl.payload = function () { return cipher.seal(botRunPayload(ctl.line, ctl.plan, ctl.branches, ctl.legs, ctl.bg)); };
+  ctl.payload = function () { return cipher.seal(botRunPayload(ctl.line, ctl.plan, ctl.branches, ctl.legs, ctl.bg, ctl.final)); };
   ctl.flush = function () {
     if (!ctl.registered) return null;
     ctl.dirty = false;
@@ -6079,28 +6164,36 @@ function botRunControl(env, context, pk, cipher) {
   };
   ctl.inject = async function (messages) {
     if (!ctl.asked || !Array.isArray(messages)) return messages;
-    var loc = local();
-    if ((loc && loc.steer) || Date.now() - ctl.steerAt >= BOT_RUN_STEER_MS) {
-      if (loc) loc.steer = false;
-      ctl.steerAt = Date.now();
-      var rows = await runSteerList(db, pk, ctl.asked);
-      var fresh = [];
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        if (ctl.applied[r.id]) continue;
-        ctl.applied[r.id] = true;
-        var text = cipher.open(r.text);
-        if (!text) continue;
-        ctl.notes.push(text);
-        if (!Number(r.applied_at)) fresh.push(r.id);
-      }
-      if (fresh.length) {
-        await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
-        ctl.note({ kind: "steer" });
-      }
+    var rows = await runSteerList(db, pk, ctl.asked);
+    var fresh = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (ctl.applied[r.id]) continue;
+      ctl.applied[r.id] = true;
+      var text = cipher.open(r.text);
+      if (!text) continue;
+      ctl.notes.push(text);
+      if (!Number(r.applied_at)) fresh.push(r.id);
+    }
+    if (fresh.length) {
+      await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
+      ctl.note({ kind: "steer" });
     }
     if (!ctl.notes.length) return messages;
     return messages.concat([{ role: "user", content: BOT_STEER_PREFIX + ctl.notes.map(function (n) { return "- " + n; }).join("\n") }]);
+  };
+  ctl.markFinal = async function () {
+    if (ctl.final) return;
+    ctl.final = true;
+    ctl.dirty = true;
+    if (ctl.registered) await ctl.flush();
+  };
+  ctl.missed = async function () {
+    if (!ctl.asked) return [];
+    var rows = await runSteerList(db, pk, ctl.asked);
+    var ids = rows.filter(function (r) { return !ctl.applied[r.id] && !Number(r.applied_at); }).map(function (r) { return r.id; });
+    if (ids.length) await runSteerMiss(db, pk, ctl.asked, ids, Date.now());
+    return ids;
   };
   ctl.start = function () {
     if (timer) return;
@@ -6289,15 +6382,39 @@ function botRunOthersBlock(others) {
 
 function botSteerTags(text) {
   var out = [];
-  var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
-  var m;
-  while ((m = re.exec(String(text || ""))) && out.length < 3) {
-    var said = String(m[2] || "").trim();
-    if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+  var parts = String(text || "").split(/(```[\s\S]*?(?:```|$))/);
+  for (var i = 0; i < parts.length; i += 2) {
+    var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
+    var m;
+    while ((m = re.exec(parts[i])) && out.length < 3) {
+      var said = String(m[2] || "").trim();
+      if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+    }
+    parts[i] = parts[i].replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "");
   }
-  var rest = String(text || "").replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "")
-    .replace(/\n{3,}/g, "\n\n").trim();
+  var rest = parts.join("").replace(/\n{3,}/g, "\n\n").trim();
   return { steers: out, text: rest };
+}
+
+function botSteerRefusal(row, cipher, now) {
+  if (!row || row.state === "pending") {
+    return { status: 404, body: { error: "Nymbot has no request running for that message.", unknown: true } };
+  }
+  var beat = Number(row.beat_at) || 0;
+  var live = !row.cancel && (
+    (row.state === "running" && beat > now - RUN_LIVE_MS) ||
+    (row.state === "parked" && beat > now - RUN_PARKED_MS) ||
+    (row.state === "waiting" && beat > now - RUN_WAITING_MS));
+  if (!live) {
+    return { status: 409, body: {
+      error: "That request has already finished. Send this as a new message instead.", finished: true,
+      state: row.cancel ? "stopped" : (row.state === "running" ? "failed" : row.state)
+    } };
+  }
+  if (row.state === "running" && botRunUnpack(cipher, row.progress).final) {
+    return { status: 409, body: { error: BOT_STEER_FINAL, final: true, state: "running" } };
+  }
+  return null;
 }
 
 async function botEarlyClaim(env, pk, eventId, json) {
@@ -7483,6 +7600,11 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // Which replies another model wrote; empty in single-model chats.
   var voicesBlock = modelVoicesBlock(keptTurns, nowVoice);
   if (voicesBlock) messages.push({ role: "system", content: voicesBlock });
+  if (keptTurns.length && runOpts.free !== true) {
+    var madeBlock = "";
+    try { madeBlock = await fileRecallBlock(keptTurns, botFileFetch, { hosts: botFileHostnames(context.env) }); } catch (e) { }
+    if (madeBlock) messages.push({ role: "system", content: madeBlock });
+  }
   if (Array.isArray(runOpts.others) && runOpts.others.length) {
     messages.push({ role: "system", content: botRunOthersBlock(runOpts.others) });
   }
@@ -7627,6 +7749,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         chat: botRunChat(runOpts),
         stopped: runOpts.run ? runOpts.run.stopped : null,
         plan: runOpts.run ? botPlanTool(runOpts.run, runOpts.progress) : null,
+        files: runOpts.files || null,
         progress: runOpts.progress,
         priorCalls: runOpts.resume ? (runOpts.resume.calls || 0) : 0,
         capGuard: runOpts.capGuard || null,
@@ -7658,24 +7781,29 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     // Effort wraps whatever produces the answer, so it composes with look-back.
     var effort = botEffortLevel(runOpts.effort);
     var proWatch = { draft: runOpts.draft || null, clock: runOpts.clock || null };
+    var proChat = botRunChat(runOpts);
+    var proFinal = runOpts.run ? runOpts.run.markFinal : null;
     var wrapped = await runProEffort(context.env, proModel, messages, effort, {
-      chat: botRunChat(runOpts),
+      chat: proChat,
       stopped: runOpts.run ? runOpts.run.stopped : null,
       progress: runOpts.progress,
       extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0,
       capGuard: runOpts.capGuard || null,
-      watch: proWatch
-    }, async function (convo, done, of) {
+      watch: proWatch,
+      final: proFinal
+    }, async function (convo, done, of, last) {
       if (canRecall) {
         return await runProRecallChat(context.env, proModel, convo, dropped, {
-          progress: runOpts.progress, priorCalls: done, of: of, watch: proWatch
+          progress: runOpts.progress, priorCalls: done, of: of, watch: proWatch,
+          chat: proChat, final: last ? proFinal : null, files: runOpts.files || null
         });
       }
       if (runOpts.progress) {
         runOpts.progress({ kind: "model", call: done + 1, of: of, model: proModel.label || proModel.model || "" });
       }
+      if (last && proFinal) await proFinal();
       var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens,
-        runOpts.progress, proWatch);
+        runOpts.progress, proWatch, proChat);
       return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens,
         usage: one.usage };
     });
@@ -7701,6 +7829,10 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   if (runOpts.progress) {
     runOpts.progress({ kind: "route", task: taskType, seeing: !!visionReroute });
   }
+  if (runOpts.run) {
+    await runOpts.run.markFinal();
+    messages = await runOpts.run.inject(messages);
+  }
   var std = await botStandardRun(ai, pmModel, messages, maxOut, {
     draft: runOpts.draft || null,
     clock: pmClock,
@@ -7725,6 +7857,7 @@ async function botStandardRun(ai, pmModel, messages, maxOut, opts) {
     botUsageAdd(usage, u);
     usageParts.push({ model: model, usage: u });
   };
+  if (o.vision) messages = await botInlineVisionImages(messages);
   var stdDraft = o.draft || null;
   var stdFrom = Date.now();
   var cutOff = null;
@@ -7735,6 +7868,7 @@ async function botStandardRun(ai, pmModel, messages, maxOut, opts) {
       try {
         primary = await aiRun(ai, pmModel, streamReq);
         if (botIsStream(primary)) {
+          botDraftAccepted(stdDraft);
           var got = await botCollectChatStream(primary, function (t) { stdDraft.push(t); },
             typeof stdDraft.delta === "function" ? function (kind, piece) { stdDraft.delta(kind, piece); } : null);
           if (!got.text) spentOn(pmModel, proCallUsage({ usage: got.usage }));
@@ -8008,8 +8142,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
   if (body.action === "runner-info") {
     var infoSettings = await runnerSettings(env);
-    if (!runnerAvailable(env, infoSettings)) return json({ available: false });
-    return json(runnerInfo(env, await botBtcPrice(), { settings: infoSettings, milliForUsd: botRunnerMilliForUsd }));
+    var infoSite = siteCheckAvailable(env, infoSettings) ? await botBtcPrice() : null;
+    var siteInfo = infoSite != null ? siteCheckInfo(env, infoSettings, infoSite, botSiteCheckPrice(env, infoSettings, infoSite)) : null;
+    if (!runnerAvailable(env, infoSettings)) return json(siteInfo ? { available: false, siteCheck: siteInfo } : { available: false });
+    var infoBody = runnerInfo(env, await botBtcPrice(), { settings: infoSettings, milliForUsd: botRunnerMilliForUsd });
+    if (siteInfo) infoBody.siteCheck = siteInfo;
+    return json(infoBody);
   }
 
   if (body.action === "voucher-keys") {
@@ -8089,6 +8227,15 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(), opts);
   }
 
+  if (body.action === "file-render") {
+    if (!(await botRateOk("file-render", String(userPubkey).toLowerCase(), BOT_FILE_RENDER_LIMIT, 60000))) {
+      return json({ error: "Slow down \u2014 too many conversions. Try again in a minute." }, 429);
+    }
+    var artFile = await renderArtifact({ format: body.format, title: body.title, lang: body.lang, body: body.body });
+    if (!artFile.ok) return json({ error: "That could not be converted: " + artFile.error + "." }, 400);
+    return json({ name: artFile.name, type: artFile.type, size: artFile.bytes.length, data: botBase64Encode(artFile.bytes), notes: artFile.notes.length ? artFile.notes : undefined });
+  }
+
   // Scoped to the key that asked, so watching reveals nothing the message didn't.
   if (body.action === "pm-progress") {
     if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
@@ -8124,10 +8271,17 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
   }
 
-  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-done-since") {
+  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-done-since" || body.action === "pm-steer-status") {
     var ctlPk = String(userPubkey).toLowerCase();
     if (!(await botRateOk("runctl", ctlPk, 60, 60000))) {
       return json({ error: "Slow down \u2014 too many requests. Try again in a minute." }, 429);
+    }
+    if (body.action === "pm-steer-status") {
+      var statusIds = Array.isArray(body.ids) ? body.ids.filter(function (id) {
+        return typeof id === "string" && /^[0-9a-f]{24}$/.test(id);
+      }) : [];
+      if (!statusIds.length) return json({ error: "Missing the ids of the updates to check." }, 400);
+      return json({ states: await runSteerStatus(env.DB_BOT, ctlPk, statusIds) });
     }
     if (body.action === "pm-done-since") {
       var sinceNow = Date.now();
@@ -8179,25 +8333,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (!steerText) return json({ error: "There is nothing to pass on." }, 400);
     if (steerText.length > RUN_STEER_CHARS) return json({ error: "That update is too long; keep it under " + RUN_STEER_CHARS + " characters." }, 413);
     var steerRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
-    if (!steerRow || steerRow.state === "pending") {
-      return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
-    }
     var steerNow = Date.now();
-    var steerBeat = Number(steerRow.beat_at) || 0;
-    var steerLive = !steerRow.cancel && (
-      (steerRow.state === "running" && steerBeat > steerNow - RUN_LIVE_MS) ||
-      (steerRow.state === "parked" && steerBeat > steerNow - RUN_PARKED_MS) ||
-      (steerRow.state === "waiting" && steerBeat > steerNow - RUN_WAITING_MS));
-    if (!steerLive) {
-      return json({
-        error: "That request has already finished. Send this as a new message instead.", finished: true,
-        state: steerRow.cancel ? "stopped" : (steerRow.state === "running" ? "failed" : steerRow.state)
-      }, 409);
-    }
+    var steerNo = botSteerRefusal(steerRow, runCipher, steerNow);
+    if (steerNo) return json(steerNo.body, steerNo.status);
     var steerId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
     var steered = await runSteerAdd(env.DB_BOT, ctlPk, ctlAsked, steerId, runCipher.seal(steerText), steerNow);
     if (!steered) return json({ error: "Updates can't be passed on right now." }, 503);
-    botRunLocalEntry(ctlPk, ctlAsked).steer = true;
     return json({ ok: true, state: steerRow.state, id: steerId });
   }
 
@@ -8382,6 +8523,24 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json(branchDid.body, branchDid.status);
   }
 
+  if (body.action === "site-check") {
+    if (await denied(env, userPubkey)) {
+      return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
+    }
+    var siteSettings = await runnerSettings(env);
+    if (!siteCheckAvailable(env, siteSettings)) {
+      return json({ error: "Site checks are not available right now.", available: false }, 503);
+    }
+    var siteBtc = await botBtcPrice();
+    var siteOut = await siteCheckAction(Object.assign(botSiteCheckPrice(env, siteSettings, siteBtc), {
+      env: env, context: context, pubkey: userPubkey, body: body,
+      rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS,
+      rateOk: function () { return botRateOk("sitecheck", userPubkey, SITE_CHECK_RATE_LIMIT, SITE_CHECK_RATE_WINDOW_MS); },
+      hostArtifact: botArtifactHost(env, botPrivkey, botPubkey), balanceOf: botRunnerBalanceOf(env, userPubkey)
+    }));
+    return json(siteOut.body, siteOut.status);
+  }
+
   if (body.action === "runner-run") {
     if (await denied(env, userPubkey)) {
       return json({ error: "Nymbot is temporarily unavailable. Please try again later." }, 503);
@@ -8393,6 +8552,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var runOut = await serverRunAction({
       env: env, context: context, pubkey: userPubkey, body: body, settings: runSettings,
       btcUsd: await botBtcPrice(), margin: runnerMargin(env, runSettings), milliForUsd: botRunnerMilliForUsd,
+      surcharge: runnerBrowserSurcharge(env, runSettings), hostArtifact: botArtifactHost(env, botPrivkey, botPubkey),
       rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS,
       headers: CLIENT_CORS_HEADERS, balanceOf: botRunnerBalanceOf(env, userPubkey)
     });
@@ -8818,6 +8978,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       var runState = obj && obj.stopped ? "stopped" : (obj && obj.pendingTool ? "waiting" : (obj && (obj.resumeToken || runBg) ? "parked" : "done"));
       runNotice(runBg && runState === "parked" ? "background" : (runState === "parked" ? "paused" : (runState === "waiting" ? "approval" : runState)));
       if (runCtl) await runCtl.finish(runState, obj && obj.resumeToken ? obj.resumeToken : null);
+      if (runCtl && runState === "done" && obj && typeof obj === "object") {
+        var steerMissed = await runCtl.missed();
+        if (steerMissed.length) obj.steerMissed = steerMissed;
+      }
       var storeKeys = ["e:" + String(currentId).toLowerCase()];
       if (typeof msgId === "string" && isHex64(msgId)) storeKeys.push("x:" + msgId.toLowerCase());
       await runResultPut(env.DB_BOT, runPk, storeKeys, { body: obj, status: status || 200 }, leg && leg.keepAt ? leg.keepAt : Date.now());
@@ -9848,12 +10012,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var serverRunOpt = serverRunSettings && ghConfig && proModel
       ? botServerRunOption(context, userPubkey, serverRunSettings, await botBtcPrice(), turnGuard, pushProgress,
         function (timeoutSec) { return botTurnKeepAlive(env, turnKeys.slice(), serverRunKeepAliveMs(timeoutSec)); },
-        runPolicy.serverRuns === "allow")
+        runPolicy.serverRuns === "allow", botArtifactHost(env, botPrivkey, botPubkey), message)
       : null;
     var chatResult;
+    var fileOut = fileSession({ upload: botFileHost(env), progress: function (f) { pushProgress({ kind: "tool", tool: FILE_TOOL, target: f.name }); } });
     try {
       chatResult = await handleBotPMChat(message, history, context, taskType, proModel, ghConfig, {
         progress: pushProgress,
+        files: fileOut,
         resume: resumeState,
         canRecall: typeof recallAffordable === "boolean" ? recallAffordable : false,
         effort: body.effort,
@@ -9906,15 +10072,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (!chatResult.checkpoint) chatResult.checkpoint = botJobCheckpoint(ghConfig, "stopped");
     } else if (chatResult && typeof chatResult.reply === "string" && /steer_run/i.test(chatResult.reply)) {
       var steerSaid = botSteerTags(chatResult.reply);
+      var steerPassed = 0;
       for (var sti = 0; sti < steerSaid.steers.length; sti++) {
         var steerTo = runOthers.filter(function (o) { return o.handle === steerSaid.steers[sti].handle; })[0];
         if (!steerTo) continue;
+        if (botSteerRefusal(await runGet(env.DB_BOT, runPk, steerTo.asked), runCipher, Date.now())) continue;
         var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
-        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) {
-          botRunLocalEntry(runPk, steerTo.asked).steer = true;
-        }
+        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) steerPassed++;
       }
-      chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+      if (steerPassed || !steerSaid.steers.length) chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+      else chatResult.reply = (steerSaid.text ? steerSaid.text + "\n\n" : "") + BOT_STEER_MISSED;
     }
     if (repoReadOnly.length && !runStopped && chatResult && chatResult.reply) {
       chatResult.reply = String(chatResult.reply) + "\n\n_Another task was changing " + repoReadOnly.join(", ") +
@@ -9922,6 +10089,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     }
     var taken = botTakeFollowUps(chatResult && chatResult.reply, parsed.question);
     var reply = taken.text;
+    try {
+      reply = await fileOut.deliver(reply);
+    } catch (e) {
+      reply = String(reply || "") + "\n\n_The file could not be attached: " + String((e && e.message) || e).slice(0, 200) + "._";
+    }
     if (!reply) return await turnFailSpent(chatResult, { error: "Nymbot returned an empty response." }, 500);
     var costMilli = 0;
     var heldCapMilli = null;
@@ -10538,7 +10710,7 @@ async function onRequest(context) {
     });
   }
 
-  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "push-key" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "git-branch" || body.action === "runner-info" || body.action === "runner-run" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn" || body.action === "pm-done-since" || body.action === "pm-bgleg" || body.action === "pm-bgend" || body.action === "pm-schedfire" || body.action === "pm-schednotify" || body.action === "schedule-put" || body.action === "schedule-delete" || body.action === "schedule-clear" || body.action === "schedule-list")) {
+  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "push-key" || body.action === "notices" || body.action === "team-estimate" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-steer-status" || body.action === "pm-runs" || body.action === "pm-revert" || body.action === "mcp-probe" || body.action === "git-apply" || body.action === "git-branch" || body.action === "runner-info" || body.action === "runner-run" || body.action === "site-check" || body.action === "file-render" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem" || body.action === "gift-create" || body.action === "gift-redeem" || body.action === "gift-cancel" || body.action === "gift-list" || body.action === "gift-peek" || body.action === "notify-turn" || body.action === "pm-done-since" || body.action === "pm-bgleg" || body.action === "pm-bgend" || body.action === "pm-schedfire" || body.action === "pm-schednotify" || body.action === "schedule-put" || body.action === "schedule-delete" || body.action === "schedule-clear" || body.action === "schedule-list")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -12858,10 +13030,16 @@ var BOT_PAGE_URL_RE = /https?:\/\/[^\s<>"'`\]\)]+/g;
 
 function botExtractPageUrls(text) {
   var out = [];
-  var m = String(text || "").match(BOT_PAGE_URL_RE);
+  var body = String(text || "");
+  var attached = {};
+  var labeled = /---\s*attached (?:video|image):[^\n]*---\s*\n\s*(https?:\/\/[^\s<>"']+)/gi;
+  var a;
+  while ((a = labeled.exec(body)) !== null) attached[a[1].replace(/[.,;:!?]+$/, "")] = true;
+  var m = body.match(BOT_PAGE_URL_RE);
   if (!m) return out;
   for (var i = 0; i < m.length && out.length < LINK_READ_COUNT; i++) {
     var url = m[i].replace(/[.,;:!?]+$/, "");
+    if (attached[url]) continue;
     if (LINK_SKIP_EXT.test(url)) continue;
     if (isPrivateHostUrl(url)) continue;
     if (out.indexOf(url) === -1) out.push(url);
@@ -14485,6 +14663,7 @@ export {
   botProCatalog,
   botHistoryVision,
   botExtractVideoUrls,
+  botExtractPageUrls,
   botVideoFrames,
   botVideoFrameUrl,
   botVisionContent,

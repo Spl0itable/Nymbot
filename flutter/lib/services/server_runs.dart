@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../features/i18n/i18n.dart';
 import 'sandbox_protocol.dart';
+import 'site_checks.dart';
 
 class RunnerImage {
   const RunnerImage({
@@ -11,6 +12,8 @@ class RunnerImage {
     this.maxTimeoutSec = 900,
     this.creditsPerMinute = 0,
     this.setupSec = 0,
+    this.browser = false,
+    this.surcharge = 0,
   });
 
   final String name;
@@ -19,6 +22,8 @@ class RunnerImage {
   final int maxTimeoutSec;
   final double creditsPerMinute;
   final int setupSec;
+  final bool browser;
+  final double surcharge;
 
   static RunnerImage? fromJson(Object? raw) {
     if (raw is! Map) return null;
@@ -28,6 +33,7 @@ class RunnerImage {
     final max = raw['maxTimeoutSec'];
     final cpm = raw['creditsPerMinute'];
     final setup = raw['setupSec'];
+    final extra = raw['surcharge'];
     return RunnerImage(
       name: name,
       label: label is String && label.isNotEmpty ? label : name,
@@ -35,15 +41,18 @@ class RunnerImage {
       maxTimeoutSec: max is num && max > 0 ? max.toInt() : 900,
       creditsPerMinute: cpm is num && cpm > 0 ? cpm.toDouble() : 0,
       setupSec: setup is num && setup > 0 ? setup.ceil() : 0,
+      browser: raw['browser'] == true,
+      surcharge: extra is num && extra > 1 ? extra.toDouble() : 0,
     );
   }
 }
 
 class RunnerInfo {
-  const RunnerInfo({this.available = false, this.images = const []});
+  const RunnerInfo({this.available = false, this.images = const [], this.siteCheck = const SiteCheckInfo()});
 
   final bool available;
   final List<RunnerImage> images;
+  final SiteCheckInfo siteCheck;
 
   RunnerImage? image(String? name) {
     for (final i in images) {
@@ -53,12 +62,14 @@ class RunnerInfo {
   }
 
   static RunnerInfo fromJson(Object? raw) {
-    if (raw is! Map || raw['available'] != true) return const RunnerInfo();
+    if (raw is! Map) return const RunnerInfo();
+    final site = SiteCheckInfo.fromJson(raw['siteCheck']);
+    if (raw['available'] != true) return RunnerInfo(siteCheck: site);
     final images = [
       for (final i in (raw['images'] is List ? raw['images'] as List : const []))
         if (RunnerImage.fromJson(i) != null) RunnerImage.fromJson(i)!,
     ];
-    return RunnerInfo(available: images.isNotEmpty, images: images);
+    return RunnerInfo(available: images.isNotEmpty, images: images, siteCheck: site);
   }
 }
 
@@ -87,6 +98,8 @@ class ServerRunState {
   bool truncated = false;
   bool filesTruncated = false;
   List<Map<String, dynamic>> files = const [];
+  List<Map<String, dynamic>> artifacts = const [];
+  bool artifactsTruncated = false;
   double? charged;
   double? balance;
   bool done = false;
@@ -113,6 +126,8 @@ class ServerRunState {
             if (f is Map && f['path'] is String)
               {'name': f['path'], 'size': f['size'], 'data': f['data']},
         ];
+        artifacts = ServerRuns.artifactsOf(d['artifacts']);
+        artifactsTruncated = d['artifactsTruncated'] == true;
       case 'error':
         error = d['message'] is String && (d['message'] as String).isNotEmpty
             ? d['message'] as String
@@ -204,8 +219,53 @@ class ServerRuns {
   static String? imageFor(String language, {String? code}) =>
       (language == 'bash' || language == 'sh') && code != null ? shellImage(code) : _images[language];
 
-  static bool canRun(RunnerInfo info, String? language, String code) =>
-      language != null && info.available && info.image(imageFor(language, code: code)) != null;
+  static final _browserImport = RegExp(
+      r'''(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["'](?:playwright(?:-core|-chromium)?|@playwright/test|puppeteer(?:-core)?|selenium-webdriver|cypress)(?:/[^"'\n]*)?["']''');
+  static final _browserCommand =
+      RegExp(r'(?:^|[\s;&|(`!/])(?:playwright|puppeteer|cypress)(?=[\s;&|)`.\-]|$)', multiLine: true);
+
+  static bool needsBrowser(String? language, String code) {
+    final lang = language == null ? null : languageOf(language);
+    if (lang == 'javascript' || lang == 'typescript') return _browserImport.hasMatch(code);
+    if (lang == 'bash' || lang == 'sh') {
+      return _browserCommand.hasMatch(code.replaceAll(RegExp(r'^\s*#.*$', multiLine: true), ''));
+    }
+    return false;
+  }
+
+  static RunnerImage? imageIn(RunnerInfo info, String? language, String code) {
+    if (language == null || !info.available) return null;
+    if (needsBrowser(language, code)) {
+      final browser = info.image('browser');
+      if (browser != null) return browser;
+    }
+    return info.image(imageFor(language, code: code));
+  }
+
+  static bool canRun(RunnerInfo info, String? language, String code) => imageIn(info, language, code) != null;
+
+  static List<Map<String, dynamic>> artifactsOf(Object? raw, {bool hostedOnly = false}) {
+    final out = <Map<String, dynamic>>[];
+    for (final a in (raw is List ? raw : const [])) {
+      if (a is! Map) continue;
+      final name = '${a['name'] ?? ''}';
+      final type = '${a['type'] ?? ''}';
+      final url = a['url'] is String && (a['url'] as String).startsWith('https://') ? a['url'] as String : null;
+      final data = !hostedOnly && a['data'] is String && RegExp(r'^[A-Za-z0-9+/=]+$').hasMatch(a['data'] as String)
+          ? a['data'] as String
+          : null;
+      if (name.isEmpty || (url == null && data == null)) continue;
+      out.add({
+        'name': safeName(name),
+        'type': type.length > 60 ? type.substring(0, 60) : type,
+        'size': a['size'] is num ? (a['size'] as num).toInt() : 0,
+        if (url != null) 'url': url,
+        if (url == null && data != null) 'data': data,
+      });
+      if (out.length >= 20) break;
+    }
+    return out;
+  }
 
   static int clampTimeout(int sec, RunnerImage image) =>
       sec > image.maxTimeoutSec ? image.maxTimeoutSec : sec;
@@ -307,13 +367,33 @@ class ServerRuns {
     };
   }
 
-  static Map<String, dynamic> pendingFrom(Map p, String token) => {
+  static Map<String, dynamic> pendingFrom(Map p, String token) => p['check'] == true
+      ? {
+          'kind': 'server-run',
+          'check': true,
+          'id': '${p['id'] ?? ''}',
+          'image': 'sitecheck',
+          'url': '${p['url'] ?? p['command'] ?? ''}',
+          'command': '${p['url'] ?? p['command'] ?? ''}',
+          'steps': SiteChecks.stepsFrom(p['steps']),
+          'timeoutSec': p['timeoutSec'] is num ? (p['timeoutSec'] as num).toInt() : 0,
+          'maxCredits': p['maxCredits'] is num ? (p['maxCredits'] as num).toDouble() : 0.0,
+          if (p['surcharge'] is num && (p['surcharge'] as num) > 1) 'surcharge': (p['surcharge'] as num).toDouble(),
+          if (p['surcharge'] is num && (p['surcharge'] as num) > 1 && p['creditsPerMinute'] is num)
+            'creditsPerMinute': (p['creditsPerMinute'] as num).toDouble(),
+          'token': token,
+          'state': 'waiting',
+        }
+      : {
         'kind': 'server-run',
         'id': '${p['id'] ?? ''}',
         'image': '${p['image'] ?? ''}',
         'command': '${p['command'] ?? ''}',
         'timeoutSec': p['timeoutSec'] is num ? (p['timeoutSec'] as num).toInt() : 0,
         'maxCredits': p['maxCredits'] is num ? (p['maxCredits'] as num).toDouble() : 0.0,
+        if (p['surcharge'] is num && (p['surcharge'] as num) > 1) 'surcharge': (p['surcharge'] as num).toDouble(),
+        if (p['surcharge'] is num && (p['surcharge'] as num) > 1 && p['creditsPerMinute'] is num)
+          'creditsPerMinute': (p['creditsPerMinute'] as num).toDouble(),
         if (p['repo'] is String && (p['repo'] as String).isNotEmpty) 'repo': p['repo'],
         if (p['team'] == true) 'team': true,
         if (stagedFrom(p) case final staged?) 'staged': staged,
@@ -331,6 +411,9 @@ class ServerRuns {
               'billedMs': r['billedMs'] is num ? (r['billedMs'] as num).toInt() : 0,
               'code': r['code'] is num ? (r['code'] as num).toInt() : null,
               'ok': r['ok'] == true,
+              if (r['check'] == true) 'check': true,
+              if (artifactsOf(r['artifacts'], hostedOnly: true) case final shots when shots.isNotEmpty)
+                'artifacts': shots,
             },
       ].take(20).toList();
 }

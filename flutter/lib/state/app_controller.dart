@@ -29,6 +29,7 @@ import '../services/api_access.dart';
 import '../services/background_jobs.dart';
 import '../services/backup.dart';
 import '../services/blossom.dart';
+import '../services/bot_files.dart';
 import '../services/canary.dart';
 import '../services/chat_engine.dart';
 import '../services/connectors.dart';
@@ -54,6 +55,7 @@ import '../services/relay_pool.dart';
 import '../services/reply_notify.dart';
 import '../services/research.dart';
 import '../services/server_runs.dart';
+import '../services/site_checks.dart';
 import '../services/server_schedules.dart';
 import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
@@ -109,12 +111,13 @@ class AppController extends ChangeNotifier {
       Store? store,
       Nip46SocketFactory? signerSockets,
       PqKeyServer? pqKeys,
-      StorageSync? storage}) async {
+      StorageSync? storage,
+      RelayPool? relays}) async {
     store ??= await Store.open();
     final identity = Identity(store,
         restoreSigner: (session) =>
             restoreRemoteSigner(session, sockets: signerSockets));
-    final relays = RelayPool();
+    relays ??= RelayPool();
     final api = NymbotApi(client: client);
     final pq = PqAnnounce(relays,
         store: store, keyServer: pqKeys ?? pqKeyServer(api));
@@ -1522,6 +1525,32 @@ class AppController extends ChangeNotifier {
 
   String runnerLabel(String image) => runner.image(image)?.label ?? image;
 
+  SiteCheckInfo get siteCheck => runner.siteCheck;
+
+  bool get siteCheckAvailable => runner.siteCheck.available;
+
+  Future<ApiResult> runSiteCheck(Conversation? conv, String url, double maxCost) async {
+    final useAnon = conv != null && conv.anon;
+    final signer = useAnon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    final res = await api.siteCheck(signer, {'url': url, 'maxCost': maxCost});
+    if (res.status != 200 || conv == null) return res;
+    final data = res.data;
+    final credits = data['credits'] is num ? (data['credits'] as num).toDouble() : 0.0;
+    await _addTo(conv, ChatMessage(
+      id: bytesToHex(randomBytes(8)),
+      role: ChatRole.bot,
+      content: SiteChecks.reportMarkdown('${data['url'] ?? url}', data, credits),
+      pro: true,
+      serverRunCredits: credits,
+    ));
+    final balance = data['balanceCredits'] ?? data['balance'];
+    final state = ServerRunState()
+      ..charged = credits
+      ..balance = balance is num ? balance.toDouble() : null;
+    await serverRunCharged(conv, state);
+    return res;
+  }
+
   Future<bool> serverRunCapGate(Conversation? conv, double credits) async {
     if (conv == null || !SpendCaps.any(conv, botOf(conv))) return true;
     final gate = await _capGate(conv, true, credits);
@@ -2792,6 +2821,7 @@ class AppController extends ChangeNotifier {
     _gone = true;
     _pendingTimer?.cancel();
     _runsTimer?.cancel();
+    _farTimer?.cancel();
     _bgTimer?.cancel();
     for (final turn in turns.values) {
       turn.control.cancel();
@@ -2946,6 +2976,19 @@ class AppController extends ChangeNotifier {
     final entry = artifacts[at];
     if (index < 0 || index >= entry.versions.length) return;
     await updateArtifact(id, entry.versions[index].body);
+  }
+
+  Future<({({String name, String type, Uint8List bytes})? file, String error})> renderArtifactFile(
+      Artifact artifact, String format, String body) async {
+    final conv = current;
+    if (conv == null || (format != 'pdf' && format != 'docx')) return (file: null, error: '');
+    if (body.trim().isEmpty) return (file: null, error: t('This artifact is empty.'));
+    final res = await api.call('file-render', await _signerOf(conv),
+        extra: {'format': format, 'title': artifact.title, 'lang': artifact.lang, 'body': body},
+        timeout: const Duration(seconds: 60));
+    final file = res.status == 200 ? BotFiles.decodeRendered(res.data) : null;
+    if (file == null) return (file: null, error: '${res.data['error'] ?? t('That could not be converted.')}');
+    return (file: file, error: '');
   }
 
   Future<void> deleteArtifact(String id) async {
@@ -3513,11 +3556,41 @@ class AppController extends ChangeNotifier {
     }
     _endTurn(turn);
     if (!told) return;
+    final prepared = turn.prepared;
+    if (prepared != null) {
+      unawaited(_keepStoppedBranches(turn.conv, prepared).catchError((_) {}));
+    }
     try {
       final signer = turn.prepared?.signer ?? await _signerOf(turn.conv);
       final res = await api.cancelRun(signer, turn.runId);
       if (res.status == 200) unawaited(refreshBalance());
     } catch (_) {}
+  }
+
+  @visibleForTesting
+  static Duration stoppedBranchWait = const Duration(minutes: 2);
+
+  Future<void> _keepStoppedBranches(
+      Conversation conv, PreparedTurn prepared) async {
+    if (!reposOf(conv).any((r) => r.allowWrites && r.jobBranches)) return;
+    final until = DateTime.now().add(stoppedBranchWait);
+    var i = 0;
+    while (!_gone && DateTime.now().isBefore(until)) {
+      final step = claimBackoff[math.min(i++, claimBackoff.length - 1)];
+      await Future<void>.delayed(step + Jitter.next(step ~/ 4));
+      if (_gone || !DateTime.now().isBefore(until)) return;
+      final res = await api.claimRun(prepared.signer, prepared.eventId);
+      final data = res.data;
+      if (res.status == 0 || res.status == 202 || data['pending'] == true) {
+        continue;
+      }
+      if (res.status != 200 || data['unknown'] == true) return;
+      final mark = data['checkpoint'];
+      if (mark is Map<String, dynamic>) {
+        await rememberBranches(_conversationById(conv.id) ?? conv, mark);
+      }
+      return;
+    }
   }
 
   String? _linkOf(ChatTurn turn) {
@@ -3606,14 +3679,27 @@ class AppController extends ChangeNotifier {
         unawaited(store.setThread(conv.id, thread));
       };
 
-  Future<TurnResult> _deliver(ChatTurn turn, {Duration? timeout}) {
+  Future<TurnResult> _deliver(ChatTurn turn, {Duration? timeout}) async {
     turn.sent = true;
     turn.phase = 'running';
     notifyListeners();
-    return chat.deliver(turn.prepared!,
-        timeout: timeout,
-        control: turn.control,
-        onThreadIds: _threadIdsOf(turn.conv));
+    await _keepClaim(turn);
+    try {
+      final res = await chat.deliver(turn.prepared!,
+          timeout: timeout,
+          control: turn.control,
+          onThreadIds: _threadIdsOf(turn.conv));
+      if (!_gone) await _dropClaim(turn);
+      return res;
+    } on ChatFailure catch (e) {
+      if (!_gone && (!(e.pending || e.lost) || (e.lost && e.offline))) {
+        await _dropClaim(turn);
+      }
+      rethrow;
+    } catch (_) {
+      if (!_gone) await _dropClaim(turn);
+      rethrow;
+    }
   }
 
   ChatMessage _replyOf(ChatTurn turn, TurnResult res) {
@@ -3684,6 +3770,8 @@ class AppController extends ChangeNotifier {
     await harvestArtifacts(reply, conv: conv);
     if (conv.seed != null) conv.seed = null;
     await _count(conv, res);
+    final missed = prepared?.steerMissed ?? const <String>[];
+    if (missed.isNotEmpty) unawaited(_offerMissed(missed, conv));
     if (res.free != null) {
       // Counted on the device too, so a fresh key does not reset the day.
       free = res.free;
@@ -4475,6 +4563,15 @@ class AppController extends ChangeNotifier {
 
   // Steering
 
+  final Map<String, String> _steered = {};
+  final Map<String, _FarSteer> _farSteers = {};
+  Timer? _farTimer;
+  bool _farChecking = false;
+
+  static Duration farSteerKeep = const Duration(hours: 2);
+
+  Future<bool?> Function(String text, Conversation conv)? onSteerMissed;
+
   Future<String> steer(String runId, String text, {Conversation? conv}) async {
     final body = text.trim();
     if (body.isEmpty || runId.isEmpty) return 'failed';
@@ -4482,10 +4579,21 @@ class AppController extends ChangeNotifier {
     for (final t in turns.values) {
       if (t.runId == runId) local = t;
     }
+    final owner = local?.conv ?? conv;
     final signer = local?.prepared?.signer ??
-        (conv != null ? await _signerOf(conv) : identity.signer);
+        (owner != null ? await _signerOf(owner) : identity.signer);
     final res = await api.steerRun(signer, runId, body);
     if (res.status == 200 && res.data['ok'] == true) {
+      final id = res.data['id'];
+      if (id is String && id.isNotEmpty) {
+        _steered[id] = body;
+        if (_steered.length > 50) _steered.remove(_steered.keys.first);
+        if (local == null && RegExp(r'^[0-9a-f]{24}$').hasMatch(id)) {
+          _farSteers[id] = _FarSteer(runId, body, owner?.id, signer, DateTime.now());
+          if (_farSteers.length > 50) _farSteers.remove(_farSteers.keys.first);
+          _watchFarSteers();
+        }
+      }
       if (local != null) {
         local.progress = t('Passed on. It applies at the next step.');
         notifyListeners();
@@ -4493,8 +4601,95 @@ class AppController extends ChangeNotifier {
       return 'ok';
     }
     if (res.status == 413) return 'long';
-    if (res.status == 429 || res.status == 0) return 'failed';
+    if (res.status == 429 || res.status == 0 || res.status >= 500) {
+      return 'failed';
+    }
+    if (res.status == 409 && res.data['final'] == true) return 'final';
     return 'finished';
+  }
+
+  void _watchFarSteers() {
+    if (_farTimer != null || _gone) return;
+    _farTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_farSteers.isEmpty || _gone) {
+        _farTimer?.cancel();
+        _farTimer = null;
+        return;
+      }
+      if (_runsTimer == null) unawaited(refreshRuns());
+    });
+  }
+
+  Future<void> _checkFarSteers() async {
+    if (_farChecking || _farSteers.isEmpty) return;
+    _farChecking = true;
+    try {
+      final now = DateTime.now();
+      _farSteers.removeWhere((_, s) => now.difference(s.at) > farSteerKeep);
+      final live = {for (final r in remoteRuns) r.replyTo, for (final t in turns.values) t.runId};
+      final groups = <String, List<String>>{};
+      final signers = <String, EventSigner>{};
+      _farSteers.forEach((id, s) {
+        if (live.contains(s.runId)) return;
+        if (s.signer.pubkey != identity.pubkey && current?.id != s.convId) return;
+        groups.putIfAbsent(s.signer.pubkey, () => []).add(id);
+        signers[s.signer.pubkey] = s.signer;
+      });
+      final offers = <String, List<String>>{};
+      final convs = <String, Conversation?>{};
+      for (final entry in groups.entries) {
+        final ids = entry.value.take(20).toList();
+        final res = await api.steerStatus(signers[entry.key]!, ids);
+        final states = res.data['states'];
+        if (res.status != 200 || states is! Map) continue;
+        for (final id in ids) {
+          final s = _farSteers[id];
+          if (s == null) continue;
+          final state = states[id];
+          if (state == 'pending' || state == null) {
+            s.tries++;
+            if (s.tries >= 6) _farSteers.remove(id);
+            continue;
+          }
+          _farSteers.remove(id);
+          if (state != 'missed' || _steered.remove(id) == null) continue;
+          final conv = s.convId == null
+              ? current
+              : conversations.where((c) => c.id == s.convId).firstOrNull ?? current;
+          if (conv == null) continue;
+          offers.putIfAbsent(conv.id, () => []).add(s.text);
+          convs[conv.id] = conv;
+        }
+      }
+      for (final entry in offers.entries) {
+        final conv = convs[entry.key]!;
+        final ask = onSteerMissed;
+        if (ask == null) continue;
+        final text = entry.value.join('\n\n');
+        if (await ask(text, conv) == true) {
+          await send(text, target: conv, withAttachments: const []);
+        }
+      }
+    } finally {
+      _farChecking = false;
+    }
+  }
+
+  Future<void> _offerMissed(List<String> ids, Conversation conv) async {
+    for (final id in ids) {
+      _farSteers.remove(id);
+    }
+    final texts = [
+      for (final id in ids)
+        if (_steered.containsKey(id)) _steered.remove(id)!,
+    ];
+    if (texts.isEmpty) return;
+    final ask = onSteerMissed;
+    if (ask == null) return;
+    final text = texts.join('\n\n');
+    if (await ask(text, conv) == true) {
+      await send(text, target: conv, withAttachments: const []);
+    }
   }
 
   Future<bool?> Function(double? credits)? onBackgroundPrompt;
@@ -5092,6 +5287,7 @@ class AppController extends ChangeNotifier {
     }
     remoteRuns = runs;
     notifyListeners();
+    if (_farSteers.isNotEmpty) unawaited(_checkFarSteers());
   }
 
   bool _isLocal(String runId) => turns.values.any((t) => t.runId == runId);
@@ -6493,6 +6689,7 @@ class AppController extends ChangeNotifier {
     _parked.clear();
     _offlineHeld.clear();
     remoteRuns = [];
+    _farSteers.clear();
     signedIn = false;
     _entered = false;
     notifyListeners();
@@ -6547,6 +6744,17 @@ class ChatTurn {
   String get runId => prepared?.replyTo ?? msgId ?? prepared?.msgId ?? '';
 
   bool get live => phase == 'running' && sent && !stopped;
+}
+
+class _FarSteer {
+  _FarSteer(this.runId, this.text, this.convId, this.signer, this.at);
+
+  final String runId;
+  final String text;
+  final String? convId;
+  final EventSigner signer;
+  final DateTime at;
+  int tries = 0;
 }
 
 typedef RemoteRun = ({

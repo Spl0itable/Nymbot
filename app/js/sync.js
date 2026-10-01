@@ -337,6 +337,14 @@
         return !!(resp && !resp.error);
     }
 
+    function settledSettings(pushed) {
+        const held = Store.read('sync_settings_dirty', []);
+        if (!Array.isArray(held) || !held.length || !pushed || typeof pushed !== 'object') return;
+        const now = Store.settings();
+        const kept = held.filter(k => JSON.stringify(now[k]) !== JSON.stringify(pushed[k]));
+        if (kept.length !== held.length) Store.write('sync_settings_dirty', kept);
+    }
+
     function stamp(record) {
         if (!record || typeof record !== 'object') return 0;
         return Number(record.updatedAt || record.at || record.createdAt || record.ts) || 0;
@@ -558,9 +566,11 @@
             }
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
+                const held = new Set(this._names ? this._names.values() : []);
                 for (const conv of chats) {
                     const arts = Artifacts.all(conv.id).filter(a => a && a.id && !graves[a.id]);
                     if (arts.length) out['arts-' + conv.id] = { id: conv.id, artifacts: fitArtifacts(conv.id, arts) };
+                    else if (held.has('arts-' + conv.id)) out['arts-' + conv.id] = { id: conv.id, artifacts: [] };
                 }
             }
             out['graves'] = graves;
@@ -607,10 +617,18 @@
                 const theirs = Object.assign({}, remote.settings);
                 delete theirs.git;
                 delete local.git;
-                const merged = Object.assign({}, theirs, local);
+                const held = Store.read('sync_settings_dirty', []);
+                const dirty = new Set(Array.isArray(held) ? held : []);
+                const merged = Object.assign({}, local);
+                for (const key of Object.keys(theirs)) {
+                    if (!dirty.has(key)) merged[key] = theirs[key];
+                }
                 if ((Number(remote.settings.nicknameAt) || 0) > (Number(local.nicknameAt) || 0)) {
                     merged.nickname = typeof remote.settings.nickname === 'string' ? remote.settings.nickname : '';
                     merged.nicknameAt = Number(remote.settings.nicknameAt);
+                } else if ('nickname' in local) {
+                    merged.nickname = local.nickname;
+                    if ('nicknameAt' in local) merged.nicknameAt = local.nicknameAt;
                 }
                 Store.write('settings', merged);
                 touched.push('settings');
@@ -757,7 +775,10 @@
             for (let attempt = 0; attempt <= CAS_RETRIES; attempt++) {
                 const plain = JSON.stringify({ __cat: dTag, v: current });
                 const hash = await sha256Hex(Identity.pubkey + '|' + (selfKem() ? 'pq' : 'c') + '|' + plain);
-                if (this._hashes.get(category) === hash) return true;
+                if (this._hashes.get(category) === hash) {
+                    if (dTag === 'settings') settledSettings(current);
+                    return true;
+                }
                 let blob;
                 try { blob = await seal(plain); } catch (_) { return false; }
                 if (!blob) return false;
@@ -772,6 +793,7 @@
                     continue;
                 }
                 if (!resp || resp.error) return false;
+                if (dTag === 'settings') settledSettings(current);
                 this._hashes.set(category, hash);
                 this._names.set(category, dTag);
                 if (Identity.isRemote) remember(await sha256Hex(blob), plain);

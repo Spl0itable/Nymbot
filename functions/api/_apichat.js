@@ -11,7 +11,8 @@ import {
   apiUrlHasUserinfo, API_TIMING, API_IMAGE_URL_MAX_CHARS
 } from "./_apihttp.js";
 import {
-  apiBillOpen, apiBillSettle, apiBillFail, apiBillPrecheck, apiCostObject, apiCostHeaders, apiRecordQuery
+  apiBillOpen, apiBillSettle, apiBillFail, apiBillPrecheck, apiBillCheckpoint, apiCostObject, apiCostHeaders, apiRecordQuery,
+  API_BILL_TIMING
 } from "./_apibill.js";
 import { apiResolveModel, apiModelTools, apiModelReasons, apiSamplingParams, apiModelShape } from "./_apimodels.js";
 
@@ -659,16 +660,47 @@ function holdLostError() {
   return e;
 }
 
-function watchedDraft(draft, gone, bill) {
+function watchedDraft(draft, gone, bill, seen) {
   if (!draft) return null;
   return {
     push(t) { return draft.push(t); },
     reset() { return draft.reset(); },
     delta(kind, piece) {
       if (bill && bill.holdLost) throw holdLostError();
+      if (typeof piece === "string") seen.chars += piece.length;
+      if (seen.tick) seen.tick();
       return draft.delta(kind, piece);
     },
+    accepted() {
+      if (seen.accept) seen.accept();
+    },
     get committed() { return !!draft.committed || gone(); }
+  };
+}
+
+function settleWhenGone(api, sink, settle) {
+  const signal = api.request && api.request.signal;
+  const st = { timer: null, over: false };
+  const fire = () => {
+    st.timer = null;
+    if (st.over) return;
+    st.over = true;
+    api.waitUntil(Promise.resolve().then(settle).catch(() => { }));
+  };
+  const arm = () => {
+    if (st.over || st.timer) return;
+    st.timer = setTimeout(fire, Math.max(0, Number(API_TIMING.goneSettleMs) || 0));
+  };
+  if (sink && sink.draft && typeof sink.draft.onGone === "function") sink.draft.onGone(arm);
+  if (signal && typeof signal.addEventListener === "function") {
+    if (signal.aborted) arm();
+    else signal.addEventListener("abort", arm);
+  }
+  return () => {
+    st.over = true;
+    if (st.timer) clearTimeout(st.timer);
+    st.timer = null;
+    if (signal && typeof signal.removeEventListener === "function") signal.removeEventListener("abort", arm);
   };
 }
 
@@ -683,16 +715,75 @@ async function chatRun(api, req, sink) {
   apiCheckNesting({ tools: req.tools, messages: req.messages, sampling: req.sampling });
   const btc = await botBtcPrice();
   const plan = await planRun(api, req, btc);
-  const bill = await apiBillOpen(api, { tier: plan.tier, reserveMilli: plan.reserveMilli, refresh: true });
+  let messages = req.messages;
+  const cutMilli = async (chars) => {
+    const est = estimatedUsage(req, plan, messages, null, chars);
+    const cut = plan.tier === "pro" ? { usage: est } : { usageParts: [{ model: plan.pmModel, usage: est }] };
+    const extraMilli = await prepFailMilli(api, req, plan, btc);
+    let milli = 0;
+    try { milli = await botFailedSpendMilli(api.env, cut, plan.model, plan.stdRates); } catch (e) { milli = 0; }
+    return { est, milli: milli + extraMilli };
+  };
+  const bill = await apiBillOpen(api, {
+    tier: plan.tier, reserveMilli: plan.reserveMilli, refresh: true, history: { type: req.type || "chat", model: req.resolved.id }
+  });
   const gone = goneCheck(api, sink && sink.draft, bill);
-  const draft = watchedDraft(sink && sink.draft ? sink.draft : null, gone, bill);
+  const seen = { chars: 0, billed: false, tick: null, accept: null, accepted: false };
+  const expiryMilli = async (chars) => {
+    if (seen.accepted) return (await cutMilli(chars)).milli;
+    return prepFailMilli(api, req, plan, btc);
+  };
+  const mark = { at: Date.now(), busy: false, again: false };
+  const checkpoint = () => {
+    if (bill.done) return;
+    if (mark.busy) {
+      mark.again = true;
+      return;
+    }
+    mark.at = Date.now();
+    mark.busy = true;
+    mark.again = false;
+    api.waitUntil(expiryMilli(seen.chars).then((milli) => apiBillCheckpoint(api, bill, milli)).catch(() => { }).then(() => {
+      mark.busy = false;
+      if (mark.again) checkpoint();
+    }));
+  };
+  seen.tick = () => {
+    if (!seen.accepted) {
+      seen.accept();
+      return;
+    }
+    if (Date.now() - mark.at >= Math.max(0, Number(API_BILL_TIMING.checkpointMs) || 0)) checkpoint();
+  };
+  seen.accept = () => {
+    if (seen.accepted) return;
+    seen.accepted = true;
+    checkpoint();
+  };
+  const draft = watchedDraft(sink && sink.draft ? sink.draft : null, gone, bill, seen);
   let web = null;
   let got = null;
   let failure = null;
-  let messages = req.messages;
+  const record = (settled, status, usage) => {
+    if (seen.billed && !usage) return;
+    api.waitUntil(apiRecordQuery(api, {
+      bill, type: req.type || "chat", model: req.resolved.id, usage: usage || (got ? got.usage : (failure && failure.usage) || null),
+      milli: settled.chargedMilli, tier: plan.tier, status, web: !!(web && web.context), task: plan.task || null,
+      ms: Date.now() - started, btcUsd: btc, err: status === "error" ? "upstream" : null
+    }));
+  };
+  const stopGone = settleWhenGone(api, sink, async () => {
+    if (bill.done) return;
+    const cut = await cutMilli(seen.chars);
+    if (bill.done) return;
+    const pending = apiBillSettle(api, bill, cut.milli);
+    seen.billed = true;
+    record(await pending, "error", cut.est);
+  });
   try {
     web = await webContext(api, req, plan.tier);
     messages = withWeb(req.messages, web);
+    if (req.webSearched) checkpoint();
     try {
       got = plan.tier === "pro" ? await runPro(api, req, plan, messages, draft, gone) : await runStandard(api, req, plan, messages, draft, gone);
     } catch (e) {
@@ -708,11 +799,7 @@ async function chatRun(api, req, sink) {
   } catch (e) {
     failure = e;
   }
-  const record = (settled, status) => api.waitUntil(apiRecordQuery(api, {
-    type: req.type || "chat", model: req.resolved.id, usage: got ? got.usage : (failure && failure.usage) || null,
-    milli: settled.chargedMilli, tier: plan.tier, status, web: !!(web && web.context), task: plan.task || null,
-    ms: Date.now() - started, btcUsd: btc, err: status === "error" ? "upstream" : null
-  }));
+  stopGone();
   if (failure && typeof failure === "object" && failure.usageEstimated) {
     const est = estimatedUsage(req, plan, messages, failure.usage, failure.streamed ? failure.streamed.chars : 0);
     if (plan.tier === "pro") failure.usage = est;
@@ -891,7 +978,11 @@ export function apiStreamDraft(sse, onDelta) {
         firstSeen();
       },
       get committed() { return committed; },
-      get gone() { return !!(sse.cancelled || sse.closed); }
+      get gone() { return !!(sse.cancelled || sse.closed); },
+      onGone(fn) {
+        if (sse.cancelled) fn();
+        else sse.onCancel(fn);
+      }
     }
   };
 }

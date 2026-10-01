@@ -82,6 +82,7 @@ export const OUTLINE = [
         sections: [
           { id: 'what-they-are', title: 'What is an artifact' },
           { id: 'versions', title: 'Editing and versions' },
+          { id: 'files', title: 'Files a reply makes' },
           { id: 'compare', title: 'Asking two models at once' },
           { id: 'citations-and-patches', title: 'Citations and patches' },
         ],

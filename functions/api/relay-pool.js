@@ -35,6 +35,8 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const HEX128 = /^[0-9a-f]{128}$/;
 const SUB_ID = /^[A-Za-z0-9_.:~-]+$/;
 const BOT_D_PREFIX = 'nym-bot-';
+const HELD_EVENTS_MAX = 16;
+const HELD_EVENT_MS = 20000;
 
 function firstTag(tags, name) {
   for (const t of tags) if (Array.isArray(t) && t[0] === name) return t[1];
@@ -155,6 +157,7 @@ export async function onRequest(context) {
   const seenEvents = new Set();
   const acceptedOKs = new Set();
   const published = new Set();
+  const held = [];
   const seenEOSE = new Set();
   const kindBlacklist = new Map();
   const closedKindRetries = new Map();
@@ -403,6 +406,7 @@ export async function onRequest(context) {
       info.status = 'connected';
       reconnectAttempts.delete(relayUrl);
       for (const subId of subs.keys()) sendSubscription(relayUrl, info, subId);
+      sendHeld(relayUrl, info);
       schedulePoolStatus();
     });
 
@@ -419,6 +423,16 @@ export async function onRequest(context) {
     });
   }
 
+  function sendHeld(relayUrl, info) {
+    const now = Date.now();
+    while (held.length && now - held[0].at > HELD_EVENT_MS) held.shift();
+    const blocked = kindBlacklist.get(relayUrl);
+    for (const h of held) {
+      if (blocked && blocked.has(h.kind)) continue;
+      try { info.ws.send(h.payload); } catch { }
+    }
+  }
+
   function publishEvent(ev) {
     const payload = JSON.stringify(['EVENT', ev]);
     if (payload.length > POOL_LIMITS.maxEventBytes) {
@@ -432,12 +446,18 @@ export async function onRequest(context) {
     }
     boundedAdd(published, ev.id, OK_MAX);
     acceptedOKs.delete(ev.id);
+    let sent = 0;
     upstreams.forEach((info, url) => {
       if (!isOpen(info)) return;
+      sent++;
       const blocked = kindBlacklist.get(url);
       if (blocked && blocked.has(ev.kind)) return;
       try { info.ws.send(payload); } catch { }
     });
+    if (!sent) {
+      if (held.length >= HELD_EVENTS_MAX) held.shift();
+      held.push({ payload, kind: ev.kind, at: Date.now() });
+    }
     if (channelsDb && ev.kind === 30078 && firstTag(ev.tags, 'd') === PQ_D_TAG &&
       pqArchives < POOL_LIMITS.pqArchivesPerSocket) {
       pqArchives++;
@@ -527,6 +547,7 @@ export async function onRequest(context) {
     });
     upstreams.clear();
     subs.clear();
+    held.length = 0;
     subRelays.clear();
     seenEvents.clear();
     acceptedOKs.clear();

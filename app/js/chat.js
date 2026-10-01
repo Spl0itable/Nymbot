@@ -741,7 +741,8 @@
                         onSlot: opts.onSlot
                     });
                     if (res.aborted || controller.signal.aborted) throw fail(stoppedErr());
-                    if ((res.data && res.data.pending) || res.timedOut) {
+                    const dropped = !res.status && !res.aborted && !res.timedOut && navigator.onLine !== false;
+                    if ((res.data && res.data.pending) || res.timedOut || dropped) {
                         late = true;
                         say(t('Still working on that one…'));
                         if (typeof opts.onClaiming === 'function') { try { opts.onClaiming(true); } catch (_) { } }
@@ -1016,6 +1017,7 @@
                 free: data.free || null,
                 repos: (ctx.repos || []).map(r => r.repo),
                 stopped: data.stopped === true,
+                steerMissed: Array.isArray(data.steerMissed) ? data.steerMissed.filter(id => typeof id === 'string' && /^[0-9a-f]{24}$/.test(id)) : [],
                 plan: planOf(data.plan),
                 replyTo: link.replyTo,
                 askedId: link.askedId,

@@ -408,6 +408,10 @@
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1.5"></rect><rect x="3" y="13" width="18" height="7" rx="1.5"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line></svg>
                         <span class="chip-label">Server runs</span>
                     </button>
+                    <button class="chip" type="button" data-act="open-site-check" id="chipSiteCheck" hidden title="Check a live website in a headless browser">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><polyline points="9 14.5 11 16.5 15 12.5"></polyline></svg>
+                        <span class="chip-label">Check a site</span>
+                    </button>
                     <button class="chip" type="button" data-act="open-connectors" id="chipConnectors" title="Outside tools this chat can use">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3"></path><path d="M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 17v4"></path></svg>
                         <span class="chip-label">Connectors</span>
@@ -502,6 +506,8 @@
                         <span class="artifact-status" id="artifactStatus"></span>
                         <button class="btn btn-small" type="button" data-act="artifact-copy">Copy</button>
                         <button class="btn btn-small" type="button" data-act="artifact-download">Save</button>
+                        <button class="btn btn-small" type="button" data-act="artifact-export" data-format="pdf" title="Download as PDF">PDF</button>
+                        <button class="btn btn-small" type="button" data-act="artifact-export" data-format="docx" title="Download as DOCX">DOCX</button>
                         <button class="btn btn-small btn-primary" type="button" data-act="artifact-save" id="artifactSave" hidden>Save version</button>
                     </footer>
                 </aside>
@@ -1359,12 +1365,29 @@
             <p class="server-run-image" id="serverRunImage"></p>
             <label for="serverRunTime">Time limit</label>
             <select id="serverRunTime"></select>
+            <div class="server-run-surcharge-box" id="serverRunSurcharge" hidden></div>
             <p class="server-run-price" id="serverRunPrice"></p>
             <label class="check" id="serverRunFilesRow" hidden><input type="checkbox" id="serverRunFiles"> Include this chat's attached files</label>
             <p class="modal-status" id="serverRunStatus"></p>
             <footer>
                 <button class="btn btn-primary" type="button" data-act="server-run-go" id="serverRunGo">Run</button>
                 <button class="btn btn-ghost" type="button" data-act="close-modal" id="serverRunCancel">Cancel</button>
+            </footer>
+        </div>
+    </div>
+
+    <div class="modal" id="modalSiteCheck" hidden>
+        <div class="modal-card">
+            <header><h2>Check a site</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">A fresh headless browser opens the public address you give and reports console errors, failed requests, load times, web app checks and a quick accessibility scan, with desktop and phone screenshots. Private, local and Nymbot addresses are refused. You pay for the browser time, never more than the price shown.</p>
+            <label for="siteCheckUrl">Address</label>
+            <input type="url" id="siteCheckUrl" placeholder="https://example.com" autocomplete="off" inputmode="url" spellcheck="false">
+            <div class="server-run-surcharge-box" id="siteCheckSurcharge" hidden></div>
+            <p class="server-run-price" id="siteCheckPrice"></p>
+            <p class="modal-status" id="siteCheckStatus"></p>
+            <footer>
+                <button class="btn btn-primary" type="button" data-act="site-check-go" id="siteCheckGo">Check</button>
+                <button class="btn btn-ghost" type="button" data-act="close-modal" id="siteCheckCancel">Cancel</button>
             </footer>
         </div>
     </div>
@@ -1981,6 +2004,7 @@
     <script src="/app/js/dictate.js"></script>
     <script src="/app/js/chat.js"></script>
     <script src="/app/js/highlight.js"></script>
+    <script src="/app/js/files.js"></script>
     <script src="/app/js/markdown.js"></script>
     <script src="/app/js/compose.js"></script>
     <script src="/app/js/artifacts.js"></script>

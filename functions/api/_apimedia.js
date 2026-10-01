@@ -9,7 +9,7 @@ import { mediaTiers, mediaTier, mediaRate } from "./_mediaprice.js";
 import { ledgerCall } from "./_ledger.js";
 import { ApiError, apiBad, apiJson, apiRandomId, apiRound, apiIso, apiDropBody, apiUrlHasUserinfo, API_IMAGE_URL_MAX_CHARS } from "./_apihttp.js";
 import {
-  apiBillOpen, apiBillSettle, apiBillRelease, apiCostObject, apiCostHeaders, apiRecordQuery, apiMilliSats, apiUsd
+  apiBillOpen, apiBillSettle, apiBillRelease, apiBillCheckpoint, apiCostObject, apiCostHeaders, apiRecordQuery, apiMilliSats, apiUsd
 } from "./_apibill.js";
 import { apiResolveModel } from "./_apimodels.js";
 import {
@@ -428,9 +428,9 @@ async function imagesRun(api, o) {
     : botMediaQuote("image", pick.gen, { refs: o.ref ? 1 : 0 }, btc).milli;
   const signer = o.format === "url" || (o.ref && o.ref.bytes) ? apiNeedSigner(env, "use response_format b64_json with a URL image") : null;
   const extra = pick.gen ? imageExtra(pick.gen, o.params) : null;
-  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: perMilli * o.n, l402Partial: true, refresh: true });
+  const bill = await apiBillOpen(api, { tier: pick.tier, reserveMilli: perMilli * o.n, l402Partial: true, refresh: true, history: { type: "image", model: pick.id } });
   const record = (milli, status) => api.waitUntil(apiRecordQuery(api, {
-    type: "image", model: pick.id, usage: null, milli, tier: pick.tier, status, btcUsd: btc, ms: Date.now() - t0, calls: o.n
+    bill, type: "image", model: pick.id, usage: null, milli, tier: pick.tier, status, btcUsd: btc, ms: Date.now() - t0, calls: o.n
   }));
   let refs = [];
   try {
@@ -442,8 +442,13 @@ async function imagesRun(api, o) {
     throw e;
   }
   const runs = [];
+  let made = 0;
+  const paid = (r) => {
+    if (r.item || (r.err && r.err.billed)) apiBillCheckpoint(api, bill, perMilli * ++made);
+    return r;
+  };
   for (let i = 0; i < o.n; i++) {
-    runs.push(imageOne(env, pick, o.prompt, refs, extra, o.format, signer).then((item) => ({ item }), (err) => ({ err })));
+    runs.push(imageOne(env, pick, o.prompt, refs, extra, o.format, signer).then((item) => ({ item }), (err) => ({ err })).then(paid));
   }
   const done = await Promise.all(runs);
   const items = done.filter((d) => d.item).map((d) => d.item);
@@ -700,11 +705,11 @@ async function videoSubmit(api) {
   const milli = botMediaQuote("video", gen, { body: plan.body, seconds: plan.seconds }, btc).milli;
   const tierRes = mediaRate("video", gen, { body: plan.body }).res || null;
   const t0 = Date.now();
-  const bill = await apiBillOpen(api, { tier: "pro", reserveMilli: milli, refresh: true });
+  const bill = await apiBillOpen(api, { tier: "pro", reserveMilli: milli, refresh: true, history: { type: "video", model: hit.key } });
   const fail = async (e) => {
     const settled = e && e.billed ? await apiBillSettle(api, bill, milli) : await apiBillRelease(api, bill);
     if (!(e && e.billed)) dropRef(api, ref);
-    api.waitUntil(apiRecordQuery(api, { type: "video", model: hit.key, usage: null, milli: settled.chargedMilli, tier: "pro", status: "error", btcUsd: btc, ms: Date.now() - t0 }));
+    api.waitUntil(apiRecordQuery(api, { bill, type: "video", model: hit.key, usage: null, milli: settled.chargedMilli, tier: "pro", status: "error", btcUsd: btc, ms: Date.now() - t0 }));
     if (e instanceof ApiError) throw e;
     throw apiMediaFailed("The video generator failed.", apiMilliSats(settled.chargedMilli, "pro"));
   };
@@ -712,6 +717,7 @@ async function videoSubmit(api) {
   try {
     if (ref) plan = await botVideoPlan(env, prompt, gen, ref.bytes ? await hostRef(env, ref, signer) : ref.url, res || "", extra);
     got = await botVideoStart(env, plan, gen);
+    apiBillCheckpoint(api, bill, milli);
   } catch (e) {
     return fail(e);
   }
@@ -743,7 +749,7 @@ async function videoSubmit(api) {
       { code: "service_unavailable", headers: { "Retry-After": "30" } });
   }
   api.waitUntil(apiRecordQuery(api, {
-    type: "video", model: hit.key, usage: null, milli: settled.chargedMilli, tier: "pro", status: "ok", btcUsd: btc, ms: now - t0, at: now
+    bill, type: "video", model: hit.key, usage: null, milli: settled.chargedMilli, tier: "pro", status: "ok", btcUsd: btc, ms: now - t0, at: now
   }));
   const out = videoObject(row, btc, env);
   out.cost = cost.charged_usd;

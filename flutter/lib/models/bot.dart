@@ -127,7 +127,7 @@ class Bot {
       };
 
   /// The bot rides in the URL fragment, which browsers never send to a server.
-  String link({String origin = 'https://nymbot.com'}) {
+  String link({String origin = 'https://nymbot.ai'}) {
     final payload = base64Url
         .encode(utf8.encode(jsonEncode(shareable)))
         .replaceAll('=', '');

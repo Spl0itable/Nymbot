@@ -1148,6 +1148,32 @@ html[data-timestamps="off"] .bubble-time-inner { display: none; }
 .md-table { border-collapse: collapse; width: 100%; font-size: 0.88em; }
 .md-table th, .md-table td { padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); text-align: left; }
 .md-table th { background: var(--bubble-quote); font-weight: 600; }
+
+.file-cards { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.25rem 0; }
+.file-card {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: min(460px, 100%);
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bubble-quote);
+}
+.file-card-icon { position: relative; flex: none; display: inline-flex; width: 40px; height: 40px; align-items: center; justify-content: center; border-radius: 8px; color: var(--secondary); background: var(--bg-sunken); }
+.file-card-ext { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center; font-size: 0.55rem; font-weight: 700; letter-spacing: 0.04em; }
+.file-card.is-pdf .file-card-icon { color: var(--danger); }
+.file-card.is-sheet .file-card-icon { color: var(--primary); }
+.file-card.is-archive .file-card-icon { color: var(--lightning); }
+.file-card-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.file-card-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-card-sub { font-size: 0.78rem; color: var(--text-dim); }
+.file-card-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
+.file-card.is-pending { opacity: 0.75; }
+@media (max-width: 520px) {
+    .file-card { flex-wrap: wrap; }
+    .file-card-actions { width: 100%; justify-content: flex-start; }
+}
 .md-table tr:last-child td { border-bottom: 0; }
 .md-table .md-align-left { text-align: left; }
 .md-table .md-align-center { text-align: center; }
@@ -1229,6 +1255,12 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .server-run-summary { margin-top: 0.4rem; display: grid; gap: 0.2rem; font-size: 0.72rem; color: var(--text-faint); }
 .server-run-summary-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; min-width: 0; }
 .server-run-summary-command { font-family: var(--mono); font-size: 0.7rem; overflow-wrap: anywhere; min-width: 0; }
+.server-run-surcharge { color: var(--primary); font-weight: 600; }
+.server-run-surcharge-box { display: grid; gap: 0.1rem; margin-top: 0.4rem; }
+.server-run-artifacts { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; min-width: 0; }
+.server-run-shot { margin: 0; display: grid; gap: 0.2rem; max-width: 100%; min-width: 0; }
+.server-run-shot .run-image { max-height: 24rem; object-fit: contain; border: 1px solid var(--line); }
+.site-check-steps { margin: 0; padding-left: 1.2rem; font-family: var(--mono); font-size: 0.7rem; display: grid; gap: 0.1rem; overflow-wrap: anywhere; }
 .sandbox-frame { position: absolute; width: 0; height: 0; border: 0; visibility: hidden; }
 .doc-tray-label { font-size: 0.72rem; color: var(--text-faint); align-self: center; }
 .doc-used { margin-top: 0.3rem; font-size: 0.72rem; color: var(--text-faint); }

@@ -113,6 +113,8 @@ String toolLabel(String name) {
       return t('Opening a pull request');
     case 'recall':
       return t('Looking back through this chat');
+    case 'create_file':
+      return t('Making a file');
     default:
       return t('Working');
   }

@@ -1,4 +1,4 @@
-const CACHE = 'nymbot-shell-v79';
+const CACHE = 'nymbot-shell-v81';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -32,6 +32,7 @@ const SHELL = [
     '/app/js/dictate.js',
     '/app/js/chat.js',
     '/app/js/highlight.js',
+    '/app/js/files.js',
     '/app/js/markdown.js',
     '/app/js/compose.js',
     '/app/js/artifacts.js',

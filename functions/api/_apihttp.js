@@ -2,7 +2,7 @@ import { bytesToHex, randomBytes, hmac, sha256, utf8ToBytes } from "./_shared.js
 import { ledgerCall } from "./_ledger.js";
 import { BtcPriceUnavailable } from "./_btcprice.js";
 
-export const API_TIMING = { keepAliveMs: 15000, firstByteWaitMs: 8000 };
+export const API_TIMING = { keepAliveMs: 15000, firstByteWaitMs: 8000, goneSettleMs: 27000 };
 export const API_JSON_MAX_BYTES = 4 * 1024 * 1024;
 export const API_MULTIPART_MAX_BYTES = 32 * 1024 * 1024;
 export const API_MULTIPART_MAX_PARTS = 64;

@@ -21,6 +21,7 @@ import 'motion.dart';
 import 'nym_avatar.dart';
 import 'nym_glyph.dart';
 import 'pending_tool_card.dart';
+import 'server_run_artifacts.dart';
 import 'staged_card.dart';
 import 'sticky_avatar.dart';
 import 'team_view.dart';
@@ -355,20 +356,25 @@ class _MessageBubbleState extends State<MessageBubble> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final r in m.serverRuns)
+          for (final r in m.serverRuns) ...[
             Text(
               t('Server run on {image}: {command} — {outcome}, {credits} Pro credits', {
                 'image': '${r['image'] ?? ''}',
                 'command': _short('${r['command'] ?? ''}'),
-                'outcome': r['code'] is num
-                    ? t('exit {code}', {'code': r['code']})
-                    : t('did not finish'),
+                'outcome': r['check'] == true
+                    ? (r['ok'] == true ? t('site check finished') : t('did not finish'))
+                    : r['code'] is num
+                        ? t('exit {code}', {'code': r['code']})
+                        : t('did not finish'),
                 'credits': ServerRuns.credits(((r['milli'] as num?) ?? 0) / 1000),
               }),
               style: hint,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
+            if (r['artifacts'] is List && (r['artifacts'] as List).isNotEmpty)
+              ServerRunArtifacts(artifacts: ServerRuns.artifactsOf(r['artifacts'], hostedOnly: true)),
+          ],
         ],
       ),
     );

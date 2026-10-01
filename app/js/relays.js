@@ -5,6 +5,9 @@
     const C = window.NymbotConfig;
     const Edge = window.NymbotEdge;
 
+    const HELD_MAX = 16;
+    const HELD_WAIT_MS = 15000;
+
     function subId() {
         return 'nb' + Math.random().toString(36).slice(2, 10);
     }
@@ -17,6 +20,7 @@
         _direct: false,          // proxy unreachable, on our own sockets
         _tries: 0,
         _timer: null,
+        _held: [],
 
         get connected() {
             if (this.pooled) return this._upstream.length || 1;
@@ -71,6 +75,7 @@
                 }
                 this._retireDirect();
                 this._emit();
+                this._flushHeld();
             });
             ws.addEventListener('message', (m) => {
                 let data;
@@ -140,6 +145,7 @@
                 for (const [id, sub] of this._subs) {
                     try { ws.send(JSON.stringify(['REQ', id, sub.filter])); } catch (_) { }
                 }
+                this._flushHeld();
             });
             ws.addEventListener('message', (m) => {
                 let data;
@@ -163,7 +169,7 @@
         /// One acceptance is enough for the worker to find the wrap.
         publish(event, timeoutMs) {
             const open = [...this.sockets.entries()].filter(([, ws]) => ws.readyState === 1);
-            if (open.length === 0) return Promise.resolve(0);
+            if (open.length === 0) return this._hold(event, timeoutMs);
             const need = this.pooled ? 1 : 2;
             return new Promise((resolve) => {
                 let accepted = 0;
@@ -189,6 +195,31 @@
                 }
                 setTimeout(finish, timeoutMs || 4000);
             });
+        },
+
+        _hold(event, timeoutMs) {
+            return new Promise((resolve) => {
+                if (this._held.length >= HELD_MAX) {
+                    const oldest = this._held.shift();
+                    clearTimeout(oldest.timer);
+                    oldest.resolve(0);
+                }
+                const item = { event, timeoutMs, resolve, timer: null };
+                item.timer = setTimeout(() => {
+                    const i = this._held.indexOf(item);
+                    if (i !== -1) this._held.splice(i, 1);
+                    resolve(0);
+                }, HELD_WAIT_MS);
+                this._held.push(item);
+            });
+        },
+
+        _flushHeld() {
+            const list = this._held.splice(0);
+            for (const item of list) {
+                clearTimeout(item.timer);
+                this.publish(item.event, item.timeoutMs).then(item.resolve);
+            }
         },
 
         fetchFrom(urls, filter, timeoutMs) {

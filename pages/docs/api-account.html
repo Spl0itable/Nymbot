@@ -955,7 +955,7 @@ const www = challenge.headers.get("www-authenticate");
 // The Payment scheme: echo every challenge parameter back with the preimage
 const start = www.indexOf("Payment ");
 const params = Object.fromEntries([...www.slice(start + 8).matchAll(/(\w+)="((?:[^"\\]|\\.)*)"/g)].map((m) => [m[1], m[2]]));
-const { invoice } = JSON.parse(Buffer.from(params.request, "base64url").toString());
+const { invoice } = JSON.parse(Buffer.from(params.request, "base64url").toString()).methodDetails;
 const preimage = await payWithYourWallet(invoice);
 
 const credential = Buffer.from(JSON.stringify({ challenge: params, payload: { preimage } })).toString("base64url");

@@ -24,8 +24,10 @@
     const STAGED_SHOWN = 8;
 
     let info = null;
+    let site = null;
     let loading = null;
     let sheet = null;
+    let siteSheet = null;
 
     const $ = (id) => document.getElementById(id);
     const credits = (v) => window.amount(v, 3);
@@ -71,10 +73,33 @@
         return 'polyglot';
     }
 
+    const BROWSER_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["'](?:playwright(?:-core|-chromium)?|@playwright\/test|puppeteer(?:-core)?|selenium-webdriver|cypress)(?:\/[^"'\n]*)?["']/;
+    const BROWSER_COMMAND = /(?:^|[\s;&|(`!/])(?:playwright|puppeteer|cypress)(?=[\s;&|)`.\-]|$)/m;
+
+    function needsBrowser(language, code) {
+        const lang = LANGS[String(language || '').toLowerCase()] || null;
+        if (lang === 'javascript' || lang === 'typescript') return BROWSER_IMPORT.test(String(code || ''));
+        if (lang === 'bash' || lang === 'sh') return BROWSER_COMMAND.test(String(code || '').replace(/^\s*#.*$/gm, ''));
+        return false;
+    }
+
     function imageFor(language, code) {
         if (!language) return null;
+        if (code != null && needsBrowser(language, code) && imageNamed('browser')) return imageNamed('browser');
         const name = (language === 'bash' || language === 'sh') && code != null ? shellImage(code) : IMAGE_FOR[language];
         return imageNamed(name);
+    }
+
+    function surchargeOf(image) {
+        const n = Number(image && image.surcharge);
+        return Number.isFinite(n) && n > 1 ? n : 0;
+    }
+
+    function surchargeNodes(perMinute) {
+        return [
+            el('div', 'server-run-meta server-run-surcharge', t('Includes a browser surcharge')),
+            el('div', 'server-run-meta server-run-per-minute', t('{credits} Pro credits a minute', { credits: credits(perMinute) }))
+        ];
     }
 
     function load(force) {
@@ -85,6 +110,7 @@
         loading = Api.runnerInfo().then((data) => {
             loading = null;
             if (data && typeof data === 'object') {
+                site = data.siteCheck && data.siteCheck.available === true ? data.siteCheck : null;
                 info = data.available === true && Array.isArray(data.images) ? data : { available: false };
             } else if (!info) {
                 info = { available: false };
@@ -293,6 +319,13 @@
         const price = priceOf(sheet, timeoutSec);
         $('serverRunPrice').textContent = t('Up to {credits} Pro credits', { credits: credits(price) });
         $('serverRunPrice').dataset.credits = String(price);
+        const extra = $('serverRunSurcharge');
+        if (extra) {
+            extra.innerHTML = '';
+            const on = surchargeOf(sheet.image) > 0;
+            extra.hidden = !on;
+            if (on) for (const n of surchargeNodes(Number(sheet.image.creditsPerMinute) || 0)) extra.appendChild(n);
+        }
     }
 
     async function go() {
@@ -376,6 +409,40 @@
             if (Ex && typeof Ex.saveBlob === 'function') Ex.saveBlob(name, blob);
         });
         return b;
+    }
+
+    function artifactsNode(list, truncated) {
+        const box = el('div', 'server-run-artifacts');
+        for (const a of Array.isArray(list) ? list : []) {
+            if (!a || typeof a !== 'object') continue;
+            const name = window.NymbotRunner ? window.NymbotRunner.safeName(String(a.name || 'file')) : inputName(a.name);
+            const type = String(a.type || '');
+            const url = typeof a.url === 'string' && /^https:\/\//.test(a.url) ? a.url : '';
+            const data = typeof a.data === 'string' && /^[A-Za-z0-9+/=]*$/.test(a.data) ? a.data : '';
+            if (!url && !data) continue;
+            if (/^image\/(png|jpeg|webp|gif)$/.test(type)) {
+                const fig = el('figure', 'server-run-shot');
+                const img = el('img', 'run-image');
+                img.alt = name;
+                img.loading = 'lazy';
+                img.referrerPolicy = 'no-referrer';
+                img.src = url || 'data:' + type + ';base64,' + data;
+                fig.appendChild(img);
+                fig.appendChild(el('figcaption', 'run-note', name));
+                box.appendChild(fig);
+            } else if (url) {
+                const link = el('a', 'code-btn run-file server-run-artifact', t('Save {name}', { name }));
+                link.href = url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.setAttribute('download', name);
+                box.appendChild(link);
+            } else {
+                box.appendChild(saveButton({ path: name, data }));
+            }
+        }
+        if (truncated) box.appendChild(el('div', 'run-note', t('Some screenshots or reports were left out: there were too many, or they were too large.')));
+        return box.childElementCount ? box : null;
     }
 
     async function execute(state, conv, timeoutSec, maxCost, withFiles) {
@@ -529,7 +596,9 @@
                         tail.appendChild(list);
                     }
                     if (ev.filesTruncated) line('run-note', t('Some files were left out: there were too many, or they were too large.'));
-                    if (!log.childElementCount && !files.length) line('run-note', t('It ran, and printed nothing.'));
+                    const shots = artifactsNode(ev.artifacts, ev.artifactsTruncated);
+                    if (shots) tail.appendChild(shots);
+                    if (!log.childElementCount && !files.length && !shots) line('run-note', t('It ran, and printed nothing.'));
                     line('run-note server-run-where', t('Ran on a Nymbot server'));
                     break;
                 }
@@ -594,6 +663,11 @@
     }
 
     function refreshChip(U) {
+        const siteChip = $('chipSiteCheck');
+        if (siteChip) {
+            siteChip.hidden = !site;
+            siteChip.querySelector('.chip-label').textContent = t('Check a site');
+        }
         const chip = $('chipServerRuns');
         if (!chip) return;
         const Chat = window.NymbotChat;
@@ -665,8 +739,40 @@
         return box;
     }
 
+    function stepsFrom(p) {
+        const out = [];
+        for (const s of Array.isArray(p.steps) ? p.steps.slice(0, 20) : []) {
+            if (!s || typeof s !== 'object') continue;
+            const parts = [String(s.action || '')];
+            for (const k of ['selector', 'key', 'url']) if (s[k]) parts.push(String(s[k]).slice(0, 120));
+            if (s.text) parts.push('"' + String(s.text).slice(0, 80) + '"');
+            if (s.ms != null) parts.push(t('{n} ms', { n: Math.max(0, Math.floor(Number(s.ms) || 0)) }));
+            out.push(parts.join(' '));
+        }
+        return out;
+    }
+
     function pendingFrom(p, token) {
         const staged = stagedFrom(p);
+        if (p.check === true) {
+            return {
+                kind: 'server-run',
+                check: true,
+                id: String(p.id || ''),
+                image: 'sitecheck',
+                url: String(p.url || p.command || '').slice(0, 2000),
+                command: String(p.url || p.command || '').slice(0, 2000),
+                steps: stepsFrom(p),
+                timeoutSec: Math.max(0, Math.floor(Number(p.timeoutSec) || 0)),
+                maxCredits: Math.max(0, Number(p.maxCredits) || 0),
+                surcharge: Number(p.surcharge) > 1 ? Number(p.surcharge) : 0,
+                creditsPerMinute: Math.max(0, Number(p.creditsPerMinute) || 0),
+                team: false,
+                staged: null,
+                token,
+                state: 'waiting'
+            };
+        }
         return {
             kind: 'server-run',
             id: String(p.id || ''),
@@ -674,6 +780,8 @@
             command: String(p.command || '').slice(0, COMMAND_KEPT),
             timeoutSec: Math.max(0, Math.floor(Number(p.timeoutSec) || 0)),
             maxCredits: Math.max(0, Number(p.maxCredits) || 0),
+            surcharge: Number(p.surcharge) > 1 ? Number(p.surcharge) : 0,
+            creditsPerMinute: Math.max(0, Number(p.creditsPerMinute) || 0),
             repo: p.repo ? String(p.repo).slice(0, 200) : '',
             team: !!p.team,
             staged,
@@ -686,6 +794,21 @@
         const p = m.pendingTool;
         const card = el('div', 'pending-tool server-run-card' + (p.state && p.state !== 'waiting' ? ' is-settled' : ''));
         card.dataset.id = m.id;
+        if (p.check) {
+            card.classList.add('site-check-card');
+            card.appendChild(el('div', 'pending-tool-head', t('Nymbot wants to check a website in a headless browser')));
+            card.appendChild(el('pre', 'pending-tool-args server-run-command site-check-url', p.url || p.command));
+            const steps = Array.isArray(p.steps) ? p.steps : [];
+            if (steps.length) {
+                const list = el('ol', 'site-check-steps');
+                for (const s of steps) list.appendChild(el('li', null, String(s)));
+                card.appendChild(list);
+            }
+            card.appendChild(el('div', 'server-run-meta', t('Time limit: {time}', { time: timeLabel(p.timeoutSec) })));
+            if (Number(p.surcharge) > 1) for (const n of surchargeNodes(Number(p.creditsPerMinute) || 0)) card.appendChild(n);
+            card.appendChild(el('div', 'server-run-price', t('Up to {credits} Pro credits', { credits: credits(p.maxCredits) })));
+            return settleRow(U, m, p, card);
+        }
         card.appendChild(el('div', 'pending-tool-head', p.team
             ? t('The team lead wants to run a command on a Nymbot server')
             : t('Nymbot wants to run a command on a Nymbot server')));
@@ -694,8 +817,13 @@
         if (p.repo) card.appendChild(el('div', 'server-run-meta', t('Repository: {repo}', { repo: p.repo })));
         card.appendChild(el('pre', 'pending-tool-args server-run-command', p.command));
         card.appendChild(el('div', 'server-run-meta', t('Time limit: {time}', { time: timeLabel(p.timeoutSec) })));
+        if (Number(p.surcharge) > 1) for (const n of surchargeNodes(Number(p.creditsPerMinute) || 0)) card.appendChild(n);
         card.appendChild(el('div', 'server-run-price', t('Up to {credits} Pro credits', { credits: credits(p.maxCredits) })));
         if (p.staged && Array.isArray(p.staged.files) && p.staged.files.length) card.appendChild(stagedNode(p.staged));
+        return settleRow(U, m, p, card);
+    }
+
+    function settleRow(U, m, p, card) {
         if (p.state === 'allowed') {
             card.appendChild(el('div', 'pending-tool-note', t('Allowed once.')));
             return card;
@@ -745,8 +873,8 @@
             : leg;
         K.settle(U, conv.id, m, approve ? 'allowed' : 'denied');
         const turn = U.beginTurn(conv, approve
-            ? t('Running the command on a Nymbot server')
-            : t('Carrying on without the server run'), { asked: m.askedBy || null, runId: m.replyTo || null, resumed: true });
+            ? (p.check ? t('Checking the website in a headless browser') : t('Running the command on a Nymbot server'))
+            : (p.check ? t('Carrying on without the site check') : t('Carrying on without the server run')), { asked: m.askedBy || null, runId: m.replyTo || null, resumed: true });
         turn.approving = m.id;
         if (p.team) {
             turn.team = {};
@@ -825,13 +953,17 @@
             const row = el('div', 'server-run-summary-row');
             row.appendChild(el('span', 'server-run-summary-image', String(r.image || '')));
             row.appendChild(el('code', 'server-run-summary-command', shorten(r.command, SUMMARY_COMMAND)));
-            row.appendChild(el('span', 'server-run-summary-exit', r.code == null
-                ? t('did not finish')
-                : t('exit {code}', { code: String(r.code) })));
+            row.appendChild(el('span', 'server-run-summary-exit', r.check
+                ? (r.ok ? t('site check finished') : t('did not finish'))
+                : r.code == null
+                    ? t('did not finish')
+                    : t('exit {code}', { code: String(r.code) })));
             row.appendChild(el('span', 'server-run-summary-credits', t('{credits} Pro credits', {
                 credits: credits((Number(r.milli) || 0) / 1000)
             })));
             box.appendChild(row);
+            const shots = Array.isArray(r.artifacts) ? artifactsNode(r.artifacts.filter(a => a && typeof a.url === 'string'), false) : null;
+            if (shots) box.appendChild(shots);
         }
         return box;
     }
@@ -843,10 +975,157 @@
         };
     }
 
+    function md(text) {
+        return '`' + String(text == null ? '' : text).replace(/[`\r\n]+/g, ' ').slice(0, 300) + '`';
+    }
+
+    function reportMarkdown(url, out, creditsCharged) {
+        const r = (out && out.report) || {};
+        const lines = ['**' + t('Site check of {url}', { url: String(url || r.url || '').replace(/[*`]/g, '') }) + '**', ''];
+        if (r.timedOut) lines.push(t('The check stopped at its time limit.'));
+        else if (out && out.ok) lines.push(t('Loaded with status {status}: {title}', { status: r.status == null ? '?' : String(r.status), title: md(r.title || '') }));
+        else lines.push(t('The check did not finish: {error}', { error: md(r.error || t('unknown error')) }));
+        lines.push('');
+        const tm = r.timings;
+        if (tm) {
+            lines.push('- ' + t('Timings: first byte {ttfb} ms, content loaded {dcl} ms, fully loaded {load} ms', {
+                ttfb: String(Math.round(Number(tm.ttfbMs) || 0)), dcl: String(Math.round(Number(tm.domContentLoadedMs) || 0)), load: String(Math.round(Number(tm.loadMs) || 0))
+            }));
+        }
+        const list = (label, items, count, fmt) => {
+            const all = Array.isArray(items) ? items : [];
+            lines.push('- ' + label(String(Math.max(Number(count) || 0, all.length))));
+            for (const it of all.slice(0, 5)) lines.push('  - ' + fmt(it));
+        };
+        list(n => t('Console errors: {n}', { n }), (r.console || []).concat((r.pageErrors || []).map(e => ({ text: e }))), r.consoleErrorCount, it => md(it.text));
+        list(n => t('Failed requests: {n}', { n }), r.failedRequests, r.failedCount, it => md(it.url) + ' (' + (it.status != null ? String(it.status) : String(it.error || '')) + ')');
+        list(n => t('Blocked requests: {n}', { n }), r.blocked, r.blockedCount, it => md(it.url) + ' \u2014 ' + String(it.reason || ''));
+        const pwa = r.pwa;
+        if (pwa) {
+            const m = pwa.manifest || {};
+            lines.push('- ' + t('Web app manifest: {state}', { state: m.ok ? t('valid') : (m.found ? t('has problems') : t('missing')) }));
+            lines.push('- ' + t('Service worker: {state}', { state: pwa.serviceWorker && pwa.serviceWorker.registered ? t('registered') : t('not registered') }));
+            lines.push('- ' + t('Reloads offline: {state}', { state: !pwa.offline || !pwa.offline.tested ? t('not tested') : (pwa.offline.ok ? t('yes') : t('no')) }));
+            lines.push('- ' + t('Installable: {state}', { state: pwa.installable && pwa.installable.ready ? t('yes') : t('no') }));
+        }
+        const a = r.a11y;
+        if (a) {
+            lines.push('- ' + t('Accessibility: {images} images without alt text, {fields} unlabeled fields, {buttons} unnamed buttons, {links} unnamed links', {
+                images: String(a.imagesWithoutAlt || 0), fields: String(a.inputsWithoutLabel || 0), buttons: String(a.buttonsWithoutName || 0), links: String(a.linksWithoutName || 0)
+            }));
+            if (!a.lang) lines.push('- ' + t('The page has no lang attribute.'));
+        }
+        for (const s of Array.isArray(r.steps) ? r.steps : []) {
+            lines.push('- ' + t('Step {n}: {action}', { n: String(s.i), action: String(s.action || '') }) + ' ' + (s.ok ? '\u2713' : '\u2717' + (s.error ? ' ' + md(s.error) : (s.skipped ? ' ' + t('skipped') : ''))));
+        }
+        for (const shot of Array.isArray(out && out.screenshots) ? out.screenshots : []) {
+            if (shot && typeof shot.url === 'string' && /^https:\/\//.test(shot.url)) lines.push('', shot.url);
+        }
+        lines.push('', t('Charged {credits} Pro credits', { credits: credits(Number(creditsCharged) || 0) }));
+        return lines.join('\n');
+    }
+
+    function siteMax() {
+        const base = Number(site && site.maxCredits) || 0;
+        const held = siteSheet ? Number(siteSheet.override) || 0 : 0;
+        return Math.max(base, held);
+    }
+
+    function showSitePrice() {
+        const box = $('siteCheckSurcharge');
+        if (box) {
+            box.innerHTML = '';
+            const on = Number(site && site.surcharge) > 1;
+            box.hidden = !on;
+            if (on) for (const n of surchargeNodes(Number(site.creditsPerMinute) || 0)) box.appendChild(n);
+        }
+        $('siteCheckPrice').textContent = t('Up to {credits} Pro credits', { credits: credits(siteMax()) });
+        $('siteCheckPrice').dataset.credits = String(siteMax());
+    }
+
+    async function openSite(U, keep) {
+        if (!U.conv) return;
+        await load(true);
+        if (!site) {
+            U.toast(t('Site checks are not available right now.'));
+            return;
+        }
+        siteSheet = keep || { ui: U, convId: U.conv.id, override: 0, busy: false };
+        if (!keep) $('siteCheckUrl').value = '';
+        showSitePrice();
+        $('siteCheckGo').disabled = false;
+        U.modalStatus('siteCheckStatus', keep && keep.changed ? t('The price went up since this was shown. Check it and run again.') : '', keep && keep.changed ? 'warn' : undefined);
+        U.openModal('modalSiteCheck');
+    }
+
+    async function goSite() {
+        const state = siteSheet;
+        if (!state || state.busy) return;
+        const U = state.ui;
+        const url = String($('siteCheckUrl').value || '').trim();
+        if (!/^https?:\/\/\S+$/i.test(url)) {
+            U.modalStatus('siteCheckStatus', t('Enter a full http or https address.'), 'warn');
+            return;
+        }
+        const Store = window.NymbotStore;
+        const conv = Store.conversation(state.convId) || (U.conv && U.conv.id === state.convId ? U.conv : null);
+        if (!conv) return;
+        const maxCost = siteMax();
+        const Caps = window.NymbotCaps;
+        if (Caps && Caps.any(conv)) {
+            const gate = await Caps.gate(U, conv, { tier: 'pro', low: maxCost, high: maxCost });
+            if (!gate.go) return;
+        }
+        state.busy = true;
+        $('siteCheckGo').disabled = true;
+        U.modalStatus('siteCheckStatus', t('Checking {url} in a headless browser…', { url }));
+        const Api = window.NymbotApi;
+        let res;
+        try {
+            res = await Api.call('site-check', { url, maxCost }, { signer: signerFor(conv), timeout: 150000 });
+        } catch (e) {
+            res = { status: 0, data: { error: (e && e.message) || t('The request failed.') } };
+        }
+        state.busy = false;
+        $('siteCheckGo').disabled = false;
+        const data = (res && res.data) || {};
+        if (res.status === 402 && data.error === 'price-changed') {
+            state.override = Number(data.maxCredits) || 0;
+            state.changed = true;
+            await openSite(U, state);
+            return;
+        }
+        if (res.status === 402 && data.noCredits) {
+            U.modalStatus('siteCheckStatus', data.error || t('You are out of Pro credits.'), 'warn');
+            outOfPro(U, conv, data);
+            return;
+        }
+        if (res.status !== 200) {
+            U.modalStatus('siteCheckStatus', data.error || t('The site check could not start.'), 'warn');
+            if (res.status === 503 && data.available === false) {
+                site = null;
+                refreshChip(U);
+            }
+            return;
+        }
+        U.closeModals();
+        const amount = Number(data.credits) || 0;
+        const msg = {
+            id: Store.uid(), role: 'bot', content: reportMarkdown(data.url || url, data, amount), ts: Date.now(),
+            cost: 0, pro: true, siteCheck: true, serverRunCredits: amount
+        };
+        U.placeMessage(conv.id, msg);
+        const balance = data.balanceCredits != null ? data.balanceCredits : data.balance;
+        if (balance != null) U.creditBalance(true, balance);
+        spend(U, conv.id, amount);
+    }
+
     function handlers(U) {
         return {
             'server-run-go': () => go(),
-            'toggle-server-runs': () => toggle(U)
+            'toggle-server-runs': () => toggle(U),
+            'open-site-check': () => openSite(U),
+            'site-check-go': () => goSite()
         };
     }
 
@@ -862,9 +1141,11 @@
     }
 
     window.NymbotServerRun = {
-        LANGS, IMAGE_FOR, shellImage, canRun,
+        LANGS, IMAGE_FOR, shellImage, needsBrowser, canRun, artifactsNode,
         load, available, decorate, refresh, open, go,
-        priceFor, billedSec, timesFor, refreshChip, handlers,
+        priceFor, billedSec, timesFor, refreshChip, handlers, reportMarkdown, openSite,
+        get site() { return site; },
+        set site(v) { site = v; },
         pendingFrom, pendingCard, resume, summaryNode, totalCost, carry,
         get info() { return info; },
         set info(v) { info = v; }

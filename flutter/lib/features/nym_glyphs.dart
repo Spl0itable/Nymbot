@@ -94,6 +94,7 @@ const Map<String, String> kNymGlyphShell = <String, String>{
   'team': '<circle cx="12" cy="7" r="3"></circle><circle cx="5" cy="17" r="2.5"></circle><circle cx="19" cy="17" r="2.5"></circle><path d="M12 10v3"></path><path d="M7 15.5 10 13h4l3 2.5"></path>',
   'ghost': '<path d="M12 2a7 7 0 0 0-7 7v11l2.5-2 2.5 2 2-2 2 2 2.5-2 2.5 2V9a7 7 0 0 0-7-7Z"></path><circle cx="9.5" cy="10" r="1"></circle><circle cx="14.5" cy="10" r="1"></circle>',
   'compare': '<rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect>',
+  'site-check': '<rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><polyline points="9 14.5 11 16.5 15 12.5"></polyline>',
 };
 
 /// What the web app draws next to each label, so a screen here asks for the
@@ -115,6 +116,7 @@ const Map<String, String> kNymGlyphFor = <String, String>{
   'auto-routed': 'model',
   'git': 'branch',
   'server-runs': 'server-runs',
+  'site-check': 'site-check',
   'persona': 'person',
   'effort': 'lightbulb',
   'research': 'research',

@@ -22,6 +22,7 @@ import 'sheets/team_sheet.dart';
 import 'sheets/workspaces_sheet.dart';
 import 'nym_glyph.dart';
 import 'research_view.dart';
+import 'site_check_sheet.dart';
 
 class NymbotToolbar extends StatelessWidget {
   const NymbotToolbar({super.key});
@@ -73,6 +74,14 @@ class NymbotToolbar extends StatelessWidget {
           label: t('Server runs'),
           active: app.current?.serverRuns == true,
           onTap: () => _toggleServerRuns(context, app),
+        ),
+      if (app.siteCheckAvailable)
+        _ChipSpec(
+          glyph: 'site-check',
+          paidOnly: true,
+          label: t('Check a site'),
+          active: false,
+          onTap: () => showSiteCheckSheet(context),
         ),
       _ChipSpec(
         glyph: 'connectors',

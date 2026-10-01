@@ -161,6 +161,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (conv != null) _input.setMarkdown(app.store.draft(conv.id));
       app.onCapPrompt = _capPrompt;
       app.onBackgroundPrompt = _backgroundPrompt;
+      app.onSteerMissed = (text, conv) async =>
+          mounted ? await offerAsMessage(context) : null;
       app.onBuy = () {
         if (mounted) unawaited(showCreditsSheet(context));
       };

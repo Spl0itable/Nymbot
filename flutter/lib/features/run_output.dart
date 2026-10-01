@@ -13,6 +13,7 @@ import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
+import 'server_run_artifacts.dart';
 
 class DetachedRuns extends InheritedWidget {
   const DetachedRuns({super.key, required super.child});
@@ -56,6 +57,8 @@ class RunCodeController extends ChangeNotifier {
   double? charged;
   RunnerImage? image;
   int? timeoutSec;
+  List<Map<String, dynamic>> artifacts = const [];
+  bool artifactsTruncated = false;
 
   int? get longerTimeout {
     final held = image;
@@ -74,6 +77,8 @@ class RunCodeController extends ChangeNotifier {
     charged = null;
     image = null;
     timeoutSec = null;
+    artifacts = const [];
+    artifactsTruncated = false;
   }
 
   Future<ServerRunResponse> runOnServer(
@@ -107,6 +112,8 @@ class RunCodeController extends ChangeNotifier {
         result = state.result();
         exitCode = state.exitCode;
         timedOut = state.timedOut;
+        artifacts = state.artifacts;
+        artifactsTruncated = state.artifactsTruncated;
         notifyListeners();
       }
     } catch (_) {
@@ -269,6 +276,8 @@ class RunOutputView extends StatelessWidget {
                               ),
                     ],
                   ),
+                if (server && (controller.artifacts.isNotEmpty || controller.artifactsTruncated))
+                  ServerRunArtifacts(artifacts: controller.artifacts, truncated: controller.artifactsTruncated),
                 if (r.stderr.isNotEmpty) SelectableText(r.stderr, style: danger),
                 if (r.error != null) SelectableText(r.error!, style: danger),
                 if (r.truncated) Text(t('The output was cut short.'), style: hint),

@@ -117,10 +117,52 @@ class Store {
     }
   }
 
-  Future<void> saveSettings(AppSettings s) =>
-      _watched(_prefs.setString('appSettings', jsonEncode(s.toJson())));
+  Future<void> saveSettings(AppSettings s) async {
+    final next = s.toJson();
+    await _markSettings(next);
+    await _watched(_prefs.setString('appSettings', jsonEncode(next)));
+  }
 
-  Future<void> resetSettings() => _prefs.remove('appSettings');
+  Future<void> resetSettings() async {
+    await _markSettings(AppSettings().toJson());
+    await _prefs.remove('appSettings');
+  }
+
+  static const String settingsDirtyKey = 'sync_settings_dirty';
+
+  Set<String> settingsDirty() {
+    final raw = _prefs.getString(settingsDirtyKey);
+    if (raw == null) return {};
+    try {
+      final held = jsonDecode(raw);
+      return held is List ? {for (final k in held) '$k'} : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveSettingsDirty(Set<String> keys) => keys.isEmpty
+      ? _prefs.remove(settingsDirtyKey)
+      : _prefs.setString(settingsDirtyKey, jsonEncode(keys.toList()..sort()));
+
+  Future<void> _markSettings(Map<String, dynamic> next) async {
+    if (_muted) return;
+    final was = settings().toJson();
+    final dirty = settingsDirty();
+    final before = dirty.length;
+    for (final key in {...was.keys, ...next.keys}) {
+      if (jsonEncode(was[key]) != jsonEncode(next[key])) dirty.add(key);
+    }
+    if (dirty.length != before) await _saveSettingsDirty(dirty);
+  }
+
+  Future<void> settlePushedSettings(Map<String, dynamic> pushed) async {
+    final dirty = settingsDirty();
+    if (dirty.isEmpty) return;
+    final now = settings().toJson();
+    dirty.removeWhere((k) => jsonEncode(now[k]) == jsonEncode(pushed[k]));
+    await _saveSettingsDirty(dirty);
+  }
 
   Future<List<GitRepo>> repos() async =>
       GitRepo.decodeList(await vault.read('repos'));

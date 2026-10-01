@@ -155,6 +155,7 @@ class PreparedTurn {
   String? replyTo;
   String? askedId;
   bool stopped = false;
+  List<String> steerMissed = const [];
   ({String runId, int until})? background;
   List<Map<String, dynamic>> plan = const [];
 
@@ -1566,6 +1567,10 @@ class ChatEngine {
     if (link.replyTo != null) prepared.replyTo = link.replyTo;
     if (link.askedId != null) prepared.askedId = link.askedId;
     prepared.stopped = data['stopped'] == true;
+    prepared.steerMissed = [
+      for (final id in (data['steerMissed'] is List ? data['steerMissed'] as List : const []))
+        if (id is String && RegExp(r'^[0-9a-f]{24}$').hasMatch(id)) id,
+    ];
     prepared.background = BackgroundJobs.handover(data['background']);
 
     // A '!' question stays out of the conversation context on both sides, though the chat shows it.

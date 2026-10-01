@@ -73,9 +73,33 @@
                 of the artifact you already have rather than a second copy of it &mdash; one file, one
                 history.</p>
             <p>Artifacts live on the device with the conversation they came from, are deleted with it, and
-                are never uploaded anywhere. In a <a href="/docs/chats/#ghost-mode">ghost chat</a> they are
+                are never uploaded anywhere, except to be converted when you download one as a PDF or DOCX. In a <a href="/docs/chats/#ghost-mode">ghost chat</a> they are
                 held in memory only, like the rest of that chat.</p>
 
+            <h2 id="files">Files a reply makes</h2>
+            <p>Ask for a file and Nymbot makes one: &ldquo;put that in a PDF&rdquo;, &ldquo;export this
+                table to Excel&rdquo;, &ldquo;give me the plan as a Word document&rdquo;. It can make PDF,
+                Word (DOCX), Excel (XLSX), CSV, Markdown, plain text, HTML and JSON files, or a ZIP of
+                several. This works on every model, standard routing included.</p>
+            <p>The file arrives under the reply as a card with its name, type and size. Download saves it
+                under its own name; Open shows a PDF or a text file in a new tab. An HTML file is only ever
+                downloaded, never opened inside the app. In the apps for iOS and Android, Download hands the
+                file to the share sheet, where you can save it or send it on.</p>
+            <p>Files are hosted the way pictures Nymbot makes are: on the same public media hosts, each
+                uploaded under a fresh throwaway key so the uploads cannot be tied to one another, with the
+                link carried inside your end-to-end encrypted chat. Anyone holding that link can download
+                the file, and the host can read it, so keep secrets out of files you ask for. A file follows
+                its chat: it is synced, kept and deleted with the conversation, and later replies can still
+                see what an earlier file was made from, so &ldquo;now make that a DOCX&rdquo; works.</p>
+            <div class="docs-note">
+                <span class="docs-note-label">Limits</span>
+                <p>Up to 5 files a reply and 5 MB a file. PDF text covers Latin, Greek and Cyrillic
+                    scripts; for Chinese, Japanese, Korean, Arabic, Hebrew or emoji ask for DOCX, HTML or
+                    Markdown, which keep every character. Making a file costs nothing beyond the reply
+                    itself.</p>
+            </div>
+            <p>Any artifact can also be downloaded as a PDF or a DOCX from its panel. Nymbot&rsquo;s server
+                converts it and sends the file straight back; nothing is stored or uploaded.</p>
             <h2 id="compare">Asking two models at once</h2>
             <p><strong>Compare</strong> sends one prompt to two models at the same time. Each answers on a
                 thread of its own, seeded with the last few turns of the conversation, so neither model

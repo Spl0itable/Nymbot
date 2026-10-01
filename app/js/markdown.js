@@ -407,6 +407,12 @@
                         body.push(lines[i++]);
                     }
                 }
+                const Files = window.NymbotFiles;
+                const fileInfo = fence[2].replace(/^[`~]+/, '');
+                if (Files && Files.isPending(fileInfo)) {
+                    out.push(Files.pendingCard(fileInfo));
+                    continue;
+                }
                 out.push(codeBlock(body.join('\n'), lang, opts));
                 continue;
             }
@@ -475,9 +481,10 @@
             if (!para.length) para.push(lines[i++]);
             const text = para.join('\n');
             const bare = text.trim();
-            const media = /^https?:\/\/\S+$/.test(bare)
+            const files = window.NymbotFiles ? window.NymbotFiles.paragraph(bare) : null;
+            const media = !files && /^https?:\/\/\S+$/.test(bare)
                 ? mediaFor(bare, opts.media) : null;
-            out.push(media || `<p>${inline(text).replace(/\n/g, '<br>')}</p>`);
+            out.push(files || media || `<p>${inline(text).replace(/\n/g, '<br>')}</p>`);
         }
 
         return out.join('\n');

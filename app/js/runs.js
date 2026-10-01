@@ -4,6 +4,7 @@
     const POLL_MS = 5000;
     const HEX = /^[0-9a-f]{64}$/;
     const STEER_MAX = 2000;
+    const STEER_KEEP_MS = 2 * 3600 * 1000;
     const KINDS = new Set(['chat', 'research', 'team', 'repo', 'connector', 'server-run', 'media', 'compare']);
     const STATES = new Set(['running', 'parked', 'waiting']);
 
@@ -19,8 +20,10 @@
     const Chat = () => window.NymbotChat;
 
     let remote = [];
+    const steered = new Map();
     let timer = null;
     let polling = null;
+    let checking = null;
     const followers = new Set();
 
     function clip(v, max) {
@@ -151,9 +154,61 @@
                 : kept.filter(r => signer && r.thread === open.rootId);
             remote = nym.concat(anon);
             render(ui);
+            checkSteers(ui).catch(() => { });
             return remote;
         })();
         try { return await polling; } finally { polling = null; }
+    }
+
+    function watched() {
+        const now = Date.now();
+        for (const [id, s] of [...steered]) if (now - s.at > STEER_KEEP_MS) steered.delete(id);
+        return [...steered].filter(([, s]) => s.remote);
+    }
+
+    async function checkSteers(ui) {
+        if (checking) return checking;
+        checking = (async () => {
+            const live = new Set(remote.map(r => r.replyTo));
+            for (const id of localRunIds(ui)) live.add(id);
+            const groups = new Map();
+            for (const [id, s] of watched()) {
+                if (live.has(s.runId)) continue;
+                if (s.signer && !(ui.conv && ui.conv.id === s.convId)) continue;
+                if (!groups.has(s.signer)) groups.set(s.signer, []);
+                groups.get(s.signer).push(id);
+            }
+            const offers = new Map();
+            for (const [signer, ids] of groups) {
+                let res;
+                try {
+                    res = await Api().steerStatus(ids.slice(0, 20), { signer });
+                } catch (_) {
+                    continue;
+                }
+                const states = res && res.status === 200 && res.data && res.data.states;
+                if (!states || typeof states !== 'object') continue;
+                for (const id of ids.slice(0, 20)) {
+                    const got = steered.get(id);
+                    if (!got) continue;
+                    if (states[id] === 'pending' || states[id] == null) {
+                        got.tries = (got.tries || 0) + 1;
+                        if (got.tries >= 6) steered.delete(id);
+                        continue;
+                    }
+                    steered.delete(id);
+                    if (states[id] !== 'missed') continue;
+                    const key = got.convId || '';
+                    if (!offers.has(key)) offers.set(key, []);
+                    offers.get(key).push(got.text);
+                }
+            }
+            for (const [convId, texts] of offers) {
+                const conv = convId ? Store().conversation(convId) : null;
+                await offer(ui, conv, texts.join('\n\n'), t('That request has finished'));
+            }
+        })();
+        try { await checking; } finally { checking = null; }
     }
 
     function render(ui) {
@@ -171,6 +226,7 @@
     }
 
     function visible(name) {
+        if (name === 'steers') return watched().length > 0;
         if (name === 'tasks') return !!(window.NymbotTasks && window.NymbotTasks.isOpen);
         if (name === 'sheet') { const s = $('modalRunning'); return !!(s && !s.hidden); }
         return false;
@@ -293,19 +349,25 @@
         return text == null ? null : String(text).trim();
     }
 
-    async function deliver(ui, conv, runId, signer, text) {
+    async function deliver(ui, conv, runId, signer, text, far) {
         if (!text) return;
         if (text.length > STEER_MAX) {
             ui.toast(t('That is too long. Instructions can be up to 2,000 characters.'));
             return;
         }
         let res;
+        const signedBy = signer || signerFor(conv);
         try {
-            res = await Api().steerRun(runId, text, { signer: signer || signerFor(conv) });
+            res = await Api().steerRun(runId, text, { signer: signedBy });
         } catch (_) {
             res = { status: 0, data: {} };
         }
         if (res.status === 200 && res.data && res.data.ok) {
+            if (typeof res.data.id === 'string' && res.data.id) {
+                steered.set(res.data.id, { text, convId: conv ? conv.id : null, runId, signer: signedBy, remote: !!far, at: Date.now() });
+                if (steered.size > 50) steered.delete(steered.keys().next().value);
+                if (far) follow(ui, 'steers', true);
+            }
             ui.toast(t('Passed on. It applies at the next step.'));
             return;
         }
@@ -317,8 +379,13 @@
             ui.toast(t('Could not pass that on. Try again in a moment.'));
             return;
         }
+        const late = res.status === 409 && res.data && res.data.final === true;
+        await offer(ui, conv, text, late ? t('That request is already writing its answer') : t('That request has finished'));
+    }
+
+    async function offer(ui, conv, text, title) {
         const go = await ui.ask({
-            title: t('That request has finished'),
+            title,
             body: t('Send your instructions as a new message instead?'),
             confirm: t('Send as a message')
         });
@@ -327,6 +394,18 @@
         if (!target) return;
         if (!ui.conv || ui.conv.id !== target.id) ui.open(target);
         await ui.send(text, target, { attachments: [] });
+    }
+
+    async function missed(ui, conv, ids) {
+        const texts = [];
+        for (const id of Array.isArray(ids) ? ids : []) {
+            const got = steered.get(id);
+            if (!got) continue;
+            steered.delete(id);
+            texts.push(got.text);
+        }
+        if (!texts.length) return;
+        await offer(ui, conv, texts.join('\n\n'), t('That request has finished'));
     }
 
     async function steer(ui, turn) {
@@ -342,7 +421,7 @@
         const conv = r ? convForThread(r.thread) : null;
         const text = await askSteer(ui);
         if (!text) return;
-        await deliver(ui, conv, runId, null, text);
+        await deliver(ui, conv, runId, null, text, true);
     }
 
     window.NymbotRuns = {
@@ -358,6 +437,8 @@
         stopRemote,
         steer,
         steerRemote,
+        missed,
+        checkSteers,
         get remote() { return remote.slice(); }
     };
 })();

@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import 'artifact_preview.dart';
 import 'code_highlight.dart';
 import 'diff_view.dart';
+import 'file_card.dart';
 import 'i18n/i18n.dart';
 import 'media_viewer.dart';
 import 'nym_glyph.dart';
@@ -18,6 +19,7 @@ import '../app.dart';
 import '../config.dart';
 import '../core/theme/theme.dart';
 import '../core/utils/safe_url.dart';
+import '../services/bot_files.dart';
 import '../services/media_cache.dart';
 import '../services/sandbox_host.dart';
 import '../services/sandbox_protocol.dart';
@@ -209,7 +211,10 @@ class MarkdownBody extends StatelessWidget {
           }
         }
         gap();
-        if (lang == 'diff' || lang == 'patch') {
+        final fileInfo = (fence.group(2) ?? '').replaceFirst(RegExp(r'^[`~]+'), '');
+        if (BotFile.isPending(fileInfo)) {
+          blocks.add(PendingFileCard(name: BotFile.pendingName(fileInfo)));
+        } else if (lang == 'diff' || lang == 'patch') {
           blocks.add(DiffView(source: body.join('\n')));
         } else {
           blocks.add(CodeBlock(
@@ -337,7 +342,10 @@ class MarkdownBody extends StatelessWidget {
       final bare = text.trim();
       final linked = _bareUrl.hasMatch(bare);
       final unlabelled = linked && !_anyExt.hasMatch(bare);
-      if (linked &&
+      final files = BotFile.paragraph(bare);
+      if (files != null) {
+        blocks.add(FileCards(files: files));
+      } else if (linked &&
           imageSource(bare) != null &&
           (_imageUrl.hasMatch(bare) || (unlabelled && media == 'image'))) {
         blocks.add(MediaBlock(url: bare, image: true));

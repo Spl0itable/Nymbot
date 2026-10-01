@@ -10,7 +10,7 @@ const BOT_ACTIONS = {
   'pm': 1, 'clear-history': 1, 'balance': 1,
   'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1,
   'voucher-keys': 1, 'voucher-issue': 1, 'notify-turn': 1,
-  'pm-claim': 1, 'pm-cancel': 1, 'pm-steer': 1, 'pm-runs': 1, 'pm-done-since': 1
+  'pm-claim': 1, 'pm-cancel': 1, 'pm-steer': 1, 'pm-steer-status': 1, 'pm-runs': 1, 'pm-done-since': 1
 };
 
 export function wsAuthHostOk(auth, reqUrl) {

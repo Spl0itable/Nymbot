@@ -8,6 +8,7 @@ import { bytesToHex, sha256 } from "./_shared.js";
 import { apiAuthKey, apiAuthNostr, apiAuthKeyOrNostr, apiNostrEvent, apiNostrFinish } from "./_apiauth.js";
 import { apiCheckNesting } from "./_apichat.js";
 import { apiAuthPaid, apiAuthKeyOrSigned, apiL402Finish, apiL402Failed, apiL402Limit } from "./_apil402.js";
+import { apiHistoryNudge } from "./_apibill.js";
 
 export const API_BASE_PATH = "/api/v1";
 
@@ -76,7 +77,8 @@ export class ApiRouter {
       const pre = apiPreflightHeaders(request, account);
       return apiFinish(new Response(null, { status: 204 }), requestId, pre);
     }
-    const cors = apiCorsHeaders(request, account);
+    const signed = /^\s*Nostr\s/i.test(request.headers.get("Authorization") || "") && hits.some((h) => h.route.opts.auth === "key-or-nostr");
+    const cors = apiCorsHeaders(request, account || signed);
     const pick = hits.find((h) => h.route.method === method) || (method === "HEAD" ? hits.find((h) => h.route.method === "GET") : null);
     let format = pick ? pick.route.opts.format : (hits[0] ? hits[0].route.opts.format : "openai");
     let api = null;
@@ -142,6 +144,7 @@ export class ApiRouter {
           apiCheckNesting(api.body);
         }
       }
+      api.sweep = apiHistoryNudge(api);
       let res = await route.handler(api);
       if (api.l402) res = await apiL402Finish(api, res);
       return apiFinish(res, requestId, cors);

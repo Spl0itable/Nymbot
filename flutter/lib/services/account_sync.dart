@@ -532,6 +532,13 @@ class AccountSync {
     return _overlay(raw, mine);
   }
 
+  static const Map<String, String> _settingsAliases = {
+    'sidebarGrouping': 'grouping',
+    'defaultPersona': 'defaultPersonaId',
+    'defaultRepos': 'defaultRepoIds',
+    'showTokenEstimate': 'showCostEstimate',
+  };
+
   static AppSettings _settingsFromWire(Map<String, dynamic> j) {
     j = {...j};
     j['grouping'] ??= j['sidebarGrouping'];
@@ -657,12 +664,13 @@ class AccountSync {
         ]),
       };
     }
+    final knownRows = {..._names.values, ..._remote.keys};
     for (final conv in chats) {
       final arts = [
         for (final a in _store.artifacts(conv.id))
           if (a.id.isNotEmpty && !graves.containsKey(a.id)) a.toJson()
       ];
-      if (arts.isEmpty) continue;
+      if (arts.isEmpty && !knownRows.contains('arts-${conv.id}')) continue;
       out['arts-${conv.id}'] = {
         'id': conv.id,
         'artifacts': fitArtifacts(conv.id, arts),
@@ -714,17 +722,31 @@ class AccountSync {
 
     final settings = remote['settings'];
     if (settings is Map) {
-      final theirs = _settingsToWire(
-          _settingsFromWire(settings.cast<String, dynamic>()), null);
-      final mine = _settingsToWire(_store.settings(), null);
-      final merged = _overlay(theirs, mine);
+      final raw = settings.cast<String, dynamic>();
+      final theirs = _settingsFromWire(raw).toJson();
+      final carried = {
+        ...raw.keys,
+        for (final e in _settingsAliases.entries)
+          if (raw.containsKey(e.key)) e.value,
+      };
+      final dirty = _store.settingsDirty();
+      final mine = _store.settings().toJson();
+      final merged = {
+        ...mine,
+        for (final e in theirs.entries)
+          if (carried.contains(e.key) && !dirty.contains(e.key))
+            e.key: e.value,
+      };
       final theirAt = settings['nicknameAt'];
       if (theirAt is num && theirAt.toInt() > (mine['nicknameAt'] as int? ?? 0)) {
         merged['nickname'] =
             settings['nickname'] is String ? settings['nickname'] : '';
         merged['nicknameAt'] = theirAt.toInt();
+      } else {
+        merged['nickname'] = mine['nickname'];
+        merged['nicknameAt'] = mine['nicknameAt'];
       }
-      await _store.saveSettings(_settingsFromWire(merged));
+      await _store.saveSettings(AppSettings.fromJson(merged));
       touched.add('settings');
     }
 
@@ -1111,7 +1133,13 @@ class AccountSync {
       final plain = jsonEncode({'__cat': dTag, 'v': current});
       final hash =
           _sha256Hex('${_identity.pubkey}|${_hybrid ? 'pq' : 'c'}|$plain');
-      if (_hashes[category] == hash) return true;
+      if (_hashes[category] == hash) {
+        if (dTag == 'settings' && current is Map) {
+          await _store.settlePushedSettings(
+              _settingsFromWire(current.cast<String, dynamic>()).toJson());
+        }
+        return true;
+      }
       final blob = await _seal(plain);
       if (blob == null || stale()) return false;
       final put = await _storage.settingsPut(_identity.signer,
@@ -1129,6 +1157,10 @@ class AccountSync {
         continue;
       }
       if (!put.ok) return false;
+      if (dTag == 'settings' && current is Map) {
+        await _store.settlePushedSettings(
+            _settingsFromWire(current.cast<String, dynamic>()).toJson());
+      }
       _hashes[category] = hash;
       _names[category] = dTag;
       _remember(_sha256Hex(blob), plain);

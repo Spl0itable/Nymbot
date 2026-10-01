@@ -6,6 +6,7 @@ import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
 import 'run_output.dart';
+import 'server_run_artifacts.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/sheet.dart';
 import 'nym_glyph.dart';
@@ -126,6 +127,8 @@ class _ServerRunSheetState extends State<ServerRunSheet> {
               ),
             ],
             const SizedBox(height: 10),
+            if (widget.image.surcharge > 1)
+              ...serverRunSurchargeLines(context, widget.image.creditsPerMinute),
             Text(
               t('Up to {credits} Pro credits', {'credits': ServerRuns.credits(_price)}),
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -203,7 +206,7 @@ Future<void> runCodeOnServer(
             : null,
       ));
   final info = await app.refreshRunner();
-  final image = info.image(ServerRuns.imageFor(language, code: code));
+  final image = ServerRuns.imageIn(info, language, code);
   if (!info.available || image == null) {
     say(t('Server runs are not available right now.'));
     return;

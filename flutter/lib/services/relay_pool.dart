@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config.dart';
@@ -21,10 +22,29 @@ class _Relay {
 
 /// Publish, fetch and subscribe via the worker's proxy, falling back to direct sockets on the worker's relay set.
 class RelayPool {
-  RelayPool({WebSocketChannel Function(Uri uri)? connect})
-      : _connect = connect ?? WebSocketChannel.connect;
+  RelayPool({
+    WebSocketChannel Function(Uri uri)? connect,
+    Duration? heldWait,
+    Duration? openWait,
+  })  : _connect = connect ?? WebSocketChannel.connect,
+        heldWait = heldWait ?? defaultHeldWait,
+        openWait = openWait ?? defaultOpenWait;
 
+  static const int heldMax = 16;
+
+  @visibleForTesting
+  static Duration defaultHeldWait = const Duration(seconds: 15);
+
+  @visibleForTesting
+  static Duration defaultOpenWait = const Duration(seconds: 5);
+
+  final Duration heldWait;
+  final Duration openWait;
   final WebSocketChannel Function(Uri uri) _connect;
+  final List<({NostrEvent event, Duration? timeout, Completer<int> done, Timer timer})>
+      _held = [];
+  final List<({Completer<bool> done, Timer timer})> _waiting = [];
+  bool _flushQueued = false;
   final Map<String, _Relay> _relays = {};
   final Map<String,
           ({Map<String, dynamic> filter, void Function(NostrEvent) onEvent})>
@@ -139,6 +159,7 @@ class RelayPool {
       }
       _retireDirect();
       _emit();
+      _flushHeld();
     }).catchError((_) {
       _poolDown(pool);
     });
@@ -231,6 +252,65 @@ class RelayPool {
     for (final entry in _standing.entries) {
       _send(relay, ['REQ', entry.key, entry.value.filter]);
     }
+    _flushSoon();
+  }
+
+  void _flushSoon() {
+    if (_flushQueued) return;
+    _flushQueued = true;
+    scheduleMicrotask(() {
+      _flushQueued = false;
+      _flushHeld();
+    });
+  }
+
+  void _flushHeld() {
+    if (_targets.isEmpty) return;
+    final waiting = List.of(_waiting);
+    _waiting.clear();
+    for (final w in waiting) {
+      w.timer.cancel();
+      if (!w.done.isCompleted) w.done.complete(true);
+    }
+    final held = List.of(_held);
+    _held.clear();
+    for (final item in held) {
+      item.timer.cancel();
+      publish(item.event, timeout: item.timeout).then((n) {
+        if (!item.done.isCompleted) item.done.complete(n);
+      });
+    }
+  }
+
+  Future<int> _hold(NostrEvent event, Duration? timeout) {
+    if (_held.length >= heldMax) {
+      final oldest = _held.removeAt(0);
+      oldest.timer.cancel();
+      if (!oldest.done.isCompleted) oldest.done.complete(0);
+    }
+    final done = Completer<int>();
+    late final ({NostrEvent event, Duration? timeout, Completer<int> done, Timer timer}) item;
+    final timer = Timer(heldWait, () {
+      _held.remove(item);
+      if (!done.isCompleted) done.complete(0);
+    });
+    item = (event: event, timeout: timeout, done: done, timer: timer);
+    _held.add(item);
+    return done.future;
+  }
+
+  Future<bool> _awaitOpen() {
+    if (_targets.isNotEmpty) return Future.value(true);
+    if (_closed || openWait <= Duration.zero) return Future.value(false);
+    final done = Completer<bool>();
+    late final ({Completer<bool> done, Timer timer}) entry;
+    final timer = Timer(openWait, () {
+      _waiting.remove(entry);
+      if (!done.isCompleted) done.complete(_targets.isNotEmpty);
+    });
+    entry = (done: done, timer: timer);
+    _waiting.add(entry);
+    return done.future;
   }
 
   void _drop(String url) {
@@ -255,7 +335,11 @@ class RelayPool {
   /// Completes with the OK count after the first couple of acceptances.
   Future<int> publish(NostrEvent event, {Duration? timeout}) {
     final open = _targets;
-    if (open.isEmpty) return Future.value(0);
+    if (open.isEmpty) {
+      return _closed || heldWait <= Duration.zero
+          ? Future.value(0)
+          : _hold(event, timeout);
+    }
     // The proxy sends one OK per event regardless of relay count.
     final need = pooled ? 1 : 2;
     final done = Completer<int>();
@@ -288,7 +372,13 @@ class RelayPool {
 
   /// One-shot query across the pool, deduplicated by event id.
   Future<List<NostrEvent>> fetch(Map<String, dynamic> filter,
-      {Duration? timeout}) {
+      {Duration? timeout}) async {
+    if (_targets.isEmpty && !await _awaitOpen()) return const [];
+    return _fetchOpen(filter, timeout);
+  }
+
+  Future<List<NostrEvent>> _fetchOpen(
+      Map<String, dynamic> filter, Duration? timeout) {
     final open = _targets;
     if (open.isEmpty) return Future.value(const []);
     final id = _subId();
@@ -487,6 +577,16 @@ class RelayPool {
 
   void close() {
     _closed = true;
+    for (final item in _held) {
+      item.timer.cancel();
+      if (!item.done.isCompleted) item.done.complete(0);
+    }
+    _held.clear();
+    for (final w in _waiting) {
+      w.timer.cancel();
+      if (!w.done.isCompleted) w.done.complete(false);
+    }
+    _waiting.clear();
     _poolTimer?.cancel();
     _poolTimer = null;
     final pool = _pool;

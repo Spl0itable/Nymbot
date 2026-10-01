@@ -23,41 +23,10 @@ void _toast(BuildContext context, String text) {
 Future<void> addInstructions(BuildContext context,
     {required String runId, Conversation? conv}) async {
   final app = AppScope.read(context);
-  final field = TextEditingController();
   final text = await showNymDialog<String>(
     context: context,
-    builder: (dialog) => AlertDialog(
-      scrollable: true,
-      title: Text(t('Add instructions')),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(t('Nymbot passes this to the running request at its next step. It does not change what the request can spend.'),
-              style: const TextStyle(fontSize: 13)),
-          const SizedBox(height: 8),
-          TextField(
-            key: const ValueKey('steer-text'),
-            controller: field,
-            autofocus: true,
-            minLines: 2,
-            maxLines: 6,
-            decoration: InputDecoration(
-                hintText: t('For example: also cover the pricing')),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(dialog), child: Text(t('Cancel'))),
-        FilledButton(
-          onPressed: () => Navigator.pop(dialog, field.text),
-          child: Text(t('Send to this request')),
-        ),
-      ],
-    ),
+    builder: (dialog) => const _SteerDialog(),
   );
-  field.dispose();
   final body = text?.trim() ?? '';
   if (body.isEmpty || !context.mounted) return;
   final outcome = await app.steer(runId, body, conv: conv);
@@ -70,27 +39,83 @@ Future<void> addInstructions(BuildContext context,
     case 'failed':
       _toast(context, t('Could not pass that on. Try again in a moment.'));
     default:
-      final again = await showNymDialog<bool>(
-        context: context,
-        builder: (dialog) => AlertDialog(
-          title: Text(t('That request has finished')),
-          content: Text(t('Send your instructions as a new message instead?')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialog, false),
-                child: Text(t('Cancel'))),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialog, true),
-              child: Text(t('Send as a message')),
-            ),
-          ],
-        ),
-      );
+      final again = await offerAsMessage(context,
+          late: outcome == 'final');
       if (again == true) {
         await app.send(body, target: conv ?? app.current, withAttachments: const []);
       }
   }
 }
+
+class _SteerDialog extends StatefulWidget {
+  const _SteerDialog();
+
+  @override
+  State<_SteerDialog> createState() => _SteerDialogState();
+}
+
+class _SteerDialogState extends State<_SteerDialog> {
+  final _field = TextEditingController();
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        scrollable: true,
+        title: Text(t('Add instructions')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(t('Nymbot passes this to the running request at its next step. It does not change what the request can spend.'),
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('steer-text'),
+              controller: _field,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 6,
+              decoration: InputDecoration(
+                  hintText: t('For example: also cover the pricing')),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: Text(t('Cancel'))),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _field.text),
+            child: Text(t('Send to this request')),
+          ),
+        ],
+      );
+}
+
+Future<bool?> offerAsMessage(BuildContext context, {bool late = false}) =>
+    showNymDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: Text(late
+            ? t('That request is already writing its answer')
+            : t('That request has finished')),
+        content: Text(t('Send your instructions as a new message instead?')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: Text(t('Cancel'))),
+          FilledButton(
+            key: const ValueKey('steer-send-as-message'),
+            onPressed: () => Navigator.pop(dialog, true),
+            child: Text(t('Send as a message')),
+          ),
+        ],
+      ),
+    );
 
 class RunPlan extends StatelessWidget {
   const RunPlan({super.key, required this.plan});

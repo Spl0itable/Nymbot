@@ -30,6 +30,7 @@ class NymbotApi {
     'git-branch',
     'mcp-probe',
     'runner-run',
+    'site-check',
     'gift-create',
     'gift-redeem',
     'gift-cancel',
@@ -195,6 +196,9 @@ class NymbotApi {
     }
   }
 
+  Future<ApiResult> siteCheck(EventSigner signer, Map<String, dynamic> extra) =>
+      call('site-check', signer, extra: extra, timeout: const Duration(seconds: 150));
+
   Future<ApiResult> cancelRun(EventSigner signer, String runId) =>
       call('pm-cancel', signer,
           extra: {'replyTo': runId}, timeout: const Duration(seconds: 10));
@@ -203,6 +207,10 @@ class NymbotApi {
       call('pm-steer', signer,
           extra: {'replyTo': runId, 'text': text},
           timeout: const Duration(seconds: 15));
+
+  Future<ApiResult> steerStatus(EventSigner signer, List<String> ids) =>
+      call('pm-steer-status', signer,
+          extra: {'ids': ids}, timeout: const Duration(seconds: 15));
 
   Future<ApiResult> claimRun(EventSigner signer, String eventId) =>
       call('pm-claim', signer,

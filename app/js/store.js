@@ -71,6 +71,14 @@
         } catch (_) { return false; }
     }
 
+    function markSettings(keys) {
+        if (!keys.length) return;
+        const held = load('sync_settings_dirty', []);
+        const dirty = new Set(Array.isArray(held) ? held : []);
+        for (const k of keys) dirty.add(k);
+        write('sync_settings_dirty', [...dirty]);
+    }
+
     function drop(key) {
         if (window.NymbotVault) window.NymbotVault.drop(key);
         try { localStorage.removeItem(P + key); } catch (_) { }
@@ -236,12 +244,15 @@
             return Object.assign({}, DEFAULT_SETTINGS, read('settings', {}));
         },
         setSettings(patch) {
-            const next = Object.assign(this.settings(), patch);
+            const before = this.settings();
+            const next = Object.assign({}, before, patch);
+            markSettings(Object.keys(patch || {}).filter(k => JSON.stringify(before[k]) !== JSON.stringify(next[k])));
             write('settings', next);
             return next;
         },
         resetSettings() {
             migrateGit();
+            markSettings(Object.keys(read('settings', {}) || {}));
             drop('settings');
             return this.settings();
         },
