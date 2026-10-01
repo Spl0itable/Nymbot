@@ -186,7 +186,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
           if (_mode == 'run') ...[
             DropdownButtonFormField<int>(
               key: const ValueKey('schedule-run-cap'),
-              initialValue: _cap,
+              value: _cap,
               isExpanded: true,
               decoration: InputDecoration(labelText: t('Most credits one run may spend')),
               items: [

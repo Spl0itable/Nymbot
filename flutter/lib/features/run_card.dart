@@ -485,7 +485,7 @@ class RunSettings extends StatelessWidget {
         const SizedBox(height: 10),
         DropdownButtonFormField<int>(
           key: const ValueKey('max-runs'),
-          initialValue: app.runLimit,
+          value: app.runLimit,
           isExpanded: true,
           decoration: InputDecoration(labelText: t('Requests at once')),
           items: [
@@ -504,7 +504,7 @@ class RunSettings extends StatelessWidget {
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
           key: const ValueKey('policy-read-only'),
-          initialValue: s.readOnlyTools,
+          value: s.readOnlyTools,
           isExpanded: true,
           decoration: InputDecoration(labelText: t('Read-only tool calls')),
           items: [
@@ -516,7 +516,7 @@ class RunSettings extends StatelessWidget {
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           key: const ValueKey('policy-server-runs'),
-          initialValue: s.serverRunPolicy,
+          value: s.serverRunPolicy,
           isExpanded: true,
           decoration: InputDecoration(labelText: t('Server runs')),
           items: [
@@ -552,7 +552,7 @@ Future<void> showChatPermissions(BuildContext context, Conversation conv) =>
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
                 key: const ValueKey('chat-policy-read-only'),
-                initialValue: own['readOnlyTools'] ?? 'default',
+                value: own['readOnlyTools'] ?? 'default',
                 isExpanded: true,
                 decoration: InputDecoration(labelText: t('Read-only tool calls')),
                 items: [
@@ -565,7 +565,7 @@ Future<void> showChatPermissions(BuildContext context, Conversation conv) =>
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 key: const ValueKey('chat-policy-server-runs'),
-                initialValue: own['serverRuns'] ?? 'default',
+                value: own['serverRuns'] ?? 'default',
                 isExpanded: true,
                 decoration: InputDecoration(labelText: t('Server runs')),
                 items: [

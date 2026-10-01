@@ -110,7 +110,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
           const SizedBox(height: 8),
           DropdownButtonFormField<int>(
             key: const ValueKey('schedule-daily-cap'),
-            initialValue: ServerSchedules.dailyCaps.contains(s.scheduleDailyCap)
+            value: ServerSchedules.dailyCaps.contains(s.scheduleDailyCap)
                 ? s.scheduleDailyCap
                 : ServerSchedules.defaultDaily,
             isExpanded: true,
@@ -132,7 +132,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
           else if (_distributors != null)
             DropdownButtonFormField<String>(
               key: const ValueKey('unifiedpush'),
-              initialValue: picked,
+              value: picked,
               isExpanded: true,
               decoration: InputDecoration(
                   labelText: t('Instant notifications with UnifiedPush')),

@@ -619,7 +619,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             if (_jobBranches)
               DropdownButtonFormField<String>(
                 key: ValueKey('repo-when-done-$_editingId'),
-                initialValue: _whenDone,
+                value: _whenDone,
                 isExpanded: true,
                 decoration: InputDecoration(labelText: t('When done')),
                 items: [

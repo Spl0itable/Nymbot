@@ -289,7 +289,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               key: const ValueKey('when-done-default'),
-              initialValue: whenDoneFor('', s.whenDone),
+              value: whenDoneFor('', s.whenDone),
               isExpanded: true,
               decoration: InputDecoration(
                   labelText: t('When a task\'s branch is done')),
