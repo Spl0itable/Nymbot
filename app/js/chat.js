@@ -27,6 +27,12 @@
         return { thinking: null, body: text || '' };
     }
 
+    function steerOfferOf(raw) {
+        if (!raw || typeof raw !== 'object' || typeof raw.text !== 'string') return null;
+        const text = raw.text.trim();
+        return text ? { text } : null;
+    }
+
     function followUpsOf(raw) {
         if (!Array.isArray(raw)) return null;
         const out = [];
@@ -1012,6 +1018,7 @@
                 sources: Array.isArray(data.sources) ? data.sources : null,
                 team: data.team && typeof data.team === 'object' && Array.isArray(data.team.workers) ? data.team : null,
                 followUps: followUpsOf(data.followUps),
+                steerOffer: steerOfferOf(data.steerOffer),
                 serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
                 serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
                 free: data.free || null,

@@ -1051,6 +1051,7 @@
             if (runs) body.appendChild(runs);
             const crew = m.role === 'bot' ? Team.summaryNode(this, m) : null;
             if (crew) body.appendChild(crew);
+            if (m.role === 'bot' && m.steerOffer && !m.steerOffer.sent && m.steerOffer.text) body.appendChild(this.steerOfferCard(m));
 
 
             const made = m.role === 'bot'
@@ -1133,6 +1134,25 @@
             }
             add(t('Wait'), 'msg-cap-wait', limit >= ceiling);
             return card;
+        },
+
+        steerOfferCard(m) {
+            const card = el('div', 'steer-offer');
+            const b = el('button', 'btn btn-small btn-ghost', t('Send as a message'));
+            b.type = 'button';
+            b.dataset.act = 'msg-steer-offer';
+            b.dataset.id = m.id;
+            card.appendChild(b);
+            return card;
+        },
+
+        sendSteerOffer(m) {
+            const conv = this.conv;
+            if (!conv || !m || !m.steerOffer || m.steerOffer.sent || !m.steerOffer.text) return;
+            const offer = Object.assign({}, m.steerOffer, { sent: true });
+            Store.patchMessage(conv.id, m.id, { steerOffer: offer });
+            this.replaceMessage(Object.assign({}, m, { steerOffer: offer }));
+            return this.send(m.steerOffer.text, conv, { attachments: [] });
         },
 
         pendingCard(m) {
@@ -2223,6 +2243,7 @@
                 sources: res.sources || null,
                 team: Team.carry(res),
                 followUps: res.followUps || null,
+                steerOffer: res.steerOffer || null,
                 serverRuns: res.serverRuns || null,
                 serverRunCredits: res.serverRunCredits || 0,
                 repos: (res.repos && res.repos.length > 1) ? res.repos : null,
@@ -3423,6 +3444,9 @@
                 case 'msg-cap-always':
                 case 'msg-cap-wait':
                     this.capChoice(m, act.slice(8));
+                    return;
+                case 'msg-steer-offer':
+                    Promise.resolve(this.sendSteerOffer(m)).catch(() => { });
                     return;
                 case 'msg-pending-edit':
                     this.editPending(m);

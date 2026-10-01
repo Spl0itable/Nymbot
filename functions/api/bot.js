@@ -5939,7 +5939,8 @@ var BOT_REPO_LOCK_WAIT_MS = 30000;
 var BOT_REPO_LOCK_POLL_MS = 2000;
 var BOT_STOPPED_TEXT = "Stopped.";
 var BOT_STEER_PASSED = "I passed that on to the running request.";
-var BOT_STEER_MISSED = "I could not pass that on: the request it was meant for is no longer taking instructions. Send it as a new message if it still applies.";
+var BOT_STEER_OFFER = "You can send your message as a new request instead.";
+var BOT_STEER_NOWHERE = "The request this was meant for can no longer take instructions, so I couldn't pass this on.";
 var BOT_STEER_FINAL = "That request is already writing its answer, so it can't take instructions now. Send this as a new message instead.";
 var BOT_STEER_PREFIX = "Update from the user while you were working. Apply it from here on, and keep replying in the format asked for above:\n";
 var BOT_PENDING_TEXT = "Nymbot is still working on that message — ask again in a moment and the reply will be waiting.";
@@ -6349,10 +6350,13 @@ function botRunAge(ms) {
 async function botRunOthers(db, pk, thread, exclude, cipher) {
   var rows = await runLive(db, pk, thread, exclude, Date.now(), 8);
   var now = Date.now();
-  return rows.map(function (r, i) {
+  var open = 0;
+  return rows.map(function (r) {
     var got = botRunUnpack(cipher, r.progress);
+    var steerable = !botSteerRefusal(r, cipher, now);
     return {
-      handle: "R" + (i + 1),
+      handle: steerable ? "R" + (++open) : "",
+      steerable: steerable,
       asked: r.asked,
       kind: r.kind || "chat",
       state: r.state,
@@ -6365,19 +6369,27 @@ async function botRunOthers(db, pk, thread, exclude, cipher) {
 }
 
 function botRunOthersBlock(others) {
+  var open = others.filter(function (o) { return o.steerable; });
+  var closed = others.filter(function (o) { return !o.steerable; });
   var lines = others.map(function (o) {
     var bits = [o.kind + ", started " + o.age];
     var now = o.state === "waiting" ? "waiting for the user's approval" : (o.state === "parked" ? "paused, carries on next" : o.progress);
     var plan = Array.isArray(o.plan) && o.plan.length
       ? "; plan: " + o.plan.filter(function (p) { return p && p.state === "done"; }).length + " of " + o.plan.length + " steps done"
       : "";
-    return "[" + o.handle + "] (" + bits.join("") + ") \"" + String(o.label || "").replace(/"/g, "'") + "\"" +
+    if (!o.steerable) now = "writing its answer now, can no longer take instructions";
+    return (o.steerable ? "[" + o.handle + "]" : "-") + " (" + bits.join("") + ") \"" + String(o.label || "").replace(/"/g, "'") + "\"" +
       (now ? " — now: " + now : "") + plan;
   });
   return "OTHER REQUESTS STILL RUNNING IN THIS CHAT: the user sent these earlier and they are still being worked on separately; their answers will arrive on their own.\n" +
     lines.join("\n") +
     "\nDo not redo or repeat these requests in this reply. If the user asks about them, say they are still in progress; you may report the progress shown here, but never invent their results." +
-    "\nTo pass the user's instruction to one of them (for example \"for that research, also cover X\"), write on its own line <steer_run id=\"R1\">the instruction</steer_run> using its id from the list, and tell the user briefly that you passed it on. Only do this when the message is clearly meant for that running request; if it is unclear which one, ask. The line is removed before the user sees your reply.";
+    (open.length
+      ? "\nTo pass the user's instruction to one of the requests with an id in brackets (for example \"for that research, also cover X\"), write on its own line <steer_run id=\"" + open[0].handle + "\">the instruction</steer_run> using its id from the list, and tell the user briefly that you passed it on. Only do this when the message is clearly meant for that running request; if it is unclear which one, ask. The line is removed before the user sees your reply."
+      : "") +
+    (closed.length
+      ? "\nA request marked as writing its answer now can no longer take instructions: never write <steer_run> for it and never say you passed anything on to it or changed it. If the user's message is meant for one of these, say plainly that it is already writing its answer so it can't be changed now, and that they can send the update as a new message once that answer arrives. If the message makes sense on its own as a fresh request, offer to do it now as a new request instead."
+      : "");
 }
 
 function botSteerTags(text) {
@@ -6415,6 +6427,47 @@ function botSteerRefusal(row, cipher, now) {
     return { status: 409, body: { error: BOT_STEER_FINAL, final: true, state: "running" } };
   }
   return null;
+}
+
+function botSteerQuote(label) {
+  var s = String(label || "").replace(/"/g, "'").trim();
+  return s ? "\"" + s + "\"" : "That request";
+}
+
+function botSteerOutcomeText(outcomes) {
+  var seen = {};
+  var passed = [];
+  var missed = [];
+  var nowhere = false;
+  outcomes.forEach(function (o) {
+    if (!o.to) { nowhere = true; return; }
+    var k = o.to.asked + ":" + (o.ok ? "ok" : o.why);
+    if (seen[k]) return;
+    seen[k] = true;
+    if (o.ok) passed.push(o.to);
+    else missed.push(o);
+  });
+  missed = missed.filter(function (o) { return passed.indexOf(o.to) === -1; });
+  var out = [];
+  if (passed.length) out.push("I passed this on to " + passed.map(function (p) { return botSteerQuote(p.label); }).join(" and ") + ".");
+  missed.forEach(function (o) {
+    var name = botSteerQuote(o.to.label);
+    if (o.why === "final") out.push(name + " is already writing its answer, so I couldn't add this to it.");
+    else if (o.why === "stopped") out.push(name + " was stopped, so I couldn't add this to it.");
+    else if (o.why === "finished") out.push(name + " has already finished, so I couldn't add this to it.");
+    else out.push(name + " can't take instructions right now, so I couldn't add this to it.");
+  });
+  if (nowhere && !missed.length && !passed.length) out.push(BOT_STEER_NOWHERE);
+  out.push(BOT_STEER_OFFER);
+  return out.join(" ");
+}
+
+function botSteerWhy(no) {
+  if (!no) return "";
+  if (no.body && no.body.final) return "final";
+  if (no.body && no.body.state === "stopped") return "stopped";
+  if (no.body && no.body.finished) return "finished";
+  return "gone";
 }
 
 async function botEarlyClaim(env, pk, eventId, json) {
@@ -10072,16 +10125,23 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (!chatResult.checkpoint) chatResult.checkpoint = botJobCheckpoint(ghConfig, "stopped");
     } else if (chatResult && typeof chatResult.reply === "string" && /steer_run/i.test(chatResult.reply)) {
       var steerSaid = botSteerTags(chatResult.reply);
-      var steerPassed = 0;
+      var steerOutcomes = [];
       for (var sti = 0; sti < steerSaid.steers.length; sti++) {
-        var steerTo = runOthers.filter(function (o) { return o.handle === steerSaid.steers[sti].handle; })[0];
-        if (!steerTo) continue;
-        if (botSteerRefusal(await runGet(env.DB_BOT, runPk, steerTo.asked), runCipher, Date.now())) continue;
+        var steerTo = runOthers.filter(function (o) { return o.handle && o.handle === steerSaid.steers[sti].handle; })[0];
+        if (!steerTo) { steerOutcomes.push({ to: null, ok: false, why: "gone" }); continue; }
+        var steerNo = botSteerRefusal(await runGet(env.DB_BOT, runPk, steerTo.asked), runCipher, Date.now());
+        if (steerNo) { steerOutcomes.push({ to: steerTo, ok: false, why: botSteerWhy(steerNo) }); continue; }
         var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
-        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) steerPassed++;
+        var steerAdded = await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now());
+        steerOutcomes.push({ to: steerTo, ok: !!steerAdded, why: steerAdded ? "" : "gone" });
       }
-      if (steerPassed || !steerSaid.steers.length) chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
-      else chatResult.reply = (steerSaid.text ? steerSaid.text + "\n\n" : "") + BOT_STEER_MISSED;
+      var steerAllOk = steerOutcomes.every(function (o) { return o.ok; });
+      if (steerAllOk) {
+        chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+      } else {
+        chatResult.reply = botSteerOutcomeText(steerOutcomes);
+        chatResult.steerOffer = { text: String(message || "") };
+      }
     }
     if (repoReadOnly.length && !runStopped && chatResult && chatResult.reply) {
       chatResult.reply = String(chatResult.reply) + "\n\n_Another task was changing " + repoReadOnly.join(", ") +
@@ -10271,6 +10331,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       proModel: proModel ? proModelKey : undefined,
       git: !!ghConfig,
       modelCalls: chatResult.modelCalls,
+      steerOffer: chatResult.steerOffer && !runStopped ? chatResult.steerOffer : undefined,
       // What this reply changed in the repository, so the device can put it back.
       checkpoint: chatResult.checkpoint || undefined,
       staged: chatResult.staged || undefined,

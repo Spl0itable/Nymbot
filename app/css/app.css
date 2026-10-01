@@ -2691,7 +2691,7 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .plan-item.is-doing { color: var(--text); font-weight: 600; }
 .plan-item.is-skipped .plan-text { text-decoration: line-through; }
 .task-group > .run-plan { margin: 0.2rem 0 0.3rem 0.4rem; }
-.run-cap, .pending-card { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
+.run-cap, .pending-card, .steer-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.45rem; }
 .pending-badge {
     font-size: 0.72rem;
     color: var(--text-dim);
