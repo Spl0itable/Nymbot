@@ -251,10 +251,6 @@
                 <svg class="side-links-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </button>
             <div class="sidebar-links" id="sidebarLinks">
-                <button class="side-link" type="button" data-act="open-running" id="runningLink">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
-                    <span>Running now</span><span class="side-count" id="runningCount"></span>
-                </button>
                 <button class="side-link" type="button" data-act="open-repos">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
                     <span>Repositories</span><span class="side-count" id="repoCount"></span>
@@ -286,6 +282,10 @@
                 <button class="side-link" type="button" data-act="open-schedules" id="schedulesLink">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
                     <span>Scheduled</span><span class="side-count" id="scheduleCount"></span>
+                </button>
+                <button class="side-link" type="button" data-act="open-running" id="runningLink">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 6.5 5.2 8.2 8 5"></polyline><line x1="11" y1="6.5" x2="20.5" y2="6.5"></line><polyline points="3.5 12.5 5.2 14.2 8 11"></polyline><line x1="11" y1="12.5" x2="20.5" y2="12.5"></line><circle cx="5.6" cy="18.5" r="1.6"></circle><line x1="11" y1="18.5" x2="20.5" y2="18.5"></line></svg>
+                    <span>Running now</span><span class="side-count" id="runningCount"></span>
                 </button>
                 <button class="side-link" type="button" data-act="open-pinned">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 3 14.9 9 21.5 9.8 16.7 14.3 18 20.8 12 17.6 6 20.8 7.3 14.3 2.5 9.8 9.1 9 12 3"></polygon></svg>

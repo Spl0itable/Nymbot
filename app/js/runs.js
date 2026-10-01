@@ -105,7 +105,8 @@
                 background: !!r.background
             });
         }
-        return out.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+        const local = out.filter(e => !e.remote).sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+        return local.concat(out.filter(e => e.remote));
     }
 
     async function poll(ui) {
@@ -194,8 +195,10 @@
 
     function age(ts) {
         if (!ts) return '';
-        const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
-        return mins < 1 ? t('Started just now') : t('Started {n} min ago', { n: mins });
+        const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+        if (mins < 1) return t('just now');
+        if (mins < 60) return t('{n} min', { n: mins });
+        return t('{n} h', { n: Math.floor(mins / 60) });
     }
 
     function renderSheet(ui) {
@@ -211,17 +214,19 @@
             const row = el('div', 'running-row');
             const main = el('div', 'running-main');
             main.appendChild(el('span', 'running-chat', e.chat));
-            const label = el('span', 'running-label', e.label);
-            label.dir = 'auto';
-            main.appendChild(label);
-            const bits = [e.progress, ...(e.branches || []).map(b => t('Working on branch {branch}', { branch: b.branch })),
-                e.background ? t('In the background') : '', e.remote && !e.background ? t('On another device') : '', age(e.startedAt)].filter(Boolean);
-            main.appendChild(el('span', 'running-meta', bits.join(' · ')));
-            if (e.plan && e.plan.length) {
-                const plan = el('ol', 'run-plan');
-                ui.fillPlan(plan, e.plan);
-                main.appendChild(plan);
+            const shown = e.remote && e.background ? t('Working in the background') + ': ' + (e.label || '') : e.label;
+            if (shown) {
+                const label = el('span', 'running-label', shown);
+                label.dir = 'auto';
+                main.appendChild(label);
             }
+            const progress = e.remote && e.background && !e.progress
+                ? t("You can close the app. Nymbot's server carries this on for up to 6 hours.")
+                : e.progress;
+            const when = e.remote && e.background ? [t('In the background'), age(e.startedAt)].filter(Boolean).join(' · ') : age(e.startedAt);
+            const bits = [progress, when].filter(Boolean);
+            if (bits.length) main.appendChild(el('span', 'running-meta', bits.join(' · ')));
+            for (const b of e.branches || []) main.appendChild(el('span', 'running-meta', t('Working on branch {branch}', { branch: b.branch })));
             row.appendChild(main);
             const actions = el('div', 'running-actions');
             const add = (text, act, data) => {
@@ -234,6 +239,7 @@
             if (e.convId) add(t('Open'), 'running-open', { key: e.key });
             if (e.steer) add(t('Add instructions'), 'run-steer', { run: e.run });
             add(t('Stop'), 'run-stop', { run: e.run });
+            actions.lastElementChild.classList.add('btn-danger-text');
             row.appendChild(actions);
             box.appendChild(row);
         }

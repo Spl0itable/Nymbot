@@ -2669,19 +2669,18 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 }
 .running-list { display: grid; gap: 0.5rem; }
 .running-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 0.5rem;
+    display: grid;
+    gap: 0.35rem;
     padding: 0.55rem 0.65rem;
     border: 1px solid var(--line);
     border-radius: 10px;
 }
-.running-main { display: grid; gap: 0.15rem; flex: 1 1 14rem; min-width: 0; }
+.running-main { display: grid; gap: 0.15rem; min-width: 0; }
 .running-chat { font-weight: 600; font-size: 0.85rem; overflow-wrap: anywhere; }
 .running-label { font-size: 0.82rem; color: var(--text-dim); overflow-wrap: anywhere; }
 .running-meta { font-size: 0.72rem; color: var(--text-faint); overflow-wrap: anywhere; }
 .running-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.btn-danger-text { color: var(--danger); }
 
 .toast-undo {
     margin-left: 0.6rem;
