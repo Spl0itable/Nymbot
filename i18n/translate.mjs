@@ -4,6 +4,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const PROXY = process.env.NYM_TRANSLATE_PROXY || 'https://nymbot.ai/api/proxy';
+const BUILD_TOKEN = (process.env.NYM_BUILD_TOKEN || '').trim();
+const proxyHeaders = () => ({
+  'Content-Type': 'application/json',
+  ...(BUILD_TOKEN ? { 'X-Nym-Build': BUILD_TOKEN } : {}),
+});
 // Overridable so tests never touch the committed cache.
 const CACHE_DIR = process.env.NYM_I18N_CACHE_DIR || new URL('./cache/', import.meta.url).pathname;
 
@@ -40,7 +45,7 @@ export async function saveCache(lang, map) {
 async function viaProxy(text, target) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: proxyHeaders(),
     body: JSON.stringify({ text, source: 'en', target }),
   });
   if (!res.ok) throw new Error(`proxy ${res.status}`);
@@ -53,7 +58,7 @@ async function viaProxy(text, target) {
 async function viaProxyBatch(texts, target) {
   const res = await fetch(`${PROXY}?action=translate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: proxyHeaders(),
     body: JSON.stringify({ texts, source: 'en', target }),
   });
   if (!res.ok) throw new Error(`proxy ${res.status}`);

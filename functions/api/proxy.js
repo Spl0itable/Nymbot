@@ -61,9 +61,20 @@ async function translateRateWindow(bucket, ip, units, limit, windowMs) {
   }
 }
 
+function translateSecretMatches(expected, got, min) {
+  if (typeof expected !== 'string') return false;
+  expected = expected.trim();
+  if (expected.length < min) return false;
+  const given = typeof got === 'string' ? got.trim() : '';
+  if (given.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
+
 async function translateRateOk(request, env, units) {
-  const bypass = env && typeof env.TRANSLATE_RATE_BYPASS === 'string' ? env.TRANSLATE_RATE_BYPASS : '';
-  if (bypass.length >= 32 && request.headers.get('X-Translate-Key') === bypass) return true;
+  if (translateSecretMatches(env && env.NYM_BUILD_TOKEN, request.headers.get('X-Nym-Build'), 16)) return true;
+  if (translateSecretMatches(env && env.TRANSLATE_RATE_BYPASS, request.headers.get('X-Translate-Key'), 32)) return true;
   let ip = '';
   try { ip = request.headers.get('CF-Connecting-IP') || ''; } catch (_) { ip = ''; }
   if (!ip) return true;
