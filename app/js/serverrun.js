@@ -666,7 +666,7 @@
         const siteChip = $('chipSiteCheck');
         if (siteChip) {
             siteChip.hidden = !site;
-            siteChip.querySelector('.chip-label').textContent = t('Check a site');
+            siteChip.querySelector('.chip-label').textContent = t('Site checker');
         }
         const chip = $('chipServerRuns');
         if (!chip) return;

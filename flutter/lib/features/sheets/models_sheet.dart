@@ -405,7 +405,7 @@ class _ModelChoice extends StatelessWidget {
                         ? ModelList.everyFilter
                         : ModelPicker.chatFilters,
                 price: price,
-                selectedKeys: {if (current != null) current!},
+                selectedKeys: {?current},
                 unavailable: unavailable,
                 scrollController: controller,
                 onPick: (m, _) => Navigator.pop(context, m),
@@ -944,7 +944,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                       await app.setProModel(null);
                       if (context.mounted) Navigator.pop(context);
                     },
-                    child: Text(t('Auto-routed (standard)')),
+                    child: Text(t('Auto-routed (Standard)')),
                   ),
                 ],
               ),

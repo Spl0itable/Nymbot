@@ -44,7 +44,7 @@ class ReplyNotifyChannel {
         'title': title,
         'body': body,
         'channel': channelName,
-        if (asked != null) 'asked': asked,
+        'asked': ?asked,
       }) ??
       false;
 
@@ -63,7 +63,7 @@ class ReplyNotifyChannel {
   Future<bool> checks(bool on, {String? channelName}) async =>
       await _call<bool>('checks', {
         'on': on,
-        if (channelName != null) 'channel': channelName,
+        'channel': ?channelName,
       }) ??
       false;
 
@@ -102,8 +102,8 @@ class ReplyNotifyChannel {
           {String? channelName, Map<String, String>? texts}) async =>
       await _call<bool>('upRegister', {
         'distributor': distributor,
-        if (channelName != null) 'channel': channelName,
-        if (texts != null) 'texts': texts,
+        'channel': ?channelName,
+        'texts': ?texts,
       }) ??
       false;
 
@@ -144,10 +144,9 @@ class ReplyNotify with WidgetsBindingObserver {
     required this.open,
     this.openAt,
     ReplyNotifyChannel? channel,
-    TargetPlatform? platform,
+    this._platform,
     bool? sandbox,
   })  : channel = channel ?? ReplyNotifyChannel(),
-        _platform = platform,
         sandbox = sandbox ?? kDebugMode;
 
   final bool Function() enabled;

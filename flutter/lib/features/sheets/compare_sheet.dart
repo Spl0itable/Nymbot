@@ -84,8 +84,7 @@ class _CompareSheetState extends State<_CompareSheet> {
       catalog: _catalog,
       current: current,
       unavailable: {
-        if (other != null)
-          other: first
+        ?other: first
               ? t('Already picked as Model B')
               : t('Already picked as Model A'),
       },

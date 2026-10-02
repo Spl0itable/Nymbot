@@ -259,7 +259,7 @@ class ServerRuns {
         'name': safeName(name),
         'type': type.length > 60 ? type.substring(0, 60) : type,
         'size': a['size'] is num ? (a['size'] as num).toInt() : 0,
-        if (url != null) 'url': url,
+        'url': ?url,
         if (url == null && data != null) 'data': data,
       });
       if (out.length >= 20) break;
@@ -329,6 +329,9 @@ class ServerRuns {
 
   static String credits(num value) => decimalFigure(value, 3);
 
+  static double totalCost(double cost, double runCredits) =>
+      runCredits > 0 ? ((cost + runCredits) * 1000).round() / 1000 : cost;
+
   static String minutes(int sec) => sec % 60 == 0
       ? t('{n} min', {'n': sec ~/ 60})
       : t('{n} s', {'n': sec});
@@ -396,7 +399,7 @@ class ServerRuns {
           'creditsPerMinute': (p['creditsPerMinute'] as num).toDouble(),
         if (p['repo'] is String && (p['repo'] as String).isNotEmpty) 'repo': p['repo'],
         if (p['team'] == true) 'team': true,
-        if (stagedFrom(p) case final staged?) 'staged': staged,
+        'staged': ?stagedFrom(p),
         'token': token,
         'state': 'waiting',
       };

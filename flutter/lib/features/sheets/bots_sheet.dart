@@ -81,7 +81,7 @@ class _BotsSheetState extends State<_BotsSheet> {
       title: t('Pick the bot\'s model'),
       catalog: _catalog,
       current: _modelKey,
-      noneLabel: t('Auto-routed (standard)'),
+      noneLabel: t('Auto-routed (Standard)'),
       includeMedia: true,
     );
     if (picked == null || !mounted) return;
@@ -312,7 +312,7 @@ class _BotsSheetState extends State<_BotsSheet> {
               title: t('Model'),
               model: _model,
               catalog: _catalog,
-              emptyLabel: t('Auto-routed (standard)'),
+              emptyLabel: t('Auto-routed (Standard)'),
               emptyNote: t('Nymbot picks the model for each message'),
               onTap: _catalog == null ? null : _chooseModel,
             ),
@@ -478,7 +478,7 @@ class _ShareBotState extends State<_ShareBot> {
                     icon: const Icon(Icons.ios_share, size: 16),
                     label: Text(t('Share')),
                     onPressed: () =>
-                        Share.share(link, subject: widget.bot.name),
+                        SharePlus.instance.share(ShareParams(text: link, subject: widget.bot.name)),
                   ),
                 ),
               ],

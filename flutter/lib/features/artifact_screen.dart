@@ -120,7 +120,8 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
             IconButton(
               icon: const Icon(Icons.ios_share, size: 20),
               tooltip: t('Share'),
-              onPressed: () => Share.share(_body.text, subject: artifact.title),
+              onPressed: () => SharePlus.instance
+                  .share(ShareParams(text: _body.text, subject: artifact.title)),
             ),
             PopupMenuButton<String>(
               key: const ValueKey('artifact-export'),

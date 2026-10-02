@@ -34,7 +34,7 @@ class NymAvatar extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (context, _, __) => drawn,
+          errorBuilder: (context, _, _) => drawn,
           frameBuilder: (context, child, frame, wasSync) =>
               frame == null && !wasSync ? drawn : child,
         ),

@@ -260,9 +260,7 @@ class AutoTopup {
 }
 
 class ApiAccess {
-  ApiAccess({required http.Client client, required EventSigner Function() signer})
-      : _client = client,
-        _signer = signer;
+  ApiAccess({required this._client, required this._signer});
 
   final http.Client _client;
   final EventSigner Function() _signer;
@@ -344,7 +342,7 @@ class ApiAccess {
   }) =>
       send('POST', url('/keys'), body: {
         'name': name,
-        if (limitSats != null) 'limit_sats': limitSats,
+        'limit_sats': ?limitSats,
         if (limitSats != null && resetPeriod != null) 'reset_period': resetPeriod,
         if (expireAt != null) 'expire_at': expireAt.toUtc().toIso8601String(),
       });

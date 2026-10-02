@@ -17,7 +17,7 @@ class SignerWait extends StatelessWidget {
         children: [
           child ?? const SizedBox.shrink(),
           ListenableBuilder(
-            listenable: Listenable.merge([waiting, if (authUrl != null) authUrl!]),
+            listenable: Listenable.merge([waiting, ?authUrl]),
             builder: (context, _) {
               final on = waiting.value;
               final url = authUrl?.value;

@@ -55,7 +55,7 @@ class ServerSchedules {
       if (mode == 'run') 'maxCreditsPerRun': cap,
       'dailyCap': dailyCap.clamp(1, 10000),
       'payload': payload,
-      if (push != null) 'push': push,
+      'push': ?push,
     };
   }
 

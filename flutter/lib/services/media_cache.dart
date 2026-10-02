@@ -13,7 +13,7 @@ import 'package:path_provider/path_provider.dart';
 class MediaCache {
   MediaCache({
     Future<Directory> Function()? directory,
-    http.Client? client,
+    this._client,
     DateTime Function()? now,
     this.maxAge = const Duration(days: 7),
     this.immutableAge = const Duration(days: 30),
@@ -22,7 +22,6 @@ class MediaCache {
     this.maxBytes = 100 * 1024 * 1024,
     this.entryMaxBytes = 25 * 1024 * 1024,
   })  : _directory = directory ?? _appCacheDirectory,
-        _client = client,
         _now = now ?? DateTime.now;
 
   static MediaCache instance = MediaCache();

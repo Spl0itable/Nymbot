@@ -1469,7 +1469,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     padding: 8px 12px;
     margin-bottom: var(--msg-gap);
     max-width: min(30rem, 88%);
-    width: fit-content;
+    width: min(30rem, 88%);
     background: var(--bubble-bot);
     /* Every corner the same: no tail until something has been said. */
     border-radius: var(--bubble-radius);

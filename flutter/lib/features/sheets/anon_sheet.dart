@@ -234,8 +234,7 @@ class _AnonSheetState extends State<_AnonSheet> {
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
                 isExpanded: true,
-                // ignore: deprecated_member_use
-                value: app.settings.anonAutoTopTier,
+                initialValue: app.settings.anonAutoTopTier,
                 decoration: InputDecoration(labelText: t('Which balance')),
                 items: [
                   DropdownMenuItem(
@@ -253,21 +252,21 @@ class _AnonSheetState extends State<_AnonSheet> {
             ],
             if (b != null) ...[
               Text(
-                  t('Your nym: {standard} standard · {pro} Pro',
+                  t('Your nym: {standard} Standard · {pro} Pro',
                       {
                         'standard': b.identity == null ? '–' : figure(b.identity),
                         'pro': b.identityPro == null ? '–' : figure(b.identityPro)
                       }),
                   style: const TextStyle(fontSize: 12)),
               Text(
-                  t('Throwaway key: {standard} standard · {pro} Pro',
+                  t('Throwaway key: {standard} Standard · {pro} Pro',
                       {
                         'standard': b.anon == null ? '–' : figure(b.anon),
                         'pro': b.anonPro == null ? '–' : figure(b.anonPro)
                       }),
                   style: const TextStyle(fontSize: 12)),
               Text(
-                  t('All anonymous keys, others as last used: {standard} standard · {pro} Pro',
+                  t('All anonymous keys, others as last used: {standard} Standard · {pro} Pro',
                       {
                         'standard': b.total == null ? '–' : figure(b.total),
                         'pro': b.totalPro == null ? '–' : figure(b.totalPro)
@@ -276,7 +275,7 @@ class _AnonSheetState extends State<_AnonSheet> {
               if (app.anon.heldCredits('standard') > 0 ||
                   app.anon.heldCredits('pro') > 0)
                 Text(
-                    t('Anonymous vouchers held: {standard} standard · {pro} Pro',
+                    t('Anonymous vouchers held: {standard} Standard · {pro} Pro',
                         {
                           'standard': figure(app.anon.heldCredits('standard')),
                           'pro': figure(app.anon.heldCredits('pro'))

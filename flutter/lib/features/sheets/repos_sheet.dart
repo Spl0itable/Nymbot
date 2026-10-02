@@ -530,8 +530,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: _provider,
+              initialValue: _provider,
               decoration: InputDecoration(labelText: t('Provider')),
               items: [
                 const DropdownMenuItem(value: 'github', child: Text('GitHub')),
@@ -619,7 +618,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             if (_jobBranches)
               DropdownButtonFormField<String>(
                 key: ValueKey('repo-when-done-$_editingId'),
-                value: _whenDone,
+                initialValue: _whenDone,
                 isExpanded: true,
                 decoration: InputDecoration(labelText: t('When done')),
                 items: [

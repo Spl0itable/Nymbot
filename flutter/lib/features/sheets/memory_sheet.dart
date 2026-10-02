@@ -78,8 +78,7 @@ class _MemorySheetState extends State<_MemorySheet> {
       decoration: InputDecoration(isDense: true, labelText: t('Topic')),
     );
     final scope = DropdownButtonFormField<String?>(
-      // ignore: deprecated_member_use
-      value: _scope,
+      initialValue: _scope,
       isExpanded: true,
       decoration: InputDecoration(isDense: true, labelText: t('Applies to')),
       items: [

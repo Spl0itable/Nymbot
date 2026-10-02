@@ -179,9 +179,8 @@ class PasskeyResult {
 }
 
 class PasskeyPlatform {
-  PasskeyPlatform({MethodChannel? channel, bool? supported})
-      : _channel = channel ?? defaultChannel,
-        _supported = supported;
+  PasskeyPlatform({MethodChannel? channel, this._supported})
+      : _channel = channel ?? defaultChannel;
 
   static const defaultChannel = MethodChannel('ai.nymbot/passkey');
 

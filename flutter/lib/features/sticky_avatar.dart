@@ -57,18 +57,13 @@ class StickyAvatar extends SingleChildRenderObjectWidget {
 
 class RenderStickyAvatar extends RenderProxyBox {
   RenderStickyAvatar({
-    required Object group,
-    required bool first,
-    required bool last,
-    required double inset,
-    ScrollableState? scrollable,
-    bool sticky = true,
-  })  : _group = group,
-        _sticky = sticky,
-        _first = first,
-        _last = last,
-        _inset = inset,
-        _scrollable = scrollable;
+    required this._group,
+    required this._first,
+    required this._last,
+    required this._inset,
+    this._scrollable,
+    this._sticky = true,
+  });
 
   static final Set<RenderStickyAvatar> _attached = {};
   static final Expando<Map<Object, Set<RenderStickyAvatar>>> _groups = Expando();
@@ -279,7 +274,7 @@ class RenderStickyAvatar extends RenderProxyBox {
 
   @override
   void applyPaintTransform(RenderBox child, Matrix4 transform) {
-    transform.translate(0.0, _avatarTop ?? size.height - child.size.height);
+    transform.translateByDouble(0.0, _avatarTop ?? size.height - child.size.height, 0.0, 1.0);
   }
 
   @override

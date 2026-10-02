@@ -78,7 +78,7 @@ class ServerRunArtifacts extends StatelessWidget {
     final safe = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
     final file = File('${Directory.systemTemp.path}/$safe');
     await file.writeAsBytes(base64Decode(data));
-    await Share.shareXFiles([XFile(file.path)]);
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
   }
 }
 

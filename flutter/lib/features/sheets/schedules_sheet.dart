@@ -186,7 +186,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
           if (_mode == 'run') ...[
             DropdownButtonFormField<int>(
               key: const ValueKey('schedule-run-cap'),
-              value: _cap,
+              initialValue: _cap,
               isExpanded: true,
               decoration: InputDecoration(labelText: t('Most credits one run may spend')),
               items: [
@@ -382,7 +382,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<ScheduleRepeat>(
               isExpanded: true,
-              value: _repeat,
+              initialValue: _repeat,
               decoration: InputDecoration(labelText: t('How often')),
               items: [
                 for (final r in ScheduleRepeat.values)

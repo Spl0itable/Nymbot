@@ -237,7 +237,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                 child: Image.memory(
                   base64Decode((f['data'] as String).split(',').last),
                   height: 90,
-                  errorBuilder: (_, __, ___) => Text('${f['name']}'),
+                  errorBuilder: (_, _, _) => Text('${f['name']}'),
                 ),
               )
             else
@@ -395,10 +395,11 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                     label: Text(t('Copy the link')),
                   ),
                   OutlinedButton.icon(
-                    onPressed: () => Share.share(current.link,
+                    onPressed: () => SharePlus.instance.share(ShareParams(
+                        text: current.link,
                         subject: widget.conv.title.isEmpty
                             ? t('Shared chat')
-                            : widget.conv.title),
+                            : widget.conv.title)),
                     icon: const Icon(Icons.ios_share, size: 16),
                     label: Text(t('Share…')),
                   ),

@@ -271,8 +271,7 @@ class _TagsSheetState extends State<_TagsSheet> {
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: folders.any((f) => f.id == _folderId) ? _folderId : null,
+              initialValue: folders.any((f) => f.id == _folderId) ? _folderId : null,
               decoration: InputDecoration(labelText: t('Folder')),
               items: [
                 DropdownMenuItem<String?>(value: null, child: Text(t('No folder'))),

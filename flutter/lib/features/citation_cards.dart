@@ -288,7 +288,7 @@ class _Mark extends StatelessWidget {
           height: 20,
           fit: BoxFit.contain,
           gaplessPlayback: true,
-          errorBuilder: (_, __, ___) => letter,
+          errorBuilder: (_, _, _) => letter,
           frameBuilder: (_, child, frame, wasSync) =>
               frame == null && !wasSync ? letter : child,
         ),

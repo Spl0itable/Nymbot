@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -285,7 +287,7 @@ class _MessageBubbleState extends State<MessageBubble> {
       child: Tooltip(
         message: isPro
             ? t('A frontier model you picked wrote this, charged to your Pro balance.')
-            : t('Nymbot routed this to the model that suited it, charged to your standard balance.'),
+            : t('Nymbot routed this to the model that suited it, charged to your Standard balance.'),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
           decoration: BoxDecoration(
@@ -322,30 +324,13 @@ class _MessageBubbleState extends State<MessageBubble> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const NymGlyph('bolt', size: 11, color: NymbotColors.lightning),
-              Text(creditFigure(m.cost),
+              Text(
+                  ServerRuns.credits(
+                      ServerRuns.totalCost(m.cost, m.serverRunCredits)),
                   style: const TextStyle(
                       fontSize: 10, color: NymbotColors.lightning)),
             ],
           ),
-        ),
-      );
-
-  Widget _runCost(BuildContext context, ChatMessage m) => Container(
-        key: const ValueKey('server-run-cost'),
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          border: Border.all(color: NymbotColors.lightning.withValues(alpha: 0.4)),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const NymGlyph('server-runs', size: 11, color: NymbotColors.lightning),
-            const SizedBox(width: 2),
-            Text(
-                t('{credits} on server runs', {'credits': ServerRuns.credits(m.serverRunCredits)}),
-                style: const TextStyle(fontSize: 10, color: NymbotColors.lightning)),
-          ],
         ),
       );
 
@@ -487,13 +472,9 @@ class _MessageBubbleState extends State<MessageBubble> {
                       _time(m.at),
                       style: TextStyle(fontSize: 10, color: theme.hintColor),
                     ),
-                  if (m.cost > 0) ...[
+                  if (m.cost > 0 || m.serverRunCredits > 0) ...[
                     const SizedBox(width: 6),
                     _cost(context, m),
-                  ],
-                  if (m.serverRunCredits > 0) ...[
-                    const SizedBox(width: 6),
-                    _runCost(context, m),
                   ],
                 ],
               ),
@@ -942,11 +923,12 @@ class TypingIndicator extends StatelessWidget {
     final recent = steps.length > 4 ? steps.sublist(steps.length - 4) : steps;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
+      child: LayoutBuilder(builder: (context, box) => Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Flexible(
+          SizedBox(
+            width: math.min(480.0, box.maxWidth * 0.88),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               decoration: BoxDecoration(
@@ -998,7 +980,7 @@ class TypingIndicator extends StatelessWidget {
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 }

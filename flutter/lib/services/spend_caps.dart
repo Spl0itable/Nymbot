@@ -169,7 +169,7 @@ class SpendCaps {
     final estimate = t('{sats} sats ({n} {tier} credits)', {
       'sats': figure(check.high.ceil()),
       'n': creditFigure(credits),
-      'tier': check.pro ? t('Pro') : t('standard'),
+      'tier': check.pro ? t('Pro') : t('Standard'),
     });
     return (
       title: t('Over this chat\'s cap?'),
@@ -191,7 +191,7 @@ class SpendCaps {
     final vars = {
       'sats': figure(satsFor(required, pro).ceil()),
       'n': creditFigure(required),
-      'tier': pro ? t('Pro') : t('standard'),
+      'tier': pro ? t('Pro') : t('Standard'),
     };
     return (
       title: t('Over this chat\'s cap?'),

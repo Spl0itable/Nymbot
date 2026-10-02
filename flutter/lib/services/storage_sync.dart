@@ -53,8 +53,8 @@ class StorageSync {
   }) =>
       _call('settings-get', signer,
           extra: {
-            if (since != null) 'since': since,
-            if (only != null) 'only': only,
+            'since': ?since,
+            'only': ?only,
           },
           timeout: const Duration(seconds: 20));
 

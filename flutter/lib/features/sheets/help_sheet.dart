@@ -49,7 +49,7 @@ List<HelpTopic> helpTopics() => [
         t('Attach a picture and it is uploaded to the same public media hosts '
             'Nymchat uses, so the model is handed the image itself rather than '
             'the file\'s name — on Pro that needs a model that can see, and on '
-            'standard routing a picture is routed to one automatically. Paste a '
+            'Standard routing a picture is routed to one automatically. Paste a '
             'link and the page is fetched and read before the reply is written. '
             'A text or code file travels as its text; anything long enough to '
             'be a document belongs in a workspace, which searches the whole of '
@@ -60,7 +60,7 @@ List<HelpTopic> helpTopics() => [
         t('?image draws from a description, and ?image models lists the '
             'frontier generators a Pro model unlocks. ?video makes a short clip '
             'and is Pro only — every video model is provider-hosted, so there '
-            'is no standard-tier generator; ?video models lists them with their '
+            'is no Standard-tier generator; ?video models lists them with their '
             'prices, and a picture in the same message becomes the frame it '
             'animates. Nothing is charged if a generation fails.'),
       ),

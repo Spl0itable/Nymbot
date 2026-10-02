@@ -177,7 +177,7 @@
             const estimate = t('{sats} sats ({n} {tier} credits)', {
                 sats: num(Math.ceil(check.high)),
                 n: window.amount ? window.amount(credits, 2) : String(credits),
-                tier: pro ? t('Pro') : t('standard')
+                tier: pro ? t('Pro') : t('Standard')
             });
             if (check.reason === 'total') {
                 return t('This reply could cost up to {estimate}. The chat has used {spent} of its {cap} sat cap, so it could go past it.', {
@@ -245,7 +245,7 @@
             const vars = {
                 sats: num(Math.ceil(this.satsFor(required, pro, ui.models))),
                 n: window.amount ? window.amount(required, 2) : String(required),
-                tier: pro ? t('Pro') : t('standard')
+                tier: pro ? t('Pro') : t('Standard')
             };
             const choice = await this.confirm({
                 title: t('Over this chat\'s cap?'),

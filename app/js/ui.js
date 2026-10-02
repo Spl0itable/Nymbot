@@ -874,7 +874,7 @@
             const badge = el('span', 'tier-badge' + (pro ? ' is-pro' : ''), pro ? t('PRO') : t('STD'));
             badge.title = pro
                 ? t('A frontier model you picked wrote this, charged to your Pro balance.')
-                : t('Nymbot routed this to the model that suited it, charged to your standard balance.');
+                : t('Nymbot routed this to the model that suited it, charged to your Standard balance.');
             return badge;
         },
 
@@ -3081,7 +3081,8 @@
             row.setAttribute('role', 'group');
             row.setAttribute('aria-label', t('Suggested replies'));
             for (const text of items) row.appendChild(this.followUpChip(conv.id, m.id, text));
-            node.insertBefore(row, node.querySelector('.msg-actions'));
+            const actions = node.querySelector('.msg-actions');
+            node.insertBefore(row, actions ? actions.nextSibling : null);
             if (follow) {
                 const pin = this._pinnedReply;
                 if (pin && pin.isConnected && pin.getBoundingClientRect().top >= box.getBoundingClientRect().top - 2) this.pinReply(pin);
@@ -3610,7 +3611,7 @@
                 case 'model':
                     if (/^off$/i.test(arg)) {
                         this.setModel(null);
-                        this.note(t('Back to standard auto-routing.'));
+                        this.note(t('Back to Standard auto-routing.'));
                         return true;
                     }
                     await this.openModels(arg);
@@ -4177,11 +4178,11 @@
             if (!$('modalCredits').hidden) this.renderCreditBalances();
             if (announce) {
                 this.note((inAnonChat
-                    ? t('This chat\'s anonymous balance: {standard} standard, {pro} Pro.',
+                    ? t('This chat\'s anonymous balance: {standard} Standard, {pro} Pro.',
                         { standard: creditAmount(this.anonBalance.standard), pro: creditAmount(this.anonBalance.pro) })
-                        + ' ' + t('Your nym still holds {standard} standard and {pro} Pro.',
+                        + ' ' + t('Your nym still holds {standard} Standard and {pro} Pro.',
                             { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })
-                    : t('Your balance: {standard} standard, {pro} Pro.',
+                    : t('Your balance: {standard} Standard, {pro} Pro.',
                         { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })));
             }
         },
@@ -4196,7 +4197,7 @@
             const moved = await Anon.fund(payer, est.tier, est.high, known).catch(() => null);
             if (!moved) return null;
             const parts = [];
-            if (moved.standard) parts.push(t('{n} standard', { n: moved.standard }));
+            if (moved.standard) parts.push(t('{n} Standard', { n: moved.standard }));
             if (moved.pro) parts.push(t('{n} Pro', { n: moved.pro }));
             this.note(t('Moved {what} onto the throwaway key.', { what: parts.join(', ') }), conv.id);
             await this.refreshBalance().catch(() => { });
@@ -4235,7 +4236,7 @@
                 ? t('{n} free', { n: num(free) })
                 : (value == null ? t('Buy') : creditAmount(value));
             $('whoBalance').textContent = this.balance.standard == null ? ''
-                : t('{standard} standard · {pro} Pro',
+                : t('{standard} Standard · {pro} Pro',
                     { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) });
         },
 
@@ -6992,7 +6993,7 @@
             const pro = !!m.model;
             const sats = m.cost * C.satsPerCredit[pro ? 'pro' : 'standard'];
             const rows = [
-                [t('Charged'), t('{n} credits', { n: creditAmount((m.costCredits != null ? m.costCredits : m.cost) + (Number(m.serverRunCredits) || 0)) })],
+                [t('Charged'), t('{n} credits', { n: window.amount((m.costCredits != null ? m.costCredits : m.cost) + (Number(m.serverRunCredits) || 0), 3) })],
                 [t('Tier'), pro ? t('Pro') : t('Standard')],
                 [t('Model'), m.model || t('Auto-routed')],
                 [t('At today\'s price'), t('{n} sats', { n: num(sats) })]
@@ -7025,7 +7026,7 @@
             }
             $('costNote').textContent = m.model
                 ? t('A Pro reply costs the model\'s base and then scales with the length of the answer, up to that model\'s cap. The cap is held when you send and only the real cost is taken.')
-                : t('A standard reply is one credit, whichever model the router picked for it.');
+                : t('A Standard reply is one credit, whichever model the router picked for it.');
             this.openModal('modalCost');
         },
 
@@ -7052,11 +7053,11 @@
                 },
                 {
                     title: t('Pictures, links and files'),
-                    body: t('Attach a picture and it is uploaded to the same public media hosts Nymchat uses, so the model is handed the image itself rather than the file\'s name — on Pro that needs a model that can see, and on standard routing a picture is routed to one automatically. Paste a link and the page is fetched and read before the reply is written. A text or code file travels as its text; anything long enough to be a document belongs in a workspace, which searches the whole of it.')
+                    body: t('Attach a picture and it is uploaded to the same public media hosts Nymchat uses, so the model is handed the image itself rather than the file\'s name — on Pro that needs a model that can see, and on Standard routing a picture is routed to one automatically. Paste a link and the page is fetched and read before the reply is written. A text or code file travels as its text; anything long enough to be a document belongs in a workspace, which searches the whole of it.')
                 },
                 {
                     title: t('Pictures and video'),
-                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Picking a generator in the model picker pins it, so every message after that is a generation: it takes over the model chip until you pick it again, switch back to standard, or send ?image off. Nothing is charged if a generation fails.')
+                    body: t('?image draws from a description, and ?image models lists the frontier generators a Pro model unlocks. ?video makes a short clip and is Pro only — every video model is provider-hosted, so there is no Standard-tier generator; ?video models lists them with their prices, and a picture in the same message becomes the frame it animates. Picking a generator in the model picker pins it, so every message after that is a generation: it takes over the model chip until you pick it again, switch back to Standard, or send ?image off. Nothing is charged if a generation fails.')
                 },
                 {
                     title: t('Workspaces'),
@@ -7768,7 +7769,7 @@
         renderBotModel() {
             this.renderModelSlot($('botModel'), this.botModel || null, {
                 label: t('Model'),
-                empty: t('Auto-routed (standard)'),
+                empty: t('Auto-routed (Standard)'),
                 note: t('Nymbot picks the model for each message')
             });
         },
@@ -8824,20 +8825,20 @@
             Anon.balances(payer).then((b) => {
                 const box = $('anonBalances');
                 box.innerHTML = '';
-                box.appendChild(el('div', null, t('Your nym: {standard} standard · {pro} Pro',
+                box.appendChild(el('div', null, t('Your nym: {standard} Standard · {pro} Pro',
                     { standard: b.identity ?? '–', pro: b.identityPro ?? '–' })));
                 const last = Anon.lastKnown();
                 const here = payer ? last.keys[payer.pk] : null;
                 box.appendChild(el('div', null, (inAnonChat
-                    ? t('This chat\'s key: {standard} standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' })
-                    : t('Throwaway key: {standard} standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' }))));
+                    ? t('This chat\'s key: {standard} Standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' })
+                    : t('Throwaway key: {standard} Standard · {pro} Pro', { standard: (here && here.standard) ?? '–', pro: (here && here.pro) ?? '–' }))));
                 if (Object.keys(last.keys).length > 1) {
-                    box.appendChild(el('div', null, t('All throwaway keys, as of each one\'s last use: {standard} standard · {pro} Pro',
+                    box.appendChild(el('div', null, t('All throwaway keys, as of each one\'s last use: {standard} Standard · {pro} Pro',
                         { standard: last.total.standard, pro: last.total.pro })));
                 }
                 const held = Anon.vouchers();
                 if (held.standard || held.pro) {
-                    box.appendChild(el('div', null, t('Vouchers on this device: {standard} standard · {pro} Pro',
+                    box.appendChild(el('div', null, t('Vouchers on this device: {standard} Standard · {pro} Pro',
                         { standard: held.standard, pro: held.pro })));
                 }
             }).catch(() => { $('anonBalances').textContent = t('Could not read the balances.'); });
@@ -8898,7 +8899,7 @@
             const moved = await Anon.autoTopUp(Object.assign({}, opts, { identity })).catch(() => null);
             if (!moved) return null;
             const parts = [];
-            if (moved.standard) parts.push(t('{n} standard', { n: moved.standard }));
+            if (moved.standard) parts.push(t('{n} Standard', { n: moved.standard }));
             if (moved.pro) parts.push(t('{n} Pro', { n: moved.pro }));
             const text = t('Moved {what} onto the throwaway key.', { what: parts.join(', ') });
             if (opts.announce) this.toast(text);

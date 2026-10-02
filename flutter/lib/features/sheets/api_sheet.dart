@@ -106,7 +106,7 @@ List<String> _curlJson(String path, String body, [String? tail]) => [
       '  -H "Authorization: Bearer $_curlKey" \\',
       '  -H "Content-Type: application/json" \\',
       "  -d '$body'${tail != null ? ' \\' : ''}",
-      if (tail != null) tail,
+      ?tail,
     ];
 
 List<String> _chatLines(String tab, Map<String, dynamic> m) {
@@ -368,7 +368,7 @@ String apiPriceLine(Map<String, dynamic>? m) {
 
 String apiBalanceLine(Map<String, dynamic>? m) => m?['balance'] == 'pro'
     ? t('Spends the Pro balance.')
-    : t('Spends the standard balance.');
+    : t('Spends the Standard balance.');
 
 String apiModelHint(Map<String, dynamic>? m, {bool failed = false}) => [
       apiPriceLine(m),
@@ -1028,7 +1028,7 @@ class _ApiSheetState extends State<_ApiSheet> {
             _balance('pro', account?.pro ?? const ApiBalance()),
           ],
         ),
-        _hint(t('Nymbot Auto spends the standard balance; any other model spends Pro.')),
+        _hint(t('Nymbot Auto spends the Standard balance; any other model spends Pro.')),
         if (_accountError != null) _error(_accountError!),
       ],
     );
@@ -1183,7 +1183,7 @@ class _ApiSheetState extends State<_ApiSheet> {
         'output': figure(q.outputTokens),
       }),
       t('{n} sats', {'n': figure(q.costSats)}),
-      if (q.balance == 'standard') t('standard'),
+      if (q.balance == 'standard') t('Standard'),
       if (q.balance == 'pro') t('Pro'),
       if (owner != null && owner.name.isNotEmpty) owner.name,
       if (q.webSearch) t('web search'),
@@ -1245,7 +1245,7 @@ class _ApiSheetState extends State<_ApiSheet> {
         Text(
           t('Connected. When the {tier} balance drops below {threshold} sats, it tops up {topup} sats.',
               {
-                'tier': topup.tier == 'standard' ? t('standard') : t('Pro'),
+                'tier': topup.tier == 'standard' ? t('Standard') : t('Pro'),
                 'threshold': figure(topup.thresholdSats ?? 0),
                 'topup': figure(topup.topupSats ?? 0),
               }),
@@ -1257,7 +1257,7 @@ class _ApiSheetState extends State<_ApiSheet> {
         if (topup.lastError != null)
           _hint(t('Last error: {error}', {'error': topup.lastError}),
               color: NymbotColors.danger),
-        if (status != null) status,
+        ?status,
         const SizedBox(height: 6),
         Align(
           alignment: AlignmentDirectional.centerStart,
@@ -1325,7 +1325,7 @@ class _ApiSheetState extends State<_ApiSheet> {
               ),
           ],
         ),
-        if (status != null) status,
+        ?status,
         const SizedBox(height: 6),
         Align(
           alignment: AlignmentDirectional.centerStart,
@@ -1356,7 +1356,7 @@ class _ApiSheetState extends State<_ApiSheet> {
           Text(t('API'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 4),
           Text(
-            t('Call Nymbot\'s models from your own code with an OpenAI-compatible API. Requests spend the same balances as the app: Nymbot Auto uses the standard balance, any other model the Pro balance. Unlike chats in the app, API requests are not end-to-end encrypted.'),
+            t('Call Nymbot\'s models from your own code with an OpenAI-compatible API. Requests spend the same balances as the app: Nymbot Auto uses the Standard balance, any other model the Pro balance. Unlike chats in the app, API requests are not end-to-end encrypted.'),
             style: TextStyle(fontSize: 12, height: 1.45, color: theme.hintColor),
           ),
           if (_free) _freeNote(),

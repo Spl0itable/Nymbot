@@ -76,8 +76,8 @@ class AnonMode {
     final entry = was is Map ? was.cast<String, dynamic>() : <String, dynamic>{};
     _balances[pk] = {
       ...entry,
-      if (standard != null) 'standard': standard,
-      if (pro != null) 'pro': pro,
+      'standard': ?standard,
+      'pro': ?pro,
     };
     try {
       await _store.setSecret(_balancesKey, jsonEncode(_balances));
@@ -370,7 +370,7 @@ class AnonMode {
     final spent = _spentList()..sort();
     if (ids.isEmpty && tokens.isEmpty && spent.isEmpty) return null;
     final current = pubkey;
-    final keep = {...referenced(), if (current != null) current};
+    final keep = {...referenced(), ?current};
     final keys = [
       for (var i = 0; i < ids.length; i++)
         if (i < syncKeysMax || keep.contains(ids[i]['pk'])) _keyWire(ids[i])

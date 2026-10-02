@@ -105,7 +105,7 @@ class Attachments {
 
   static Future<({List<Attachment> files, List<String> problems})> pick(
       {bool media = false, void Function(bool busy)? onLoading}) async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       allowMultiple: true,
       withReadStream: true,
       type: media ? FileType.media : FileType.any,

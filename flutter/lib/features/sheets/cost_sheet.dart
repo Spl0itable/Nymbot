@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../config.dart';
 import '../../models/conversation.dart';
+import '../../services/server_runs.dart';
 import '../../services/team.dart';
 import '../i18n/i18n.dart';
 import 'credits_sheet.dart';
@@ -13,7 +14,9 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m,
   final pro = m.model != null;
   final sats = m.cost * (NymbotConfig.satsPerCredit[pro ? 'pro' : 'standard'] ?? 1);
   final rows = <(String, String)>[
-    (t('Charged'), t('{n} credits', {'n': creditFigure(m.cost)})),
+    (t('Charged'), t('{n} credits', {
+      'n': ServerRuns.credits(ServerRuns.totalCost(m.cost, m.serverRunCredits)),
+    })),
     (t('Tier'), pro ? t('Pro') : t('Standard')),
     (t('Model'), m.model ?? t('Auto-routed')),
     (t("At today's price"), t('{n} sats', {'n': figure(sats)})),
@@ -25,6 +28,10 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m,
   }
   if (m.sources.isNotEmpty) {
     rows.add((t('Sources read'), '${m.sources.length}'));
+  }
+  if (m.serverRunCredits > 0) {
+    rows.add((t('Server runs'),
+        t('{n} Pro credits', {'n': ServerRuns.credits(m.serverRunCredits)})));
   }
   rows.addAll(Team.costRows(m.team, catalog));
   final at = m.at.toLocal();
@@ -100,7 +107,7 @@ class _CostSheet extends StatelessWidget {
                   ? t("A Pro reply costs the model's base and then scales with the "
                       'length of the answer, up to that model\'s cap. The cap is '
                       'held when you send and only the real cost is taken.')
-                  : t('A standard reply is one credit, whichever model the router '
+                  : t('A Standard reply is one credit, whichever model the router '
                       'picked for it.'),
               style: TextStyle(fontSize: 11.5, color: theme.hintColor),
             ),

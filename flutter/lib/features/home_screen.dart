@@ -264,7 +264,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {});
     });
     setState(() => _dictation = 'recording');
-    unawaited(SemanticsService.announce(t('Recording'), Directionality.of(context)));
+    unawaited(SemanticsService.sendAnnouncement(
+        View.of(context), t('Recording'), Directionality.of(context)));
     _startLevels();
   }
 
@@ -289,7 +290,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       misses = 0;
       if (meter.noSound && !wasQuiet) {
-        unawaited(SemanticsService.announce(
+        unawaited(SemanticsService.sendAnnouncement(
+            View.of(context),
             t('No sound is coming in. Check your microphone.'),
             Directionality.of(context)));
       }
@@ -708,7 +710,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'model':
         if (RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
           await app.setProModel(null);
-          await app.note(t('Back to standard auto-routing.'));
+          await app.note(t('Back to Standard auto-routing.'));
           return true;
         }
         await showModelsSheet(context, filter: arg);
@@ -2013,7 +2015,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           draft: true,
           selfPubkey: selfPubkey,
           settings: app.settings,
-          onAction: (_, __) {},
+          onAction: (_, _) {},
           grouped: false,
           avatarGroup: 'reply-draft-${run.key}',
           modelCatalog: app.mentionCatalog,
@@ -2632,12 +2634,12 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
       await showShareChatSheet(context, app, conv,
           elsewhere ? app.store.messages(conv.id) : app.messages);
     case 'share':
-      await Share.share(
-        Transcript.markdown(conv,
+      await SharePlus.instance.share(ShareParams(
+        text: Transcript.markdown(conv,
             elsewhere ? app.store.messages(conv.id) : app.messages,
             repos: reposOf(app, conv)),
         subject: conv.title.isEmpty ? 'Nymbot' : conv.title,
-      );
+      ));
     case 'export-md':
       await exportChat(app, conv, 'md');
     case 'export-txt':
@@ -3138,7 +3140,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         subtitle: Text(
           app.standardBalance == null
               ? t('{n} relays', {'n': app.relaysUp})
-              : t('{standard} standard · {pro} Pro', {
+              : t('{standard} Standard · {pro} Pro', {
                   'standard': creditFigure(app.standardBalance),
                   'pro': creditFigure(app.proBalance),
                 }),

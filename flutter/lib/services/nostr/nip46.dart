@@ -129,14 +129,13 @@ class Nip46Signer implements RemoteSigner {
     required this.relays,
     String? remotePubkey,
     String? userPubkey,
-    String? secret,
+    this._secret,
     Nip46SocketFactory? sockets,
     this.timeout = const Duration(seconds: 60),
   })  : _clientSk = clientSk,
         clientPubkey = getPublicKeyHex(clientSk),
         _remote = remotePubkey,
         _user = userPubkey,
-        _secret = secret,
         _sockets = sockets ?? _openWebSocket;
 
   final Uint8List _clientSk;
@@ -266,7 +265,7 @@ class Nip46Signer implements RemoteSigner {
       final secret = parsed.secret;
       final result = await signer._request('connect', [
         parsed.pubkey,
-        if (secret != null) secret,
+        ?secret,
         if (secret != null) nip46Perms.join(','),
       ]);
       if (result != 'ack' && (secret == null || result != secret)) {

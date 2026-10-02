@@ -567,7 +567,7 @@ class KeyBackups {
 
   List<BackupStore> get stores => [
         for (final store in [apple, google])
-          if (store != null) store,
+          ?store,
       ];
 
   bool get any => google != null || apple != null;

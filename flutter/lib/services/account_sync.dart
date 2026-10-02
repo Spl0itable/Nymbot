@@ -21,14 +21,11 @@ import 'support_thread.dart';
 
 class AccountSync {
   AccountSync({
-    required Store store,
-    required Identity identity,
-    required StorageSync storage,
-    AnonMode? anon,
-  })  : _store = store,
-        _identity = identity,
-        _storage = storage,
-        _anon = anon;
+    required this._store,
+    required this._identity,
+    required this._storage,
+    this._anon,
+  });
 
   final Store _store;
   final Identity _identity;
@@ -1250,7 +1247,7 @@ class AccountSync {
       if (again) touch(const Duration(milliseconds: 600));
     });
     unawaited(_round(gen, applied).then(finish,
-        onError: (_, __) => finish(const SyncRound.failed())).whenComplete(watchdog.cancel));
+        onError: (_, _) => finish(const SyncRound.failed())).whenComplete(watchdog.cancel));
     return (done: done.future, applied: applied.future);
   }
 

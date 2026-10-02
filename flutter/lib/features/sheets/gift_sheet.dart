@@ -204,10 +204,10 @@ class _GiftSheetState extends State<GiftSheet> {
               OutlinedButton.icon(
                 icon: const Icon(Icons.ios_share, size: 16),
                 label: Text(t('Share')),
-                onPressed: () => Share.share(
-                  '${t('A gift of {what} on Nymbot. Open the link to add them to your balance.', {'what': Gifts.credits(made.gift.tier, made.gift.amount)})}\n$link',
+                onPressed: () => SharePlus.instance.share(ShareParams(
+                  text: '${t('A gift of {what} on Nymbot. Open the link to add them to your balance.', {'what': Gifts.credits(made.gift.tier, made.gift.amount)})}\n$link',
                   subject: t('A Nymbot gift'),
-                ),
+                )),
               ),
             ],
           ),

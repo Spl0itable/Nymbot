@@ -234,7 +234,8 @@ class _TasksPaneState extends State<TasksPane> {
       if (!mounted) return;
       _spoken = text;
       _spokenAt = DateTime.now();
-      unawaited(SemanticsService.announce(text, Directionality.of(context)));
+      unawaited(SemanticsService.sendAnnouncement(
+          View.of(context), text, Directionality.of(context)));
     }
 
     if (wait <= Duration.zero) {
@@ -445,7 +446,7 @@ class _TasksPaneState extends State<TasksPane> {
         image: CachedMediaImage(url),
         width: 12,
         height: 12,
-        errorBuilder: (_, __, ___) => const SizedBox(width: 12, height: 12),
+        errorBuilder: (_, _, _) => const SizedBox(width: 12, height: 12),
       ),
     );
   }

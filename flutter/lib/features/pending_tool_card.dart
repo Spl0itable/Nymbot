@@ -189,7 +189,7 @@ class _PendingToolCardState extends State<PendingToolCard> {
         t('Up to {credits} Pro credits', {'credits': ServerRuns.credits(credits)}),
         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
       ),
-      if (staged != null) staged,
+      ?staged,
       const SizedBox(height: 6),
       if (state == 'allowed')
         Text(t('Allowed once.'), style: hint)

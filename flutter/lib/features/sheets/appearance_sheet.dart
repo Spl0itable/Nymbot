@@ -85,8 +85,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             ],
             DropdownButtonFormField<ChatTheme>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: s.theme,
+              initialValue: s.theme,
               decoration: InputDecoration(labelText: t('Theme')),
               items: [
                 DropdownMenuItem(
@@ -106,8 +105,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<ChatDensity>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: s.density,
+              initialValue: s.density,
               decoration: InputDecoration(labelText: t('Density')),
               items: [
                 DropdownMenuItem(
@@ -124,8 +122,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<double>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: const [0.9, 1.0, 1.15, 1.3].contains(s.fontScale)
+              initialValue: const [0.9, 1.0, 1.15, 1.3].contains(s.fontScale)
                   ? s.fontScale
                   : 1.0,
               decoration: InputDecoration(labelText: t('Text size')),
@@ -143,8 +140,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<SidebarGrouping>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: s.grouping,
+              initialValue: s.grouping,
               decoration: InputDecoration(labelText: t('Chat list')),
               items: [
                 DropdownMenuItem(
@@ -212,8 +208,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<double>(
               isExpanded: true,
-              // ignore: deprecated_member_use
-              value: const [0.8, 1.0, 1.25, 1.5].contains(s.speechRate)
+              initialValue: const [0.8, 1.0, 1.25, 1.5].contains(s.speechRate)
                   ? s.speechRate
                   : 1.0,
               decoration: InputDecoration(labelText: t('Reading speed')),
@@ -247,7 +242,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             Text(t('Long tasks'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
             DropdownButtonFormField<int>(
-              value: s.autoContinue,
+              initialValue: s.autoContinue,
               isExpanded: true,
               decoration: InputDecoration(
                   labelText: t('When a repo task runs out of room')),
@@ -289,7 +284,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               key: const ValueKey('when-done-default'),
-              value: whenDoneFor('', s.whenDone),
+              initialValue: whenDoneFor('', s.whenDone),
               isExpanded: true,
               decoration: InputDecoration(
                   labelText: t('When a task\'s branch is done')),
@@ -332,7 +327,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<int>(
               isExpanded: true,
-              value: s.autoDeleteDays,
+              initialValue: s.autoDeleteDays,
               decoration: InputDecoration(labelText: t('Delete chats after')),
               items: [
                 DropdownMenuItem(value: 0, child: Text(t('Never'))),
@@ -389,7 +384,7 @@ Future<void> importBackup(BuildContext context) async {
   void say(String text) => messenger
     ..clearSnackBars()
     ..showSnackBar(SnackBar(content: Text(text)));
-  final picked = await FilePicker.platform.pickFiles(
+  final picked = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['json'],
     withData: true,
@@ -474,7 +469,7 @@ class _VoicePickerState extends State<VoicePicker> {
       child: DropdownButtonFormField<String?>(
         key: const ValueKey('voice-picker'),
         isExpanded: true,
-        value: value,
+        initialValue: value,
         decoration: InputDecoration(labelText: t('Voice')),
         items: [
           DropdownMenuItem<String?>(value: null, child: Text(t('Default voice'))),

@@ -147,10 +147,10 @@ class BotFiles {
   }
 
   static Future<void> _share(Uint8List bytes, String name, String mime) async {
-    await Share.shareXFiles(
-      [XFile.fromData(bytes, mimeType: mime, name: name)],
+    await SharePlus.instance.share(ShareParams(
+      files: [XFile.fromData(bytes, mimeType: mime, name: name)],
       fileNameOverrides: [name],
-    );
+    ));
   }
 
   static Future<bool> save(BotFile file) async {

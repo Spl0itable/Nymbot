@@ -218,7 +218,7 @@ class NymbotApi {
 
   Future<ApiResult> liveRuns(EventSigner signer, {String? thread}) =>
       call('pm-runs', signer,
-          extra: {if (thread != null) 'thread': thread},
+          extra: {'thread': ?thread},
           timeout: const Duration(seconds: 15));
 
   Future<ApiResult> doneSince(EventSigner signer, int since) =>
@@ -404,7 +404,7 @@ class NymbotApi {
       call('create-invoice', signer, extra: {
         'amountSats': amountSats,
         'tier': tier,
-        if (recipientPubkey != null) 'recipientPubkey': recipientPubkey,
+        'recipientPubkey': ?recipientPubkey,
       });
 
   Future<ApiResult> checkInvoice(EventSigner signer, String invoiceId) =>

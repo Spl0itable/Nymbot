@@ -1141,7 +1141,7 @@ class AppController extends ChangeNotifier {
   String describeTopUp(Map<String, int> moved) {
     final parts = <String>[];
     if (moved['standard'] != null) {
-      parts.add(t('{n} standard', {'n': moved['standard']}));
+      parts.add(t('{n} Standard', {'n': moved['standard']}));
     }
     if (moved['pro'] != null) parts.add(t('{n} Pro', {'n': moved['pro']}));
     return t('Moved {what} onto the throwaway key.', {'what': parts.join(', ')});
@@ -3469,7 +3469,7 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> _runExtras(Conversation conv, {String? kind}) => {
         if (settings.maxRuns > 0 && !conv.anon) 'maxRuns': settings.maxRuns,
         'policy': policyOf(conv),
-        if (kind != null) 'runKind': kind,
+        'runKind': ?kind,
       };
 
   static String _labelOf(String text) {
@@ -3893,7 +3893,7 @@ class AppController extends ChangeNotifier {
         msgId: turn.msgId,
         runExtras: {
           ..._runExtras(conv),
-          if (fork != null) 'forkOf': fork,
+          'forkOf': ?fork,
           ...await _grantFor(conv, asked ?? proModelForTurnOf(conv),
               research: research, team: team),
         },
@@ -6373,9 +6373,9 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     if (announce) {
       await note(inAnonChat
-          ? t("This chat's anonymous balance: {standard} standard, {pro} Pro. "
-              'All your anonymous keys hold {totalStandard} standard and {totalPro} Pro, the others as of their last use. '
-              'Your nym still holds {nymStandard} standard and {nymPro} Pro.', {
+          ? t("This chat's anonymous balance: {standard} Standard, {pro} Pro. "
+              'All your anonymous keys hold {totalStandard} Standard and {totalPro} Pro, the others as of their last use. '
+              'Your nym still holds {nymStandard} Standard and {nymPro} Pro.', {
               'standard': creditFigure(anonStandardBalance),
               'pro': creditFigure(anonProBalance),
               'totalStandard': creditFigure(anonTotalStandard),
@@ -6383,7 +6383,7 @@ class AppController extends ChangeNotifier {
               'nymStandard': creditFigure(standardBalance),
               'nymPro': creditFigure(proBalance),
             })
-          : t('Your balance: {standard} standard, {pro} Pro.', {
+          : t('Your balance: {standard} Standard, {pro} Pro.', {
               'standard': creditFigure(standardBalance),
               'pro': creditFigure(proBalance)
             }));

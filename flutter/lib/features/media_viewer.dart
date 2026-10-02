@@ -208,9 +208,9 @@ class MediaViewer extends StatefulWidget {
         barrierDismissible: false,
         transitionDuration: const Duration(milliseconds: 150),
         reverseTransitionDuration: const Duration(milliseconds: 150),
-        pageBuilder: (_, __, ___) =>
+        pageBuilder: (_, _, _) =>
             MediaViewer(items: items, initialIndex: at),
-        transitionsBuilder: (_, animation, __, child) =>
+        transitionsBuilder: (_, animation, _, child) =>
             FadeTransition(opacity: animation, child: child),
       ),
     );
@@ -253,10 +253,10 @@ class MediaViewer extends StatefulWidget {
       final file = File('${dir.path}/$name');
       await file.writeAsBytes(bytes);
       final mime = _sniffMime(bytes);
-      await Share.shareXFiles(
-        [XFile(file.path, name: name, mimeType: mime.isEmpty ? null : mime)],
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile(file.path, name: name, mimeType: mime.isEmpty ? null : mime)],
         sharePositionOrigin: origin,
-      );
+      ));
       return true;
     } catch (_) {
       return false;
@@ -600,7 +600,7 @@ class _MediaViewerState extends State<MediaViewer>
                                             ),
                                           ),
                                         ),
-                                  errorBuilder: (_, __, ___) => const SizedBox(
+                                  errorBuilder: (_, _, _) => const SizedBox(
                                     width: 96,
                                     height: 96,
                                     child: NymGlyph('picture',
@@ -724,7 +724,7 @@ class AttachmentThumb extends StatelessWidget {
         height: size,
         fit: BoxFit.cover,
         gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => SizedBox(
+        errorBuilder: (_, _, _) => SizedBox(
           width: size,
           height: size,
           child: NymGlyph('picture', size: size * 0.5),

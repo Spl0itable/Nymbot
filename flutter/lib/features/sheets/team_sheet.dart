@@ -286,7 +286,7 @@ class _TeamModelChoice extends StatelessWidget {
                 loading: false,
                 chatOnly: true,
                 filters: ModelPicker.chatFilters,
-                selectedKeys: {if (current != null) current!},
+                selectedKeys: {?current},
                 scrollController: controller,
                 onPick: (m, _) => Navigator.pop(context, m),
               ),

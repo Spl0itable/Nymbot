@@ -863,7 +863,7 @@ class _MediaBlockState extends State<MediaBlock> {
       final file = File(
           '${Directory.systemTemp.path}/${MediaBlock.fileName(widget.url, res.headers['content-type'])}');
       await file.writeAsBytes(res.bodyBytes);
-      await Share.shareXFiles([XFile(file.path)]);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
     } catch (_) {
       await launchSafeUrl(widget.url);
       messenger.showSnackBar(

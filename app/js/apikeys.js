@@ -371,7 +371,7 @@
     }
 
     function balanceLine(m) {
-        return m && m.balance === 'pro' ? t('Spends the Pro balance.') : t('Spends the standard balance.');
+        return m && m.balance === 'pro' ? t('Spends the Pro balance.') : t('Spends the Standard balance.');
     }
 
     function hintFor(m) {
@@ -531,7 +531,7 @@
                     ? t('{credits} ({sats} sats)', { credits: credits(x.credits), sats: num(x.sats) })
                     : credits(x.credits);
             };
-            node.textContent = t('Balances: {standard} standard, {pro} Pro', { standard: part(b.standard), pro: part(b.pro) });
+            node.textContent = t('Balances: {standard} Standard, {pro} Pro', { standard: part(b.standard), pro: part(b.pro) });
         }
         $('apiFreeNote').hidden = !isFree(ui);
     }
@@ -655,7 +655,7 @@
                 typeWord(q.type),
                 t('{input} in, {output} out', { input: num(Number(q.input_tokens) || 0), output: num(Number(q.output_tokens) || 0) }),
                 t('{n} sats', { n: num(Number(q.cost_sats) || 0) }),
-                q.balance === 'standard' ? t('standard') : (q.balance === 'pro' ? t('Pro') : ''),
+                q.balance === 'standard' ? t('Standard') : (q.balance === 'pro' ? t('Pro') : ''),
                 key ? key.name : '',
                 q.web_search ? t('web search') : '',
                 q.status === 'error' ? t('failed') : ''
@@ -684,7 +684,7 @@
         const lines = [];
         if (on) {
             lines.push(t('Connected. When the {tier} balance drops below {threshold} sats, it tops up {topup} sats.', {
-                tier: d.tier === 'standard' ? t('standard') : t('Pro'),
+                tier: d.tier === 'standard' ? t('Standard') : t('Pro'),
                 threshold: num(Number(d.threshold_sats) || 0),
                 topup: num(Number(d.topup_sats) || 0)
             }));

@@ -371,7 +371,7 @@ class Tasks {
         : <String>{for (final s in m?.sources ?? const <Map<String, dynamic>>[]) _host(s['url'])}
             .where((h) => h.isNotEmpty)
             .toList();
-    final items = <TaskItem>[if (plan != null) plan, ...searches];
+    final items = <TaskItem>[?plan, ...searches];
     if (shown.isNotEmpty) {
       items.add(TaskItem(
           shown.length == 1 ? t('Read 1 source') : t('Read {n} sources', {'n': shown.length}),

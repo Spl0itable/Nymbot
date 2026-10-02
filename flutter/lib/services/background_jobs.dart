@@ -98,7 +98,7 @@ class BackgroundJobs {
     return {
       if (budget > 0 && budget.isFinite) 'maxCredits': credits < 1 ? 1 : credits,
       'maxLegs': maxLegs,
-      if (notify != null) 'notify': notify,
+      'notify': ?notify,
     };
   }
 

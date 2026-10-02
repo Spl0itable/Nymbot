@@ -79,7 +79,7 @@ class NymbotToolbar extends StatelessWidget {
         _ChipSpec(
           glyph: 'site-check',
           paidOnly: true,
-          label: t('Check a site'),
+          label: t('Site checker'),
           active: false,
           onTap: () => showSiteCheckSheet(context),
         ),

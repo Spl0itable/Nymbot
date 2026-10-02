@@ -12,11 +12,11 @@ class ShareFile {
 
   static Future<void> _platform(
       String body, String name, String mime, String? subject) async {
-    await Share.shareXFiles(
-      [XFile.fromData(utf8.encode(body), mimeType: mime, name: name)],
+    await SharePlus.instance.share(ShareParams(
+      files: [XFile.fromData(utf8.encode(body), mimeType: mime, name: name)],
       fileNameOverrides: [name],
       subject: subject,
-    );
+    ));
   }
 
   static Future<void> text(

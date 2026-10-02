@@ -548,7 +548,7 @@ class ChatEngine {
     if (e.unpriced) {
       return pro
           ? t('— Pro credits (price unavailable right now)')
-          : t('— standard credits (price unavailable right now)');
+          : t('— Standard credits (price unavailable right now)');
     }
     if (!e.metered) {
       if (pro) {
@@ -559,8 +559,8 @@ class ChatEngine {
             : t('About {low}–{high} Pro credits', {'low': low, 'high': high});
       }
       return e.low == 1
-          ? t('1 standard credit')
-          : t('{n} standard credits', {'n': figure(e.low.round())});
+          ? t('1 Standard credit')
+          : t('{n} Standard credits', {'n': figure(e.low.round())});
     }
     final low = creditAmount(e.low, true);
     final high = creditAmount(e.high, true);
@@ -573,8 +573,8 @@ class ChatEngine {
             : t('About {low}–{high} Pro credits', {'low': low, 'high': high});
       }
       return same
-          ? t('{n} standard credits', {'n': low})
-          : t('About {low}–{high} standard credits', {'low': low, 'high': high});
+          ? t('{n} Standard credits', {'n': low})
+          : t('About {low}–{high} Standard credits', {'low': low, 'high': high});
     }
     if (pro) {
       return same
@@ -583,8 +583,8 @@ class ChatEngine {
               {'low': low, 'high': high, 'max': max});
     }
     return same
-        ? t('About {n} standard credits (up to {max})', {'n': low, 'max': max})
-        : t('About {low}–{high} standard credits (up to {max})',
+        ? t('About {n} Standard credits (up to {max})', {'n': low, 'max': max})
+        : t('About {low}–{high} Standard credits (up to {max})',
             {'low': low, 'high': high, 'max': max});
   }
 
@@ -1578,7 +1578,7 @@ class ChatEngine {
     // A '!' question stays out of the conversation context on both sides, though the chat shows it.
     if (!prepared.fresh) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
-      holdWraps(conv.id, [...prepared.partWraps, if (selfEvent != null) selfEvent]);
+      holdWraps(conv.id, [...prepared.partWraps, ?selfEvent]);
     }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');

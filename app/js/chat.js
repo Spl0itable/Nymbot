@@ -627,7 +627,7 @@
         const fmt = amount || function (v) { return String(v); };
         const pro = est.tier === 'pro';
         if (est.unpriced) {
-            return pro ? t('— Pro credits (price unavailable right now)') : t('— standard credits (price unavailable right now)');
+            return pro ? t('— Pro credits (price unavailable right now)') : t('— Standard credits (price unavailable right now)');
         }
         if (!est.metered) {
             if (pro) {
@@ -635,7 +635,7 @@
                     ? t('About {n} Pro credits', { n: fmt(est.low) })
                     : t('About {low}–{high} Pro credits', { low: fmt(est.low), high: fmt(est.high) });
             }
-            return est.low === 1 ? t('1 standard credit') : t('{n} standard credits', { n: fmt(est.low) });
+            return est.low === 1 ? t('1 Standard credit') : t('{n} Standard credits', { n: fmt(est.low) });
         }
         const top = Number(est.max) || 0;
         const low = fmt(est.low);
@@ -646,7 +646,7 @@
             if (pro) {
                 return same ? t('About {n} Pro credits', { n: low }) : t('About {low}–{high} Pro credits', { low, high });
             }
-            return same ? t('{n} standard credits', { n: low }) : t('About {low}–{high} standard credits', { low, high });
+            return same ? t('{n} Standard credits', { n: low }) : t('About {low}–{high} Standard credits', { low, high });
         }
         if (pro) {
             return same
@@ -654,8 +654,8 @@
                 : t('About {low}–{high} Pro credits (up to {max})', { low, high, max });
         }
         return same
-            ? t('About {n} standard credits (up to {max})', { n: low, max })
-            : t('About {low}–{high} standard credits (up to {max})', { low, high, max });
+            ? t('About {n} Standard credits (up to {max})', { n: low, max })
+            : t('About {low}–{high} Standard credits (up to {max})', { low, high, max });
     }
 
     const Chat = {
