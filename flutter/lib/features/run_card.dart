@@ -295,6 +295,31 @@ class RunCapActions extends StatelessWidget {
   }
 }
 
+class SteerOfferActions extends StatelessWidget {
+  const SteerOfferActions({super.key, required this.message});
+
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          OutlinedButton(
+            key: const ValueKey('steer-offer-send'),
+            onPressed: () => unawaited(app.sendSteerOffer(message)),
+            child: Text(t('Send as a message')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class PendingActions extends StatelessWidget {
   const PendingActions({super.key, required this.message, required this.onEdit});
 

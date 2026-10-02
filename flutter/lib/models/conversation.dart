@@ -233,6 +233,7 @@ class ChatMessage {
     this.retryEvent,
     this.runCap,
     this.sched,
+    this.steerOffer,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
@@ -282,6 +283,7 @@ class ChatMessage {
   final String? retryEvent;
   final Map<String, dynamic>? runCap;
   final String? sched;
+  final String? steerOffer;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -293,7 +295,8 @@ class ChatMessage {
           Map<String, dynamic>? tasks,
           DateTime? updatedAt,
           String? wire,
-          bool sent = false}) =>
+          bool sent = false,
+          bool clearSteerOffer = false}) =>
       ChatMessage(
         id: id,
         role: role,
@@ -331,6 +334,7 @@ class ChatMessage {
         retryEvent: retryEvent,
         runCap: runCap,
         sched: sched,
+        steerOffer: clearSteerOffer ? null : steerOffer,
         at: at,
       );
 
@@ -371,6 +375,7 @@ class ChatMessage {
         if (retryEvent != null) 'retryEvent': retryEvent,
         if (runCap != null) 'runCap': runCap,
         if (sched != null) 'sched': sched,
+        if (steerOffer != null) 'steerOffer': steerOffer,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -419,8 +424,18 @@ class ChatMessage {
         retryEvent: j['retryEvent'] is String ? j['retryEvent'] as String : null,
         runCap: j['runCap'] is Map ? (j['runCap'] as Map).cast<String, dynamic>() : null,
         sched: j['sched'] is String ? j['sched'] as String : null,
+        steerOffer: j['steerOffer'] is String && (j['steerOffer'] as String).trim().isNotEmpty
+            ? j['steerOffer'] as String
+            : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
+
+  static String? steerOfferOf(Object? raw) {
+    if (raw is! Map) return null;
+    final text = raw['text'];
+    if (text is! String || text.trim().isEmpty) return null;
+    return text.trim();
+  }
 
   static List<String> followUpsOf(Object? raw) {
     if (raw is! List) return const [];

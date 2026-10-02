@@ -2146,7 +2146,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ? PendingActions(message: m, onEdit: _takePending)
                 : m.runCap != null
                     ? RunCapActions(message: m)
-                    : null;
+                    : m.role == ChatRole.bot && m.steerOffer != null
+                        ? SteerOfferActions(message: m)
+                        : null;
             return KeyedSubtree(
               key: key,
               child: extra == null

@@ -3726,6 +3726,7 @@ class AppController extends ChangeNotifier {
       serverRuns: res.serverRuns,
       team: Team.normalize(res.team),
       replyTo: _linkOf(turn),
+      steerOffer: turn.prepared?.steerOffer,
     );
   }
 
@@ -4673,6 +4674,21 @@ class AppController extends ChangeNotifier {
     } finally {
       _farChecking = false;
     }
+  }
+
+  Future<void> sendSteerOffer(ChatMessage m) async {
+    final conv = current;
+    if (conv == null) return;
+    final at = messages.indexWhere((x) => x.id == m.id);
+    if (at < 0) return;
+    final text = messages[at].steerOffer;
+    if (text == null || text.isEmpty) return;
+    messages = [
+      for (final x in messages) x.id == m.id ? x.copyWith(clearSteerOffer: true) : x,
+    ];
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
+    await send(text, target: conv, withAttachments: const []);
   }
 
   Future<void> _offerMissed(List<String> ids, Conversation conv) async {

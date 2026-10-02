@@ -22,7 +22,7 @@ if (keystorePropertiesFile.exists()) {
 //   * whatever Flutter resolved (flutter.versionCode)
 //   * MIN_PLAY_VERSION_CODE, a floor above everything already on Play
 // ---------------------------------------------------------------------------
-def MIN_PLAY_VERSION_CODE = 358
+def MIN_PLAY_VERSION_CODE = 359
 
 def pubspecBuildNumber = 0
 def pubspecVersionName = null
