@@ -1,7 +1,7 @@
 name: nymbot
 description: "Nymbot — a private AI assistant. No account, end-to-end encrypted, paid in sats."
 publish_to: "none"
-version: 1.0.7+374
+version: 1.0.7+375
 environment:
   sdk: ^3.13.0
   flutter: ">=3.47.1"

@@ -107,7 +107,7 @@ class NymbotToolbar extends StatelessWidget {
         onTap: () => showPersonasSheet(context),
       ),
       _ChipSpec(
-        glyph: 'bolt',
+        glyph: 'skills',
         label: app.skillOf(app.current) != null ? Skills.label(app.skillOf(app.current)!) : t('Skills'),
         active: app.skillOf(app.current) != null,
         onTap: () async {
