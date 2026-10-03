@@ -1,4 +1,4 @@
-const CACHE = 'nymbot-shell-v83';
+const CACHE = 'nymbot-shell-v84';
 const SHELL = [
     '/app/',
     '/app/index.html',
