@@ -378,6 +378,23 @@
                 }));
             }
         }
+        const asked = window.NymbotAsk ? window.NymbotAsk.taskItem(m) : null;
+        if (asked) {
+            out.push(item(asked.label, asked.state, {
+                card: '.ask-card',
+                actions: asked.state === 'waiting' ? [{ act: 'answer', label: t('Answer'), primary: true }] : []
+            }));
+        }
+        const planned = window.NymbotPlan ? window.NymbotPlan.taskItem(m) : null;
+        if (planned) {
+            out.push(item(planned.label, planned.state, {
+                detail: planned.detail, children: planned.children, card: '.plan-card', approval: planned.state === 'waiting',
+                actions: planned.state === 'waiting' ? [
+                    { act: 'plan-approve', label: t('Approve'), primary: true },
+                    { act: 'plan-review', label: t('Review') }
+                ] : []
+            }));
+        }
         const p = m.pendingTool;
         if (p && typeof p === 'object') {
             const run = p.kind === 'server-run';
@@ -415,6 +432,8 @@
             case 'research': return t('Research');
             case 'repo': return t('Repository task');
             case 'tool': return t('Tool call');
+            case 'question': return t('Question');
+            case 'plan': return t('Plan');
             default: return t('Reply');
         }
     }
@@ -446,6 +465,8 @@
             if (m.team) mode = 'team';
             else if (runs || m.staged || m.checkpoint) mode = 'repo';
             else if (m.pendingTool) mode = 'tool';
+            else if (m.ask) mode = 'question';
+            else if (m.proposal) mode = 'plan';
         }
         if (!mode) return null;
         const end = rec ? rec.end : 'done';
@@ -523,7 +544,9 @@
 
     function waitingCount(ui, conv) {
         const list = Store().messages(conv.id).slice(-RECENT);
-        return list.filter(m => m.pendingTool && (!m.pendingTool.state || m.pendingTool.state === 'waiting')).length;
+        const Ask = window.NymbotAsk;
+        return list.filter(m => (m.pendingTool && (!m.pendingTool.state || m.pendingTool.state === 'waiting'))
+            || (Ask && Ask.pending(m)) || (window.NymbotPlan && window.NymbotPlan.pending(m))).length;
     }
 
     function began(ui, turn) {
@@ -694,7 +717,12 @@
                 b.type = 'button';
                 b.tabIndex = -1;
                 b.dataset.role = a.act;
-                b.addEventListener('click', () => approve(ui, g.messageId, a.act === 'allow'));
+                b.addEventListener('click', () => {
+                    if (a.act === 'answer') return jump(ui, g.messageId, '.ask-card');
+                    if (a.act === 'plan-review') return jump(ui, g.messageId, '.plan-card');
+                    if (a.act === 'plan-approve') return window.NymbotPlan.approveById(ui, g.messageId);
+                    return approve(ui, g.messageId, a.act === 'allow');
+                });
                 row2.appendChild(b);
             }
             li.appendChild(row2);
@@ -731,6 +759,21 @@
         jumpBtn.appendChild(el('span', 'task-group-meta', meta.join(' · ')));
         jumpBtn.addEventListener('click', () => jump(ui, g.messageId, ''));
         head.appendChild(jumpBtn);
+        const T = window.NymbotTranscripts;
+        const conv = ui.conv;
+        if (T && conv) {
+            const m = g.live ? null : Store().messages(conv.id).find(x => x.id === g.messageId);
+            if (g.live ? T.has(conv.id, g.run) : T.hasMessage(conv.id, m)) {
+                const tx = el('button', 'btn btn-small btn-ghost task-transcript task-focus', t('Transcript'));
+                tx.type = 'button';
+                tx.tabIndex = -1;
+                tx.dataset.act = 'open-transcript';
+                tx.dataset.conv = conv.id;
+                if (g.live) tx.dataset.tx = g.run || '';
+                else tx.dataset.msg = g.messageId;
+                head.appendChild(tx);
+            }
+        }
         if (g.live && g.steer) {
             const steer = el('button', 'btn btn-small btn-ghost task-steer task-focus', t('Add instructions'));
             steer.type = 'button';

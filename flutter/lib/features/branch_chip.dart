@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/theme.dart';
 import '../services/git_review.dart';
+import '../services/pr_watch.dart';
 import 'i18n/i18n.dart';
 import 'markdown_body.dart';
 
 class BranchChip extends StatefulWidget {
-  const BranchChip({super.key, required this.job, this.onAction});
+  const BranchChip({super.key, required this.job, this.onAction, this.watch});
 
   final Map<String, dynamic> job;
+  final ({bool on, Map<String, dynamic>? live})? watch;
   final Future<void> Function(Map<String, dynamic> job, String op)? onAction;
 
   @override
@@ -61,8 +63,18 @@ class _BranchChipState extends State<BranchChip> {
     final deleted = job['deleted'] == true;
     final conflict = job['conflict'] == true;
     final running = job['done'] == false;
+    final closed = job['closed'] == true && !merged;
+    final pullNo = pullNumberOf(job['pull']);
+    final revertable = pullNo > 0 && merged && job['reverted'] == null;
+    final canRevert = revertable && canRevertOn(job['provider']);
+    final watch = widget.watch;
+    final live = watch == null ? '' : PrWatch.liveText(watch.live);
+    final failing = watch?.live?['ci'] == 'failing';
+    final canWatch = watch != null && (watch.on || (pullNo > 0 && !merged && !closed && !running));
     final buttons = <Widget>[
-      if (conflict) ...[
+      if (closed) ...[
+        if (_url != null) _open('branch-open', t('Open PR')),
+      ] else if (conflict) ...[
         _open('branch-resolve', t('Open the PR to resolve')),
         _button('branch-update', t('Ask Nymbot to update the branch'), 'update',
             primary: true),
@@ -72,6 +84,14 @@ class _BranchChipState extends State<BranchChip> {
             primary: job['whenDone'] == 'merge'),
       ] else if (merged && _url != null)
         _open('branch-open', t('Open PR')),
+      if (pullNo > 0 && !merged && !closed && !running)
+        _button('branch-close', t('Close pull request'), 'close'),
+      if (canRevert) _button('branch-revert', t('Revert with a new PR'), 'revert-pr'),
+      if (canWatch)
+        Semantics(
+          toggled: watch.on,
+          child: _button('branch-watch', watch.on ? t('Stop watching') : t('Watch PR'), 'watch'),
+        ),
       if (!running) _button('branch-delete', t('Delete'), 'delete'),
     ];
     return Container(
@@ -98,9 +118,21 @@ class _BranchChipState extends State<BranchChip> {
             const SizedBox(height: 2),
             Text(branchState(job),
                 style: TextStyle(fontSize: 11.5, color: theme.hintColor)),
+            if (live.isNotEmpty)
+              Text(live,
+                  key: const ValueKey('branch-live'),
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      color: failing ? NymbotColors.danger : theme.hintColor)),
             if (!deleted && buttons.isNotEmpty) ...[
               const SizedBox(height: 6),
               Wrap(spacing: 6, runSpacing: 6, children: buttons),
+            ],
+            if (!deleted && revertable && !canRevert) ...[
+              const SizedBox(height: 4),
+              Text(
+                  t('This forge cannot open a revert from Nymbot. Revert the merge on the forge.'),
+                  style: TextStyle(fontSize: 11, color: theme.hintColor)),
             ],
           ],
         ),

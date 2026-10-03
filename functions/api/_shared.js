@@ -2697,7 +2697,7 @@ var AUTH_MAX_AGE_S = 120;
 var AUTH_MAX_FUTURE_S = 15;
 var AUTH_REPLAY_TTL_S = AUTH_MAX_AGE_S + AUTH_MAX_FUTURE_S + 15;
 
-var AUTH_PAYLOAD_REQUIRED = ["transfer-credits", "shop-transfer", "voucher-issue", "gift-create"];
+var AUTH_PAYLOAD_REQUIRED = ["transfer-credits", "shop-transfer", "voucher-issue", "gift-create", "pm-answer"];
 
 var AUTH_REPLAY_ACTIONS = [
   "transfer-credits", "create-invoice", "claim-credits", "clear-history",
@@ -2705,7 +2705,7 @@ var AUTH_REPLAY_ACTIONS = [
   "pm-revert", "git-apply", "git-branch", "runner-run", "site-check", "mcp-probe",
   "shop-set-active", "shop-buy-invoice", "shop-claim", "shop-transfer", "shop-redeem",
   "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
-  "channel-delete", "zap-put"
+  "channel-delete", "zap-put", "pm-answer"
 ];
 
 function authPayloadRequired(action) {

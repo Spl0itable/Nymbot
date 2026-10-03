@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'i18n/i18n.dart';
 import '../core/theme/theme.dart';
+import '../services/skills.dart';
 
 class BotCommand {
   const BotCommand({
@@ -39,6 +40,7 @@ class BotCommands {
         BotCommand(name: 'system', args: '[text]', group: 'local', hint: () => t("Set this chat's custom instructions")),
         BotCommand(name: 'prompt', args: '[title]', group: 'local', hint: () => t('Insert a saved prompt')),
         BotCommand(name: 'save', args: '[title]', group: 'local', hint: () => t('Save the composer text as a prompt')),
+        BotCommand(name: 'skills', args: '[name]', group: 'local', hint: () => t("Run, attach or edit your saved skills; or type / and a skill's name")),
         BotCommand(name: 'search', args: '[text]', group: 'local', hint: () => t('Search every conversation')),
         BotCommand(name: 'effort', args: '[normal|careful|deep]', group: 'local', hint: () => t('How hard to think about each reply')),
         BotCommand(name: 'remember', args: '[text]', group: 'local', hint: () => t('Keep a standing fact between chats')),
@@ -176,6 +178,72 @@ class CommandSuggestions extends StatelessWidget {
                   Expanded(
                     child: Text(
                       c.hint(),
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: theme.hintColor),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class SkillSuggestions extends StatelessWidget {
+  const SkillSuggestions({
+    super.key,
+    required this.term,
+    required this.skills,
+    required this.onPick,
+  });
+
+  final String term;
+  final List<Skill> skills;
+  final void Function(Skill skill) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = Skills.match(term, skills);
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Container(
+      key: const ValueKey('skill-suggestions'),
+      margin: const EdgeInsets.only(bottom: 6),
+      constraints: const BoxConstraints(maxHeight: 280),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: rows.length,
+        itemBuilder: (context, i) {
+          final s = rows[i];
+          final about = Skills.describe(s);
+          return InkWell(
+            key: ValueKey('skill-suggest-${s.id}'),
+            onTap: () => onPick(s),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              child: Row(
+                children: [
+                  Text(
+                    '/${Skills.slugOf(s)}',
+                    style: TextStyle(
+                      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
+                      fontSize: 13,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      about.isEmpty ? Skills.label(s) : '${Skills.label(s)} · $about',
                       textAlign: TextAlign.right,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 11, color: theme.hintColor),

@@ -6,6 +6,7 @@ import '../../core/crypto/keys.dart';
 import '../../models/workspace.dart';
 import '../../services/git_forge.dart';
 import '../../services/git_review.dart';
+import '../../services/pr_watch.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
@@ -35,6 +36,7 @@ class _ReposSheetState extends State<_ReposSheet> {
   bool _approve = false;
   bool _jobBranches = true;
   String _whenDone = '';
+  String _prWatch = '';
   String? _editingId;
   String? _error;
   List<ForgeRepo>? _found;
@@ -66,6 +68,7 @@ class _ReposSheetState extends State<_ReposSheet> {
       _approve = false;
       _jobBranches = true;
       _whenDone = '';
+      _prWatch = '';
       _error = null;
       _host.clear();
       _token.clear();
@@ -254,6 +257,7 @@ class _ReposSheetState extends State<_ReposSheet> {
           approve: _approve,
           jobBranches: _jobBranches,
           whenDone: _whenDone,
+          prWatch: _prWatch,
         ),
         useHere: true,
       );
@@ -376,6 +380,7 @@ class _ReposSheetState extends State<_ReposSheet> {
       _approve = r.approve;
       _jobBranches = r.jobBranches;
       _whenDone = whenDoneOf(r.whenDone);
+      _prWatch = PrWatch.repoChoice(r.prWatch);
       _error = null;
       _host.text = r.host;
       _token.text = r.token;
@@ -634,6 +639,23 @@ class _ReposSheetState extends State<_ReposSheet> {
                 ],
                 onChanged: (v) => setState(() => _whenDone = whenDoneOf(v)),
               ),
+            DropdownButtonFormField<String>(
+              key: ValueKey('repo-pr-watch-$_editingId'),
+              initialValue: _prWatch,
+              isExpanded: true,
+              decoration: InputDecoration(labelText: t('Watch the pull requests tasks open')),
+              items: [
+                DropdownMenuItem(
+                  value: '',
+                  child: Text(t('Use the default in Settings ({choice})', {
+                    'choice': app.settings.prWatch ? t('Watch them') : t("Don't watch them")
+                  })),
+                ),
+                DropdownMenuItem(value: 'on', child: Text(t('Watch them'))),
+                DropdownMenuItem(value: 'off', child: Text(t("Don't watch them"))),
+              ],
+              onChanged: (v) => setState(() => _prWatch = PrWatch.repoChoice(v)),
+            ),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -678,6 +700,7 @@ class _ReposSheetState extends State<_ReposSheet> {
                     approve: _approve,
                     jobBranches: _jobBranches,
                     whenDone: _whenDone,
+                    prWatch: _prWatch,
                     nymBranches: before?.nymBranches,
                     ngit: _originFor(_repo.text.trim(), _host.text.trim()),
                   ),

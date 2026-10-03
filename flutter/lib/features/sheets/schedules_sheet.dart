@@ -43,6 +43,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
   String _error = '';
   String? _mode;
   int _cap = ServerSchedules.defaultCap;
+  bool _runChanges = false;
   String _status = '';
 
   @override
@@ -69,6 +70,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
         _error = '';
         _mode = null;
         _cap = ServerSchedules.defaultCap;
+        _runChanges = false;
         _title.clear();
         _prompt.clear();
       });
@@ -84,6 +86,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
         _cap = ServerSchedules.runCaps.contains(entry.serverCap)
             ? entry.serverCap
             : ServerSchedules.defaultCap;
+        _runChanges = entry.runChanges;
         _title.text = entry.title;
         _prompt.text = entry.prompt;
       });
@@ -125,6 +128,7 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
     entry.convId = _here ? app.current?.id : null;
     entry.enabled = true;
     entry.serverCap = _cap;
+    entry.runChanges = _runChanges;
     await app.saveSchedule(entry);
     var said = '';
     final alone = _here && (app.current?.anon ?? false);
@@ -199,6 +203,16 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             ),
             const SizedBox(height: 4),
             Text(ServerSchedules.consent(_cap), style: const TextStyle(fontSize: 11)),
+            CheckboxListTile(
+              key: const ValueKey('schedule-run-changes'),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: _runChanges,
+              onChanged: (v) => setState(() => _runChanges = v ?? false),
+              title: Text(t('Run changes without asking')),
+              subtitle: Text(t('Only for this schedule: it skips the plan-first approval and makes its changes straight away.'),
+                  style: const TextStyle(fontSize: 11)),
+            ),
           ],
           _choice(null, t('Neither: only while the app is open'), ''),
         ],

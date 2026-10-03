@@ -35,6 +35,7 @@
     const LIBRARY = [
         ['personas', () => Store.customPersonas(), (v) => Store.write('personas', v)],
         ['prompts', () => Store.read('prompts', null), (v) => Store.write('prompts', v)],
+        ['skills', () => Store.read('skills', null), (v) => Store.write('skills', v)],
         ['workspaces', () => Store.workspaces(), (v) => Store.write('workspaces', v)],
         ['folders', () => Store.folders(), (v) => Store.write('folders', v)],
         ['schedules', () => Store.schedules(), (v) => Store.write('schedules', v)],
@@ -350,6 +351,16 @@
         return Number(record.updatedAt || record.at || record.createdAt || record.ts) || 0;
     }
 
+    function fitTranscripts(entry, list) {
+        const T = window.NymbotTranscripts;
+        if (!T || !list.length) return [];
+        const room = Math.floor((SEAL_MAX_BYTES - utf8Bytes(JSON.stringify(entry)) - 4096) / 3);
+        const budget = Math.min(T.SYNC_MAX_CHARS, room);
+        if (budget <= 0) return [];
+        const fitted = T.Core.fit(list, budget);
+        return JSON.stringify(fitted).length > budget ? [] : fitted;
+    }
+
     function fitArtifacts(convId, list) {
         let arts = list.map(a => Object.assign({}, a, { versions: (a.versions || []).slice(-ART_VERSIONS) }));
         const size = () => JSON.stringify({ id: convId, artifacts: arts }).length;
@@ -562,7 +573,10 @@
             for (const conv of chats) {
                 const msgs = Store.messages(conv.id);
                 if (!msgs.length) continue;
-                out['chat-' + conv.id] = { id: conv.id, messages: fitMessages(msgs.slice(-MAX_MESSAGES)) };
+                const entry = { id: conv.id, messages: fitMessages(msgs.slice(-MAX_MESSAGES)) };
+                const tx = fitTranscripts(entry, Store.transcripts ? Store.transcripts(conv.id) : []);
+                if (tx.length) entry.transcripts = tx;
+                out['chat-' + conv.id] = entry;
             }
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
@@ -701,6 +715,15 @@
                 if (merged.length !== mine.length) {
                     Store.saveMessages(entry.id, merged);
                     touched.push(key);
+                }
+                const T = window.NymbotTranscripts;
+                if (T && Store.transcripts && Array.isArray(entry.transcripts) && entry.transcripts.length) {
+                    const held = Store.transcripts(entry.id);
+                    const both = T.Core.mergeList(held, entry.transcripts);
+                    if (JSON.stringify(both) !== JSON.stringify(T.Core.mergeList(held, []))) {
+                        Store.saveTranscripts(entry.id, both);
+                        if (!touched.includes(key)) touched.push(key);
+                    }
                 }
             }
 

@@ -14,7 +14,8 @@
     const SEEN_KEY = 'sched_seen';
     const COLLECTED_KEY = 'sched_collected';
     const WRAP_SKEW_MS = 2 * 86400000;
-    const LIVE = new Set(['running', 'parked', 'waiting']);
+    const ASK_WAIT_MS = 86400000;
+    const LIVE = new Set(['running', 'parked', 'waiting', 'awaiting']);
 
     const Store = () => window.NymbotStore;
     const Api = () => window.NymbotApi;
@@ -39,7 +40,9 @@
 
     const Background = {
         POLL_MS: 5000,
+        LOG_MS: 30000,
         COLLECT_EVERY_MS: 120000,
+        _logAt: new Map(),
         MAX_LEGS,
         _lastCollect: 0,
         _collecting: null,
@@ -72,18 +75,19 @@
         async grantWithPush(ui, conv, turn, opts) {
             const grant = this.grantFor(ui, conv, turn, opts);
             if (!grant) return null;
-            const push = await this.pushFor(conv.id, t('Your task is done'));
+            const push = await this.pushFor(conv.id, t('Your task is done'), 'background');
             if (push) grant.notify = push;
             return grant;
         },
 
-        async pushFor(chat, text) {
+        async pushFor(chat, text, kind) {
             const N = Notify();
             if (!N || !CHAT_RE.test(String(chat || '')) || !N.pushSupported() || N.permission() !== 'granted') return null;
             try {
                 const subscription = await within(N.subscription(), PUSH_WAIT_MS);
                 if (!subscription) return null;
-                return { env: 'web', subscription, chat, text: String(text || '').slice(0, 80) };
+                const base = { env: 'web', subscription, chat, text: String(text || '').slice(0, 80) };
+                return kind && typeof N.pushOptions === 'function' ? Object.assign(base, N.pushOptions(kind)) : base;
             } catch (_) {
                 return null;
             }
@@ -154,14 +158,16 @@
 
         async status(rec) {
             try {
-                const live = await Api().liveRuns(null, {});
+                const fresh = Date.now() - (this._logAt.get(rec.runId) || 0) >= this.LOG_MS;
+                if (fresh) this._logAt.set(rec.runId, Date.now());
+                const live = await Api().call('pm-runs', fresh ? { log: rec.runId } : {}, { timeout: 10000 });
                 const runs = live && live.status === 200 && live.data && Array.isArray(live.data.runs) ? live.data.runs : null;
                 const hit = runs ? runs.find(r => r && r.replyTo === rec.runId) : null;
-                if (hit) return { state: LIVE.has(hit.state) ? hit.state : 'running', legs: this.legIds(hit.legs), listed: true };
-                const done = await Api().call('pm-done-since', { since: Math.max(0, (Number(rec.at) || Date.now()) - 60000) }, { timeout: 10000 });
+                if (hit) return { state: LIVE.has(hit.state) ? hit.state : 'running', legs: this.legIds(hit.legs), listed: true, log: hit.log };
+                const done = await Api().call('pm-done-since', { since: Math.max(0, (Number(rec.at) || Date.now()) - 60000), log: rec.runId }, { timeout: 10000 });
                 const ended = done && done.status === 200 && done.data && Array.isArray(done.data.runs) ? done.data.runs : null;
                 const end = ended ? ended.find(r => r && r.replyTo === rec.runId) : null;
-                if (end) return { state: String(end.state || ''), legs: this.legIds(end.legs), listed: false };
+                if (end) return { state: String(end.state || ''), legs: this.legIds(end.legs), listed: false, log: end.log };
                 return runs || ended ? { state: '', legs: [], listed: false } : null;
             } catch (_) {
                 return null;
@@ -200,6 +206,9 @@
             if (turn.stopped) return { wait: true };
             if (next.stopped) return { end: 'stopped' };
             ui.placeLeg(turn, conv, next);
+            if (data.expired === true) return { end: 'expired', next };
+            if (next.ask && next.ask.runId) return { end: 'question', next };
+            if (next.proposal && next.proposal.runId) return { end: 'question', next, plan: true };
             if (next.background) return { more: true };
             if (next.pendingTool) return { end: 'approval', next };
             const paused = data.background && data.background.state === 'paused' ? String(data.background.reason || '') : '';
@@ -220,8 +229,9 @@
                 const seen = await this.status(rec);
                 if (turn.stopped) break;
                 if (!seen) continue;
+                if (window.NymbotTranscripts) window.NymbotTranscripts.server(ui, turn, seen);
                 let waiting = false;
-                const over = seen.state === 'failed' || seen.state === 'stopped';
+                const over = seen.state === 'failed' || seen.state === 'stopped' || seen.state === 'expired';
                 for (const leg of seen.legs) {
                     if (claimed.has(leg)) continue;
                     const got = await this.claimLeg(ui, turn, rec, leg);
@@ -233,12 +243,20 @@
                     if (got.end) { end = got; break; }
                 }
                 if (turn.stopped || end || waiting) continue;
-                if (seen.state === 'failed') end = { end: 'failed' };
+                if (seen.state === 'expired') end = { end: 'expired' };
+                else if (seen.state === 'failed') end = { end: 'failed' };
                 else if (seen.state === 'stopped') end = { end: 'stopped' };
                 else if (seen.state === 'done' && seen.legs.length) end = { end: 'done' };
                 else if (!seen.state && !seen.listed && ++misses >= 3 && Date.now() > (Number(rec.until) || 0)) end = { end: 'lost' };
             }
-            this.forget(rec.runId);
+            if (end && end.end === 'question') {
+                rec.waiting = true;
+                rec.askedAt = Date.now();
+                this.keep(rec);
+            } else {
+                this.forget(rec.runId);
+            }
+            if (end && end.end === 'expired') this.expire(ui, rec, turn);
             if (turn.stopped || !end) return;
             await this.finish(ui, turn, end);
         },
@@ -251,6 +269,12 @@
                     return;
                 case 'approval':
                     turn.outcome = 'approval';
+                    return;
+                case 'question':
+                    turn.outcome = got.plan ? 'approval' : 'question';
+                    return;
+                case 'expired':
+                    turn.outcome = 'stopped';
                     return;
                 case 'failed':
                 case 'lost':
@@ -290,9 +314,64 @@
             }
         },
 
+        expire(ui, rec, turn) {
+            const S = Store();
+            const conv = S.conversation(rec.convId);
+            if (!conv) return;
+            for (const m of S.messages(conv.id)) {
+                if (m.ask && m.ask.runId === rec.runId && window.NymbotAsk && window.NymbotAsk.stateOf(m.ask) === 'waiting') {
+                    window.NymbotAsk.patch(ui, conv.id, m, { state: 'expired' });
+                    if (turn && window.NymbotTranscripts) window.NymbotTranscripts.asked(ui, turn, 'expired', m);
+                }
+                const Plan = window.NymbotPlan;
+                if (m.proposal && m.proposal.runId === rec.runId && Plan && Plan.stateOf(m.proposal) === 'waiting') {
+                    Plan.patch(ui, conv.id, m, { state: 'expired' });
+                    if (turn && window.NymbotTranscripts) window.NymbotTranscripts.planned(ui, turn, 'expired', m);
+                }
+            }
+        },
+
+        async recheck(ui, rec) {
+            const seen = await this.status(rec);
+            if (!seen || !seen.state || seen.state === 'awaiting') return;
+            const conv = Store().conversation(rec.convId);
+            if (!conv) return;
+            rec.waiting = false;
+            rec.until = Math.max(Number(rec.until) || 0, Date.now());
+            this.keep(rec);
+            if ([...ui.turns.values()].some(x => x.runId === rec.runId)) return;
+            const turn = ui.beginTurn(conv, t('Working in the background'), { asked: rec.asked, runId: rec.runId, resumed: true });
+            turn.sent = true;
+            await this.track(ui, turn, rec).catch(() => { }).finally(() => ui.endTurn(turn));
+        },
+
+        answered(ui, conv, m, data) {
+            const runId = m.proposal && m.proposal.runId ? m.proposal.runId : m.ask.runId;
+            const rec = this.runs().find(r => r.runId === runId)
+                || { runId, convId: conv.id, asked: m.askedBy || null, claimed: [], at: Date.now() };
+            rec.waiting = false;
+            rec.until = Number(data && data.until) || (Date.now() + WINDOW_MS);
+            rec.at = Date.now();
+            this.keep(rec);
+            const live = [...ui.turns.values()].some(x => x.runId === rec.runId);
+            if (live) return;
+            const turn = ui.beginTurn(conv, t('Working in the background'), { asked: rec.asked, runId: rec.runId, resumed: true });
+            turn.sent = true;
+            if (window.NymbotTranscripts) {
+                if (m.proposal && m.proposal.runId === runId) window.NymbotTranscripts.planned(ui, turn, window.NymbotPlan.stageOf(m.proposal), m);
+                else window.NymbotTranscripts.asked(ui, turn, m.ask && m.ask.state === 'skipped' ? 'skipped' : 'answered', m);
+            }
+            this.track(ui, turn, rec).catch(() => { }).finally(() => ui.endTurn(turn));
+        },
+
         resume(ui) {
             const now = Date.now();
             for (const rec of this.runs()) {
+                if (rec.waiting) {
+                    if (now > (Number(rec.askedAt) || 0) + ASK_WAIT_MS + KEEP_MS) { this.forget(rec.runId); continue; }
+                    this.recheck(ui, rec).catch(() => { });
+                    continue;
+                }
                 if (now > (Number(rec.until) || 0) + KEEP_MS) { this.forget(rec.runId); continue; }
                 const conv = Store().conversation(rec.convId);
                 if (!conv) { this.forget(rec.runId); continue; }
@@ -336,7 +415,9 @@
                 title: String(entry.title || '').slice(0, TITLE_MAX),
                 thread: conv && !conv.anon && HEX.test(String(conv.rootId || '')) ? conv.rootId : '',
                 model: model && model.key ? String(model.key) : '',
-                tier: model && model.key ? 'pro' : 'standard'
+                tier: model && model.key ? 'pro' : 'standard',
+                ask: !!(model && model.key),
+                runChanges: entry.runChanges === true
             });
         },
 
@@ -355,7 +436,7 @@
                 }
             }
             const chat = CHAT_RE.test(String(entry.convId || '')) ? entry.convId : entry.id;
-            const push = await this.pushFor(chat, mode === 'notify' ? t('A scheduled prompt is due') : t('Your scheduled prompt ran'));
+            const push = await this.pushFor(chat, mode === 'notify' ? t('A scheduled prompt is due') : t('Your scheduled prompt ran'), 'schedule');
             if (mode === 'notify' && !push) {
                 return { error: t('Notifications are off for this app, so the server cannot tell you when it is due. Allow notifications first.') };
             }
@@ -521,12 +602,22 @@
             };
             S.addMessage(conv.id, asked);
             const split = Chat().splitThinking(rumor.content || '');
+            const Ask = window.NymbotAsk;
+            const took = Ask ? Ask.take(split.body) : { text: split.body, ask: null };
+            const asks = took.ask && Ask ? Ask.record(took, null, when) : null;
+            const Plan = window.NymbotPlan;
+            const planned = Plan ? Plan.take(took.ask ? took.text : split.body) : { text: took.ask ? took.text : split.body, plan: null };
+            const proposal = planned.plan && Plan ? Plan.record(planned, null, when) : null;
             const modelTag = rumor.tags.find(x => Array.isArray(x) && x[0] === 'model');
-            ui.placeMessage(conv.id, {
-                id: S.uid(), role: 'bot', content: split.body, thinking: split.thinking || null,
+            const reply = {
+                id: S.uid(), role: 'bot', content: planned.text, thinking: split.thinking || null, ask: asks, proposal,
                 model: modelTag ? String(modelTag[1] || '') || null : null,
                 replyTo: link.replyTo || null, askedBy: asked.id, scheduled: id, ts: when + 1
-            });
+            };
+            if (window.NymbotTranscripts) {
+                window.NymbotTranscripts.scheduled(ui, conv, reply, link.replyTo, (entry && entry.title) || asked.content).catch(() => { });
+            }
+            ui.placeMessage(conv.id, reply);
             S.write(SEEN_KEY, seen.concat([key]).slice(-200));
             if (entry) {
                 S.saveSchedule(Object.assign({}, entry, {

@@ -84,10 +84,13 @@
     }
 
     function toJson(conv, messages) {
+        const entry = { conversation: conv, messages };
+        const tx = conv && conv.id && Store.transcripts ? Store.transcripts(conv.id) : [];
+        if (tx.length) entry.transcripts = tx;
         return JSON.stringify({
             version: 2,
             exportedAt: Date.now(),
-            conversations: [{ conversation: conv, messages }]
+            conversations: [entry]
         }, null, 2);
     }
 

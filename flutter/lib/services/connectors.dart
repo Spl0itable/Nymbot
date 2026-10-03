@@ -143,7 +143,8 @@ class Connectors {
   static Map<String, dynamic>? pendingFrom(Map<String, dynamic> data) {
     final p = data['pendingTool'];
     final token = data['resumeToken'];
-    if (p is! Map || token is! String || token.isEmpty) return null;
+    if (p is! Map || token is! String || token.isEmpty || p['kind'] == 'question') return null;
+    if (p['kind'] == 'plan') return null;
     if (p['kind'] == 'server-run') return ServerRuns.pendingFrom(p, token);
     final raw = '${p['args'] ?? '{}'}';
     final args = raw.length > argsKept ? raw.substring(0, argsKept) : raw;
@@ -157,6 +158,7 @@ class Connectors {
       'args': args,
       'argsLength': length is num && length > 0 ? length.floor() : raw.length,
       'destructive': p['destructive'] == true,
+      if (p['readOnly'] == true) 'readOnly': true,
       if (p['team'] == true) 'team': true,
       'token': token,
       'state': 'waiting',

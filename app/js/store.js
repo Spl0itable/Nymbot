@@ -121,6 +121,10 @@
         hapticOnReply: true,
         autoSpeak: false,
         replyNotify: true,
+        notify: { done: true, failed: true, waiting: true, paused: true, schedule: true, pr: true, minSeconds: 0 },
+        prWatch: true,
+        prFix: 'ask',
+        prFixCap: 20,
         voiceUri: null,
         speechRate: 1,
         showReasoningByDefault: false,
@@ -543,6 +547,8 @@
             drop('thread_' + id);
             drop('draft_' + id);
             drop('artifacts_' + id);
+            drop('tx_' + id);
+            this._ghostTx.delete(id);
         },
 
         duplicateConversation(id, title) {
@@ -570,6 +576,35 @@
 
         /// Ghost chats live only in memory and vanish with the tab.
         _ghosts: new Map(),
+
+        _ghostTx: new Map(),
+
+        _txCache: new Map(),
+
+        transcripts(convId) {
+            if (this.isGhost(convId)) return (this._ghostTx.get(convId) || []).slice();
+            let raw = null;
+            try { raw = localStorage.getItem(P + 'tx_' + convId); } catch (_) { raw = null; }
+            const hit = this._txCache.get(convId);
+            if (hit && hit.raw === raw) return hit.list.slice();
+            let list = [];
+            try { list = raw ? JSON.parse(raw) : []; } catch (_) { list = []; }
+            if (!Array.isArray(list)) list = [];
+            this._txCache.set(convId, { raw, list });
+            return list.slice();
+        },
+
+        saveTranscripts(convId, list) {
+            const kept = (Array.isArray(list) ? list : []).map(x => Object.assign({}, x, { conv: convId }));
+            if (this.isGhost(convId)) {
+                this._ghostTx.set(convId, kept);
+                drop('tx_' + convId);
+                return;
+            }
+            this._ghostTx.delete(convId);
+            if (!kept.length) drop('tx_' + convId);
+            else write('tx_' + convId, kept);
+        },
 
         /// Remembered long enough that every other device has been online since.
         bury(id) {
@@ -606,6 +641,9 @@
             const list = read('msgs_' + convId, []);
             this._ghosts.set(convId, Array.isArray(list) ? list : []);
             drop('msgs_' + convId);
+            const tx = read('tx_' + convId, []);
+            this._ghostTx.set(convId, Array.isArray(tx) ? tx : []);
+            drop('tx_' + convId);
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
                 const lifted = read('artifacts_' + convId, []);
@@ -618,6 +656,9 @@
             const kept = this._ghosts.get(convId) || [];
             this._ghosts.delete(convId);
             write('msgs_' + convId, kept.slice(-MSG_CAP));
+            const tx = this._ghostTx.get(convId) || [];
+            this._ghostTx.delete(convId);
+            if (tx.length) write('tx_' + convId, tx);
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
                 const lifted = Artifacts._ghosts.get(convId) || [];
@@ -738,14 +779,17 @@
                 folders: this.folders(),
                 personas: this.customPersonas(),
                 prompts: this.prompts(),
+                skills: (function () { const k = read('skills', []); return Array.isArray(k) ? k : []; })(),
                 workspaces: this.workspaces(),
                 memories: this.memories(),
                 schedules: this.schedules(),
                 bots: (function () { const b = read('bots', []); return Array.isArray(b) ? b : []; })(),
-                conversations: this.conversations().filter(c => !c.support).map(c => ({
-                    conversation: c,
-                    messages: this.messages(c.id)
-                }))
+                conversations: this.conversations().filter(c => !c.support).map(c => {
+                    const out = { conversation: c, messages: this.messages(c.id) };
+                    const tx = this.transcripts(c.id);
+                    if (tx.length) out.transcripts = tx;
+                    return out;
+                })
             };
         },
 
@@ -754,7 +798,7 @@
             if (mode === 'replace') {
                 for (const c of this.conversations()) if (!c.support) this.deleteConversation(c.id);
             }
-            for (const name of ['folders', 'personas', 'prompts', 'workspaces', 'memories', 'schedules', 'bots']) {
+            for (const name of ['folders', 'personas', 'prompts', 'skills', 'workspaces', 'memories', 'schedules', 'bots']) {
                 if (!Array.isArray(payload[name])) continue;
                 write(name, mode === 'replace' ? payload[name] : mergeById(read(name, []), payload[name]));
             }
@@ -774,6 +818,10 @@
                 const conv = Object.assign({}, source, { id: uid(), importedFrom: original });
                 list.unshift(conv);
                 this.saveMessages(conv.id, Array.isArray(entry.messages) ? entry.messages : []);
+                const T = window.NymbotTranscripts;
+                if (T && Array.isArray(entry.transcripts) && entry.transcripts.length) {
+                    this.saveTranscripts(conv.id, T.Core.mergeList([], entry.transcripts));
+                }
                 count++;
             }
             this.saveConversations(list);

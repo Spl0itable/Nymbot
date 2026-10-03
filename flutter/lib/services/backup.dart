@@ -8,22 +8,28 @@ import '../models/schedule.dart';
 import '../models/workspace.dart';
 import '../state/store.dart';
 import 'account_sync.dart';
+import 'skills.dart';
+import 'task_transcript.dart';
 
 class Backup {
   const Backup._();
 
   static const _pretty = JsonEncoder.withIndent('  ');
 
-  static Map<String, dynamic> _chat(Conversation conv, List<ChatMessage> messages) => {
+  static Map<String, dynamic> _chat(Conversation conv, List<ChatMessage> messages,
+          [List<TaskTranscript> transcripts = const []]) =>
+      {
         'conversation': AccountSync.chatToWire(conv),
         'messages': [for (final m in messages) AccountSync.messageToWire(m)],
+        if (transcripts.isNotEmpty) 'transcripts': [for (final x in transcripts) x.toJson()],
       };
 
-  static String chat(Conversation conv, List<ChatMessage> messages) =>
+  static String chat(Conversation conv, List<ChatMessage> messages,
+          {List<TaskTranscript> transcripts = const []}) =>
       _pretty.convert({
         'version': 2,
         'exportedAt': DateTime.now().millisecondsSinceEpoch,
-        'conversations': [_chat(conv, messages)],
+        'conversations': [_chat(conv, messages, transcripts)],
       });
 
   static String everything(Store store) => _pretty.convert({
@@ -33,13 +39,14 @@ class Backup {
         'folders': [for (final f in store.folders()) f.toJson()],
         'personas': [for (final p in store.customPersonas()) p.toJson()],
         'prompts': [for (final p in store.prompts()) p.toJson()],
+        'skills': [for (final k in store.skillsHeld()) k.toJson()],
         'workspaces': [for (final w in store.workspaces()) w.toJson()],
         'memories': [for (final m in store.memories()) m.toJson()],
         'schedules': [for (final s in store.schedules()) s.toJson()],
         'bots': [for (final b in store.bots()) b.toJson()],
         'conversations': [
           for (final c in store.conversations())
-            if (!c.ephemeral && !c.support) _chat(c, store.messages(c.id)),
+            if (!c.ephemeral && !c.support) _chat(c, store.messages(c.id), store.transcripts(c.id)),
         ],
       });
 
@@ -114,6 +121,9 @@ class Backup {
     await library<SavedPrompt>('prompts',
         () => [for (final p in store.prompts()) p.toJson()],
         SavedPrompt.decodeList, store.savePrompts);
+    await library<Skill>('skills',
+        () => [for (final k in store.skillsHeld()) k.toJson()],
+        Skill.decodeList, store.saveSkills);
     await library<Workspace>('workspaces',
         () => [for (final w in store.workspaces()) w.toJson()],
         Workspace.decodeList, store.saveWorkspaces);
@@ -148,6 +158,10 @@ class Backup {
       }
       list.insert(0, conv);
       await store.saveMessages(conv.id, messages);
+      final tx = entry['transcripts'];
+      if (tx is List && tx.isNotEmpty) {
+        await store.saveTranscripts(conv.id, TaskTranscript.mergeList(const [], tx));
+      }
       count++;
     }
     await store.saveConversations(list);

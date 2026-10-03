@@ -512,6 +512,9 @@
             if (p.destructive) {
                 card.appendChild(el('div', 'pending-tool-warn', t('The connector marks this tool as able to change or delete things.')));
             }
+            if (!p.readOnly) {
+                card.appendChild(el('div', 'pending-tool-final', t('Can\'t be undone from Nymbot')));
+            }
             if (p.state === 'allowed') {
                 card.appendChild(el('div', 'pending-tool-note', t('Allowed once.')));
                 return card;
@@ -674,17 +677,21 @@
                 followUps: res.followUps || null,
                 serverRuns: res.serverRuns || null,
                 serverRunCredits: res.serverRunCredits || 0,
+                actions: res.actions || null,
                 calls: res.modelCalls || 1,
                 task: res.taskType || null,
                 checkpoint: res.checkpoint || null,
                 pendingTool: this.pendingFrom(res),
+                ask: res.ask || null,
+                proposal: res.proposal || null,
                 ts: Date.now()
             };
         },
 
         pendingFrom(res) {
             const p = res && res.pendingTool;
-            if (!p || typeof p !== 'object' || !res.resumeToken) return null;
+            if (!p || typeof p !== 'object' || !res.resumeToken || p.kind === 'question') return null;
+            if (p.kind === 'plan') return null;
             if (p.kind === 'server-run') {
                 return window.NymbotServerRun ? window.NymbotServerRun.pendingFrom(p, res.resumeToken) : null;
             }
@@ -696,6 +703,7 @@
                 args: String(p.args || '{}').slice(0, ARGS_KEPT),
                 argsLength: Math.max(0, Math.floor(Number(p.argsLength) || 0)) || String(p.args || '{}').length,
                 destructive: !!p.destructive,
+                readOnly: p.readOnly === true,
                 team: !!p.team,
                 token: res.resumeToken,
                 state: 'waiting'

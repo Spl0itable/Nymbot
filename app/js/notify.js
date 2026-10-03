@@ -9,6 +9,23 @@
     const ASKED_RE = /^[0-9a-f]{64}$/;
     const TEXT_CACHE = 'nymbot-notify';
     const TEXT_KEY = '/app/notify-text.json';
+    const TEXT_MAX = 80;
+    const PREF_DEFAULTS = { done: true, failed: true, waiting: true, paused: true, schedule: true, pr: true, minSeconds: 0 };
+    const MIN_CHOICES = [0, 30, 120];
+    const PUSH_STATES = ['done', 'failed', 'stopped', 'approval', 'question', 'expired', 'paused', 'pr', 'disabled', 'ci-failed', 'review'];
+    const STATE_PREFS = {
+        done: ['done'],
+        failed: ['failed'],
+        stopped: ['failed'],
+        disabled: ['failed'],
+        approval: ['waiting'],
+        question: ['waiting', 'question'],
+        expired: ['failed'],
+        paused: ['paused'],
+        pr: ['pr'],
+        'ci-failed': ['pr'],
+        review: ['pr']
+    };
 
     const b64ToBytes = (s) => {
         const p = String(s || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -18,6 +35,7 @@
 
     const Notify = {
         enabled: () => false,
+        prefsOf: () => null,
         titleOf: () => '',
         open: () => { },
         pending: new Map(),
@@ -48,19 +66,110 @@
             return document.visibilityState === 'hidden';
         },
 
+        prefs() {
+            const held = this.prefsOf();
+            const out = Object.assign({}, PREF_DEFAULTS, held && typeof held === 'object' ? held : {});
+            out.minSeconds = MIN_CHOICES.includes(Number(out.minSeconds)) ? Number(out.minSeconds) : 0;
+            return out;
+        },
+
+        wants(state, kind) {
+            const p = this.prefs();
+            const st = state || 'done';
+            if (kind === 'schedule' && st === 'due') return true;
+            if (kind === 'schedule' && p.schedule === false) return false;
+            if (kind === 'prwatch' && p.pr === false) return false;
+            const keys = STATE_PREFS[st];
+            if (!keys) return true;
+            return keys.every(k => p[k] !== false);
+        },
+
+        wantList(kind) {
+            const list = PUSH_STATES.filter(s => this.wants(s, kind));
+            if (kind === 'schedule') list.push('due');
+            return list;
+        },
+
+        minSeconds() {
+            return this.prefs().minSeconds;
+        },
+
+        quick(startedAt) {
+            const min = this.minSeconds();
+            return min > 0 && Number(startedAt) > 0 && Date.now() - Number(startedAt) < min * 1000;
+        },
+
+        pushTexts(kind) {
+            const all = {
+                turn: {
+                    done: t('Your reply is ready'),
+                    failed: t('Nymbot could not finish that reply'),
+                    approval: t('Nymbot is waiting for your approval'),
+                    question: t('Nymbot has a question for you'),
+                    expired: t('Nymbot stopped: no answer came within 24 hours'),
+                    paused: t('Nymbot paused. Open the chat to carry on.')
+                },
+                background: {
+                    done: t('Your task is done'),
+                    failed: t('Your background task could not finish'),
+                    approval: t('Your background task needs your approval'),
+                    question: t('Your background task has a question for you'),
+                    expired: t('Your background task stopped: no answer came within 24 hours'),
+                    paused: t('Your background task paused')
+                },
+                schedule: {
+                    done: t('Your scheduled prompt ran'),
+                    failed: t('A scheduled prompt could not run'),
+                    approval: t('A scheduled prompt needs your approval'),
+                    question: t('A scheduled prompt has a question for you'),
+                    expired: t('A scheduled prompt stopped: no answer came within 24 hours'),
+                    paused: t('A scheduled prompt paused'),
+                    due: t('A scheduled prompt is due'),
+                    disabled: t('A scheduled prompt failed 3 times and was turned off')
+                },
+                prwatch: {
+                    'ci-failed': t('CI failed on a pull request you watch'),
+                    review: t('New review comments on a pull request you watch'),
+                    pr: t('A pull request you watch changed'),
+                    done: t('A fix run on a pull request you watch finished'),
+                    failed: t('A fix run on a pull request you watch could not finish'),
+                    approval: t('A fix run on a pull request you watch needs your approval'),
+                    question: t('A fix run on a pull request you watch has a question for you'),
+                    paused: t('A fix run on a pull request you watch paused')
+                }
+            };
+            const out = {};
+            const table = all[kind] || all.turn;
+            for (const k of Object.keys(table)) out[k] = String(table[k]).slice(0, TEXT_MAX);
+            return out;
+        },
+
+        pushOptions(kind) {
+            const out = { texts: this.pushTexts(kind), want: this.wantList(kind) };
+            const min = kind === 'schedule' ? 0 : this.minSeconds();
+            if (min) out.min = min;
+            return out;
+        },
+
         stateText() {
             return {
                 paused: t('Paused. Open the chat to carry on.'),
                 approval: t('Waiting for your approval.'),
+                expired: t('No answer came within 24 hours, so the task stopped.'),
                 stopped: t('Stopped.'),
                 failed: t('That request failed.'),
+                question: t('Nymbot has a question for you'),
                 due: t('A scheduled prompt is due. Open Nymbot to run it.'),
-                disabled: t('A server schedule was turned off after failing 3 times in a row.')
+                disabled: t('A server schedule was turned off after failing 3 times in a row.'),
+                'ci-failed': t('CI failed on a pull request you watch.'),
+                review: t('New review comments on a pull request you watch.'),
+                pr: t('A pull request changed. Open the chat to see it.')
             };
         },
 
         headingFor(state, replied) {
-            if (state === 'failed' || state === 'stopped') return t('Nymbot could not finish that reply');
+            if (state === 'failed' || state === 'stopped' || state === 'expired') return t('Nymbot could not finish that reply');
+            if (state === 'question') return t('Nymbot has a question');
             if (state) return t('Nymbot replied');
             return replied ? t('Nymbot replied') : t('Nymbot could not finish that reply');
         },
@@ -76,6 +185,7 @@
         attach(opts) {
             const o = opts || {};
             if (o.enabled) this.enabled = o.enabled;
+            if (o.prefs) this.prefsOf = o.prefs;
             if (o.titleOf) this.titleOf = o.titleOf;
             if (o.open) this.open = o.open;
             if (this._attached || !this.supported()) return;
@@ -139,7 +249,9 @@
             const key = (info && info.key) || convId;
             const asked = info && ASKED_RE.test(info.asked || '') ? info.asked : null;
             const anon = !!(signer || (info && info.anon));
-            this.pending.set(key, { convId, eventId, signer: signer || null, asked, anon });
+            const held = this.pending.get(key);
+            const startedAt = (info && Number(info.startedAt)) || (held && held.startedAt) || Date.now();
+            this.pending.set(key, { convId, eventId, signer: signer || null, asked, anon, startedAt });
             clearTimeout(this.timers.get(key));
             this.timers.delete(key);
             if (anon || !this.allowed() || !this.pushSupported()) return;
@@ -166,6 +278,8 @@
             const handled = this.registered.delete(p.eventId) | this.answered.delete(p.eventId);
             if (o.stopped || handled || !this.allowed()) return;
             if (!this.hidden() && this.viewing === convId) return;
+            const state = o.state || (o.replied ? 'done' : 'failed');
+            if (!this.wants(state, 'turn') || this.quick(o.startedAt || p.startedAt)) return;
             await this.show(convId, !!o.replied, null, p.asked, o.state);
         },
 
@@ -253,13 +367,13 @@
             try {
                 const subscription = await this.subscription();
                 if (!subscription) return;
-                res = await API.call('notify-turn', {
+                res = await API.call('notify-turn', Object.assign({
                     eventId: p.eventId,
                     env: 'web',
                     subscription,
                     chat: convId,
-                    text: t('Your reply is ready').slice(0, 80)
-                }, { timeout: 10000 });
+                    text: t('Your reply is ready').slice(0, TEXT_MAX)
+                }, this.pushOptions('turn')), { timeout: 10000 });
             } catch (_) {
                 res = null;
             } finally {
@@ -270,7 +384,7 @@
             if (!data || !now || now.eventId !== p.eventId) return;
             if (data.done === true) {
                 this.answered.add(p.eventId);
-                if (this.hidden() || this.viewing !== convId) await this.show(convId, true, null, p.asked);
+                if ((this.hidden() || this.viewing !== convId) && this.wants('done', 'turn') && !this.quick(p.startedAt)) await this.show(convId, true, null, p.asked);
                 return;
             }
             if (data.ok === true) this.registered.add(p.eventId);

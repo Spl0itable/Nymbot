@@ -1,4 +1,4 @@
-const CACHE = 'nymbot-shell-v81';
+const CACHE = 'nymbot-shell-v83';
 const SHELL = [
     '/app/',
     '/app/index.html',
@@ -51,6 +51,7 @@ const SHELL = [
     '/app/js/vault.js',
     '/app/js/keybackup.js',
     '/app/js/notify.js',
+    '/app/js/rewind.js',
     '/app/js/viewer.js',
     '/app/js/integrity.js',
     '/app/js/canary.js',
@@ -62,12 +63,17 @@ const SHELL = [
     '/app/css/share.css',
     '/app/js/research.js',
     '/app/js/team.js',
+    '/app/js/transcripts.js',
     '/app/js/tasks.js',
     '/app/js/runs.js',
     '/app/js/background.js',
+    '/app/js/ask.js',
+    '/app/js/plan.js',
+    '/app/js/skills.js',
     '/app/js/gift.js',
     '/app/js/connectors.js',
     '/app/js/gitrun.js',
+    '/app/js/prwatch.js',
     '/app/js/runner.js',
     '/app/js/serverrun.js',
     '/app/js/sw-register.js',
@@ -441,7 +447,7 @@ const CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const ASKED_RE = /^[0-9a-f]{64}$/;
 const NOTIFY_CACHE = 'nymbot-notify';
 const NOTIFY_TEXT = '/app/notify-text.json';
-const RUN_STATES = ['paused', 'approval', 'stopped', 'failed', 'due', 'disabled'];
+const RUN_STATES = ['paused', 'approval', 'stopped', 'failed', 'due', 'disabled', 'question', 'expired', 'ci-failed', 'review', 'pr'];
 
 function stateText(state) {
     if (!RUN_STATES.includes(state)) return Promise.resolve('');

@@ -35,6 +35,10 @@ class NymbotApi {
     'gift-redeem',
     'gift-cancel',
     'schedule-put',
+    'pm-answer',
+    'pr-watch-put',
+    'pr-watch-stop',
+    'pr-watch-fix',
   };
 
   final http.Client _client;
@@ -216,14 +220,14 @@ class NymbotApi {
       call('pm-claim', signer,
           extra: {'eventId': eventId}, timeout: const Duration(seconds: 20));
 
-  Future<ApiResult> liveRuns(EventSigner signer, {String? thread}) =>
+  Future<ApiResult> liveRuns(EventSigner signer, {String? thread, String? log}) =>
       call('pm-runs', signer,
-          extra: {'thread': ?thread},
+          extra: {'thread': ?thread, 'log': ?log},
           timeout: const Duration(seconds: 15));
 
-  Future<ApiResult> doneSince(EventSigner signer, int since) =>
+  Future<ApiResult> doneSince(EventSigner signer, int since, {String? log}) =>
       call('pm-done-since', signer,
-          extra: {'since': since}, timeout: const Duration(seconds: 20));
+          extra: {'since': since, 'log': ?log}, timeout: const Duration(seconds: 20));
 
   Future<ApiResult> schedulePut(
           EventSigner signer, Map<String, dynamic> schedule) =>
@@ -236,6 +240,37 @@ class NymbotApi {
 
   Future<ApiResult> scheduleClear(EventSigner signer) =>
       call('schedule-clear', signer, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> answer(EventSigner signer, String runId, String pendingId,
+          {List<Map<String, dynamic>>? answers, bool skipped = false, String? decision, Map<String, dynamic>? edits}) =>
+      call('pm-answer', signer,
+          extra: {
+            'runId': runId,
+            'pendingId': pendingId,
+            if (decision != null) 'decision': decision
+            else if (skipped) 'skipped': true
+            else 'answers': answers ?? const [],
+            'edits': ?edits,
+          },
+          timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> prWatchPut(EventSigner signer, Map<String, dynamic> body) =>
+      call('pr-watch-put', signer, extra: body, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> prWatchStop(EventSigner signer, String id) =>
+      call('pr-watch-stop', signer,
+          extra: {'id': id}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> prWatchList(EventSigner signer) =>
+      call('pr-watch-list', signer, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> prWatchPeek(EventSigner signer, Map<String, dynamic> git, Map<String, dynamic> watch) =>
+      call('pr-watch-peek', signer,
+          extra: {'git': git, 'watch': watch}, timeout: const Duration(seconds: 20));
+
+  Future<ApiResult> prWatchFix(EventSigner signer, String id, int seq) =>
+      call('pr-watch-fix', signer,
+          extra: {'id': id, 'seq': seq}, timeout: const Duration(seconds: 20));
 
   Future<ApiResult> scheduleList(EventSigner signer) =>
       call('schedule-list', signer, timeout: const Duration(seconds: 20));

@@ -127,7 +127,7 @@
         if (!mark) return [];
         return [mark].concat(Array.isArray(mark.also) ? mark.also : [])
             .filter(x => x && x.job && x.job.branch)
-            .map(x => Object.assign({ repo: x.repo }, x.job));
+            .map(x => Object.assign({ repo: x.repo, provider: x.provider || '' }, x.job));
     }
 
     function ownerOf(v) {
@@ -152,6 +152,10 @@
 
     function branchState(job) {
         if (job.deleted) return t('Branch deleted.');
+        if (job.merged && job.reverted && job.reverted.pull && job.reverted.pull.number) {
+            return t('Merged into {base}. Pull request #{n} reverts it.', { base: job.base, n: job.reverted.pull.number });
+        }
+        if (job.closed && !job.merged) return t('Pull request #{n} was closed without merging.', { n: job.pull && job.pull.number });
         if (job.ended && !job.merged && !(job.pull && job.pull.number)) return t('The task ended early. The branch keeps what it committed.');
         if (job.merged) return t('Merged into {base}.', { base: job.base });
         if (job.conflict) return t('This branch conflicts with {base}.', { base: job.base });
@@ -161,6 +165,34 @@
         if (job.pull && job.pull.number) return t('Pull request #{n} is open.', { n: job.pull.number });
         if (job.whenDone === 'merge') return t('Ready to merge into {base}.', { base: job.base });
         return t('Left on its own branch for you to review.');
+    }
+
+    const REVERT_FORGES = ['github', 'gitlab'];
+
+    function canRevertOn(provider) {
+        return REVERT_FORGES.includes(String(provider || 'github').toLowerCase());
+    }
+
+    function undoMarks(mark) {
+        if (!mark) return [];
+        return [mark].concat(Array.isArray(mark.also) ? mark.also : [])
+            .filter(x => x && x.repo && x.undoable && !x.undone && /^[0-9a-f]{7,64}$/i.test(String(x.baseSha || ''))
+                && Array.isArray(x.paths) && x.paths.length);
+    }
+
+    function openPulls(mark) {
+        if (!mark) return [];
+        const out = [];
+        for (const x of [mark].concat(Array.isArray(mark.also) ? mark.also : [])) {
+            if (!x || !x.repo) continue;
+            const jobNo = x.job && x.job.pull ? Number(x.job.pull.number) || 0 : 0;
+            for (const p of Array.isArray(x.prs) ? x.prs : []) {
+                const n = Number(p && p.number);
+                if (!Number.isInteger(n) || n < 1 || n === jobNo || !p.head || p.closed || p.merged) continue;
+                out.push({ repo: x.repo, number: n, url: String(p.url || ''), branch: String(p.head) });
+            }
+        }
+        return out;
     }
 
     function branchChip(job, opts) {
@@ -173,6 +205,13 @@
         if (job.base) name.appendChild(el('span', 'branch-chip-base', ' → ' + job.base));
         chip.appendChild(name);
         chip.appendChild(el('div', 'branch-chip-state', branchState(job)));
+        const watch = options.watch || null;
+        const liveLine = watch && window.NymbotPrWatch ? window.NymbotPrWatch.liveText(watch.live) : '';
+        if (liveLine) {
+            const live = el('div', 'branch-chip-state branch-chip-live', liveLine);
+            live.dataset.ci = (watch.live && watch.live.ci) || '';
+            chip.appendChild(live);
+        }
         if (job.deleted) return chip;
         const row = el('div', 'branch-chip-actions');
         const button = (act, label, primary) => {
@@ -191,7 +230,10 @@
             return a;
         };
         const hasUrl = !!(job.pull && /^https:\/\//i.test(job.pull.url || ''));
-        if (job.conflict) {
+        const pullNo = job.pull && Number(job.pull.number) > 0 ? Number(job.pull.number) : 0;
+        if (job.closed && !job.merged) {
+            if (hasUrl) row.appendChild(link(t('Open PR')));
+        } else if (job.conflict) {
             row.appendChild(hasUrl ? link(t('Open the PR to resolve')) : button('branch-pr', t('Open the PR to resolve')));
             row.appendChild(button('branch-update', t('Ask Nymbot to update the branch'), true));
         } else if (!job.merged && job.done !== false) {
@@ -200,8 +242,22 @@
         } else if (job.merged && hasUrl) {
             row.appendChild(link(t('Open PR')));
         }
+        if (pullNo && !job.merged && !job.closed && job.done !== false) {
+            row.appendChild(button('branch-close', t('Close pull request')));
+        }
+        let note = null;
+        if (pullNo && job.merged && !job.reverted) {
+            if (canRevertOn(options.provider)) row.appendChild(button('branch-revert', t('Revert with a new PR')));
+            else note = el('div', 'branch-chip-state', t('This forge cannot open a revert from Nymbot. Revert the merge on the forge.'));
+        }
+        if (watch && (watch.on || (pullNo && !job.merged && !job.closed && job.done !== false))) {
+            const toggle = button('branch-watch', watch.on ? t('Stop watching') : t('Watch PR'));
+            toggle.setAttribute('aria-pressed', watch.on ? 'true' : 'false');
+            row.appendChild(toggle);
+        }
         if (job.done !== false) row.appendChild(button('branch-delete', t('Delete')));
         chip.appendChild(row);
+        if (note) chip.appendChild(note);
         return chip;
     }
 
@@ -224,6 +280,9 @@
         remember,
         forget,
         branchState,
-        branchChip
+        branchChip,
+        canRevertOn,
+        undoMarks,
+        openPulls
     };
 })();

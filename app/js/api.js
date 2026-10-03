@@ -11,7 +11,8 @@
         'clear-history', 'voucher-issue', 'voucher-redeem',
         'pm-revert', 'git-apply', 'git-branch', 'mcp-probe', 'runner-run', 'site-check',
         'gift-create', 'gift-redeem', 'gift-cancel',
-        'schedule-put', 'schedule-delete', 'schedule-clear'
+        'schedule-put', 'schedule-delete', 'schedule-clear', 'pm-answer',
+        'pr-watch-put', 'pr-watch-stop', 'pr-watch-fix'
     ]);
 
     const SLOTTED = new Set(['pm']);

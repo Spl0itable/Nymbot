@@ -878,6 +878,10 @@ function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
   if (sched && typeof sched[0] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(sched[0]) && /^[0-9]{1,16}$/.test(String(sched[1]))) {
     rumor.tags.push(["nymsched", sched[0], String(sched[1])]);
   }
+  var prw = opts && Array.isArray(opts.prw) ? opts.prw : null;
+  if (prw && typeof prw[0] === "string" && /^[0-9a-f]{32}$/.test(prw[0]) && /^[a-z-]{1,16}$/.test(String(prw[1])) && /^[0-9]{1,9}$/.test(String(prw[2]))) {
+    rumor.tags.push(["nymprw", prw[0], String(prw[1]), String(prw[2])]);
+  }
   rumor.id = getEventHash(rumor);
   return rumor;
 }

@@ -51,6 +51,8 @@
     const ServerRun = window.NymbotServerRun;
     const Notify = window.NymbotNotify;
     const Background = window.NymbotBackground;
+    const PrWatch = window.NymbotPrWatch;
+    const Rewind = window.NymbotRewind;
     const KB = window.NymbotKeyBackup;
     const Support = window.NymbotSupport;
     const SUPPORT_MAX = 2000;
@@ -285,8 +287,10 @@
             Profile.loadWhenConnected(Identity.pubkey).catch(() => { });
             this.offerBotFromUrl();
             this.offerShareFromUrl().catch(() => { });
+            window.addEventListener('pagehide', () => this.commitToast());
             Notify.attach({
                 enabled: () => this.settings.replyNotify !== false,
+                prefs: () => this.settings.notify,
                 titleOf: (id) => {
                     const c = Store.conversation(id);
                     return c ? c.title || '' : '';
@@ -1043,8 +1047,31 @@
             if (m.checkpoint) {
                 body.appendChild(this.checkpointCard(m));
             }
+            if (m.prWatch && m.prWatch.offer && m.role === 'bot' && PrWatch) {
+                const row = el('div', 'staged-actions pr-fix-offer');
+                if (m.prWatch.fixed) {
+                    row.appendChild(el('span', 'checkpoint-note', t('A fix run was requested.')));
+                } else {
+                    const fix = el('button', 'btn btn-small btn-primary', t('Fix'));
+                    fix.type = 'button';
+                    fix.dataset.act = 'pr-fix';
+                    fix.addEventListener('click', () => {
+                        fix.disabled = true;
+                        PrWatch.fix(this, this.conv, m).catch(() => { fix.disabled = false; });
+                    });
+                    row.appendChild(fix);
+                    row.appendChild(el('span', 'checkpoint-note', t('Nymbot can try a fix on {branch}. It goes through your plan setting and spends at most {n} credits.', { branch: m.prWatch.branch || '', n: PrWatch.fixCap(this.settings) })));
+                }
+                body.appendChild(row);
+            }
             if (m.pendingTool && window.NymbotConnectors) {
                 body.appendChild(window.NymbotConnectors.pendingCard(this, m));
+            }
+            if (m.ask && window.NymbotAsk && Array.isArray(m.ask.questions)) {
+                body.appendChild(window.NymbotAsk.card(this, m));
+            }
+            if (m.proposal && window.NymbotPlan && Array.isArray(m.proposal.items)) {
+                body.appendChild(window.NymbotPlan.card(this, m));
             }
             if (m.staged) body.appendChild(this.stagedCard(m));
             const runs = window.NymbotServerRun ? window.NymbotServerRun.summaryNode(m) : null;
@@ -1208,6 +1235,9 @@
                 }
                 add('branch', t('Branch from here'), 'msg-fork');
                 add('quote', t('Quote'), 'msg-quote');
+                if (window.NymbotTranscripts && this.conv && window.NymbotTranscripts.hasMessage(this.conv.id, m)) {
+                    add('tasks', t('Transcript'), 'msg-transcript');
+                }
                 const up = add('thumbUp', t('Good reply'), 'msg-up', { filled: m.rating === 1 });
                 if (m.rating === 1) up.classList.add('is-on');
                 const down = add('thumbDown', t('Poor reply'), 'msg-down',
@@ -1226,6 +1256,7 @@
             if (m.role === 'error') {
                 add('refresh', t('Try again'), 'msg-retry');
             }
+            add('rewind', t('Rewind to here'), 'msg-rewind');
             add('close', t('Delete'), 'msg-delete');
             return row;
         },
@@ -1389,7 +1420,7 @@
                         token = e.resumeToken;
                         legs = 0;
                         this.runNote(turn, t('That step could not go out — the gateway is busy. Nothing is lost; trying again in {n} seconds.',
-                            { n: Math.round(wait / 1000) }));
+                            { n: Math.round(wait / 1000) }), 'retry');
                         await this.legPause(turn, wait);
                         continue;
                     }
@@ -1467,12 +1498,15 @@
                 followUps: next.followUps || null,
                 serverRuns: next.serverRuns || null,
                 serverRunCredits: next.serverRunCredits || 0,
+                actions: next.actions || null,
                 calls: next.modelCalls || 1,
                 task: next.taskType || null,
                 checkpoint: next.checkpoint || null,
                 staged: next.staged || null,
                 continued: true,
                 pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(next) : null,
+                ask: next.ask || null,
+                proposal: next.proposal || null,
                 ts: Date.now()
             };
             if (Array.isArray(next.plan)) turn.plan = next.plan;
@@ -1480,6 +1514,7 @@
             more.askedBy = turn.asked || null;
             if (more.checkpoint) Chat.rememberBranches(conv, more.checkpoint);
             this.placeMessage(convId, more, turn);
+            if (more.checkpoint && PrWatch) PrWatch.auto(this, conv, more).catch(() => { });
             turn.lastReplyId = more.id;
             turn.outcome = this.outcomeOf(more, next);
             Artifacts.harvest(convId, more);
@@ -1640,7 +1675,7 @@
             this.stopWatchingTurn(turn);
             turn.eventId = eventId;
             const watched = Store.conversation(turn.convId);
-            Notify.watch(turn.convId, eventId, signer, { key: turn.id, asked: turn.runId, anon: !!(watched && watched.anon) });
+            Notify.watch(turn.convId, eventId, signer, { key: turn.id, asked: turn.runId, anon: !!(watched && watched.anon), startedAt: turn.startedAt });
             turn.steps = (turn.steps || []).filter(s => s && s.local);
             let after = 0;
             let draftAfter = 0;
@@ -1676,6 +1711,7 @@
                             turn.steps.push(s);
                         }
                         if (window.NymbotTasks) window.NymbotTasks.seen(this, turn, steps);
+                        if (window.NymbotTranscripts) window.NymbotTranscripts.steps(this, turn, steps);
                         this.renderProgress(turn);
                     }
                     if (draft) {
@@ -1702,6 +1738,7 @@
         localStep(turn, step) {
             if (!turn || !step) return;
             turn.steps = (turn.steps || []).concat([Object.assign({}, step, { local: true })]);
+            if (window.NymbotTranscripts) window.NymbotTranscripts.steps(this, turn, [step]);
             this.renderProgress(turn);
         },
 
@@ -2246,11 +2283,14 @@
                 steerOffer: res.steerOffer || null,
                 serverRuns: res.serverRuns || null,
                 serverRunCredits: res.serverRunCredits || 0,
+                actions: res.actions || null,
                 repos: (res.repos && res.repos.length > 1) ? res.repos : null,
                 calls: res.modelCalls || 1,
                 task: res.taskType || null,
                 checkpoint: res.checkpoint || null,
                 pendingTool: window.NymbotConnectors ? window.NymbotConnectors.pendingFrom(res) : null,
+                ask: res.ask || null,
+                proposal: res.proposal || null,
                 staged: res.staged || null,
                 replyTo: res.replyTo || turn.runId || null,
                 askedBy: turn.asked || null,
@@ -2258,6 +2298,7 @@
             };
             if (reply.checkpoint) Chat.rememberBranches(live, reply.checkpoint);
             const node = this.placeMessage(live.id, reply, turn);
+            if (reply.checkpoint && PrWatch) PrWatch.auto(this, live, reply).catch(() => { });
             turn.lastReplyId = reply.id;
             turn.outcome = this.outcomeOf(reply, res);
             const lifted = Artifacts.harvest(live.id, reply);
@@ -2286,6 +2327,8 @@
 
         outcomeOf(reply, res) {
             if (reply && reply.pendingTool) return 'approval';
+            if (reply && reply.ask) return 'question';
+            if (reply && reply.proposal) return 'approval';
             return res && res.resumeToken ? 'paused' : 'done';
         },
 
@@ -2312,7 +2355,8 @@
             return spent;
         },
 
-        runNote(turn, text) {
+        runNote(turn, text, kind) {
+            if (turn && window.NymbotTranscripts) window.NymbotTranscripts.note(this, turn, text, kind);
             const m = { id: Store.uid(), role: 'note', content: text, ts: Date.now() };
             if (turn && turn.asked) m.askedBy = turn.asked;
             if (turn && turn.runId) m.replyTo = turn.runId;
@@ -2340,6 +2384,7 @@
             if (!convId) return null;
             if (turn && turn.asked && !m.askedBy) m.askedBy = turn.asked;
             if (turn && turn.runId && !m.replyTo) m.replyTo = turn.runId;
+            if (turn && window.NymbotTranscripts) window.NymbotTranscripts.placed(this, turn, m);
             const list = Store.messages(convId);
             const end = this.anchorIndex(list, { asked: m.askedBy, replyTo: m.replyTo });
             if (end === -1 || end === list.length - 1) {
@@ -2897,6 +2942,7 @@
             };
             if (o.resumed) turn.resumed = true;
             this.turns.set(turn.id, turn);
+            if (window.NymbotTranscripts) window.NymbotTranscripts.begin(this, turn, o);
             if (window.NymbotTasks) window.NymbotTasks.began(this, turn);
             this.mountTurns();
             this.syncFollowUps();
@@ -2910,12 +2956,14 @@
             if (!turn) return;
             const had = this.turns.get(turn.id) === turn;
             if (had) this.turns.delete(turn.id);
+            if (had && window.NymbotRuns) window.NymbotRuns.settled(turn);
             if (window.NymbotTasks) window.NymbotTasks.ended(this, turn);
             if (had && turn.eventId) {
                 Notify.settled(turn.id, {
                     replied: !!turn.lastReplyId,
                     stopped: !!turn.stopped && turn.outcome !== 'stopped',
-                    state: turn.outcome || (turn.lastReplyId ? 'done' : 'failed')
+                    state: turn.outcome || (turn.lastReplyId ? 'done' : 'failed'),
+                    startedAt: turn.startedAt
                 }).catch(() => { });
             }
             if (had && turn.asked && !turn.resumed) this.clearInflight(turn.asked);
@@ -2931,6 +2979,7 @@
             this.renderList();
             this.syncFollowUps();
             this.renderRunning();
+            if (window.NymbotTranscripts) window.NymbotTranscripts.finish(this, turn);
         },
 
         turnState(turn, patch) {
@@ -2982,6 +3031,7 @@
         },
 
         renderCard(turn) {
+            if (turn && window.NymbotTranscripts) window.NymbotTranscripts.observe(this, turn);
             const node = turn && turn.node;
             if (!node) return;
             const label = node.querySelector('.bot-thinking-label');
@@ -3162,6 +3212,7 @@
 
         turnStatus(turn, text) {
             turn.status = text || null;
+            if (text && window.NymbotTranscripts) window.NymbotTranscripts.status(this, turn, text);
             if (this.conv && this.conv.id === turn.convId) this.status(turn.status);
         },
 
@@ -3227,7 +3278,19 @@
 
         showAsked(convId, wire) {
             if (!this.conv || this.conv.id !== convId) return;
-            const m = Store.messages(convId).find(x => x.role === 'self' && x.wire === wire);
+            const list = Store.messages(convId);
+            const m = list.find(x => x.role === 'self' && x.wire === wire);
+            const Ask = window.NymbotAsk;
+            const Plan = window.NymbotPlan;
+            const mine = (x) => x.replyTo === wire || (m && x.askedBy === m.id);
+            const waiting = (Ask ? list.filter(x => Ask.pending(x) && mine(x)).pop() : null) || (Plan ? list.filter(x => Plan.pending(x) && mine(x)).pop() : null);
+            const card = waiting ? $('messages').querySelector(`.chat-message[data-id="${waiting.id}"] .ask-card, .chat-message[data-id="${waiting.id}"] .plan-card`) : null;
+            if (card) {
+                card.scrollIntoView({ block: 'center', behavior: this.reducedMotion() ? 'auto' : 'smooth' });
+                const first = card.querySelector('input, button');
+                if (first) first.focus({ preventScroll: true });
+                return;
+            }
             if (!m) return;
             const node = $('messages').querySelector(`.chat-message[data-id="${m.id}"]`);
             if (!node) return;
@@ -3394,6 +3457,9 @@
                 case 'msg-copy':
                     this.writeClipboard(m.content);
                     return;
+                case 'msg-transcript':
+                    if (window.NymbotTranscripts) window.NymbotTranscripts.openMessage(this, this.conv.id, m.id);
+                    return;
                 case 'msg-speak':
                     if (Speech.toggleSpeak(m.id, MD.plain(m.content), {
                         rate: this.settings.speechRate, voiceUri: this.settings.voiceUri
@@ -3462,6 +3528,9 @@
                         this.renderMessages();
                         this.send(m.retry, null, this.carriedFrom(m.retryAttachments, m.retryQuote));
                     }
+                    return;
+                case 'msg-rewind':
+                    this.rewindTo(m).catch(() => { });
                     return;
                 case 'msg-delete': {
                     const conv = this.conv;
@@ -3569,6 +3638,122 @@
             const carried = Artifacts.all(this.conv.id).filter(a => ids.has(a.messageId));
             if (carried.length) Artifacts.save(copy.id, carried);
             return copy;
+        },
+
+        rewindItemLabel(i) {
+            if (i.kind === 'files') {
+                return {
+                    label: i.paths.length === 1
+                        ? t('Undo 1 file change in {repo}', { repo: i.repo + (i.branch ? ' · ' + i.branch : '') })
+                        : t('Undo {n} file changes in {repo}', { n: i.paths.length, repo: i.repo + (i.branch ? ' · ' + i.branch : '') }),
+                    note: i.can ? i.paths.slice(0, 6).join(', ') + (i.paths.length > 6 ? ' …' : '')
+                        : (i.why === 'undone' ? t('Already put back.')
+                            : t('No commit was recorded to read the old files back from.'))
+                };
+            }
+            if (i.kind === 'pull') {
+                return {
+                    label: t('Close PR #{n} (unmerged) in {repo}', { n: i.number, repo: i.repo }),
+                    note: i.can ? (i.job ? t('Only if it is still open and ends at the commit Nymbot made.') : t('Only if it is still open on {branch}.', { branch: i.branch }))
+                        : t('No commit was recorded for it, so it is left alone.')
+                };
+            }
+            if (i.kind === 'revert') {
+                return {
+                    label: t('Revert merged PR #{n} in {repo} with a new pull request', { n: i.number, repo: i.repo }),
+                    note: i.can ? t('Opens a pull request that puts back what it changed on {base}. Nothing is force-pushed.', { base: i.base || '' })
+                        : (i.why === 'forge' ? t('This forge cannot open a revert from Nymbot. Revert the merge on the forge.')
+                            : t('No commit was recorded for it, so it is left alone.'))
+                };
+            }
+            if (i.kind === 'branch') {
+                return {
+                    label: t('Delete branch {branch} in {repo}', { branch: i.branch, repo: i.repo }),
+                    note: i.can ? t('Only if it still ends at the commit Nymbot made.') : t('No commit was recorded for it, so it is left alone.')
+                };
+            }
+            if (i.kind === 'connector') {
+                return {
+                    label: t('{connector}: {tool}', { connector: i.connector, tool: i.tool }),
+                    note: t('Can\'t be undone from Nymbot') + (i.args ? ' · ' + i.args.slice(0, 120) : '')
+                };
+            }
+            return {
+                label: i.count === 1 ? t('1 server run') : t('{n} server runs', { n: i.count }),
+                note: t('Sandboxed on the server, so there is nothing to undo.')
+            };
+        },
+
+        async rewindTo(m) {
+            const conv = this.conv;
+            if (!conv || conv.support) return;
+            if (this.sendingIn(conv.id)) {
+                this.toast(t('Wait for the reply to finish, or stop it, before rewinding this chat.'));
+                return;
+            }
+            const msgs = Store.messages(conv.id);
+            const dropped = Rewind.after(msgs, m.id);
+            if (!msgs.some(x => x.id === m.id)) return;
+            if (!dropped.length) {
+                this.toast(t('Nothing comes after this message.'));
+                return;
+            }
+            const items = Rewind.effects(dropped);
+            const ticked = Rewind.picks(items);
+            const ok = await this.ask({
+                title: t('Rewind to here'),
+                body: (dropped.length === 1
+                    ? t('This removes the 1 message after this one.')
+                    : t('This removes the {n} messages after this one.', { n: dropped.length }))
+                    + ' ' + (items.length
+                        ? t('They did these things outside the chat. Tick what to undo as well.')
+                        : t('They changed nothing outside the chat.')),
+                list: items.map(i => Object.assign(this.rewindItemLabel(i), { id: i.id, can: i.can, checked: ticked.has(i.id) })),
+                confirm: t('Rewind'),
+                danger: true
+            });
+            if (!ok) return;
+            const picks = new Set(this.dialogPicks || []);
+            if (this.sendingIn(conv.id)) {
+                this.toast(t('Wait for the reply to finish, or stop it, before rewinding this chat.'));
+                return;
+            }
+            const snap = this.chatSnapshot(conv);
+            const live = Store.conversation(conv.id) || conv;
+            Store.truncateFrom(conv.id, m.id, false);
+            this.reseed(live);
+            if (this.conv && this.conv.id === conv.id) {
+                this.renderMessages();
+                this.renderArtifactStrip();
+            }
+            this.renderList();
+            const steps = Rewind.plan(items, picks);
+            const results = steps.length ? await Rewind.run(steps, {
+                revert: async (item) => {
+                    const rows = await Chat.revertMarks(live, [item.mark]);
+                    const res = rows[0] || {};
+                    if (res.error) throw new Error(res.error);
+                    if ((res.failed || []).length) throw new Error(t('Put {done} back; {failed} could not be. Check the repository.', { done: (res.restored || []).length + (res.deleted || []).length, failed: res.failed.length }));
+                    return res;
+                },
+                deleteBranch: (item) => Chat.branchOp(live, item.repo, 'delete', item.job),
+                closePull: (item) => Chat.branchOp(live, item.repo, 'close', { branch: item.branch, sha: item.sha, pull: { number: item.number } }),
+                revertPull: (item) => Chat.branchOp(live, item.repo, 'revert-pr', { branch: item.branch, base: item.base, sha: item.sha, pull: { number: item.number } })
+            }) : [];
+            snap.messages = Rewind.settled(snap.messages, results);
+            const failed = results.filter(r => !r.ok && !r.gone);
+            const ids = dropped.map(x => x.id);
+            const text = failed.length
+                ? t('Rewound, but {n} of the changes could not be undone: {why}', { n: failed.length, why: failed.map(r => r.error || (r.moved ? t('the branch has new commits since Nymbot made it') : t('the forge could not be reached'))).join('; ') })
+                : (results.length
+                    ? t('Rewound and undid {n} changes.', { n: results.length })
+                    : t('Rewound. {n} messages removed.', { n: dropped.length }));
+            this.toastUndo(text, () => this.restoreSnapshot(snap), () => {
+                const kept = Store.messages(conv.id);
+                const gone = new Set(ids);
+                if (kept.some(x => gone.has(x.id))) Store.saveMessages(conv.id, kept.filter(x => !gone.has(x.id)));
+                for (const id of ids) Store.bury(id);
+            });
         },
 
         forkAt(m) {
@@ -3700,6 +3885,9 @@
                     return true;
                 case 'prompt':
                     this.openPrompts(arg);
+                    return true;
+                case 'skills':
+                    window.NymbotSkills.open(this, arg);
                     return true;
                 case 'save': {
                     const body = $('input').value.trim() || arg;
@@ -3870,6 +4058,8 @@
             const value = $('input').value;
             const at = Mention.typing(value);
             if (at) { this.showMentionSuggest(at); return; }
+            const skills = window.NymbotSkills ? window.NymbotSkills.suggest(value) : null;
+            if (skills) { this.showSkillSuggest(skills); return; }
             const m = /^\?(\w*)$/.exec(value);
             if (!m) { this.hideSuggest(); return; }
             const rows = Commands.match(m[1]);
@@ -3908,6 +4098,27 @@
             input.setAttribute('aria-expanded', String(open));
             if (open) input.setAttribute('aria-activedescendant', 'suggest-' + this.suggestAt);
             else input.removeAttribute('aria-activedescendant');
+        },
+
+        showSkillSuggest(skills) {
+            const S = window.NymbotSkills;
+            if (!skills.length) { this.hideSuggest(); return; }
+            this.suggestRows = skills.map(skill => ({ skill }));
+            this.suggestAt = 0;
+            const box = $('suggest');
+            box.innerHTML = '';
+            skills.forEach((skill, i) => {
+                const b = el('button', 'suggest-row is-skill' + (i === 0 ? ' is-active' : ''));
+                b.type = 'button';
+                this.suggestOption(b, i);
+                b.appendChild(el('span', 'suggest-name', '/' + S.slugOf(skill)));
+                b.appendChild(el('span', 'suggest-hint', S.label(skill) + (S.describe(skill) ? ' · ' + S.describe(skill) : '')));
+                b.addEventListener('click', () => this.pickSuggest(i));
+                box.appendChild(b);
+            });
+            box.hidden = false;
+            box.scrollTop = 0;
+            this.syncSuggestA11y();
         },
 
         showMentionSuggest(at) {
@@ -3963,9 +4174,11 @@
             const entry = this.suggestRows[index == null ? this.suggestAt : index];
             if (!entry) return false;
             const input = $('input');
-            input.value = entry.mention
-                ? Mention.completion(entry.mention, entry.fresh)
-                : '?' + entry.name + (entry.args ? ' ' : '');
+            input.value = entry.skill
+                ? '/' + window.NymbotSkills.slugOf(entry.skill) + ' '
+                : entry.mention
+                    ? Mention.completion(entry.mention, entry.fresh)
+                    : '?' + entry.name + (entry.args ? ' ' : '');
             this.hideSuggest();
             this.autoGrow();
             this.updateHints();
@@ -4371,6 +4584,8 @@
                 badge.appendChild(Icons.node(persona.icon || 'robot', { size: 11 }));
                 badge.appendChild(el('span', null, persona.name));
             }
+
+            if (window.NymbotSkills) window.NymbotSkills.chip(this);
 
             const due = Store.schedules().filter(s => s.enabled).length;
             const schedChip = $('chipSchedules');
@@ -5176,6 +5391,7 @@
                         danger: true
                     });
                     if (!ok) return;
+                    if (PrWatch) PrWatch.stopRepo(this, r).catch(() => { });
                     Store.deleteRepo(r.id);
                     this.conv = Store.conversation(this.conv.id);
                     this.renderRepos();
@@ -5204,6 +5420,7 @@
             $('gitApprove').checked = !!repo.approve;
             $('gitJobBranches').checked = GitRun.jobBranchesOn(repo);
             $('gitWhenDone').value = GitRun.whenDoneOf(repo.whenDone);
+            $('gitPrWatch').value = PrWatch ? PrWatch.repoChoice(repo.prWatch) : '';
             this.syncJobFields();
             $('repoFormTitle').textContent = t('Edit repository');
             $('repoSaveBtn').textContent = t('Save changes');
@@ -5227,6 +5444,7 @@
             $('gitApprove').checked = false;
             $('gitJobBranches').checked = true;
             $('gitWhenDone').value = '';
+            $('gitPrWatch').value = '';
             this.syncJobFields();
             $('repoFormTitle').textContent = t('Add a repository');
             $('repoSaveBtn').textContent = t('Add repository');
@@ -5253,6 +5471,8 @@
             const fallback = this.whenDoneLabel(GitRun.whenDoneFor(null, this.settings));
             const first = $('gitWhenDone').querySelector('option[value=""]');
             if (first) first.textContent = t('Use the default in Settings ({choice})', { choice: fallback });
+            const watchFirst = $('gitPrWatch').querySelector('option[value=""]');
+            if (watchFirst && PrWatch) watchFirst.textContent = t('Use the default in Settings ({choice})', { choice: PrWatch.watchDefault(this.settings) ? t('Watch them') : t("Don't watch them") });
         },
 
         /// Asked directly from this device, so the token goes nowhere it does not already go.
@@ -5351,6 +5571,7 @@
             const approve = $('gitApprove').checked;
             const jobBranches = $('gitJobBranches').checked;
             const whenDone = GitRun.whenDoneOf($('gitWhenDone').value);
+            const prWatch = PrWatch ? PrWatch.repoChoice($('gitPrWatch').value) : '';
             const next = new Set((this.conv.repoIds || []));
             for (const r of picked) {
                 const entry = Store.addRepo({
@@ -5362,7 +5583,8 @@
                     allowWrites,
                     approve,
                     jobBranches,
-                    whenDone
+                    whenDone,
+                    prWatch
                 });
                 next.add(entry.id);
             }
@@ -5449,7 +5671,8 @@
                 allowWrites: $('gitWrites').checked,
                 approve: $('gitApprove').checked,
                 jobBranches: $('gitJobBranches').checked,
-                whenDone: GitRun.whenDoneOf($('gitWhenDone').value)
+                whenDone: GitRun.whenDoneOf($('gitWhenDone').value),
+                prWatch: PrWatch ? PrWatch.repoChoice($('gitPrWatch').value) : ''
             };
             // Keeps where it was announced alongside the forge it lives on.
             const found = this.ngitFound;
@@ -6107,6 +6330,16 @@
             $('setAutoSpeak').checked = !!s.autoSpeak;
             $('replyNotifyField').hidden = !Notify.supported();
             $('setReplyNotify').checked = s.replyNotify !== false && Notify.permission() !== 'denied';
+            const events = Object.assign({ done: true, failed: true, waiting: true, paused: true, schedule: true, pr: true, minSeconds: 0 }, s.notify || {});
+            $('setNotifyDone').checked = events.done !== false;
+            $('setNotifyFailed').checked = events.failed !== false;
+            $('setNotifyWaiting').checked = events.waiting !== false;
+            $('setNotifyPaused').checked = events.paused !== false;
+            $('setNotifySchedule').checked = events.schedule !== false;
+            $('setNotifyPr').checked = events.pr !== false;
+            $('setNotifyMin').value = String([0, 30, 120].includes(Number(events.minSeconds)) ? Number(events.minSeconds) : 0);
+            $('notifyEvents').hidden = !$('setReplyNotify').checked;
+            $('setReplyNotify').onchange = () => { $('notifyEvents').hidden = !$('setReplyNotify').checked; };
             $('setRate').value = String(s.speechRate || 1);
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
@@ -6116,9 +6349,13 @@
             $('setProgress').checked = s.showProgress !== false;
             $('setMaxRuns').value = String(Chat.validRuns(s.maxRuns) || Api.RUN_LIMIT);
             $('setWhenDone').value = GitRun.whenDoneFor(null, s);
+            $('setPrWatch').value = PrWatch && !PrWatch.watchDefault(s) ? 'off' : 'on';
+            $('setPrFix').value = PrWatch ? PrWatch.fixMode(s) : 'ask';
+            $('setPrFixCap').value = String(PrWatch ? PrWatch.fixCap(s) : 20);
             const policy = s.policy || {};
             $('setPolicyRead').value = policy.readOnlyTools === 'allow' ? 'allow' : 'ask';
             $('setPolicyRuns').value = policy.serverRuns === 'allow' ? 'allow' : 'ask';
+            $('setPolicyPlan').value = ['always', 'never'].includes(policy.planFirst) ? policy.planFirst : 'changing';
             $('setNotices').checked = s.notices !== false;
             $('setSync').checked = s.sync !== false;
             this.renderVoices();
@@ -6176,6 +6413,15 @@
                 hapticOnReply: $('setHaptic').checked,
                 autoSpeak: $('setAutoSpeak').checked,
                 replyNotify: notifyOn,
+                notify: Object.assign({}, this.settings.notify || {}, {
+                    done: $('setNotifyDone').checked,
+                    failed: $('setNotifyFailed').checked,
+                    waiting: $('setNotifyWaiting').checked,
+                    paused: $('setNotifyPaused').checked,
+                    schedule: $('setNotifySchedule').checked,
+                    pr: $('setNotifyPr').checked,
+                    minSeconds: [0, 30, 120].includes(Number($('setNotifyMin').value)) ? Number($('setNotifyMin').value) : 0
+                }),
                 voiceUri: $('setVoice').value || null,
                 speechRate: Number($('setRate').value) || 1,
                 autoDeleteDays: Number($('setAutoDelete').value) || 0,
@@ -6186,9 +6432,13 @@
                 showProgress: $('setProgress').checked,
                 maxRuns: Chat.validRuns($('setMaxRuns').value) || Api.RUN_LIMIT,
                 whenDone: this.pickedWhenDone($('setWhenDone').value),
+                prWatch: $('setPrWatch').value !== 'off',
+                prFix: ['off', 'ask', 'auto'].includes($('setPrFix').value) ? $('setPrFix').value : 'ask',
+                prFixCap: [5, 10, 20, 50, 100].includes(Number($('setPrFixCap').value)) ? Number($('setPrFixCap').value) : 20,
                 policy: {
                     readOnlyTools: $('setPolicyRead').value === 'allow' ? 'allow' : 'ask',
-                    serverRuns: $('setPolicyRuns').value === 'allow' ? 'allow' : 'ask'
+                    serverRuns: $('setPolicyRuns').value === 'allow' ? 'allow' : 'ask',
+                    planFirst: ['always', 'never'].includes($('setPolicyPlan').value) ? $('setPolicyPlan').value : 'changing'
                 },
                 notices: $('setNotices').checked,
                 sync: $('setSync').checked
@@ -6209,6 +6459,7 @@
             const pick = (v) => (v === 'allow' || v === 'ask') ? v : '';
             $('chatPolicyRead').value = pick(own.readOnlyTools);
             $('chatPolicyRuns').value = pick(own.serverRuns);
+            $('chatPolicyPlan').value = ['always', 'changing', 'never'].includes(own.planFirst) ? own.planFirst : '';
             this.closeChatMenu();
             this.openModal('modalPolicy');
         },
@@ -6221,6 +6472,8 @@
             const runs = $('chatPolicyRuns').value;
             if (read === 'allow' || read === 'ask') policy.readOnlyTools = read;
             if (runs === 'allow' || runs === 'ask') policy.serverRuns = runs;
+            const plan = $('chatPolicyPlan').value;
+            if (['always', 'changing', 'never'].includes(plan)) policy.planFirst = plan;
             this.conv = this.patchChat(conv, { policy: Object.keys(policy).length ? policy : null }) || this.conv;
             this.closeModals();
             this.toast(t('Saved.'));
@@ -6664,67 +6917,125 @@
         /// Undo restores each touched path from the commit the branch stood on before the run.
         checkpointCard(m) {
             const mark = m.checkpoint;
-            const card = el('div', 'checkpoint-card' + (mark.undone ? ' is-undone' : ''));
-            const head = el('div', 'checkpoint-head');
-            head.appendChild(Icons.node('branch', { size: 13 }));
-            head.appendChild(el('span', 'checkpoint-repo',
-                mark.repo + (mark.branch ? ' · ' + mark.branch : '')));
-            card.appendChild(head);
-
-            const bits = [];
-            if ((mark.paths || []).length) {
-                bits.push(mark.paths.length === 1
-                    ? t('1 file changed')
-                    : t('{n} files changed', { n: mark.paths.length }));
-            }
-            for (const name of mark.branches || []) bits.push(t('branch {name}', { name }));
-            if ((mark.pulls || []).length) {
-                bits.push(mark.pulls.length === 1
-                    ? t('1 pull request')
-                    : t('{n} pull requests', { n: mark.pulls.length }));
-            }
-            card.appendChild(el('div', 'checkpoint-what', bits.join(' · ')));
-            if ((mark.paths || []).length) {
-                card.appendChild(el('div', 'checkpoint-paths', mark.paths.join(', ')));
+            const marks = [mark].concat(Array.isArray(mark.also) ? mark.also : []).filter(x => x && x.repo);
+            const withPaths = marks.filter(x => (x.paths || []).length);
+            const pending = withPaths.filter(x => !x.undone);
+            const card = el('div', 'checkpoint-card' + (withPaths.length && !pending.length ? ' is-undone' : ''));
+            for (const x of marks) {
+                const head = el('div', 'checkpoint-head');
+                head.appendChild(Icons.node('branch', { size: 13 }));
+                head.appendChild(el('span', 'checkpoint-repo', x.repo + (x.branch ? ' · ' + x.branch : '')));
+                card.appendChild(head);
+                const bits = [];
+                if ((x.paths || []).length) {
+                    bits.push(x.paths.length === 1
+                        ? t('1 file changed')
+                        : t('{n} files changed', { n: x.paths.length }));
+                }
+                for (const name of x.branches || []) bits.push(t('branch {name}', { name }));
+                if ((x.pulls || []).length) {
+                    bits.push(x.pulls.length === 1
+                        ? t('1 pull request')
+                        : t('{n} pull requests', { n: x.pulls.length }));
+                }
+                if (bits.length) card.appendChild(el('div', 'checkpoint-what', bits.join(' · ')));
+                if ((x.paths || []).length) card.appendChild(el('div', 'checkpoint-paths', x.paths.join(', ')));
+                if (x.undone && marks.length > 1) card.appendChild(el('div', 'checkpoint-note', t('Put back.')));
             }
             const jobs = GitRun.jobsOf(mark);
+            const conv = this.conv;
             for (const job of jobs) {
                 card.appendChild(GitRun.branchChip(job, {
+                    provider: job.provider,
+                    watch: PrWatch ? PrWatch.chipOptions(conv, job) : null,
                     onAction: (act, button) => this.branchAction(m, job, act, button)
                 }));
             }
-            if (jobs.length && !(mark.paths || []).length && !(mark.also || []).some(x => (x.paths || []).length)) return card;
-            // A multi-repo run names the repositories it cannot put back.
-            for (const other of mark.also || []) {
-                const line = [other.repo + (other.branch ? ' · ' + other.branch : '')];
-                if ((other.paths || []).length) line.push(other.paths.join(', '));
-                card.appendChild(el('div', 'checkpoint-paths', line.join(' — ')));
+            for (const pr of GitRun.openPulls(mark)) {
+                const row = el('div', 'staged-actions');
+                const prJob = { repo: pr.repo, branch: pr.branch, pull: { number: pr.number, url: pr.url } };
+                const prWatch = PrWatch ? PrWatch.chipOptions(conv, prJob) : null;
+                if (prWatch) {
+                    const live = PrWatch.liveText(prWatch.live);
+                    if (live) card.appendChild(el('div', 'branch-chip-state branch-chip-live', '#' + pr.number + ' · ' + live));
+                    const watchBtn = el('button', 'btn btn-small btn-ghost', prWatch.on ? t('Stop watching PR #{n}', { n: pr.number }) : t('Watch PR #{n}', { n: pr.number }));
+                    watchBtn.type = 'button';
+                    watchBtn.dataset.act = 'pull-watch';
+                    watchBtn.dataset.pull = String(pr.number);
+                    watchBtn.setAttribute('aria-pressed', prWatch.on ? 'true' : 'false');
+                    watchBtn.addEventListener('click', () => PrWatch.toggle(this, conv, m, prJob, watchBtn));
+                    row.appendChild(watchBtn);
+                }
+                const close = el('button', 'btn btn-small btn-ghost', t('Close PR #{n}', { n: pr.number }));
+                close.type = 'button';
+                close.dataset.act = 'pull-close';
+                close.dataset.pull = String(pr.number);
+                close.addEventListener('click', () => this.closeRecordedPull(m, pr, close));
+                row.appendChild(close);
+                card.appendChild(row);
             }
-            if ((mark.also || []).length) {
-                card.appendChild(el('div', 'checkpoint-note',
-                    t('Undoing puts back {repo} only. Ask to undo the others and it will.',
-                        { repo: mark.repo })));
-            }
-
-            if (mark.undone) {
+            if (jobs.length && !withPaths.length) return card;
+            if (withPaths.length && !pending.length) {
                 card.appendChild(el('div', 'checkpoint-note', t('Put back.')));
                 return card;
             }
-            if (!mark.undoable) {
-                // Say why rather than showing a button that cannot work.
+            const undo = GitRun.undoMarks(mark);
+            if (!undo.length) {
                 card.appendChild(el('div', 'checkpoint-note',
                     t('This one cannot be undone from here — no commit was recorded to read the old files back from.')));
                 return card;
             }
-            const undo = el('button', 'btn btn-small', t('Undo these changes'));
-            undo.type = 'button';
-            undo.addEventListener('click', () => this.revertCheckpoint(m, undo));
-            card.appendChild(undo);
-            if ((mark.branches || []).length || (mark.pulls || []).length) {
+            const button = el('button', 'btn btn-small', t('Undo these changes'));
+            button.type = 'button';
+            button.dataset.act = 'checkpoint-undo';
+            button.addEventListener('click', () => this.revertCheckpoint(m, button));
+            card.appendChild(button);
+            if (marks.some(x => (x.branches || []).length || (x.pulls || []).length)) {
                 card.appendChild(el('div', 'checkpoint-note',
                     t('Files only. A branch or pull request it opened is left where it is.')));
             }
+            for (const x of pending.filter(x => !undo.includes(x))) {
+                card.appendChild(el('div', 'checkpoint-note',
+                    t('{repo} cannot be put back from here: no commit was recorded to read its old files back from.', { repo: x.repo })));
+            }
             return card;
+        },
+
+        patchMark(convId, m, fix) {
+            const fresh = Store.messages(convId).find(x => x.id === m.id) || m;
+            const mark = fresh.checkpoint;
+            if (!mark) return;
+            const next = fix(mark, true) || mark;
+            if (Array.isArray(mark.also)) next.also = mark.also.map(x => fix(x, false) || x);
+            Store.patchMessage(convId, m.id, { checkpoint: next });
+            this.replaceMessage(Store.messages(convId).find(x => x.id === m.id) || m);
+        },
+
+        async closeRecordedPull(m, pr, button) {
+            const conv = this.conv;
+            const convId = conv.id;
+            const ok = await this.ask({
+                title: t('Close pull request'),
+                body: t('Close pull request #{n} in {repo} without merging? Only if it is still open on {branch}. The branch stays, and it can be reopened on the forge.',
+                    { n: pr.number, repo: pr.repo, branch: pr.branch }),
+                confirm: t('Close it'),
+                danger: true
+            });
+            if (!ok) return;
+            if (button) button.disabled = true;
+            const mark = (x) => Object.assign({}, x, { prs: (x.prs || []).map(p => Number(p.number) === pr.number ? Object.assign({}, p, { closed: true }) : p) });
+            try {
+                await Chat.branchOp(conv, pr.repo, 'close', { branch: pr.branch, sha: '', pull: { number: pr.number } });
+                this.patchMark(convId, m, (x) => x.repo === pr.repo ? mark(x) : x);
+                this.note(t('Closed pull request #{n}.', { n: pr.number }), convId);
+            } catch (e) {
+                if (button) button.disabled = false;
+                if (e && e.merged) {
+                    this.patchMark(convId, m, (x) => x.repo === pr.repo
+                        ? Object.assign({}, x, { prs: (x.prs || []).map(p => Number(p.number) === pr.number ? Object.assign({}, p, { merged: true }) : p) }) : x);
+                }
+                this.note((e && e.message) || t('The forge could not be reached.'), convId);
+            }
         },
 
         patchJob(convId, m, branch, patch) {
@@ -6741,6 +7052,10 @@
         async branchAction(m, job, act, button) {
             const conv = this.conv;
             const convId = conv.id;
+            if (act === 'branch-watch') {
+                if (PrWatch) await PrWatch.toggle(this, conv, m, job, button);
+                return;
+            }
             if (act === 'branch-delete') {
                 const ok = await this.ask({
                     title: t('Delete this branch'),
@@ -6760,7 +7075,27 @@
                 });
                 if (!ok) return;
             }
-            const op = { 'branch-pr': 'pr', 'branch-merge': 'merge', 'branch-update': 'update', 'branch-delete': 'delete' }[act];
+            if (act === 'branch-close') {
+                const ok = await this.ask({
+                    title: t('Close pull request'),
+                    body: t('Close pull request #{n} in {repo} without merging? Only if it still ends at the commit Nymbot made. The branch stays, and it can be reopened on the forge.',
+                        { n: job.pull && job.pull.number, repo: job.repo }),
+                    confirm: t('Close it'),
+                    danger: true
+                });
+                if (!ok) return;
+            }
+            if (act === 'branch-revert') {
+                const ok = await this.ask({
+                    title: t('Revert this merge'),
+                    body: t('Open a new pull request in {repo} that puts back every file pull request #{n} changed on {base}? Nothing is force-pushed and no history is rewritten.',
+                        { repo: job.repo, n: job.pull && job.pull.number, base: job.base }),
+                    confirm: t('Open the revert')
+                });
+                if (!ok) return;
+            }
+            const op = { 'branch-pr': 'pr', 'branch-merge': 'merge', 'branch-update': 'update', 'branch-delete': 'delete',
+                'branch-close': 'close', 'branch-revert': 'revert-pr' }[act];
             if (!op) return;
             if (button) button.disabled = true;
             try {
@@ -6771,6 +7106,13 @@
                 } else if (op === 'merge') {
                     this.patchJob(convId, m, job.branch, { merged: true, conflict: false, pull: res.pull || job.pull });
                     this.note(t('Merged {branch} into {base}.', { branch: job.branch, base: job.base }), convId);
+                } else if (op === 'close') {
+                    this.patchJob(convId, m, job.branch, { closed: true });
+                    this.note(res.already ? t('Pull request #{n} was already closed.', { n: job.pull.number })
+                        : t('Closed pull request #{n}.', { n: job.pull.number }), convId);
+                } else if (op === 'revert-pr') {
+                    this.patchJob(convId, m, job.branch, { reverted: { branch: res.branch || '', base: res.base || '', sha: res.sha || '', pull: res.pull || null } });
+                    this.note(t('Opened pull request #{n} to revert the merge, on {branch}.', { n: res.pull && res.pull.number, branch: res.branch }), convId);
                 } else if (op === 'update') {
                     this.patchJob(convId, m, job.branch, { conflict: false, sha: res.sha || job.sha });
                     this.note(res.upToDate ? t('{branch} already has everything from {base}.', { branch: job.branch, base: job.base })
@@ -6781,6 +7123,19 @@
                 }
             } catch (e) {
                 if (button) button.disabled = false;
+                if (e && e.merged && op === 'close') {
+                    this.patchJob(convId, m, job.branch, { merged: true });
+                    this.note(e.message, convId);
+                    return;
+                }
+                if (e && (op === 'close' || op === 'revert-pr') && (e.gone || e.notMerged)) {
+                    this.note(e.message, convId);
+                    return;
+                }
+                if (e && e.conflict && op === 'revert-pr') {
+                    this.note(e.message, convId);
+                    return;
+                }
                 if (e && e.conflict) {
                     this.patchJob(convId, m, job.branch, { conflict: true, pull: e.pull || job.pull });
                     this.note(t('This branch conflicts with {base}. Open the PR to resolve it, or ask Nymbot to update the branch.', { base: job.base }), convId);
@@ -6793,6 +7148,10 @@
                 }
                 if (e && e.moved) {
                     this.note(t('The branch has new commits since Nymbot made it, so it was left alone.'), convId);
+                    return;
+                }
+                if (e && e.unsupported && op === 'revert-pr') {
+                    this.note(e.message, convId);
                     return;
                 }
                 if (e && e.unsupported) {
@@ -6870,32 +7229,42 @@
         },
 
         async revertCheckpoint(m, button) {
-            const mark = m.checkpoint;
+            const convId = this.conv.id;
+            const marks = GitRun.undoMarks(m.checkpoint);
+            if (!marks.length) return;
+            const files = marks.reduce((n, x) => n + x.paths.length, 0);
             const ok = await this.ask({
                 title: t('Undo these changes'),
-                body: t('Put {n} file(s) back to how they were before this reply, on {branch}? This commits them as they were — nothing is erased from the history.', { n: (mark.paths || []).length, branch: mark.branch }),
+                body: marks.length === 1
+                    ? t('Put {n} file(s) back to how they were before this reply, on {branch}? This commits them as they were — nothing is erased from the history.', { n: files, branch: marks[0].branch })
+                    : t('Put {n} file(s) in {repos} repositories back to how they were before this reply? Each repository gets a commit with them as they were — nothing is erased from the history.', { n: files, repos: marks.length }),
                 confirm: t('Undo them'),
                 danger: true
             });
             if (!ok) return;
             button.disabled = true;
             button.textContent = t('Putting it back…');
+            let rows;
             try {
-                const res = await Chat.revert(this.conv, mark);
-                const done = (res.restored || []).length + (res.deleted || []).length;
-                const failed = (res.failed || []).length;
-                Store.patchMessage(this.conv.id, m.id,
-                    { checkpoint: Object.assign({}, mark, { undone: !failed }) });
-                this.replaceMessage(Store.messages(this.conv.id).find(x => x.id === m.id) || m);
-                this.note(failed
-                    ? t('Put {done} back; {failed} could not be. Check the repository.',
-                        { done, failed })
-                    : t('Put back: {n} file(s) are as they were before that reply.', { n: done }));
+                rows = await Chat.revertMarks(this.conv, marks);
             } catch (e) {
                 button.disabled = false;
                 button.textContent = t('Undo these changes');
-                this.note((e && e.message) || t('Could not put that back.'));
+                this.note((e && e.message) || t('Could not put that back.'), convId);
+                return;
             }
+            const clean = (r) => !r.error && !(r.failed || []).length;
+            this.patchMark(convId, m, (x) => {
+                const r = rows.find(y => y.mark.repo === x.repo && (y.mark.branch || '') === (x.branch || ''));
+                return r && clean(r) ? Object.assign({}, x, { undone: true }) : x;
+            });
+            const said = (r) => {
+                const done = (r.restored || []).length + (r.deleted || []).length;
+                if (r.error) return r.error;
+                if ((r.failed || []).length) return t('Put {done} back; {failed} could not be. Check the repository.', { done, failed: r.failed.length });
+                return t('Put back: {n} file(s) are as they were before that reply.', { n: done });
+            };
+            this.note(rows.length === 1 ? said(rows[0]) : rows.map(r => r.repo + ': ' + said(r)).join('\n'), convId);
         },
 
         citationCards(sources, id) {
@@ -7487,6 +7856,7 @@
             $('scheduleRepeat').value = 'daily';
             $('scheduleWhen').value = this.localInputValue(Date.now() + 3600000);
             $('scheduleHere').checked = false;
+            $('scheduleRunChanges').checked = false;
             this.renderScheduleServer('', 5);
             $('scheduleFormTitle').textContent = t('New scheduled prompt');
             this.modalStatus('scheduleStatus', '');
@@ -7501,6 +7871,7 @@
             $('scheduleRepeat').value = entry.repeat || 'once';
             $('scheduleWhen').value = this.localInputValue(entry.nextAt || Date.now());
             $('scheduleHere').checked = !!entry.convId;
+            $('scheduleRunChanges').checked = entry.runChanges === true;
             this.renderScheduleServer(entry.server || '', entry.serverCap || 5);
             $('scheduleFormTitle').textContent = t('Edit scheduled prompt');
             this.modalStatus('scheduleStatus', '');
@@ -7636,6 +8007,7 @@
                 repeat: $('scheduleRepeat').value,
                 nextAt: when,
                 convId: $('scheduleHere').checked && this.conv ? this.conv.id : null,
+                runChanges: $('scheduleRunChanges').checked,
                 enabled: true
             }));
             let status = t('Saved.');
@@ -7706,6 +8078,7 @@
                 }
                 Background.collect(this).catch(() => { });
             }
+            if (PrWatch) PrWatch.tick(this).catch(() => { });
             const due = this.dueSchedules();
             if (!due.length) return;
             await this.runSchedule(due[0].id);
@@ -9707,6 +10080,7 @@
                 { label: t('Personas'), hint: '', run: () => this.openPersonas() },
                 { label: t('Custom instructions'), hint: '', run: () => this.openSystem() },
                 { label: t('Prompt library'), hint: MODIFIER + '+Shift+P', run: () => this.openPrompts() },
+                { label: t('Skills'), hint: '/', run: () => window.NymbotSkills.open(this) },
                 { label: t('Saved messages'), hint: '', run: () => this.openPinned() },
                 { label: t('Settings'), hint: '', run: () => this.openAppearance() },
                 { label: t('Memory'), hint: '', run: () => this.openMemory() },
@@ -10032,6 +10406,7 @@
             $('dialogLabel').textContent = o.label || '';
             $('dialogAreaLabel').textContent = o.label || '';
             // Optional second question, read back as `dialogChecked`.
+            this.renderDialogList(o.list);
             $('dialogCheckRow').hidden = !o.check;
             $('dialogCheckLabel').textContent = o.check || '';
             $('dialogCheck').checked = !!o.checkOn;
@@ -10055,10 +10430,33 @@
             return new Promise((resolve) => { this._dialogResolve = resolve; });
         },
 
+        renderDialogList(list) {
+            const box = $('dialogList');
+            box.innerHTML = '';
+            box.hidden = !(Array.isArray(list) && list.length);
+            for (const item of list || []) {
+                const row = el('label', 'dialog-list-row' + (item.can ? '' : ' is-fixed'));
+                const box2 = document.createElement('input');
+                box2.type = 'checkbox';
+                box2.dataset.id = item.id;
+                box2.checked = !!item.can && item.checked !== false;
+                box2.disabled = !item.can;
+                if (!item.can) box2.hidden = true;
+                row.appendChild(box2);
+                const text = el('span', 'dialog-list-text');
+                text.appendChild(el('span', 'dialog-list-label', item.label || ''));
+                if (item.note) text.appendChild(el('span', 'dialog-list-note', item.note));
+                row.appendChild(text);
+                box.appendChild(row);
+            }
+        },
+
         settleDialog(ok) {
             const resolve = this._dialogResolve;
             if (!resolve) return;
             this.dialogChecked = $('dialogCheck').checked;
+            this.dialogPicks = Array.from($('dialogList').querySelectorAll('input[type=checkbox]'))
+                .filter(x => x.checked && !x.disabled).map(x => x.dataset.id);
             const value = this._dialogArea ? $('dialogTextarea').value : $('dialogInput').value;
             this._dialogResolve = null;
             $('dialog').hidden = true;
@@ -10085,6 +10483,7 @@
         },
 
         toast(text) {
+            this.commitToast();
             const node = $('toast');
             node.textContent = text;
             node.hidden = false;
@@ -10092,7 +10491,17 @@
             this._toastTimer = setTimeout(() => { node.hidden = true; }, 4000);
         },
 
-        toastUndo(text, undo) {
+        commitToast() {
+            const commit = this._toastCommit;
+            this._toastCommit = null;
+            if (commit) {
+                try { commit(); } catch (_) { }
+            }
+        },
+
+        toastUndo(text, undo, commit) {
+            this.commitToast();
+            this._toastCommit = commit || null;
             const node = $('toast');
             node.innerHTML = '';
             node.appendChild(el('span', null, text));
@@ -10101,12 +10510,16 @@
             button.addEventListener('click', () => {
                 node.hidden = true;
                 clearTimeout(this._toastTimer);
+                this._toastCommit = null;
                 try { undo(); } catch (_) { }
             });
             node.appendChild(button);
             node.hidden = false;
             clearTimeout(this._toastTimer);
-            this._toastTimer = setTimeout(() => { node.hidden = true; }, 8000);
+            this._toastTimer = setTimeout(() => {
+                node.hidden = true;
+                this.commitToast();
+            }, 8000);
         },
 
         /// Toggles marks off a selection that already carries them instead of nesting.
@@ -10301,6 +10714,9 @@
                 'open-repos': () => this.openRepos(),
                 'open-personas': () => this.openPersonas(),
                 'open-prompts': () => this.openPrompts(),
+                'open-skills': () => window.NymbotSkills.open(this),
+                'skill-save': () => window.NymbotSkills.saveForm(this),
+                'skill-reset': () => window.NymbotSkills.resetForm(this),
                 'open-pinned': () => this.openPinned(),
                 'cycle-effort': () => this.cycleEffort(),
                 'open-memory': () => this.openMemory(),
@@ -10432,6 +10848,7 @@
                 ServerRun ? ServerRun.handlers(this) : {},
                 Team.handlers(this),
                 window.NymbotTasks ? window.NymbotTasks.handlers(this) : {},
+                window.NymbotTranscripts ? window.NymbotTranscripts.handlers(this) : {},
                 window.NymbotGift.handlers(this),
                 window.NymbotApiKeys ? window.NymbotApiKeys.handlers(this) : {},
                 window.NymbotVault ? window.NymbotVault.handlers(this) : {});
@@ -10569,7 +10986,7 @@
                     if (e.key === 'Tab') { e.preventDefault(); this.pickSuggest(); return; }
                     if (e.key === 'Enter' && !e.shiftKey) {
                         const typed = input.value.trim().toLowerCase();
-                        if (!this.suggestRows.some(r => !r.mention && '?' + r.name === typed)) {
+                        if (!this.suggestRows.some(r => (r.skill ? '/' + window.NymbotSkills.slugOf(r.skill) === typed : !r.mention && '?' + r.name === typed))) {
                             e.preventDefault();
                             this.pickSuggest();
                             return;

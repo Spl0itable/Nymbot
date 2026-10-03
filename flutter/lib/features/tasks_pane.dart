@@ -9,6 +9,7 @@ import '../core/theme/theme.dart';
 import '../models/conversation.dart';
 import '../services/background_jobs.dart';
 import '../services/media_cache.dart';
+import '../services/task_transcript.dart';
 import '../services/tasks.dart';
 import '../state/app_controller.dart';
 import 'citation_cards.dart';
@@ -17,6 +18,7 @@ import 'motion.dart';
 import 'nym_glyph.dart';
 import 'run_card.dart';
 import 'sheets/sheet.dart';
+import 'transcript_sheet.dart';
 
 const double kTasksWide = 900;
 
@@ -380,9 +382,33 @@ class _TasksPaneState extends State<TasksPane> {
               padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
               child: RunPlan(plan: g.plan),
             ),
+          if (_transcriptOf(app, g) case final tx?)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                key: const ValueKey('tasks-transcript'),
+                icon: const NymGlyph('tasks', size: 14),
+                label: Text(t('Transcript')),
+                onPressed: () => unawaited(showTranscriptSheet(context,
+                    convId: tx.conv, id: tx.id, remote: g.note != null && tx.id == tx.run)),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  TaskTranscript? _transcriptOf(AppController app, TaskGroup g) {
+    final conv = app.current;
+    if (conv == null) return null;
+    if (g.live) {
+      final local = _local(app, g);
+      if (local != null) return app.transcripts.of(local);
+      final run = g.run;
+      return run == null ? null : app.transcripts.find(conv.id, run);
+    }
+    final m = app.messages.where((x) => x.id == g.id).firstOrNull;
+    return m == null ? null : app.transcripts.forMessage(conv.id, m);
   }
 
   ChatTurn? _local(AppController app, TaskGroup g) =>
@@ -518,7 +544,40 @@ class _TasksPaneState extends State<TasksPane> {
                 ],
               ),
             ),
-          if (it.approval && it.state == 'waiting' && message != null)
+          if (it.question && it.state == 'waiting')
+            Padding(
+              padding: const EdgeInsets.only(left: 27, top: 4, bottom: 2),
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  FilledButton(
+                    key: const ValueKey('tasks-answer'),
+                    onPressed: () => widget.onJump(g.id),
+                    child: Text(t('Answer')),
+                  ),
+                ],
+              ),
+            ),
+          if (it.planned && it.state == 'waiting')
+            Padding(
+              padding: const EdgeInsets.only(left: 27, top: 4, bottom: 2),
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  FilledButton(
+                    key: const ValueKey('tasks-plan-approve'),
+                    onPressed: message == null ? null : () => app.decidePlan(message!, {'decision': 'approve'}),
+                    child: Text(t('Approve')),
+                  ),
+                  TextButton(
+                    key: const ValueKey('tasks-plan-review'),
+                    onPressed: () => widget.onJump(g.id),
+                    child: Text(t('Review')),
+                  ),
+                ],
+              ),
+            ),
+          if (it.approval && !it.planned && it.state == 'waiting' && message != null)
             Padding(
               padding: const EdgeInsets.only(left: 27, top: 4, bottom: 2),
               child: Wrap(

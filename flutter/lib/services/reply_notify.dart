@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/utils/jitter.dart';
 import '../features/i18n/i18n.dart';
+import '../models/workspace.dart';
 
 class ReplyNotifyChannel {
   ReplyNotifyChannel([MethodChannel? channel])
@@ -143,10 +144,12 @@ class ReplyNotify with WidgetsBindingObserver {
     required this.titleOf,
     required this.open,
     this.openAt,
+    NotifyPrefs Function()? prefs,
     ReplyNotifyChannel? channel,
     this._platform,
     bool? sandbox,
   })  : channel = channel ?? ReplyNotifyChannel(),
+        prefs = prefs ?? NotifyPrefs.new,
         sandbox = sandbox ?? kDebugMode;
 
   final bool Function() enabled;
@@ -154,6 +157,7 @@ class ReplyNotify with WidgetsBindingObserver {
   final String Function(String conv) titleOf;
   final Future<void> Function(String conv) open;
   final Future<void> Function(String conv, String asked)? openAt;
+  final NotifyPrefs Function() prefs;
   final ReplyNotifyChannel channel;
   final TargetPlatform? _platform;
   final bool sandbox;
@@ -167,6 +171,7 @@ class ReplyNotify with WidgetsBindingObserver {
   final Set<String> registered = {};
   final Set<String> _answered = {};
   final Map<String, Timer> _timers = {};
+  final Map<String, DateTime> _started = {};
   bool background = false;
   bool waiting = false;
   String? viewing;
@@ -212,9 +217,69 @@ class ReplyNotify with WidgetsBindingObserver {
     _timers.clear();
   }
 
-  Future<Map<String, dynamic>?> pushRegistration(String chat, String text) async {
+  static const textMax = 80;
+
+  static String _cap(String s) => s.length > textMax ? s.substring(0, textMax) : s;
+
+  static Map<String, String> kindTexts(String kind) {
+    final all = <String, Map<String, String>>{
+      'turn': {
+        'done': t('Your reply is ready'),
+        'failed': t('Nymbot could not finish that reply'),
+        'approval': t('Nymbot is waiting for your approval'),
+        'question': t('Nymbot has a question for you'),
+        'expired': t('Nymbot stopped: no answer came within 24 hours'),
+        'paused': t('Nymbot paused. Open the chat to carry on.'),
+      },
+      'background': {
+        'done': t('Your task is done'),
+        'failed': t('Your background task could not finish'),
+        'approval': t('Your background task needs your approval'),
+        'question': t('Your background task has a question for you'),
+        'expired': t('Your background task stopped: no answer came within 24 hours'),
+        'paused': t('Your background task paused'),
+      },
+      'schedule': {
+        'done': t('Your scheduled prompt ran'),
+        'failed': t('A scheduled prompt could not run'),
+        'approval': t('A scheduled prompt needs your approval'),
+        'question': t('A scheduled prompt has a question for you'),
+        'expired': t('A scheduled prompt stopped: no answer came within 24 hours'),
+        'paused': t('A scheduled prompt paused'),
+        'due': t('A scheduled prompt is due'),
+        'disabled': t('A scheduled prompt failed 3 times and was turned off'),
+      },
+      'prwatch': {
+        'ci-failed': t('CI failed on a pull request you watch'),
+        'review': t('New review comments on a pull request you watch'),
+        'pr': t('A pull request you watch changed'),
+        'done': t('A fix run on a pull request you watch finished'),
+        'failed': t('A fix run on a pull request you watch could not finish'),
+        'approval': t('A fix run on a pull request you watch needs your approval'),
+        'question': t('A fix run on a pull request you watch has a question for you'),
+        'paused': t('A fix run on a pull request you watch paused'),
+      },
+    };
+    return {
+      for (final e in (all[kind] ?? all['turn']!).entries) e.key: _cap(e.value),
+    };
+  }
+
+  Map<String, dynamic> pushOptions(String kind) {
+    final p = prefs();
+    final min = kind == 'schedule' ? 0 : p.minSeconds;
+    return {
+      'texts': kindTexts(kind),
+      'want': p.wantList(kind),
+      if (min > 0) 'min': min,
+    };
+  }
+
+  Future<Map<String, dynamic>?> pushRegistration(String chat, String text,
+      {String? kind}) async {
     if (!supported || !_chatId.hasMatch(chat)) return null;
-    final said = text.length > 80 ? text.substring(0, 80) : text;
+    final said = _cap(text);
+    final extra = kind == null ? const <String, dynamic>{} : pushOptions(kind);
     if (_ios) {
       final token = await channel.token();
       if (token == null || token.isEmpty) return null;
@@ -223,6 +288,7 @@ class ReplyNotify with WidgetsBindingObserver {
         'token': token,
         'chat': chat,
         'text': said,
+        ...extra,
       };
     }
     final up = await channel.upState();
@@ -233,6 +299,7 @@ class ReplyNotify with WidgetsBindingObserver {
       'keys': {'p256dh': up['p256dh'], 'auth': up['auth']},
       'chat': chat,
       'text': said,
+      ...extra,
     };
   }
 
@@ -253,6 +320,7 @@ class ReplyNotify with WidgetsBindingObserver {
     final key = run ?? conv;
     pending[key] = eventId;
     _chatOf[key] = conv;
+    _started.putIfAbsent(key, DateTime.now);
     if (anon) {
       _local.add(key);
     } else {
@@ -283,17 +351,24 @@ class ReplyNotify with WidgetsBindingObserver {
       String? run,
       String? asked,
       bool stopped = false,
-      String? state}) async {
+      String? state,
+      DateTime? startedAt}) async {
     if (!supported) return;
     final key = run ?? conv;
     _timers.remove(key)?.cancel();
     final eventId = pending.remove(key);
     _chatOf.remove(key);
     _local.remove(key);
+    final began = startedAt ?? _started.remove(key);
+    _started.remove(key);
     final handled = eventId != null &&
         (registered.remove(eventId) | _answered.remove(eventId));
+    final p = prefs();
+    final wanted = p.wants(state ?? (replied ? 'done' : 'failed'), 'turn') &&
+        !p.quick(began);
     if (eventId != null &&
         !stopped &&
+        wanted &&
         enabled() &&
         !handled &&
         !(!background && viewing == conv)) {
@@ -379,8 +454,13 @@ class ReplyNotify with WidgetsBindingObserver {
   static Map<String, String> stateText() => {
         'paused': t('Paused. Open the chat to carry on.'),
         'approval': t('Waiting for your approval.'),
+        'expired': t('No answer came within 24 hours, so the task stopped.'),
         'stopped': t('Stopped.'),
         'failed': t('That request failed.'),
+        'question': t('Nymbot has a question for you'),
+        'ci-failed': t('CI failed on a pull request you watch.'),
+        'review': t('New review comments on a pull request you watch.'),
+        'pr': t('A pull request changed. Open the chat to see it.'),
       };
 
   static Map<String, String> pushTexts() => {
@@ -390,13 +470,17 @@ class ReplyNotify with WidgetsBindingObserver {
         'title:done': t('Nymbot replied'),
         'title:paused': t('Nymbot replied'),
         'title:approval': t('Nymbot replied'),
+        'title:expired': t('Nymbot could not finish that reply'),
         'title:failed': t('Nymbot could not finish that reply'),
+        'title:question': t('Nymbot replied'),
+        'title:pr': t('Pull request update'),
       };
 
   static String headingFor(String? state, {required bool replied}) {
-    if (state == 'failed' || state == 'stopped') {
+    if (state == 'failed' || state == 'stopped' || state == 'expired') {
       return t('Nymbot could not finish that reply');
     }
+    if (state == 'question') return t('Nymbot has a question');
     if (state != null) return t('Nymbot replied');
     return replied
         ? t('Nymbot replied')
@@ -449,6 +533,7 @@ class ReplyNotify with WidgetsBindingObserver {
         'env': sandbox ? 'sandbox' : 'production',
         'chat': conv,
         'text': t('Your reply is ready'),
+        ...pushOptions('turn'),
       });
     } catch (_) {
       res = null;
@@ -456,7 +541,12 @@ class ReplyNotify with WidgetsBindingObserver {
     if (res == null || pending[key ?? conv] != eventId) return;
     if (res['done'] == true) {
       _answered.add(eventId);
-      if (background || viewing != conv) await _show(conv, replied: true);
+      final p = prefs();
+      if ((background || viewing != conv) &&
+          p.wants('done', 'turn') &&
+          !p.quick(_started[key ?? conv])) {
+        await _show(conv, replied: true);
+      }
       return;
     }
     if (res['ok'] == true) registered.add(eventId);

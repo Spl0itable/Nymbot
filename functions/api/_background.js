@@ -1,4 +1,4 @@
-import { apnsSendReply } from "./_apns.js";
+import { apnsSendReply, pushParseOpts, pushResolve } from "./_apns.js";
 import { webPushSendReply, webPushToken, unifiedPushSend, unifiedPushParse } from "./_webpush.js";
 
 export var BG_MAX_LEGS = 40;
@@ -23,7 +23,7 @@ export var SCHED_PAYLOAD_MAX = 12000;
 export var SCHED_STEPS = { once: 0, hourly: 3600000, daily: 86400000, weekly: 604800000 };
 
 var BG_REQ_KEYS = ["proModel", "git", "repos", "mcp", "effort", "web", "followUps", "research", "team", "policy",
-  "maxCost", "maxRuns", "serverRuns", "runKind", "leadTools", "pqClassical"];
+  "maxCost", "maxRuns", "serverRuns", "runKind", "leadTools", "pqClassical", "ask"];
 
 var enc = new TextEncoder();
 var dec = new TextDecoder();
@@ -161,7 +161,7 @@ export async function bgVerify(env, body, now) {
   var secret = hmacKeyOf(env);
   if (!secret || !body || typeof body !== "object") return false;
   if (typeof body.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(body.pubkey)) return false;
-  if (typeof body.runId !== "string" || !/^(s:)?[0-9A-Za-z_-]{1,64}$/.test(body.runId)) return false;
+  if (typeof body.runId !== "string" || !/^([sw]:)?[0-9A-Za-z_-]{1,64}$/.test(body.runId)) return false;
   if (typeof body.leg !== "string" && typeof body.leg !== "number") return false;
   var ts = Number(body.ts);
   var at = now || Date.now();
@@ -209,6 +209,9 @@ export function bgParsePush(raw, isPrivate) {
   if (raw.text != null && (typeof raw.text !== "string" || raw.text.length > 80)) return null;
   var base = { env: raw.env, chat: raw.chat };
   if (typeof raw.text === "string" && raw.text) base.text = raw.text;
+  var opts = pushParseOpts(raw);
+  if (opts.error) return null;
+  Object.assign(base, opts.opts);
   if (raw.env === "production" || raw.env === "sandbox") {
     var tok = typeof raw.token === "string" ? raw.token.toLowerCase() : "";
     if (!/^[0-9a-f]{64,200}$/.test(tok)) return null;
@@ -232,8 +235,15 @@ export function bgParsePush(raw, isPrivate) {
 
 export async function bgPushSend(env, reg, fields, fetchFn) {
   if (!reg || typeof reg !== "object") return { skipped: true };
-  var msg = Object.assign({}, reg, fields || {});
-  if (fields && fields.chat == null) msg.chat = reg.chat;
+  var f = Object.assign({}, fields || {});
+  var kind = typeof f.kind === "string" ? f.kind : "background";
+  var started = Number(f.startedAt) || 0;
+  delete f.kind;
+  delete f.startedAt;
+  var picked = pushResolve(kind, reg, f, started);
+  if (!picked) return { skipped: true, filtered: true };
+  var msg = Object.assign({}, reg, picked);
+  if (picked.chat == null) msg.chat = reg.chat;
   try {
     if (reg.env === "web") return await webPushSendReply(env, msg, fetchFn);
     if (reg.env === "unifiedpush") return await unifiedPushSend(env, msg, fetchFn);
@@ -335,5 +345,7 @@ export function schedParse(raw, now, isPrivate) {
   out.maxCreditsPerRun = perRun;
   out.maxRunsPerDay = perDay;
   out.repeat = p.repeat;
+  out.ask = p.ask === true;
+  out.runChanges = p.runChanges === true;
   return { sched: out };
 }

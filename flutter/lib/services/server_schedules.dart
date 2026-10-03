@@ -33,6 +33,7 @@ class ServerSchedules {
       'thread': thread,
       if (run) 'model': model,
       'tier': run && model.isNotEmpty ? 'pro' : (run ? tier : 'standard'),
+      if (run) 'runChanges': s.runChanges,
     });
   }
 

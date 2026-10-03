@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/free_tier.dart';
 import '../services/media_cache.dart';
+import '../services/skills.dart';
+import '../services/task_transcript.dart';
 
 import '../models/artifact.dart';
 import '../models/bot.dart';
@@ -170,6 +172,20 @@ class Store {
   Future<void> saveRepos(List<GitRepo> list) => _watched(
       vault.write('repos', GitRepo.encodeList(list.take(40).toList())));
 
+  List<Skill> _skills = const [];
+
+  List<Skill> skillsHeld() => _skills;
+
+  Future<List<Skill>> skills() async {
+    _skills = Skill.decodeList(await vault.read('skills'));
+    return _skills;
+  }
+
+  Future<void> saveSkills(List<Skill> list) {
+    _skills = list.take(Skills.maxSkills).toList();
+    return _watched(vault.write('skills', Skill.encodeList(_skills)));
+  }
+
   Future<List<McpConnector>> connectors() async =>
       McpConnector.decodeList(await vault.read('connectors'));
 
@@ -331,8 +347,11 @@ class Store {
     _ghosts[convId] = ChatMessage.decodeList(_prefs.getString('msgs_$convId'));
     _ghostArtifacts[convId] =
         Artifact.decodeList(_prefs.getString('artifacts_$convId'));
+    _ghostTx[convId] = _decodeTx(_prefs.getString('tx_$convId'));
+    _txCache.remove(convId);
     await _prefs.remove('msgs_$convId');
     await _prefs.remove('artifacts_$convId');
+    await _prefs.remove('tx_$convId');
   }
 
   /// Writes a ghost chat back to disk when the mode is turned off.
@@ -340,8 +359,54 @@ class Store {
     _lowered.remove(convId);
     final kept = _ghosts.remove(convId) ?? const <ChatMessage>[];
     final lifted = _ghostArtifacts.remove(convId) ?? const <Artifact>[];
+    final tx = _ghostTx.remove(convId) ?? const <TaskTranscript>[];
+    _txCache.remove(convId);
     await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
     await _prefs.setString('artifacts_$convId', Artifact.encodeList(lifted));
+    if (tx.isNotEmpty) await _prefs.setString('tx_$convId', _encodeTx(tx));
+  }
+
+  final Map<String, List<TaskTranscript>> _ghostTx = {};
+
+  static List<TaskTranscript> _decodeTx(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw);
+      return [
+        for (final item in list is List ? list : const [])
+          ?TaskTranscript.fromJson(item),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static String _encodeTx(List<TaskTranscript> list) =>
+      jsonEncode([for (final x in list) x.toJson()]);
+
+  final Map<String, List<TaskTranscript>> _txCache = {};
+
+  List<TaskTranscript> transcripts(String convId) {
+    if (isGhost(convId)) return [...?_ghostTx[convId]];
+    return [...(_txCache[convId] ??= _decodeTx(_prefs.getString('tx_$convId')))];
+  }
+
+  Future<void> saveTranscripts(String convId, List<TaskTranscript> list,
+      {bool quiet = false}) async {
+    final kept = [for (final x in list) x.copy()..conv = convId];
+    if (isGhost(convId)) {
+      _ghostTx[convId] = kept;
+      await _prefs.remove('tx_$convId');
+      return;
+    }
+    _ghostTx.remove(convId);
+    _txCache[convId] = kept;
+    if (kept.isEmpty) {
+      await _prefs.remove('tx_$convId');
+    } else {
+      await _prefs.setString('tx_$convId', _encodeTx(kept));
+    }
+    if (!quiet) _touched();
   }
 
   /// Wrap ids for this conversation, newest last.
@@ -386,10 +451,13 @@ class Store {
     _lowered.remove(convId);
     _ghosts.remove(convId);
     _ghostArtifacts.remove(convId);
+    _ghostTx.remove(convId);
+    _txCache.remove(convId);
     await _prefs.remove('msgs_$convId');
     await _prefs.remove('thread_$convId');
     await _prefs.remove('draft_$convId');
     await _prefs.remove('artifacts_$convId');
+    await _prefs.remove('tx_$convId');
   }
 
   ({int credits, int replies}) usage() => (
@@ -504,6 +572,8 @@ class Store {
   /// Deletes everything local; there is no server account to log out of.
   Future<void> wipe() async {
     _lowered.clear();
+    _txCache.clear();
+    _ghostTx.clear();
     vault.forget();
     await vault.biometrics.erase();
     await _prefs.clear();

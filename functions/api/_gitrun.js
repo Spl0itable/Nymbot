@@ -1492,3 +1492,252 @@ async function gitCleanupOne(cfg, call, it, name, at) {
   if (del.ok) return del.gone ? "gone" : "deleted";
   return del.moved ? "moved" : "failed";
 }
+
+function gitShaOk(v) { return /^[0-9a-f]{40,64}$/i.test(str(v)); }
+
+function gitSameSha(a, b) { return str(a).toLowerCase() === str(b).toLowerCase(); }
+
+export async function gitPullGet(cfg, call, number) {
+  var n = Number(number) > 0 ? Math.floor(Number(number)) : 0;
+  if (!n) return null;
+  var r;
+  var j;
+  if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/merge_requests/" + n);
+    j = r.ok ? gitJsonOf(r) : null;
+    if (!j || typeof j !== "object") return null;
+    var gs = j.state === "merged" ? "merged" : (j.state === "closed" || j.state === "locked" ? "closed" : "open");
+    return {
+      number: Number(j.iid) || n, url: str(j.web_url), state: gs, sha: j.sha || null, head: str(j.source_branch),
+      base: str(j.target_branch), title: str(j.title), mergeSha: j.merge_commit_sha || null,
+      foreign: j.source_project_id != null && j.target_project_id != null && j.source_project_id !== j.target_project_id
+    };
+  }
+  if (cfg.provider === "github" || cfg.provider === "gitea") {
+    r = await call("/repos/" + cfg.repo + "/pulls/" + n);
+    j = r.ok ? gitJsonOf(r) : null;
+    if (!j || typeof j !== "object") return null;
+    var merged = !!(j.merged || j.merged_at);
+    var headRepo = j.head && j.head.repo && j.head.repo.full_name ? str(j.head.repo.full_name) : "";
+    return {
+      number: Number(j.number) || n, url: str(j.html_url), state: merged ? "merged" : (j.state === "closed" ? "closed" : "open"),
+      sha: j.head && j.head.sha ? j.head.sha : null, head: j.head ? str(j.head.ref) : "",
+      base: j.base ? str(j.base.ref) : "", title: str(j.title), mergeSha: j.merge_commit_sha || null,
+      foreign: !!headRepo && headRepo.toLowerCase() !== str(cfg.repo).toLowerCase()
+    };
+  }
+  return null;
+}
+
+function gitPullGuard(pull, branch, sha) {
+  if (!pull) return { ok: false, gone: true, error: "that pull request was not found" };
+  if (pull.foreign || pull.head !== branch) return { ok: false, refused: true, error: "that pull request is not the one Nymbot recorded" };
+  if (sha && (!pull.sha || !gitSameSha(pull.sha, sha))) {
+    return { ok: false, moved: true, sha: pull.sha, error: "the branch has moved since Nymbot recorded it" };
+  }
+  return null;
+}
+
+export async function gitPullClose(cfg, call, opts) {
+  var o = opts || {};
+  var n = Number(o.number) > 0 ? Math.floor(Number(o.number)) : 0;
+  var branch = str(o.branch);
+  if (!n || !gitRefValid(branch)) return { ok: false, refused: true, error: "no recorded pull request" };
+  var sha = gitShaOk(o.sha) ? str(o.sha) : null;
+  if (cfg.provider !== "github" && cfg.provider !== "gitlab" && cfg.provider !== "gitea") {
+    return { ok: false, unsupported: true, error: "this forge has no pull request API" };
+  }
+  var pull = await gitPullGet(cfg, call, n);
+  var bad = gitPullGuard(pull, branch, sha);
+  if (bad) return bad;
+  var out = { number: pull.number, url: pull.url };
+  if (pull.state === "merged") return { ok: false, merged: true, pull: out, error: "that pull request was already merged" };
+  if (pull.state === "closed") return { ok: true, already: true, pull: out };
+  var r;
+  if (cfg.provider === "gitlab") {
+    r = await call(gitProj(cfg) + "/merge_requests/" + n, { method: "PUT", body: { state_event: "close" } });
+  } else {
+    r = await call("/repos/" + cfg.repo + "/pulls/" + n, { method: "PATCH", body: { state: "closed" } });
+  }
+  if (r.ok) return { ok: true, closed: true, pull: out };
+  return { ok: false, error: "HTTP " + r.status + " closing the pull request" };
+}
+
+export var GIT_REVERT_MAX_PATHS = 60;
+
+var GIT_REVERT_UNSUPPORTED = "this forge's API cannot list what a merge changed";
+
+function gitRevertTitle(title, number) {
+  var t = str(title).trim() || ("#" + number);
+  return ("Revert: " + t).slice(0, 200);
+}
+
+function gitRevertBody(pull, mergeSha) {
+  return "Reverts #" + pull.number + " (merge commit " + str(mergeSha).slice(0, 12) + ").\n\n" +
+    "Opened by Nymbot. Every path the merge changed is put back as it was on the commit before it. " +
+    "Nothing was force-pushed and no history was rewritten.";
+}
+
+async function gitRevertPrepare(cfg, call, o) {
+  var n = Number(o.number) > 0 ? Math.floor(Number(o.number)) : 0;
+  var branch = str(o.branch);
+  if (!n || !gitIsJobBranch(branch) || !gitShaOk(o.sha) || !gitIsJobBranch(o.newBranch)) {
+    return { fail: { ok: false, refused: true, error: "only a merged pull request Nymbot recorded can be reverted here" } };
+  }
+  var pull = await gitPullGet(cfg, call, n);
+  var bad = gitPullGuard(pull, branch, str(o.sha));
+  if (bad) return { fail: bad };
+  if (pull.state !== "merged") return { fail: { ok: false, notMerged: true, state: pull.state, error: "that pull request is not merged" } };
+  if (!gitShaOk(pull.mergeSha)) return { fail: { ok: false, unsupported: true, error: "the forge recorded no merge commit for it" } };
+  if (!gitRefValid(pull.base)) return { fail: { ok: false, error: "the pull request has no target branch" } };
+  return { pull: pull };
+}
+
+function gitRevertScope(cfg, paths) {
+  var outside = paths.filter(function (p) { return !gitSafePath(p) || !gitPathInScope(cfg, p); });
+  if (outside.length) {
+    return { ok: false, refused: true, outside: outside.slice(0, 10), error: "the merge changed paths outside the ones this repository is limited to" };
+  }
+  if (paths.length > GIT_REVERT_MAX_PATHS) return { ok: false, error: "the merge changed too many files to revert here" };
+  return null;
+}
+
+async function gitRevertGithub(cfg, call, o, pull) {
+  var repo = "/repos/" + cfg.repo;
+  var r = await call(repo + "/git/commits/" + pull.mergeSha);
+  var mc = r.ok ? gitJsonOf(r) : null;
+  var parent = mc && Array.isArray(mc.parents) && mc.parents[0] ? mc.parents[0].sha : null;
+  if (!gitShaOk(parent)) return { ok: false, error: "HTTP " + r.status + " reading the merge commit" };
+  r = await call(repo + "/compare/" + parent + "..." + pull.mergeSha);
+  var cmp = r.ok ? gitJsonOf(r) : null;
+  if (!cmp || !Array.isArray(cmp.files)) return { ok: false, error: "HTTP " + r.status + " reading what the merge changed" };
+  if (cmp.files.length >= 300) return { ok: false, error: "the merge changed too many files to revert here" };
+  var restore = [];
+  var remove = [];
+  cmp.files.forEach(function (f) {
+    var name = str(f && f.filename);
+    if (!name) return;
+    if (f.status === "added" || f.status === "copied") remove.push(name);
+    else if (f.status === "renamed") { remove.push(name); if (f.previous_filename) restore.push(str(f.previous_filename)); }
+    else restore.push(name);
+  });
+  var paths = restore.concat(remove);
+  var scope = gitRevertScope(cfg, paths);
+  if (scope) return scope;
+  if (!paths.length) return { ok: false, error: "the merge changed no files" };
+  var baseHead = await gitBranchHead(cfg, call, pull.base);
+  if (!baseHead) return { ok: false, error: "the target branch " + pull.base + " could not be found" };
+  r = await call(repo + "/compare/" + pull.mergeSha + "..." + baseHead);
+  var since = r.ok ? gitJsonOf(r) : null;
+  if (!since || (since.status !== "ahead" && since.status !== "identical")) {
+    return { ok: false, refused: true, error: "the merge is no longer part of " + pull.base };
+  }
+  var touched = (Array.isArray(since.files) ? since.files : []).reduce(function (acc, f) {
+    if (f && f.filename) acc.push(str(f.filename));
+    if (f && f.previous_filename) acc.push(str(f.previous_filename));
+    return acc;
+  }, []);
+  var clash = paths.filter(function (p) { return touched.indexOf(p) !== -1; });
+  if (clash.length) return { ok: false, conflict: true, paths: clash, error: "these files changed on " + pull.base + " after the merge" };
+  r = await call(repo + "/git/commits/" + parent);
+  var pc = r.ok ? gitJsonOf(r) : null;
+  if (!pc || !pc.tree || !pc.tree.sha) return { ok: false, error: "HTTP " + r.status + " reading the commit before the merge" };
+  r = await call(repo + "/git/trees/" + pc.tree.sha + "?recursive=1");
+  var pt = r.ok ? gitJsonOf(r) : null;
+  if (!pt || !Array.isArray(pt.tree) || pt.truncated) return { ok: false, error: "the tree before the merge could not be read" };
+  var was = {};
+  pt.tree.forEach(function (e) { if (e && e.path && e.type !== "tree") was[e.path] = e; });
+  var entries = [];
+  for (var i = 0; i < restore.length; i++) {
+    var e = was[restore[i]];
+    if (!e) return { ok: false, error: "'" + restore[i] + "' could not be found before the merge" };
+    entries.push({ path: restore[i], mode: e.mode || "100644", type: e.type || "blob", sha: e.sha });
+  }
+  remove.forEach(function (p) { entries.push({ path: p, mode: "100644", type: "blob", sha: null }); });
+  r = await call(repo + "/git/commits/" + baseHead);
+  var bc = r.ok ? gitJsonOf(r) : null;
+  if (!bc || !bc.tree || !bc.tree.sha) return { ok: false, error: "HTTP " + r.status + " reading " + pull.base };
+  r = await call(repo + "/git/trees", { method: "POST", body: { base_tree: bc.tree.sha, tree: entries } });
+  var nt = gitJsonOf(r);
+  if (!r.ok || !nt || !nt.sha) return { ok: false, error: "HTTP " + r.status + " writing the tree" };
+  r = await call(repo + "/git/commits", { method: "POST", body: { message: gitRevertTitle(pull.title, pull.number) + "\n\n" + gitRevertBody(pull, pull.mergeSha), tree: nt.sha, parents: [baseHead] } });
+  var made = gitJsonOf(r);
+  if (!r.ok || !made || !made.sha) return { ok: false, error: "HTTP " + r.status + " writing the commit" };
+  r = await call(repo + "/git/refs", { method: "POST", body: { ref: "refs/heads/" + o.newBranch, sha: made.sha } });
+  if (!r.ok) return { ok: false, error: "HTTP " + r.status + " creating the branch" };
+  return { ok: true, sha: made.sha, paths: paths };
+}
+
+async function gitRevertGitlab(cfg, call, o, pull) {
+  var proj = gitProj(cfg);
+  var r = await call(proj + "/repository/commits/" + pull.mergeSha);
+  var mc = r.ok ? gitJsonOf(r) : null;
+  var parent = mc && Array.isArray(mc.parent_ids) ? mc.parent_ids[0] : null;
+  if (!gitShaOk(parent)) return { ok: false, error: "HTTP " + r.status + " reading the merge commit" };
+  r = await call(proj + "/repository/compare?from=" + parent + "&to=" + pull.mergeSha + "&straight=true");
+  var cmp = r.ok ? gitJsonOf(r) : null;
+  if (!cmp || !Array.isArray(cmp.diffs)) return { ok: false, error: "HTTP " + r.status + " reading what the merge changed" };
+  var plan = [];
+  cmp.diffs.forEach(function (d) {
+    if (!d) return;
+    var oldPath = str(d.old_path);
+    var newPath = str(d.new_path);
+    if (d.new_file) plan.push({ action: "delete", path: newPath });
+    else if (d.deleted_file) plan.push({ action: "create", path: oldPath });
+    else if (d.renamed_file) { plan.push({ action: "create", path: oldPath }); plan.push({ action: "delete", path: newPath }); }
+    else plan.push({ action: "update", path: newPath });
+  });
+  var paths = plan.map(function (p) { return p.path; });
+  var scope = gitRevertScope(cfg, paths);
+  if (scope) return scope;
+  if (!paths.length) return { ok: false, error: "the merge changed no files" };
+  var baseHead = await gitBranchHead(cfg, call, pull.base);
+  if (!baseHead) return { ok: false, error: "the target branch " + pull.base + " could not be found" };
+  r = await call(proj + "/repository/merge_base?refs%5B%5D=" + pull.mergeSha + "&refs%5B%5D=" + baseHead);
+  var mb = r.ok ? gitJsonOf(r) : null;
+  if (!mb || !gitSameSha(mb.id, pull.mergeSha)) return { ok: false, refused: true, error: "the merge is no longer part of " + pull.base };
+  r = await call(proj + "/repository/compare?from=" + pull.mergeSha + "&to=" + baseHead + "&straight=true");
+  var since = r.ok ? gitJsonOf(r) : null;
+  if (!since || !Array.isArray(since.diffs)) return { ok: false, error: "HTTP " + r.status + " reading " + pull.base };
+  var touched = [];
+  since.diffs.forEach(function (d) { if (d) { touched.push(str(d.old_path)); touched.push(str(d.new_path)); } });
+  var clash = paths.filter(function (p, i) { return touched.indexOf(p) !== -1 && paths.indexOf(p) === i; });
+  if (clash.length) return { ok: false, conflict: true, paths: clash, error: "these files changed on " + pull.base + " after the merge" };
+  var actions = [];
+  for (var i = 0; i < plan.length; i++) {
+    var p = plan[i];
+    if (p.action === "delete") { actions.push({ action: "delete", file_path: p.path }); continue; }
+    r = await call(proj + "/repository/files/" + encodeURIComponent(p.path) + "?ref=" + parent);
+    var fj = r.ok ? gitJsonOf(r) : null;
+    if (!fj || typeof fj.content !== "string") return { ok: false, error: "'" + p.path + "' could not be read before the merge" };
+    actions.push({ action: p.action, file_path: p.path, content: fj.encoding === "base64" ? fj.content : gitB64(fj.content), encoding: "base64" });
+  }
+  r = await call(proj + "/repository/commits", { method: "POST", body: {
+    branch: o.newBranch, start_sha: baseHead, commit_message: gitRevertTitle(pull.title, pull.number) + "\n\n" + gitRevertBody(pull, pull.mergeSha), actions: actions
+  } });
+  var made = gitJsonOf(r);
+  if (!r.ok || !made || !made.id) return { ok: false, error: "HTTP " + r.status + " writing the commit" };
+  return { ok: true, sha: made.id, paths: paths };
+}
+
+export async function gitPullRevert(cfg, call, opts) {
+  var o = opts || {};
+  if (cfg.provider !== "github" && cfg.provider !== "gitlab") {
+    return { ok: false, unsupported: true, error: GIT_REVERT_UNSUPPORTED };
+  }
+  var prep = await gitRevertPrepare(cfg, call, o);
+  if (prep.fail) return prep.fail;
+  var pull = prep.pull;
+  var made = cfg.provider === "github" ? await gitRevertGithub(cfg, call, o, pull) : await gitRevertGitlab(cfg, call, o, pull);
+  if (!made.ok) return made;
+  var opened = await gitPullOpen(cfg, call, {
+    title: gitRevertTitle(pull.title, pull.number),
+    body: gitRevertBody(pull, pull.mergeSha),
+    head: o.newBranch,
+    base: pull.base
+  });
+  var out = { ok: true, branch: o.newBranch, base: pull.base, sha: made.sha, paths: made.paths, of: { number: pull.number, url: pull.url } };
+  if (!opened.ok) return Object.assign(out, { ok: false, opened: false, error: "the branch was made but its pull request could not be opened (" + opened.error + ")" });
+  out.pull = { number: opened.number, url: opened.url };
+  return out;
+}

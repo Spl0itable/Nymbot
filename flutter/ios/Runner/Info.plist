@@ -68,6 +68,8 @@
 	<string>Taking a photo or recording a video to attach to a message uses the camera. It is only sent when you send the message.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dictating a message records a short clip and sends it to Nymbot's server to be turned into text, which you review before anything is sent. Recording a video to attach also records its sound.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nymbot doesn't use your location. A web page you open inside Nymbot can ask for it; iOS asks you first, and nothing is shared unless you allow it.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleURLTypes</key>

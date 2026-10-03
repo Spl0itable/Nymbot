@@ -25,9 +25,13 @@ import '../models/notice.dart';
 import '../models/workspace.dart';
 import '../services/account_sync.dart';
 import '../services/anon.dart';
+import '../services/ask.dart';
+import '../services/plan.dart';
+import '../services/skills.dart';
 import '../services/api_access.dart';
 import '../services/background_jobs.dart';
 import '../services/backup.dart';
+import '../services/rewind.dart';
 import '../services/blossom.dart';
 import '../services/bot_files.dart';
 import '../services/canary.dart';
@@ -47,6 +51,7 @@ import '../services/nostr/event_signer.dart';
 import '../services/nostr/nip46.dart';
 import '../services/nostr/signer_links.dart';
 import '../services/nymbot_api.dart';
+import '../services/pr_watch.dart';
 import '../services/passkey_backup.dart';
 import '../core/crypto/pq.dart' as pq_crypto;
 import '../services/pq_announce.dart';
@@ -59,11 +64,13 @@ import '../services/site_checks.dart';
 import '../services/server_schedules.dart';
 import '../services/spend_caps.dart';
 import '../services/storage_sync.dart';
+import '../services/task_transcript.dart';
 import '../services/support_thread.dart';
 import '../services/tasks.dart';
 import '../services/team.dart';
 import 'identity.dart';
 import 'store.dart';
+import 'transcript_book.dart';
 
 /// [read] is false when neither D1 nor the relays answered, which is not "no root".
 class RootLinkVerdict {
@@ -85,6 +92,13 @@ typedef ChatSnapshot = ({
   double? satsSpent,
   List<ChatMessage> messages,
   List<String> thread,
+});
+
+typedef RewindOutcome = ({
+  ChatSnapshot snapshot,
+  String convId,
+  List<String> ids,
+  List<RewindResult> results,
 });
 
 typedef AccountRoot = ({
@@ -134,6 +148,8 @@ class AppController extends ChangeNotifier {
     c.invoice = PendingInvoice.decode(store.getString(_invoiceKey));
     await c._loadRepos();
     await c._loadConnectors();
+    await c._loadSkills();
+    c.chat.skillsOf = () => c.skills;
     return c;
   }
 
@@ -142,6 +158,43 @@ class AppController extends ChangeNotifier {
   final RelayPool relays;
   final PqAnnounce pq;
   final NymbotApi api;
+
+  late final TranscriptBook transcripts = TranscriptBook(store)
+    ..fetchLog = _transcriptLog
+    ..onChange = notifyListeners;
+
+  String _askedText(ChatTurn turn) {
+    final id = turn.askId;
+    if (id == null) return '';
+    for (final m in _messagesOf(turn.conv)) {
+      if (m.id == id) return m.content;
+    }
+    return '';
+  }
+
+  Future<({bool live, Map<String, dynamic>? run})?> _transcriptLog(
+      Conversation conv, String runId, int since) async {
+    final signer = await _signerOf(conv);
+    final res = await api.liveRuns(signer,
+        thread: conv.anon && conv.rootId.isNotEmpty ? conv.rootId : null, log: runId);
+    final runs = res.data['runs'];
+    final listed = res.status == 200 && runs is List ? runs : null;
+    for (final r in listed ?? const []) {
+      if (r is Map && r['replyTo'] == runId) return (live: true, run: r.cast<String, dynamic>());
+    }
+    final done = await api.doneSince(signer, (since - 60000).clamp(0, since), log: runId);
+    final ended = done.data['runs'];
+    final over = done.status == 200 && ended is List ? ended : null;
+    for (final r in over ?? const []) {
+      if (r is Map && r['replyTo'] == runId) return (live: false, run: r.cast<String, dynamic>());
+    }
+    return listed != null || over != null ? (live: false, run: null) : null;
+  }
+
+  TaskTranscript? transcriptFor(ChatMessage m) {
+    final conv = current;
+    return conv == null ? null : transcripts.forMessage(conv.id, m);
+  }
   final AnonMode anon;
   final StorageSync storage;
 
@@ -176,6 +229,7 @@ class AppController extends ChangeNotifier {
 
   late final ReplyNotify replyNotify = ReplyNotify(
     enabled: () => settings.replyNotify,
+    prefs: () => settings.notify,
     register: _registerReplyNotify,
     titleOf: (id) => _conversationById(id)?.title ?? '',
     open: openChat,
@@ -1186,6 +1240,7 @@ class AppController extends ChangeNotifier {
     };
     for (final id in doomed) {
       if (!ghosts.contains(id)) await store.bury(id);
+      transcripts.forget(id);
       await store.dropConversation(id);
       await DocLibrary.instance.forget(id);
     }
@@ -1309,6 +1364,7 @@ class AppController extends ChangeNotifier {
             });
         final steps = ChatEngine.steps(raw);
         if (!turn.watching) return;
+        transcripts.steps(turn, raw);
         await noteBranchSteps(turn, raw);
         if (steps.isNotEmpty) after = steps.last.n;
         if (steps.isNotEmpty && showSteps) {
@@ -1472,6 +1528,8 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> deleteRepo(String id) async {
+    final gone = repos.where((r) => r.id == id).firstOrNull;
+    if (gone != null) unawaited(prWatchStopRepo(gone).catchError((_) => 0));
     await store.bury(id);
     repos = repos.where((r) => r.id != id).toList();
     await store.saveRepos(repos);
@@ -1855,6 +1913,439 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  Future<ChatMessage> _putAsk(Conversation conv, ChatMessage m, Map<String, dynamic> patch) async {
+    final list = conv.id == current?.id ? messages : store.messages(conv.id);
+    ChatMessage? out;
+    final next = [
+      for (final x in list)
+        if (x.id == m.id) out = x.copyWith(ask: {...?x.ask, ...patch}) else x
+    ];
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+    notifyListeners();
+    return out ?? m;
+  }
+
+  final Set<String> _answering = {};
+
+  Future<void> answerQuestion(ChatMessage m, Map<String, dynamic> raw) async {
+    final conv = current;
+    if (conv == null || !_answering.add(m.id)) return;
+    try {
+      await _answerQuestion(conv, m, raw);
+    } finally {
+      _answering.remove(m.id);
+    }
+  }
+
+  Future<void> _answerQuestion(Conversation conv, ChatMessage m, Map<String, dynamic> raw) async {
+    var held = _messagesOf(conv).where((x) => x.id == m.id).firstOrNull ?? m;
+    final a = held.ask;
+    if (a == null) return;
+    final state = Ask.stateOf(a);
+    if (state == 'expired') {
+      await _putAsk(conv, held, {'state': 'expired'});
+      return;
+    }
+    if (state != 'waiting') return;
+    final questions = Ask.questionsOf(a['questions']);
+    final got = Ask.answers(questions, raw);
+    if (got['error'] != null) {
+      await _putAsk(conv, held, {'error': Ask.errorText('${got['error']}'), 'draft': raw['answers']});
+      return;
+    }
+    final skipped = got['skipped'] == true;
+    final kept = <String, dynamic>{
+      'state': skipped ? 'skipped' : 'answered',
+      'answers': skipped ? null : got['answers'],
+      'error': '',
+    };
+    final body = <String, dynamic>{
+      'id': a['id'],
+      if (skipped) 'skipped': true else 'answers': got['answers'],
+    };
+    held = await _putAsk(conv, held, {'state': 'sending', 'error': ''});
+    final runId = a['runId'];
+    if (runId is String && runId.isNotEmpty) {
+      final res = await api.answer(identity.signer, runId, '${a['id']}',
+          answers: skipped ? null : (got['answers'] as List).cast<Map<String, dynamic>>(), skipped: skipped);
+      if (res.status == 200 && res.data['ok'] == true) {
+        held = await _putAsk(conv, held, kept);
+        final turn = ChatTurn(conv, msgId: runId);
+        transcripts.begin(turn);
+        transcripts.asked(turn, skipped ? 'skipped' : 'answered', held);
+        await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
+        return;
+      }
+      if (res.status == 410 || res.status == 409 || res.data['expired'] == true || res.data['gone'] == true) {
+        await _putAsk(conv, held, {'state': 'expired'});
+        return;
+      }
+      await _putAsk(conv, held, {
+        'state': 'waiting',
+        'error': res.data['error'] is String ? res.data['error'] : t('Could not send your answer. Try again.'),
+      });
+      return;
+    }
+    final token = a['token'] is String ? a['token'] as String : null;
+    final text = Ask.answerText(questions, got);
+    final model = modelOf(conv);
+    String? askId;
+    final link = held.replyTo;
+    if (link != null) {
+      for (final x in _messagesOf(conv)) {
+        if (x.role == ChatRole.self && x.wire == link) askId = x.id;
+      }
+    }
+    final turn = ChatTurn(conv, askId: askId, msgId: link);
+    turn.model = model;
+    turn.kind = 'chat';
+    turns[turn.key] = turn;
+    turn.status = t('Carrying on with your answer');
+    turn.control.onStatus = (s) {
+      turn.status = s;
+      notifyListeners();
+    };
+    transcripts.begin(turn);
+    transcripts.asked(turn, skipped ? 'skipped' : 'answered', held);
+    notifyListeners();
+    TurnResult? carry;
+    try {
+      await _takeSlot(turn, force: true);
+      turn.prepared = await chat.prepare(
+        conv: conv,
+        text: text,
+        maxCost: SpendCaps.any(conv, botOf(conv))
+            ? SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv), pro: model != null)
+            : null,
+        proModel: model,
+        repos: reposOf(conv),
+        connectors: connectorsOf(conv),
+        serverRuns: serverRunsOf(conv),
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
+        memories: store.memories(),
+        webSearch: webOn,
+        resume: token,
+        pendingAnswer: token != null ? body : null,
+        runExtras: {
+          ..._runExtras(conv),
+          if (token != null) ...await _grantFor(conv, model),
+        },
+        onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
+      );
+      if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+      final res = await _deliver(turn);
+      await _putAsk(conv, held, kept);
+      carry = await _land(turn, res);
+    } on ChatFailure catch (e) {
+      if (e.resumeExpired) {
+        await _putAsk(conv, held, {'state': 'expired'});
+      } else if (await _commonFailure(turn, e)) {
+        await _putAsk(conv, held, {'state': 'waiting'});
+        notifyListeners();
+      } else {
+        await _putAsk(conv, held, {'state': 'waiting', 'error': e.message});
+      }
+    } catch (_) {
+      _stopWatching(turn);
+      await _putAsk(conv, held, {'state': 'waiting', 'error': t('Could not send your answer. Try again.')});
+    } finally {
+      if (turn.phase != 'claiming') {
+        _stopWatching(turn);
+        turn.status = null;
+      }
+      notifyListeners();
+    }
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry);
+    if (turn.phase != 'claiming') _endTurn(turn);
+  }
+
+  Future<void> _expireQuestions(Conversation conv, String runId) async {
+    for (final m in _messagesOf(conv)) {
+      if (m.ask != null && m.ask!['runId'] == runId && Ask.pending(m.ask)) {
+        await _putAsk(conv, m, {'state': 'expired'});
+      }
+      if (m.proposal != null && m.proposal!['runId'] == runId && Plan.pending(m.proposal)) {
+        await _putPlan(conv, m, {'state': 'expired'});
+      }
+    }
+  }
+
+  Future<ChatMessage> _putPlan(Conversation conv, ChatMessage m, Map<String, dynamic> patch) async {
+    final list = conv.id == current?.id ? messages : store.messages(conv.id);
+    ChatMessage? out;
+    final next = [
+      for (final x in list)
+        if (x.id == m.id) out = x.copyWith(proposal: {...?x.proposal, ...patch}) else x
+    ];
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+    notifyListeners();
+    return out ?? m;
+  }
+
+  Future<void> revisePlan(ChatMessage m, String text) async {
+    final conv = current;
+    if (conv == null) return;
+    final held = _messagesOf(conv).where((x) => x.id == m.id).firstOrNull ?? m;
+    final p = held.proposal;
+    final said = Plan.note(text);
+    if (p == null || Plan.stateOf(p) != 'waiting') return;
+    if (said.isEmpty) {
+      await _putPlan(conv, held, {'error': t('Say what should change.')});
+      return;
+    }
+    final runId = p['runId'] is String && (p['runId'] as String).isNotEmpty ? p['runId'] as String : held.replyTo;
+    var steered = false;
+    if (runId != null && RegExp(r'^[0-9a-f]{64}$').hasMatch(runId)) {
+      final res = await api.steerRun(identity.signer, runId, said);
+      steered = res.status == 200 && res.data['ok'] == true;
+      if (steered) transcripts.steered(runId, said, convId: conv.id);
+    }
+    await decidePlan(held, steered ? {'decision': 'revise'} : {'decision': 'revise', 'edits': {'note': said}});
+  }
+
+  Future<void> approvePlanById(String messageId) async {
+    final conv = current;
+    if (conv == null) return;
+    final m = _messagesOf(conv).where((x) => x.id == messageId).firstOrNull;
+    if (m != null && m.proposal != null) await decidePlan(m, {'decision': 'approve'});
+  }
+
+  Future<void> decidePlan(ChatMessage m, Map<String, dynamic> raw) async {
+    final conv = current;
+    if (conv == null || !_answering.add(m.id)) return;
+    try {
+      await _decidePlan(conv, m, raw);
+    } finally {
+      _answering.remove(m.id);
+    }
+  }
+
+  Future<void> _decidePlan(Conversation conv, ChatMessage m, Map<String, dynamic> raw) async {
+    var held = _messagesOf(conv).where((x) => x.id == m.id).firstOrNull ?? m;
+    final p = held.proposal;
+    if (p == null) return;
+    final state = Plan.stateOf(p);
+    if (state == 'expired') {
+      await _putPlan(conv, held, {'state': 'expired'});
+      return;
+    }
+    if (state != 'waiting') return;
+    final got = Plan.decide(p, raw);
+    if (got['error'] != null) {
+      await _putPlan(conv, held, {'error': t('That decision does not fit the plan.')});
+      return;
+    }
+    final kept = Plan.keptFor(got);
+    final body = Plan.bodyFor(p, got);
+    final stage = Plan.stageOf({...p, ...kept});
+    held = await _putPlan(conv, held, {'state': 'sending', 'error': ''});
+    final runId = p['runId'];
+    if (runId is String && runId.isNotEmpty) {
+      final res = await api.answer(identity.signer, runId, '${p['id']}',
+          decision: '${got['decision']}', edits: body['edits'] is Map ? (body['edits'] as Map).cast<String, dynamic>() : null);
+      if (res.status == 200 && res.data['ok'] == true) {
+        held = await _putPlan(conv, held, kept);
+        final turn = ChatTurn(conv, msgId: runId);
+        transcripts.begin(turn);
+        if (stage != null) transcripts.planned(turn, stage, held);
+        await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
+        return;
+      }
+      if (res.status == 410 || res.status == 409 || res.data['expired'] == true || res.data['gone'] == true) {
+        await _putPlan(conv, held, {'state': 'expired'});
+        return;
+      }
+      await _putPlan(conv, held, {
+        'state': 'waiting',
+        'error': res.data['error'] is String ? res.data['error'] : t('Could not send your decision. Try again.'),
+      });
+      return;
+    }
+    final token = p['token'] is String ? p['token'] as String : null;
+    final model = modelOf(conv);
+    String? askId;
+    final link = held.replyTo;
+    if (link != null) {
+      for (final x in _messagesOf(conv)) {
+        if (x.role == ChatRole.self && x.wire == link) askId = x.id;
+      }
+    }
+    final turn = ChatTurn(conv, askId: askId, msgId: link);
+    turn.model = model;
+    turn.kind = 'chat';
+    turns[turn.key] = turn;
+    turn.status = t('Carrying on with your decision');
+    turn.control.onStatus = (s) {
+      turn.status = s;
+      notifyListeners();
+    };
+    transcripts.begin(turn);
+    if (stage != null) transcripts.planned(turn, stage, held.copyWith(proposal: {...p, ...kept}));
+    notifyListeners();
+    TurnResult? carry;
+    try {
+      await _takeSlot(turn, force: true);
+      turn.prepared = await chat.prepare(
+        conv: conv,
+        text: Plan.textFor(got),
+        maxCost: SpendCaps.any(conv, botOf(conv))
+            ? SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv), pro: model != null)
+            : null,
+        proModel: model,
+        repos: reposOf(conv),
+        connectors: connectorsOf(conv),
+        serverRuns: serverRunsOf(conv),
+        persona: personaOf(conv),
+        workspace: workspaceOf(conv),
+        bot: botOf(conv),
+        memories: store.memories(),
+        webSearch: webOn,
+        resume: token,
+        pendingAnswer: token != null ? body : null,
+        runExtras: {
+          ..._runExtras(conv),
+          if (token != null) ...await _grantFor(conv, model),
+        },
+        onTurn: (eventId) => _watchTurn(turn, eventId),
+        onStep: (step) => _localStep(turn, step),
+      );
+      if (turn.stopped) throw ChatFailure(t('Stopped.'), cancelled: true);
+      final res = await _deliver(turn);
+      await _putPlan(conv, held, kept);
+      carry = await _land(turn, res);
+    } on ChatFailure catch (e) {
+      if (e.resumeExpired) {
+        await _putPlan(conv, held, {'state': 'expired'});
+      } else if (await _commonFailure(turn, e)) {
+        await _putPlan(conv, held, {'state': 'waiting'});
+        notifyListeners();
+      } else {
+        await _putPlan(conv, held, {'state': 'waiting', 'error': e.message});
+      }
+    } catch (_) {
+      _stopWatching(turn);
+      await _putPlan(conv, held, {'state': 'waiting', 'error': t('Could not send your decision. Try again.')});
+    } finally {
+      if (turn.phase != 'claiming') {
+        _stopWatching(turn);
+        turn.status = null;
+      }
+      notifyListeners();
+    }
+    if (carry != null && !turn.stopped) await _carryOn(turn, carry);
+    if (turn.phase != 'claiming') _endTurn(turn);
+  }
+
+  List<Skill> skills = [];
+
+  List<Skill> get allSkills => Skills.catalog(skills);
+
+  Skill? skillById(String? id) {
+    if (id == null) return null;
+    for (final s in allSkills) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
+  Skill? skillOf(Conversation? conv) => skillById(conv?.skillId);
+
+  Future<void> _loadSkills() async {
+    skills = Skills.ordered(await store.skills());
+    notifyListeners();
+  }
+
+  Future<({Skill? skill, String? error})> saveSkill(Map<String, dynamic> raw) async {
+    final got = Skills.normalize(raw);
+    if (got['error'] != null) return (skill: null, error: '${got['error']}');
+    final j = (got['skill'] as Map).cast<String, dynamic>();
+    final list = [...skills];
+    var id = '${j['id']}';
+    final at = id.isEmpty ? -1 : list.indexWhere((s) => s.id == id);
+    if (at < 0 && list.length >= Skills.maxSkills) return (skill: null, error: 'full');
+    if (id.isEmpty || Skills.isBuiltin(id) || at < 0 && list.any((s) => s.id == id)) id = bytesToHex(randomBytes(8));
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final order = at < 0
+        ? (list.isEmpty ? 0 : list.map((s) => s.order).reduce((a, b) => a > b ? a : b) + 1)
+        : list[at].order;
+    final skill = Skill(
+        id: id,
+        name: '${j['name']}',
+        description: '${j['description']}',
+        body: '${j['body']}',
+        order: order,
+        updatedAt: now);
+    if (at < 0) {
+      list.add(skill);
+    } else {
+      list[at] = skill;
+    }
+    skills = Skills.ordered(list);
+    await store.saveSkills(skills);
+    notifyListeners();
+    return (skill: skill, error: null);
+  }
+
+  Future<({Skill? skill, String? error})> duplicateSkill(String id) async {
+    final from = skillById(id);
+    if (from == null) return (skill: null, error: 'name');
+    final name = Skills.isBuiltin(id) ? Skills.label(from) : t('{name} (copy)', {'name': Skills.label(from)});
+    return saveSkill({
+      'name': name.length > Skills.nameMax ? name.substring(0, Skills.nameMax) : name,
+      'description': Skills.describe(from),
+      'body': from.body,
+    });
+  }
+
+  Future<bool> deleteSkill(String id) async {
+    if (Skills.isBuiltin(id) || !skills.any((s) => s.id == id)) return false;
+    await store.bury(id);
+    skills = [
+      for (final s in skills)
+        if (s.id != id) s
+    ];
+    await store.saveSkills(skills);
+    var changed = false;
+    for (final c in conversations) {
+      if (c.skillId == id) {
+        c.skillId = null;
+        changed = true;
+      }
+    }
+    if (changed) await store.saveConversations(conversations);
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> moveSkill(String id, int delta) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    skills = [for (final s in Skills.move(skills, id, delta)) s.copyWith(updatedAt: now)];
+    await store.saveSkills(skills);
+    notifyListeners();
+  }
+
+  Future<Conversation> newChatWithSkill(String id) async {
+    final conv = await newConversation();
+    conv.skillId = id;
+    await store.saveConversations(conversations);
+    notifyListeners();
+    return conv;
+  }
+
+  Future<void> attachSkill(String? id) async {
+    final conv = current;
+    if (conv == null) return;
+    conv.skillId = conv.skillId == id ? null : id;
+    _touch(conv);
+    await store.saveConversations(conversations);
+    notifyListeners();
+  }
+
   List<Persona> get personas => store.personas();
 
   Persona? get activePersona => personaOf(current);
@@ -2077,38 +2568,443 @@ class AppController extends ChangeNotifier {
     _scheduler?.cancel();
     _scheduler = Timer.periodic(const Duration(minutes: 1), (_) {
       runDueSchedules().catchError((_) {});
+      prWatchTick().catchError((_) {});
     });
   }
 
-  /// Free: touches no model; the token travels only with this request.
-  Future<Map<String, dynamic>> revertCheckpoint(ChatMessage m) async {
-    final mark = m.checkpoint;
+  final Map<String, Map<String, dynamic>> prLive = {};
+  final Map<String, ({int at, Map<String, dynamic>? live})> prPeeked = {};
+  int _prListedAt = 0;
+  Future<int>? _prListing;
+
+  List<Map<String, dynamic>> get prRecords =>
+      PrWatch.decodeRecords(store.getString(PrWatch.storeKey));
+
+  Future<void> _savePrRecords(List<Map<String, dynamic>> list) =>
+      store.setString(PrWatch.storeKey, PrWatch.encodeRecords(list));
+
+  Map<String, dynamic>? prRecordFor(Object? repo, Object? branch) => prRecords
+      .where((r) => r['repo'] == repo && r['branch'] == branch && r['stopped'] != true)
+      .firstOrNull;
+
+  bool get prWatching => prRecords.any((r) => r['stopped'] != true);
+
+  Map<String, dynamic>? prLiveFor(Object? repo, Object? branch) {
+    final rec = prRecordFor(repo, branch);
+    if (rec != null && prLive.containsKey(rec['id'])) return prLive[rec['id']];
+    return prPeeked[PrWatch.keyOf(repo, branch)]?.live;
+  }
+
+  ({bool on, Map<String, dynamic>? live})? prChip(Conversation? conv, Map<String, dynamic> job) {
+    if (conv == null || conv.anon || job['repo'] == null) return null;
+    final rec = prRecordFor(job['repo'], job['branch']);
+    if (rec == null && !PrWatch.canWatch(job)) return null;
+    return (on: rec != null, live: prLiveFor(job['repo'], job['branch']));
+  }
+
+  Future<String> prWatchStart(Conversation conv, ChatMessage? m, Map<String, dynamic> job,
+      {bool auto = false}) async {
+    if (conv.anon) return t('Watching pull requests is not available in anonymous chats.');
+    final repo = reposOf(conv).where((r) => r.repo == job['repo']).firstOrNull;
+    if (repo == null) return t('That repository is no longer connected.');
+    if (!repo.allowWrites) return t('Writes are off for that repository.');
+    final model = '${modelOf(conv)?['key'] ?? ''}';
+    Map<String, dynamic>? push;
+    try {
+      push = await replyNotify.pushRegistration(conv.id, t('A pull request you watch changed'), kind: 'prwatch');
+    } catch (_) {
+      push = null;
+    }
+    final body = PrWatch.watchBody(repo.toPayload(defaultWhenDone: settings.whenDone), job,
+        thread: conv.rootId,
+        fix: settings.prFix,
+        cap: PrWatch.fixCap(settings.prFixCap),
+        model: model,
+        planFirst: policyOf(conv)['planFirst'],
+        push: push);
+    final res = await api.prWatchPut(identity.signer, body);
+    if (res.status != 200 || res.data['ok'] != true || res.data['id'] is! String) {
+      final error = res.data['error'];
+      return error is String && error.isNotEmpty ? error : t('The pull request could not be watched.');
+    }
+    final watch = body['watch'] as Map<String, dynamic>;
+    final id = res.data['id'] as String;
+    final list = prRecords
+        .where((r) => !(r['repo'] == job['repo'] && r['branch'] == watch['branch']))
+        .toList()
+      ..add({
+        'id': id,
+        'repo': job['repo'],
+        'branch': watch['branch'],
+        'number': watch['number'],
+        'convId': conv.id,
+        'msgId': m?.id,
+        'at': DateTime.now().millisecondsSinceEpoch,
+        'seen': 0,
+      });
+    await _savePrRecords(list);
+    final summary = res.data['watch'];
+    if (summary is Map) prLive[id] = summary.cast<String, dynamic>();
+    if (m != null) {
+      transcripts.prEvent(conv.id, m, 'watch', t('Watching pull request #{n}.', {'n': watch['number']}));
+    }
+    notifyListeners();
+    return '';
+  }
+
+  Future<String> prWatchStop(Map<String, dynamic> rec) async {
+    final res = await api.prWatchStop(identity.signer, '${rec['id']}');
+    if (res.status != 200 || res.data['error'] != null) {
+      final error = res.data['error'];
+      return error is String && error.isNotEmpty ? error : t('The watch could not be stopped.');
+    }
+    await _savePrRecords(prRecords.where((r) => r['id'] != rec['id']).toList());
+    prLive.remove(rec['id']);
+    notifyListeners();
+    return '';
+  }
+
+  Future<int> prWatchStopRepo(GitRepo repo) async {
+    final mine = prRecords.where((r) => r['repo'] == repo.repo).toList();
+    for (final rec in mine) {
+      try {
+        await prWatchStop(rec);
+      } catch (_) {}
+    }
+    return mine.length;
+  }
+
+  Future<String> prWatchToggle(ChatMessage? m, Map<String, dynamic> job) async {
     final conv = current;
-    if (mark == null || conv == null) {
-      throw ChatFailure(t('There is nothing recorded to put back.'));
+    if (conv == null) return '';
+    final rec = prRecordFor(job['repo'], job['branch']);
+    try {
+      if (rec != null) {
+        final err = await prWatchStop(rec);
+        return err.isNotEmpty ? err : t('Stopped watching pull request #{n}.', {'n': rec['number']});
+      }
+      final err = await prWatchStart(conv, m, job);
+      return err.isNotEmpty
+          ? err
+          : t('Watching pull request #{n}. Nymbot posts here when CI fails, a reviewer comments, or it is merged or closed, even with the app closed.',
+              {'n': PrWatch.pullNo(job)});
+    } catch (_) {
+      return t('The forge could not be reached.');
     }
-    final repos = activeRepos;
-    final repo = repos.where((r) => r.repo == mark['repo']).firstOrNull ??
-        (repos.isEmpty ? null : repos.first);
-    if (repo == null) {
-      throw ChatFailure(t('That repository is no longer connected.'));
+  }
+
+  Future<int> prWatchAuto(Conversation conv, ChatMessage m) async {
+    final mark = m.checkpoint;
+    if (conv.anon || mark == null) return 0;
+    var n = 0;
+    for (final job in jobsOf(mark)) {
+      if (!PrWatch.canWatch(job) || prRecordFor(job['repo'], job['branch']) != null) continue;
+      final repo = reposOf(conv).where((r) => r.repo == job['repo']).firstOrNull;
+      if (repo == null || !repo.allowWrites || !PrWatch.watchOn(repo.prWatch, settings.prWatch)) continue;
+      if (prRecords.where((r) => r['stopped'] != true).length >= PrWatch.max) break;
+      try {
+        if ((await prWatchStart(conv, m, job, auto: true)).isEmpty) n++;
+      } catch (_) {}
     }
-    if (!repo.allowWrites) {
-      throw ChatFailure(t('Writes are off for that repository.'));
+    return n;
+  }
+
+  Future<String> prWatchFix(ChatMessage m) async {
+    final conv = current;
+    final w = m.prWatch;
+    if (conv == null || w == null || w['offer'] != true || w['fixed'] == true) return '';
+    final seq = w['seq'];
+    final res = await api.prWatchFix(identity.signer, '${w['id']}', seq is num ? seq.toInt() : 0);
+    if (res.status != 200 || res.data['ok'] != true) {
+      final error = res.data['error'];
+      return error is String && error.isNotEmpty ? error : t('The fix could not be started.');
     }
-    final signer =
-        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
-    final data = await chat.revert(
-        repo: repo, checkpoint: mark, signer: signer);
-    final failed = (data['failed'] as List?)?.length ?? 0;
-    messages = messages
-        .map((x) => x.id == m.id
-            ? x.copyWith(checkpoint: {...mark, 'undone': failed == 0})
-            : x)
-        .toList();
+    messages = messages.map((x) => x.id == m.id ? x.copyWith(prWatch: {...w, 'fixed': true}) : x).toList();
     await store.saveMessages(conv.id, messages);
     notifyListeners();
-    return data;
+    return t('Nymbot will start a fix run on {branch} in a moment. Its reply lands here.', {'branch': w['branch'] ?? ''});
+  }
+
+  Future<int> prWatchRefresh({bool force = false}) async {
+    if (!prWatching && !force) return 0;
+    if (!identity.present) return 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && now - _prListedAt < PrWatch.listEvery.inMilliseconds) return 0;
+    final running = _prListing;
+    if (running != null) return running;
+    _prListedAt = now;
+    final work = () async {
+      final res = await api.prWatchList(identity.signer);
+      final list = res.data['watches'];
+      if (res.status != 200 || list is! List) return 0;
+      return prWatchApply([for (final w in list) if (w is Map) w.cast<String, dynamic>()]);
+    }();
+    _prListing = work;
+    try {
+      return await work;
+    } catch (_) {
+      return 0;
+    } finally {
+      _prListing = null;
+    }
+  }
+
+  Future<int> prWatchApply(List<Map<String, dynamic>> watches) async {
+    final byId = {for (final w in watches) if (w['id'] is String) w['id'] as String: w};
+    final list = prRecords;
+    var filed = 0;
+    for (final rec in list) {
+      final w = byId[rec['id']];
+      if (w == null) {
+        rec['stopped'] = true;
+        prLive.remove(rec['id']);
+        continue;
+      }
+      prLive[rec['id'] as String] = w;
+      final conv = _conversationById('${rec['convId']}');
+      if (conv == null) continue;
+      final seen = rec['seen'] is num ? (rec['seen'] as num).toInt() : 0;
+      final origin = rec['msgId'] is String
+          ? _messagesOf(conv).where((x) => x.id == rec['msgId']).firstOrNull
+          : null;
+      for (final ev in PrWatch.fresh(w, seen)) {
+        rec['seen'] = ev['seq'];
+        final at = ev['at'] is num ? (ev['at'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
+        if (ev['kind'] == 'fix' && ev['eventId'] is String && ev['state'] != 'failed') {
+          await _prFileFix(conv, rec, ev);
+        } else if ('${ev['text'] ?? ''}'.isNotEmpty) {
+          await _addTo(
+              conv,
+              ChatMessage(
+                id: bytesToHex(randomBytes(8)),
+                role: ChatRole.bot,
+                content: '${ev['text']}',
+                prWatch: PrWatch.eventMessage(w, ev),
+                at: DateTime.fromMillisecondsSinceEpoch(at),
+              ));
+        }
+        if (origin != null) {
+          final stage = PrWatch.stageOf(ev['kind']);
+          transcripts.prEvent(conv.id, origin, stage.isEmpty ? '${ev['kind']}' : stage, '${ev['text'] ?? ''}');
+        }
+        if (conv.id != current?.id) conv.unread += 1;
+        filed++;
+      }
+      final fixSha = '${w['fixSha'] ?? ''}';
+      if (fixSha.isNotEmpty && origin != null) await _prMoveHead(conv, origin, rec, fixSha);
+      if (w['state'] == 'stopped' || w['pr'] == 'merged' || w['pr'] == 'closed') {
+        rec['stopped'] = true;
+        if (origin != null && w['pr'] == 'merged') await _prPatchJob(conv, origin, '${rec['branch']}', {'merged': true});
+        if (origin != null && w['pr'] == 'closed') await _prPatchJob(conv, origin, '${rec['branch']}', {'closed': true});
+      }
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _savePrRecords([
+      for (final r in list)
+        if (r['stopped'] != true || now - ((r['at'] as num?)?.toInt() ?? 0) < const Duration(days: 7).inMilliseconds) r,
+    ]);
+    if (filed > 0) await store.saveConversations(conversations);
+    notifyListeners();
+    return filed;
+  }
+
+  Future<void> _prPatchJob(Conversation conv, ChatMessage m, String branch, Map<String, dynamic> patch) async {
+    final next = _messagesOf(conv).map((x) {
+      final mark = x.checkpoint;
+      if (x.id != m.id || mark == null) return x;
+      return x.copyWith(checkpoint: patchJob(mark, branch, patch));
+    }).toList();
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+  }
+
+  Future<void> _prMoveHead(Conversation conv, ChatMessage m, Map<String, dynamic> rec, String sha) async {
+    final job = jobsOf(m.checkpoint).where((j) => j['branch'] == rec['branch']).firstOrNull;
+    if (job == null || job['sha'] == sha) return;
+    await _prPatchJob(conv, m, '${rec['branch']}', {'sha': sha});
+    await rememberBranchStep({'repo': rec['repo'], 'branch': rec['branch'], 'base': job['base'] ?? '', 'sha': sha}, conv: conv);
+  }
+
+  Future<void> _prFileFix(Conversation conv, Map<String, dynamic> rec, Map<String, dynamic> ev) async {
+    final eventId = '${ev['eventId']}';
+    final got = await api.claimRun(identity.signer, eventId);
+    if (got.status != 200 || got.data['event'] is! Map) return;
+    String? link;
+    try {
+      final res = await chat.openLeg(conv, eventId, 200, got.data,
+          onThreadIds: _threadIdsOf(conv),
+          onRumor: (rumor) => link = ChatEngine.linkOf(rumor, got.data).replyTo);
+      final wire = link ?? eventId;
+      final tag = {'id': rec['id'], 'kind': 'fix', 'seq': ev['seq']};
+      await _addTo(
+          conv,
+          ChatMessage(
+            id: bytesToHex(randomBytes(8)),
+            role: ChatRole.self,
+            content: t('Fix what was reported on pull request #{n}.', {'n': rec['number']}),
+            wire: wire,
+            prWatch: tag,
+          ));
+      final shadow = ChatTurn(conv, msgId: wire)..model = modelOf(conv);
+      final reply = _replyOf(shadow, res);
+      await _addTo(conv, ChatMessage.fromJson({...reply.toJson(), 'prWatch': tag}));
+      await harvestArtifacts(reply, conv: conv);
+      await _count(conv, res);
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> prWatchPeek(Conversation conv, Map<String, dynamic> job) async {
+    if (conv.anon || !PrWatch.canWatch(job)) return null;
+    final key = PrWatch.keyOf(job['repo'], job['branch']);
+    final held = prPeeked[key];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (held != null && now - held.at < PrWatch.peekEvery.inMilliseconds) return held.live;
+    final repo = reposOf(conv).where((r) => r.repo == job['repo']).firstOrNull;
+    if (repo == null) return null;
+    prPeeked[key] = (at: now, live: held?.live);
+    final res = await api.prWatchPeek(identity.signer, repo.toPayload(defaultWhenDone: settings.whenDone),
+        {'number': PrWatch.pullNo(job), 'branch': job['branch']});
+    if (res.status != 200 || res.data['error'] != null) return null;
+    prPeeked[key] = (at: DateTime.now().millisecondsSinceEpoch, live: res.data);
+    return res.data;
+  }
+
+  Future<int> prWatchPeekVisible() async {
+    final conv = current;
+    if (conv == null || conv.anon || replyNotify.background) return 0;
+    var n = 0;
+    for (final m in messages) {
+      final mark = m.checkpoint;
+      if (mark == null) continue;
+      for (final job in jobsOf(mark)) {
+        if (!PrWatch.canWatch(job) || prRecordFor(job['repo'], job['branch']) != null) continue;
+        final before = prPeeked[PrWatch.keyOf(job['repo'], job['branch'])]?.live;
+        final live = await prWatchPeek(conv, job);
+        if (live != null && jsonEncode(before) != jsonEncode(live)) n++;
+      }
+    }
+    if (n > 0) notifyListeners();
+    return n;
+  }
+
+  Future<void> prWatchTick() async {
+    await prWatchRefresh();
+    await prWatchPeekVisible();
+  }
+
+  /// Free: touches no model; the token travels only with this request.
+  Future<List<Map<String, dynamic>>> revertCheckpoint(ChatMessage m) async {
+    final conv = current;
+    final marks = undoMarks(m.checkpoint);
+    if (marks.isEmpty || conv == null) {
+      throw ChatFailure(t('There is nothing recorded to put back.'));
+    }
+    final rows = await _revertMarks(conv, marks);
+    bool clean(Map<String, dynamic> r) =>
+        r['error'] == null && ((r['failed'] as List?)?.isEmpty ?? true);
+    messages = messages.map((x) {
+      final mark = x.checkpoint;
+      if (x.id != m.id || mark == null) return x;
+      return x.copyWith(
+          checkpoint: patchMarks(mark, (y) {
+        final hit = rows.where((r) =>
+            r['repo'] == y['repo'] && '${r['branch'] ?? ''}' == '${y['branch'] ?? ''}');
+        return hit.isNotEmpty && clean(hit.first) ? {...y, 'undone': true} : y;
+      }));
+    }).toList();
+    await store.saveMessages(conv.id, messages);
+    notifyListeners();
+    return rows;
+  }
+
+  Future<List<Map<String, dynamic>>> _revertMarks(
+      Conversation conv, List<Map<String, dynamic>> marks) async {
+    final scoped = reposOf(conv);
+    final rows = <Map<String, dynamic>>[];
+    final sent = <(GitRepo, Map<String, dynamic>)>[];
+    final at = <int>[];
+    for (final mark in marks) {
+      final row = <String, dynamic>{'repo': mark['repo'], 'branch': mark['branch'] ?? ''};
+      rows.add(row);
+      final repo = scoped.where((r) => r.repo == mark['repo']).firstOrNull;
+      if (repo == null) {
+        row['error'] = t('That repository is no longer connected.');
+      } else if (!repo.allowWrites) {
+        row['error'] = t('Writes are off for that repository.');
+      } else {
+        sent.add((repo, mark));
+        at.add(rows.length - 1);
+      }
+    }
+    if (sent.isEmpty) return rows;
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    final got = await chat.revertMarks(marks: sent, signer: signer);
+    for (var i = 0; i < at.length; i++) {
+      final r = got[i];
+      rows[at[i]].addAll({
+        'restored': r['restored'] ?? const [],
+        'deleted': r['deleted'] ?? const [],
+        'failed': r['failed'] ?? const [],
+        if (r['error'] != null) 'error': '${r['error']}',
+      });
+    }
+    return rows;
+  }
+
+  Future<String> closeRecordedPull(ChatMessage m, Map<String, dynamic> pr) async {
+    final conv = current;
+    if (conv == null) return '';
+    final repo = activeRepos.where((r) => r.repo == pr['repo']).firstOrNull;
+    if (repo == null) return t('That repository is no longer connected.');
+    if (!repo.allowWrites) return t('Writes are off for that repository.');
+    final number = pr['number'];
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    Map<String, dynamic> data;
+    try {
+      data = await chat.branchOp(
+          repo: repo,
+          op: 'close',
+          job: {
+            'branch': pr['branch'],
+            'sha': '',
+            'pull': {'number': number},
+          },
+          signer: signer);
+    } catch (e) {
+      return t('The forge could not be reached.');
+    }
+    Future<void> mark(String key) async {
+      messages = messages.map((x) {
+        final cp = x.checkpoint;
+        if (x.id != m.id || cp == null) return x;
+        return x.copyWith(
+            checkpoint: patchMarks(cp, (y) {
+          if (y['repo'] != pr['repo'] || y['prs'] is! List) return y;
+          return {
+            ...y,
+            'prs': [
+              for (final p in y['prs'] as List)
+                if (p is Map && pullNumberOf(p) == number)
+                  {...p.cast<String, dynamic>(), key: true}
+                else
+                  p,
+            ],
+          };
+        }));
+      }).toList();
+      await store.saveMessages(conv.id, messages);
+      notifyListeners();
+    }
+
+    if (data['merged'] == true) {
+      await mark('merged');
+      return '${data['error'] ?? ''}';
+    }
+    if (data['error'] != null) return '${data['error']}';
+    await mark('closed');
+    return t('Closed pull request #{n}.', {'n': number});
   }
 
   Future<void> applyStaged(ChatMessage m) async {
@@ -2237,6 +3133,44 @@ class AppController extends ChangeNotifier {
       data = await chat.branchOp(repo: repo, op: op, job: job, signer: signer);
     } catch (e) {
       return t('The forge could not be reached.');
+    }
+    final pullNo = pullNumberOf(job['pull']);
+    if (op == 'close' || op == 'revert-pr') {
+      if (op == 'close' && data['merged'] == true) {
+        await _patchJob(m, branch, {'merged': true});
+        return '${data['error'] ?? ''}';
+      }
+      if (data['moved'] == true && data['error'] == null) {
+        return t('The branch has new commits since Nymbot made it, so it was left alone.');
+      }
+      if (data['error'] != null) return '${data['error']}';
+      if (op == 'close') {
+        await _patchJob(m, branch, {'closed': true});
+        return data['already'] == true
+            ? t('Pull request #{n} was already closed.', {'n': pullNo})
+            : t('Closed pull request #{n}.', {'n': pullNo});
+      }
+      final pull = data['pull'];
+      await _patchJob(m, branch, {
+        'reverted': {
+          'branch': '${data['branch'] ?? ''}',
+          'base': '${data['base'] ?? ''}',
+          'sha': '${data['sha'] ?? ''}',
+          'pull': pull is Map ? pull : null,
+        },
+      });
+      if (isJobBranch(data['branch'])) {
+        repo.nymBranches = rememberBranch(repo.nymBranches, {
+          'branch': data['branch'],
+          'base': data['base'] ?? '',
+          'sha': data['sha'] ?? '',
+          'pull': pull,
+          'owner': await _ownerOf(conv),
+        });
+        await store.saveRepos(repos);
+      }
+      return t('Opened pull request #{n} to revert the merge, on {branch}.',
+          {'n': pull is Map ? pull['number'] : '', 'branch': data['branch']});
     }
     if (data['conflict'] == true) {
       await _patchJob(m, branch, {'conflict': true, 'pull': data['pull'] ?? job['pull']});
@@ -2782,6 +3716,7 @@ class AppController extends ChangeNotifier {
     }
     if (touched.contains('repos')) unawaited(_loadRepos());
     if (touched.contains('connectors')) unawaited(_loadConnectors());
+    if (touched.contains('skills')) unawaited(_loadSkills());
     if (touched.contains('favouriteModels')) {
       favouriteModels = store.favouriteModels();
     }
@@ -2813,14 +3748,19 @@ class AppController extends ChangeNotifier {
   @override
   void notifyListeners() {
     if (_gone) return;
+    for (final turn in [...turns.values]) {
+      transcripts.observe(turn, asked: () => _askedText(turn));
+    }
     super.notifyListeners();
   }
 
   @override
   void dispose() {
     _gone = true;
+    transcripts.dispose();
     _pendingTimer?.cancel();
     _runsTimer?.cancel();
+    _runsSettle?.cancel();
     _farTimer?.cancel();
     _bgTimer?.cancel();
     for (final turn in turns.values) {
@@ -3072,6 +4012,7 @@ class AppController extends ChangeNotifier {
     await store.bury(conv.id);
     conversations.removeWhere((c) => c.id == conv.id);
     await store.saveConversations(conversations);
+    transcripts.forget(conv.id);
     await store.dropConversation(conv.id);
     await DocLibrary.instance.forget(conv.id);
     if (!wasOpen) {
@@ -3314,6 +4255,131 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  List<RewindItem> rewindEffects(ChatMessage m) =>
+      Rewind.effects(Rewind.after(messages, m.id));
+
+  Future<RewindOutcome?> rewindTo(ChatMessage m, Set<String> picked) async {
+    final conv = current;
+    if (conv == null || sendingIn(conv)) return null;
+    final dropped = Rewind.after(messages, m.id);
+    if (dropped.isEmpty) return null;
+    final items = Rewind.effects(dropped);
+    final before = _snapshot(conv);
+    await truncateFrom(m, inclusive: false);
+    final results = await Rewind.run(
+      Rewind.plan(items, picked),
+      revert: (item) => _rewindRevert(conv, item),
+      deleteBranch: (item) => _rewindBranch(conv, item),
+      closePull: (item) => _rewindPullOp(conv, item, 'close'),
+      revertPull: (item) => _rewindPullOp(conv, item, 'revert-pr'),
+    );
+    final ChatSnapshot snap = (
+      conv: before.conv,
+      rootId: before.rootId,
+      seed: before.seed,
+      messageCount: before.messageCount,
+      creditsSpent: before.creditsSpent,
+      satsSpent: before.satsSpent,
+      messages: Rewind.settled(before.messages, results),
+      thread: before.thread,
+    );
+    return (
+      snapshot: snap,
+      convId: conv.id,
+      ids: [for (final d in dropped) d.id],
+      results: results,
+    );
+  }
+
+  Future<void> commitRewind(RewindOutcome done) async {
+    final gone = done.ids.toSet();
+    final conv = conversations.where((c) => c.id == done.convId).firstOrNull;
+    if (conv != null) {
+      final held = _messagesOf(conv);
+      if (held.any((x) => gone.contains(x.id))) {
+        final kept = held.where((x) => !gone.contains(x.id)).toList();
+        if (conv.id == current?.id) messages = kept;
+        await store.saveMessages(conv.id, kept);
+      }
+    }
+    for (final id in done.ids) {
+      await store.bury(id);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _rewindRevert(Conversation conv, RewindItem item) async {
+    final mark = item.mark;
+    if (mark == null) throw RewindRefused(t('There is nothing recorded to put back.'));
+    final rows = await _revertMarks(conv, [mark]);
+    final r = rows.single;
+    if (r['error'] != null) throw RewindRefused('${r['error']}');
+    final failed = (r['failed'] as List?)?.length ?? 0;
+    if (failed > 0) {
+      final done = ((r['restored'] as List?)?.length ?? 0) +
+          ((r['deleted'] as List?)?.length ?? 0);
+      throw RewindRefused(t('Put {done} back; {failed} could not be. Check the repository.',
+          {'done': done, 'failed': failed}));
+    }
+  }
+
+  Future<Map<String, dynamic>> _rewindPullOp(
+      Conversation conv, RewindItem item, String op) async {
+    final repo = reposOf(conv).where((r) => r.repo == item.repo).firstOrNull;
+    if (repo == null) throw RewindRefused(t('That repository is no longer connected.'));
+    if (!repo.allowWrites) throw RewindRefused(t('Writes are off for that repository.'));
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    final data = await chat.branchOp(
+        repo: repo,
+        op: op,
+        job: {
+          'branch': item.branch,
+          'base': item.base,
+          'sha': item.sha,
+          'pull': {'number': item.number},
+        },
+        signer: signer);
+    if (data['error'] != null) {
+      throw RewindRefused('${data['error']}', moved: data['moved'] == true);
+    }
+    if (op == 'revert-pr' && isJobBranch(data['branch'])) {
+      repo.nymBranches = rememberBranch(repo.nymBranches, {
+        'branch': data['branch'],
+        'base': data['base'] ?? '',
+        'sha': data['sha'] ?? '',
+        'pull': data['pull'],
+        'owner': await _ownerOf(conv),
+      });
+      await store.saveRepos(repos);
+    }
+    return data;
+  }
+
+  Future<void> _rewindBranch(Conversation conv, RewindItem item) async {
+    final job = item.job;
+    if (job == null) throw RewindRefused(t('No commit was recorded for it, so it is left alone.'));
+    final repo = reposOf(conv).where((r) => r.repo == item.repo).firstOrNull;
+    if (repo == null) throw RewindRefused(t('That repository is no longer connected.'));
+    if (!repo.allowWrites) throw RewindRefused(t('Writes are off for that repository.'));
+    final signer =
+        conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    final data = await chat.branchOp(repo: repo, op: 'delete', job: job, signer: signer);
+    if (data['moved'] == true) {
+      throw RewindRefused(
+          t('The branch has new commits since Nymbot made it, so it was left alone.'),
+          moved: true);
+    }
+    if (data['error'] != null && data['gone'] != true) {
+      throw RewindRefused('${data['error']}');
+    }
+    repo.nymBranches = forgetBranches(repo.nymBranches, [item.branch]);
+    await store.saveRepos(repos);
+    if (data['gone'] == true && data['deleted'] != true) {
+      throw RewindRefused(t('That branch is already gone.'), gone: true);
+    }
+  }
+
   Future<void> regenerate(ChatMessage reply) async {
     final at = messages.indexWhere((m) => m.id == reply.id);
     ChatMessage? question;
@@ -3436,22 +4502,26 @@ class AppController extends ChangeNotifier {
     return {
       'readOnlyTools': own['readOnlyTools'] ?? (alone ? 'ask' : settings.readOnlyTools),
       'serverRuns': own['serverRuns'] ?? (alone ? 'ask' : settings.serverRunPolicy),
+      'planFirst': own['planFirst'] ?? (alone ? 'changing' : settings.planFirst),
     };
   }
 
-  Future<void> setPolicy({String? readOnlyTools, String? serverRuns}) async {
+  Future<void> setPolicy({String? readOnlyTools, String? serverRuns, String? planFirst}) async {
     if (readOnlyTools == 'allow' || readOnlyTools == 'ask') {
       settings.readOnlyTools = readOnlyTools!;
     }
     if (serverRuns == 'allow' || serverRuns == 'ask') {
       settings.serverRunPolicy = serverRuns!;
     }
+    if (planFirst == 'always' || planFirst == 'changing' || planFirst == 'never') {
+      settings.planFirst = planFirst!;
+    }
     await store.saveSettings(settings);
     notifyListeners();
   }
 
   Future<void> setChatPolicy(Conversation conv,
-      {String? readOnlyTools, String? serverRuns}) async {
+      {String? readOnlyTools, String? serverRuns, String? planFirst}) async {
     final next = {...?conv.policy};
     void put(String key, String? value) {
       if (value == 'allow' || value == 'ask') next[key] = value!;
@@ -3460,6 +4530,8 @@ class AppController extends ChangeNotifier {
 
     put('readOnlyTools', readOnlyTools);
     put('serverRuns', serverRuns);
+    if (planFirst == 'always' || planFirst == 'changing' || planFirst == 'never') next['planFirst'] = planFirst!;
+    if (planFirst == 'default') next.remove('planFirst');
     conv.policy = next.isEmpty ? null : next;
     _touch(conv);
     await store.saveConversations(conversations);
@@ -3600,6 +4672,7 @@ class AppController extends ChangeNotifier {
 
   void _endTurn(ChatTurn turn) {
     final ended = turns.values.any((v) => identical(v, turn));
+    if (ended) _settleRun(turn);
     turns.removeWhere((_, v) => identical(v, turn));
     if (turn.holdsSlot) turn.holdsSlot = false;
     _wakeSlots();
@@ -3611,6 +4684,7 @@ class AppController extends ChangeNotifier {
       }
     }
     unawaited(_keepTasks(turn));
+    transcripts.finish(turn, _messagesOf(turn.conv));
     if (ended) {
       final link = _linkOf(turn);
       final list = _messagesOf(turn.conv);
@@ -3724,14 +4798,19 @@ class AppController extends ChangeNotifier {
       followUps: res.followUps,
       serverRunCredits: res.serverRunCredits,
       serverRuns: res.serverRuns,
+      actions: res.actions,
       team: Team.normalize(res.team),
       replyTo: _linkOf(turn),
       steerOffer: turn.prepared?.steerOffer,
+      ask: res.ask,
+      proposal: res.proposal,
     );
   }
 
   String _outcomeOf(TurnResult res) {
     if (res.pendingTool != null) return 'approval';
+    if (res.ask != null) return 'question';
+    if (res.proposal != null) return 'approval';
     final token = res.resumeToken;
     return token != null && token.isNotEmpty ? 'paused' : 'done';
   }
@@ -3768,6 +4847,7 @@ class AppController extends ChangeNotifier {
     if (turn.drafted) streamedReplies.add(reply.id);
     turn.draft = null;
     await _addTo(conv, reply);
+    if (reply.checkpoint != null) unawaited(prWatchAuto(conv, reply).catchError((_) => 0));
     await harvestArtifacts(reply, conv: conv);
     if (conv.seed != null) conv.seed = null;
     await _count(conv, res);
@@ -4585,6 +5665,7 @@ class AppController extends ChangeNotifier {
         (owner != null ? await _signerOf(owner) : identity.signer);
     final res = await api.steerRun(signer, runId, body);
     if (res.status == 200 && res.data['ok'] == true) {
+      transcripts.steered(runId, body, convId: owner?.id);
       final id = res.data['id'];
       if (id is String && id.isNotEmpty) {
         _steered[id] = body;
@@ -4795,7 +5876,8 @@ class AppController extends ChangeNotifier {
     if (settings.replyNotify) {
       try {
         notify = await replyNotify.pushRegistration(
-            conv.id, BackgroundJobs.pushText());
+            conv.id, BackgroundJobs.pushText(),
+            kind: 'background');
       } catch (_) {
         notify = null;
       }
@@ -4953,6 +6035,9 @@ class AppController extends ChangeNotifier {
       await _saveBackground();
     }
     final state = r['state'];
+    if (state == 'expired') await _expireQuestions(conv, run.runId);
+    await transcripts.background(run.runId, conv, r, _messagesOf(conv),
+        ended: state is String && BackgroundJobs.ended.contains(state) && legs.every(run.claimed.contains));
     if (state is! String || !BackgroundJobs.ended.contains(state)) return;
     if (!legs.every(run.claimed.contains)) return;
     final said = BackgroundJobs.endNote(state, body: run.last);
@@ -5071,7 +6156,8 @@ class AppController extends ChangeNotifier {
     Map<String, dynamic>? push;
     try {
       push = await replyNotify.pushRegistration(
-          chatId, run ? title : ServerSchedules.dueText());
+          chatId, run ? title : ServerSchedules.dueText(),
+          kind: 'schedule');
     } catch (_) {
       push = null;
     }
@@ -5218,6 +6304,7 @@ class AppController extends ChangeNotifier {
           ));
       final shadow = ChatTurn(conv, msgId: wire)..model = modelOf(conv);
       final reply = _replyOf(shadow, res);
+      unawaited(transcripts.scheduled(conv, reply, wire, s.title.isEmpty ? s.prompt : s.title));
       await _addTo(conv, reply);
       await harvestArtifacts(reply, conv: conv);
       await _count(conv, res);
@@ -5236,6 +6323,13 @@ class AppController extends ChangeNotifier {
   List<RemoteRun> remoteRuns = [];
   int _runsWatchers = 0;
   Timer? _runsTimer;
+  static Duration runsReconcile = const Duration(seconds: 30);
+  static const _endedGrace = Duration(seconds: 60);
+  static const _endedKeep = Duration(hours: 1);
+  static const _runsResume = Duration(seconds: 60);
+  final Map<String, int> _endedRuns = {};
+  Timer? _runsSettle;
+  int _runsPolledAt = 0;
 
   static RemoteRun? remoteRunOf(Object? raw) {
     if (raw is! Map) return null;
@@ -5259,6 +6353,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> refreshRuns() async {
     if (!signedIn && identity.pubkey.isEmpty) return;
+    _runsPolledAt = DateTime.now().millisecondsSinceEpoch;
     final res = await api.liveRuns(identity.signer);
     final list = res.data['runs'];
     final open = current;
@@ -5301,9 +6396,50 @@ class AppController extends ChangeNotifier {
         }
       }
     }
-    remoteRuns = runs;
+    remoteRuns = [for (final r in runs) if (!_endedHere(r)) r];
+    transcripts.remote(remoteRuns, _runsRaw, chatOfThread, _isLocal);
     notifyListeners();
+    _reconcileRuns();
     if (_farSteers.isNotEmpty) unawaited(_checkFarSteers());
+  }
+
+  bool _endedHere(RemoteRun r) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _endedRuns.removeWhere((_, at) => now - at > _endedKeep.inMilliseconds);
+    final at = _endedRuns[r.replyTo];
+    if (at == null) return false;
+    return r.state != 'running' || now - at < _endedGrace.inMilliseconds;
+  }
+
+  void _settleRun(ChatTurn turn) {
+    final id = turn.runId;
+    if (id.isEmpty || turn.outcome == 'background') return;
+    _endedRuns[id] = DateTime.now().millisecondsSinceEpoch;
+    remoteRuns = [for (final r in remoteRuns) if (r.replyTo != id) r];
+  }
+
+  void _reconcileRuns() {
+    if (otherRuns.isEmpty) {
+      _runsSettle?.cancel();
+      _runsSettle = null;
+      return;
+    }
+    if (_runsSettle != null || _gone) return;
+    _runsSettle = Timer(runsReconcile, () {
+      _runsSettle = null;
+      if (_gone || otherRuns.isEmpty) return;
+      unawaited(refreshRuns());
+    });
+  }
+
+  void _resumeRuns() {
+    if (backgroundRuns.isNotEmpty) {
+      unawaited(pollBackground());
+      return;
+    }
+    final since = DateTime.now().millisecondsSinceEpoch - _runsPolledAt;
+    if (otherRuns.isEmpty && since < _runsResume.inMilliseconds) return;
+    unawaited(refreshRuns());
   }
 
   bool _isLocal(String runId) => turns.values.any((t) => t.runId == runId);
@@ -5769,6 +6905,8 @@ class AppController extends ChangeNotifier {
 
   Future<void> _stallPause(ChatTurn turn, Duration wait, int attempt) async {
     final until = DateTime.now().add(wait);
+    transcripts.note(turn, stallLine(wait, attempt), retry: true);
+    transcripts.hush(turn, true);
     while (!turn.stopped) {
       final left = until.difference(DateTime.now());
       if (left <= Duration.zero) break;
@@ -5780,6 +6918,7 @@ class AppController extends ChangeNotifier {
               : left);
     }
     turn.status = null;
+    transcripts.hush(turn, false);
     notifyListeners();
   }
 
@@ -5937,6 +7076,7 @@ class AppController extends ChangeNotifier {
         followUps: next.followUps,
         serverRunCredits: next.serverRunCredits,
         serverRuns: next.serverRuns,
+        actions: next.actions,
         team: Team.normalize(next.team),
         replyTo: _linkOf(turn),
       );
@@ -6237,6 +7377,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> resumed() async {
     if (!signedIn || identity.pubkey.isEmpty) return;
+    _resumeRuns();
     if (_entered) relays.wake();
     if (_entered) unawaited(sync.kick());
     if (_entered) unawaited(fetchSupport());
@@ -6588,8 +7729,10 @@ class AppController extends ChangeNotifier {
   String _wireTextNow(String text) {
     final conv = current;
     if (conv == null) return text;
+    final used = chat.skillWire(conv, text);
+    text = used.text;
     final head = ChatEngine.preamble(conv, activeRepos, activePersona,
-        activeWorkspace, activeBot, text, store.memories());
+        activeWorkspace, activeBot, text, store.memories(), used.blocks);
     final attached = attachments.map((a) => a.wireBlock).join();
     final searched = DocLibrary.instance.wireFor(conv.id, text, attachments);
     return '$head$text$attached$searched';

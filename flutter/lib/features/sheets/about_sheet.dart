@@ -19,6 +19,9 @@ const String kDocsUrl = 'https://nymbot.ai/docs/';
 const String kTermsUrl = 'https://nymbot.ai/terms/';
 const String kPrivacyUrl = 'https://nymbot.ai/privacy/';
 const String kDmcaUrl = 'https://nymbot.ai/dmca/';
+const String kLicenseUrl = 'https://github.com/Spl0itable/Nymbot/blob/main/LICENSE';
+const String kCopyrightUrl = 'https://nostrservices.com';
+const String kAboutCopyright = '© 21 Million LLC';
 
 String? _liveVersionCache;
 
@@ -297,6 +300,12 @@ class _AboutSheetState extends State<_AboutSheet> {
         ),
       );
 
+  Widget _creditLink(String label, String url) => Semantics(
+        link: true,
+        linkUrl: Uri.parse(url),
+        child: _link(label, url),
+      );
+
   Widget _panel({
     required Key key,
     required String label,
@@ -553,6 +562,19 @@ class _AboutSheetState extends State<_AboutSheet> {
               _link(t('Privacy'), kPrivacyUrl),
               _link('DMCA', kDmcaUrl),
             ],
+          ),
+          Padding(
+            key: const ValueKey('about-license'),
+            padding: const EdgeInsets.only(top: 10),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _creditLink(kAboutCopyright, kCopyrightUrl),
+                Text(' · ',
+                    style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                _creditLink(t('Licensed under AGPL-3.0'), kLicenseUrl),
+              ],
+            ),
           ),
           const Divider(height: 28),
           Text(t('Contact the developer'),

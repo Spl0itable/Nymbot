@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../features/i18n/i18n.dart';
+import '../models/workspace.dart';
 import '../state/store.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
@@ -59,8 +60,10 @@ class DoneSince {
     Object? runs, {
     required Set<String> seen,
     required ({String id, String title})? Function(String thread) chatOf,
+    NotifyPrefs? prefs,
   }) {
     final out = <DoneNote>[];
+    final want = prefs ?? NotifyPrefs();
     for (final r in (runs is List ? runs : const [])) {
       if (r is! Map) continue;
       final id = r['replyTo'];
@@ -70,6 +73,15 @@ class DoneSince {
       final thread = r['thread'] is String ? r['thread'] as String : '';
       final chat = chatOf(thread);
       final push = _pushState(state);
+      if (!want.wants(push, r['background'] == true ? 'background' : 'turn')) continue;
+      final began = r['startedAt'], ended = r['finishedAt'];
+      if (began is num &&
+          ended is num &&
+          began > 0 &&
+          want.quick(DateTime.fromMillisecondsSinceEpoch(began.toInt()),
+              now: DateTime.fromMillisecondsSinceEpoch(ended.toInt()))) {
+        continue;
+      }
       final said = ReplyNotify.stateText()[push];
       final title = chat?.title.trim() ?? '';
       out.add((
@@ -89,6 +101,7 @@ class DoneSince {
     required Store store,
     required Future<void> Function(DoneNote note) post,
     Iterable<String> pushed = const [],
+    NotifyPrefs? prefs,
   }) async {
     final since = store.getInt(sinceKey);
     final res = await api.doneSince(signer, since);
@@ -104,7 +117,7 @@ class DoneSince {
     };
     final held = seen(store)..addAll(pushed);
     final found = notes(res.data['runs'],
-        seen: held, chatOf: (thread) => chats[thread]);
+        seen: held, chatOf: (thread) => chats[thread], prefs: prefs);
     for (final n in found) {
       try {
         await post(n);

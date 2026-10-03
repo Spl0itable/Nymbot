@@ -772,8 +772,14 @@ export function serverRunTool(o) {
     if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "start", command: String(run.command || "").slice(0, 160) });
     var output = "";
     var truncatedNote = false;
+    var lineCount = 0;
+    var openLine = false;
     var last = await serverRunDrive(o.env, request, function (ev) {
       if (ev.type === "out" && typeof ev.data === "string") {
+        if (ev.data) {
+          lineCount += ev.data.split("\n").length - 1;
+          openLine = ev.data.slice(-1) !== "\n";
+        }
         output += ev.data;
         if (output.length > SERVER_RUN_TAIL_CHARS * 2) output = output.slice(output.length - SERVER_RUN_TAIL_CHARS - 1);
       } else if (ev.type === "note") {
@@ -794,7 +800,8 @@ export function serverRunTool(o) {
     };
     if (artifacts.length) entry.artifacts = artifacts;
     runs.push(entry);
-    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "done", credits: charged.credits, code: last && last.type === "exit" ? last.code : null, ms: Number(charged.billedMs) || 0 });
+    var producedFiles = last && last.type === "exit" && Array.isArray(last.files) ? last.files.length : 0;
+    if (typeof o.progress === "function") o.progress({ kind: "server-run", image: run.image, stage: "done", credits: charged.credits, code: last && last.type === "exit" ? last.code : null, ms: Number(charged.billedMs) || 0, lines: lineCount + (openLine ? 1 : 0), files: producedFiles + artifacts.length });
     return serverRunResult({
       image: run.image, timeoutSec: run.timeoutSec, last: last, milli: charged.milli,
       output: output, truncatedNote: truncatedNote, artifacts: artifacts

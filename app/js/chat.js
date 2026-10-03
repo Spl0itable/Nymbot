@@ -27,6 +27,22 @@
         return { thinking: null, body: text || '' };
     }
 
+    function actionsOf(raw) {
+        if (!Array.isArray(raw)) return null;
+        const out = [];
+        for (const a of raw.slice(0, 40)) {
+            if (!a || typeof a !== 'object' || typeof a.tool !== 'string' || !a.tool) continue;
+            out.push({
+                connector: String(a.connector || '').slice(0, 80),
+                tool: a.tool.slice(0, 128),
+                args: String(a.args || '').slice(0, 200),
+                at: Number(a.at) > 0 ? Number(a.at) : Date.now(),
+                error: a.error === true ? true : undefined
+            });
+        }
+        return out.length ? out : null;
+    }
+
     function steerOfferOf(raw) {
         if (!raw || typeof raw !== 'object' || typeof raw.text !== 'string') return null;
         const text = raw.text.trim();
@@ -60,6 +76,8 @@
         if (!title) return t('New chat');
         const cmd = /^\?(\w+)\s*(.*)$/.exec(title);
         if (cmd) title = cmd[2] || cmd[1];
+        const skill = /^\/([A-Za-z0-9-]+)\s*(.*)$/.exec(title);
+        if (skill) title = skill[2] || skill[1].replace(/-/g, ' ');
         title = title.replace(/^[!\s]+/, '');
         if (title.length <= 48) return title.charAt(0).toUpperCase() + title.slice(1);
         const cut = title.slice(0, 48);
@@ -254,7 +272,7 @@
     }
 
     /// Sent every message; the worker strips these blocks from historical turns.
-    function standingContext(conv, repos, query) {
+    function standingContext(conv, repos, query, skills) {
         const parts = [];
         const space = workspaceFor(conv);
         const bot = botFor(conv);
@@ -269,6 +287,7 @@
         if (instructions) {
             parts.push('[custom instructions]\n' + instructions);
         }
+        for (const block of skills || []) parts.push(block);
         if (repos.length > 1) {
             parts.push('[repositories in scope]\n' + repos.map((r, i) =>
                 `${i + 1}. ${r.repo}${r.branch ? '@' + r.branch : ''} (${r.provider || 'github'}${r.allowWrites ? ', writable' : ', read-only'})${r.paths ? ' paths: ' + r.paths : ''}`
@@ -288,10 +307,12 @@
 
     function wireTextFor(conv, text, opts) {
         const repos = reposFor(conv);
+        const used = window.NymbotSkills ? window.NymbotSkills.wire(conv, text) : { text, blocks: [] };
+        text = used.text;
         const attachments = opts.attachments || [];
         const attachText = attachments.map(a => Attach() ? Attach().wireBlock(a) : '').join('');
         const docText = window.NymbotDocs ? window.NymbotDocs.wireFor(conv, text, attachments) : '';
-        const preamble = preambleFor(conv, repos, text);
+        const preamble = preambleFor(conv, repos, text, used.blocks);
         const quoted = opts.quote
             ? `> ${String(opts.quote).replace(/\n/g, '\n> ')}\n\n`
             : '';
@@ -313,8 +334,8 @@
         return t('This message is {n} KB, and the most one question can carry is about {max} KB. Put a long file in a workspace instead, where the whole of it is searched rather than sent.', { n: kb, max: max });
     }
 
-    function preambleFor(conv, repos, query) {
-        const standing = standingContext(conv, repos, query);
+    function preambleFor(conv, repos, query, skills) {
+        const standing = standingContext(conv, repos, query, skills);
         const parts = standing.length
             ? [standing.join('\n\n') + '\n\n' + STANDING_END]
             : [];
@@ -341,9 +362,11 @@
         const own = (conv && conv.policy) || {};
         const base = (settings && settings.policy) || {};
         const pick = (mine, fallback) => (mine === 'allow' || mine === 'ask') ? mine : (fallback === 'allow' ? 'allow' : 'ask');
+        const plans = ['always', 'changing', 'never'];
         return {
             readOnlyTools: pick(own.readOnlyTools, base.readOnlyTools),
-            serverRuns: pick(own.serverRuns, base.serverRuns)
+            serverRuns: pick(own.serverRuns, base.serverRuns),
+            planFirst: plans.includes(own.planFirst) ? own.planFirst : (plans.includes(base.planFirst) ? base.planFirst : 'changing')
         };
     }
 
@@ -817,6 +840,8 @@
                     err.resumable = true;
                 }
                 if (data && data.retryable) err.retryable = true;
+                if (data && data.resumeExpired) err.resumeExpired = true;
+                if (data && data.pendingInvalid) err.pendingInvalid = String(data.pendingInvalid);
                 if (data && data.priceUnavailable) err.priceUnavailable = true;
                 throw err;
             }
@@ -872,7 +897,8 @@
                 wrap,
                 fresh: isFresh,
                 followUps: true,
-                draft: true
+                draft: true,
+                ask: true
             };
             if (!isFresh) {
                 const handed = heldHistory(conv.id, Store.thread(conv.id));
@@ -883,6 +909,7 @@
                 extra.wraps = partWraps;
             }
             if (opts.resume) extra.resume = opts.resume;
+            if (opts.pendingAnswer && typeof opts.pendingAnswer === 'object') extra.pendingAnswer = opts.pendingAnswer;
             if (!anon && opts.background && typeof opts.background === 'object') extra.background = opts.background;
             if (Number(opts.maxCost) > 0) extra.maxCost = Number(opts.maxCost);
             const proTurn = !!(model || (media && media.proKey));
@@ -985,6 +1012,12 @@
             if (conv.seed) Store.updateConversation(conv.id, { seed: null, silent: true });
 
             const split = splitThinking(opened.rumor.content || '');
+            const Ask = window.NymbotAsk;
+            const took = Ask ? Ask.take(split.body) : { text: split.body, ask: null };
+            if (took.ask) split.body = took.text;
+            const Plan = window.NymbotPlan;
+            const proposed = Plan ? Plan.take(split.body) : { text: split.body, plan: null };
+            if (proposed.plan) split.body = proposed.text;
             const link = linkOf(opened.rumor, data);
             if (data.checkpoint) {
                 try { this.rememberBranches(conv, data.checkpoint); } catch (_) { }
@@ -1003,14 +1036,16 @@
                 truncated: !!data.truncated,
                 capStopped: !!data.capStopped,
                 checkpoint: data.checkpoint || null,
-                pendingTool: data.pendingTool || null,
+                pendingTool: data.pendingTool && data.pendingTool.kind !== 'question' && data.pendingTool.kind !== 'plan' ? data.pendingTool : null,
                 staged: data.staged && typeof data.staged === 'object' ? data.staged : null,
                 stalled: !!data.stalled,
                 retryAfterMs: Number(data.retryAfterMs) || 0,
                 resumeToken: data.resumeToken || null,
                 nextReserve: data.nextReserve || 0,
-                background: data.background && typeof data.background === 'object' && HEX64.test(String(data.background.runId || ''))
+                background: data.background && typeof data.background === 'object' && HEX64.test(String(data.background.runId || '')) && data.background.waiting !== true
                     ? { runId: String(data.background.runId), until: Number(data.background.until) || 0 } : null,
+                ask: Ask && took.ask ? Ask.record(took, data) : null,
+                proposal: Plan && proposed.plan ? Plan.record(proposed, data) : null,
                 research: !!data.research,
                 taskType: data.taskType || null,
                 modelLabel: data.modelLabel || null,
@@ -1021,6 +1056,7 @@
                 steerOffer: steerOfferOf(data.steerOffer),
                 serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
                 serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
+                actions: actionsOf(data.actions),
                 free: data.free || null,
                 repos: (ctx.repos || []).map(r => r.repo),
                 stopped: data.stopped === true,
@@ -1127,7 +1163,9 @@
         validRuns,
         CLAIM_WAITS: [3000, 6000, 12000, 24000, 48000, 60000],
         followUpsOf,
+        actionsOf,
         reposFor,
+        repoPayload,
         connectorsFor,
         workspaceFor,
         botFor,
@@ -1146,28 +1184,48 @@
         },
 
         /// Reverts each written path to the pre-run commit; history is kept and no model is charged.
-        async revert(conv, checkpoint) {
+        async revertMarks(conv, marks) {
             const repos = reposFor(conv);
-            const repo = repos.find(r => r.repo === checkpoint.repo) || repos[0];
-            if (!repo) throw new Error(t('That repository is no longer connected.'));
-            if (!repo.allowWrites) throw new Error(t('Writes are off for that repository.'));
+            const out = [];
+            const sent = [];
+            for (const mark of marks || []) {
+                const repo = repos.find(r => r.repo === mark.repo);
+                const row = { repo: mark.repo, branch: mark.branch || '', mark };
+                out.push(row);
+                if (!repo) { row.error = t('That repository is no longer connected.'); continue; }
+                if (!repo.allowWrites) { row.error = t('Writes are off for that repository.'); continue; }
+                sent.push({
+                    row,
+                    entry: {
+                        git: repoPayload(repo),
+                        checkpoint: {
+                            repo: mark.repo,
+                            provider: mark.provider || '',
+                            host: mark.host || '',
+                            branch: mark.branch,
+                            baseSha: mark.baseSha,
+                            paths: mark.paths || [],
+                            branches: mark.branches || [],
+                            pulls: mark.pulls || []
+                        }
+                    }
+                });
+            }
+            if (!sent.length) return out;
             const anon = !!conv.anon;
             const signer = anon ? Anon.signer(Anon.forConv(conv)) : null;
-            const { status, data } = await Api.call('pm-revert', {
-                git: repoPayload(repo),
-                checkpoint: {
-                    repo: checkpoint.repo,
-                    branch: checkpoint.branch,
-                    baseSha: checkpoint.baseSha,
-                    paths: checkpoint.paths || [],
-                    branches: checkpoint.branches || [],
-                    pulls: checkpoint.pulls || []
-                }
-            }, { signer });
-            if (status >= 400 || !data || data.error) {
+            const { status, data } = await Api.call('pm-revert', { marks: sent.map(x => x.entry) }, { signer });
+            if (status >= 400 || !data || data.error || !Array.isArray(data.results)) {
                 throw new Error((data && data.error) || t('Could not put that back.'));
             }
-            return data;
+            sent.forEach((x, i) => {
+                const got = data.results[i] || { error: t('Could not put that back.') };
+                Object.assign(x.row, {
+                    restored: got.restored || [], deleted: got.deleted || [], failed: got.failed || [],
+                    error: got.error || ''
+                });
+            });
+            return out;
         },
 
         ownerOf(conv) {
@@ -1233,6 +1291,9 @@
                 err.moved = !!out.moved;
                 err.gone = !!out.gone;
                 err.unsupported = !!out.unsupported;
+                err.merged = !!out.merged;
+                err.notMerged = !!out.notMerged;
+                err.paths = Array.isArray(out.paths) ? out.paths : [];
                 err.pull = out.pull || null;
                 throw err;
             }
@@ -1240,6 +1301,14 @@
             const fresh = Store.repo(repo.id) || repo;
             if (op === 'delete') {
                 Store.updateRepo(repo.id, { nymBranches: GitRun.forget(fresh.nymBranches, [job.branch]) });
+            } else if (op === 'revert-pr') {
+                if (GitRun.isJobBranch(out.branch)) {
+                    Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, {
+                        branch: out.branch, base: out.base || '', sha: out.sha || '', pull: out.pull || null, owner: this.ownerOf(conv)
+                    }) });
+                }
+            } else if (op === 'close') {
+                return out;
             } else if (out.sha && op === 'update') {
                 Store.updateRepo(repo.id, { nymBranches: GitRun.remember(fresh.nymBranches, Object.assign({}, job, { sha: out.sha, pull: out.pull || job.pull, owner: this.ownerOf(conv) })) });
             } else if (out.pull) {

@@ -23,6 +23,7 @@ class Schedule {
     this.serverError,
     this.serverOff = false,
     this.serverSeenAt = 0,
+    this.runChanges = false,
   })  : nextAt = nextAt ?? DateTime.now(),
         createdAt = createdAt ?? DateTime.now();
 
@@ -44,6 +45,7 @@ class Schedule {
   String? serverError;
   bool serverOff;
   int serverSeenAt;
+  bool runChanges;
 
   bool get due => enabled && !nextAt.isAfter(DateTime.now());
 
@@ -90,6 +92,7 @@ class Schedule {
         if (serverError != null) 'serverError': serverError,
         if (serverOff) 'serverOff': true,
         if (serverSeenAt > 0) 'serverSeenAt': serverSeenAt,
+        if (runChanges) 'runChanges': true,
       };
 
   static Schedule fromJson(Map<String, dynamic> j) => Schedule(
@@ -124,6 +127,7 @@ class Schedule {
             j['serverError'] is String ? j['serverError'] as String : null,
         serverOff: j['serverOff'] == true,
         serverSeenAt: (j['serverSeenAt'] as num?)?.toInt() ?? 0,
+        runChanges: j['runChanges'] == true,
       );
 
   static String encodeList(List<Schedule> list) =>

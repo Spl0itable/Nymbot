@@ -20,6 +20,7 @@ class GitRepo {
     this.tokenAt = 0,
     this.jobBranches = true,
     this.whenDone = '',
+    this.prWatch = '',
     List<Map<String, dynamic>>? nymBranches,
   }) : nymBranches = nymBranches ?? [];
 
@@ -37,6 +38,7 @@ class GitRepo {
   bool enabled;
   bool jobBranches;
   String whenDone;
+  String prWatch;
   List<Map<String, dynamic>> nymBranches;
 
   /// NIP-34 announcement this repo was added from, if any.
@@ -69,6 +71,7 @@ class GitRepo {
         if (tokenAt > 0) 'tokenAt': tokenAt,
         if (!jobBranches) 'jobBranches': false,
         if (whenDone.isNotEmpty) 'whenDone': whenDone,
+        if (prWatch.isNotEmpty) 'prWatch': prWatch,
         if (nymBranches.isNotEmpty) 'nymBranches': nymBranches,
       };
 
@@ -103,6 +106,7 @@ class GitRepo {
         tokenAt: (j['tokenAt'] as num?)?.toInt() ?? 0,
         jobBranches: j['jobBranches'] != false,
         whenDone: whenDoneOf(j['whenDone']),
+        prWatch: j['prWatch'] == 'on' || j['prWatch'] == 'off' ? j['prWatch'] as String : '',
         nymBranches: (j['nymBranches'] as List?)
                 ?.whereType<Map>()
                 .map((e) => Map<String, dynamic>.from(e))
@@ -625,6 +629,122 @@ enum ChatDensity { compact, comfortable, roomy }
 
 enum SidebarGrouping { date, folder, flat }
 
+class NotifyPrefs {
+  NotifyPrefs({
+    this.done = true,
+    this.failed = true,
+    this.waiting = true,
+    this.paused = true,
+    this.schedule = true,
+    this.minSeconds = 0,
+    Map<String, bool>? extra,
+  }) : extra = extra ?? {};
+
+  static const minChoices = [0, 30, 120];
+  static const known = ['done', 'failed', 'waiting', 'paused', 'schedule'];
+  static const pushStates = [
+    'done',
+    'failed',
+    'stopped',
+    'approval',
+    'question',
+    'expired',
+    'paused',
+    'pr',
+    'disabled',
+    'ci-failed',
+    'review',
+  ];
+  static const statePrefs = <String, List<String>>{
+    'done': ['done'],
+    'failed': ['failed'],
+    'stopped': ['failed'],
+    'disabled': ['failed'],
+    'approval': ['waiting'],
+    'question': ['waiting', 'question'],
+    'expired': ['failed'],
+    'paused': ['paused'],
+    'pr': ['pr'],
+    'ci-failed': ['pr'],
+    'review': ['pr'],
+  };
+
+  bool done;
+  bool failed;
+  bool waiting;
+  bool paused;
+  bool schedule;
+  int minSeconds;
+  final Map<String, bool> extra;
+
+  bool get pr => extra['pr'] != false;
+  set pr(bool v) => extra['pr'] = v;
+
+  bool flag(String key) => switch (key) {
+        'done' => done,
+        'failed' => failed,
+        'waiting' => waiting,
+        'paused' => paused,
+        'schedule' => schedule,
+        _ => extra[key] != false,
+      };
+
+  bool wants(String? state, String kind) {
+    final st = state == null || state.isEmpty ? 'done' : state;
+    if (kind == 'schedule' && st == 'due') return true;
+    if (kind == 'schedule' && !schedule) return false;
+    if (kind == 'prwatch' && !pr) return false;
+    final keys = statePrefs[st];
+    if (keys == null) return true;
+    return keys.every(flag);
+  }
+
+  List<String> wantList(String kind) => [
+        for (final s in pushStates)
+          if (wants(s, kind)) s,
+        if (kind == 'schedule') 'due',
+      ];
+
+  bool quick(DateTime? started, {DateTime? now}) {
+    if (minSeconds <= 0 || started == null) return false;
+    return (now ?? DateTime.now()).difference(started).inMilliseconds <
+        minSeconds * 1000;
+  }
+
+  NotifyPrefs copy() => NotifyPrefs.fromJson(toJson());
+
+  Map<String, dynamic> toJson() => {
+        ...extra,
+        'done': done,
+        'failed': failed,
+        'waiting': waiting,
+        'paused': paused,
+        'schedule': schedule,
+        'minSeconds': minSeconds,
+      };
+
+  static NotifyPrefs fromJson(Object? raw) {
+    final j = raw is Map ? raw : const {};
+    final min = j['minSeconds'];
+    return NotifyPrefs(
+      done: j['done'] != false,
+      failed: j['failed'] != false,
+      waiting: j['waiting'] != false,
+      paused: j['paused'] != false,
+      schedule: j['schedule'] != false,
+      minSeconds: min is num && minChoices.contains(min.toInt()) ? min.toInt() : 0,
+      extra: {
+        for (final e in j.entries)
+          if (e.key is String &&
+              !known.contains(e.key) &&
+              e.key != 'minSeconds' &&
+              e.value is bool)
+            e.key as String: e.value as bool,
+      },
+    );
+  }
+}
+
 class AppSettings {
   AppSettings({
     this.theme = ChatTheme.system,
@@ -658,6 +778,7 @@ class AppSettings {
     this.sync = true,
     this.notices = true,
     this.replyNotify = true,
+    NotifyPrefs? notify,
     this.grouping = SidebarGrouping.date,
     this.defaultPersonaId,
     this.defaultRepoIds = const [],
@@ -666,11 +787,15 @@ class AppSettings {
     this.maxRuns = 0,
     this.readOnlyTools = 'ask',
     this.serverRunPolicy = 'ask',
+    this.planFirst = 'changing',
     this.whenDone = '',
+    this.prWatch = true,
+    this.prFix = 'ask',
+    this.prFixCap = 20,
     this.backgroundJobs,
     this.serverSchedules = false,
     this.scheduleDailyCap = 50,
-  });
+  }) : notify = notify ?? NotifyPrefs();
 
   ChatTheme theme;
   ChatDensity density;
@@ -710,6 +835,7 @@ class AppSettings {
   bool sync;
   bool notices;
   bool replyNotify;
+  NotifyPrefs notify;
 
   SidebarGrouping grouping;
   String? defaultPersonaId;
@@ -720,7 +846,11 @@ class AppSettings {
   int maxRuns;
   String readOnlyTools;
   String serverRunPolicy;
+  String planFirst;
   String whenDone;
+  bool prWatch;
+  String prFix;
+  int prFixCap;
   bool? backgroundJobs;
   bool serverSchedules;
   int scheduleDailyCap;
@@ -757,14 +887,18 @@ class AppSettings {
         'sync': sync,
         'notices': notices,
         'replyNotify': replyNotify,
+        'notify': notify.toJson(),
         'grouping': grouping.name,
         'defaultPersonaId': defaultPersonaId,
         'defaultRepoIds': defaultRepoIds,
         'nickname': nickname,
         'nicknameAt': nicknameAt,
         'maxRuns': maxRuns,
-        'policy': {'readOnlyTools': readOnlyTools, 'serverRuns': serverRunPolicy},
+        'policy': {'readOnlyTools': readOnlyTools, 'serverRuns': serverRunPolicy, 'planFirst': planFirst},
         if (whenDone.isNotEmpty) 'whenDone': whenDone,
+        'prWatch': prWatch,
+        'prFix': prFix,
+        'prFixCap': prFixCap,
         if (backgroundJobs != null) 'backgroundJobs': backgroundJobs,
         'serverSchedules': serverSchedules,
         'scheduleDailyCap': scheduleDailyCap,
@@ -811,6 +945,7 @@ class AppSettings {
         sync: j['sync'] as bool? ?? true,
         notices: j['notices'] != false,
         replyNotify: j['replyNotify'] != false,
+        notify: NotifyPrefs.fromJson(j['notify']),
         grouping: _enumOf(SidebarGrouping.values, j['grouping'], SidebarGrouping.date),
         defaultPersonaId: j['defaultPersonaId'] as String?,
         defaultRepoIds:
@@ -828,7 +963,15 @@ class AppSettings {
             j['policy'] is Map && (j['policy'] as Map)['serverRuns'] == 'allow'
                 ? 'allow'
                 : 'ask',
+        planFirst: j['policy'] is Map && const ['always', 'never'].contains((j['policy'] as Map)['planFirst'])
+            ? (j['policy'] as Map)['planFirst'] as String
+            : 'changing',
         whenDone: whenDoneOf(j['whenDone']),
+        prWatch: j['prWatch'] != false,
+        prFix: const ['off', 'ask', 'auto'].contains(j['prFix']) ? j['prFix'] as String : 'ask',
+        prFixCap: j['prFixCap'] is num && const [5, 10, 20, 50, 100].contains((j['prFixCap'] as num).toInt())
+            ? (j['prFixCap'] as num).toInt()
+            : 20,
         backgroundJobs:
             j['backgroundJobs'] is bool ? j['backgroundJobs'] as bool : null,
         serverSchedules: j['serverSchedules'] == true,

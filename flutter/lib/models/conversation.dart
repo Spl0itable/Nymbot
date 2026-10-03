@@ -36,6 +36,7 @@ class Conversation {
     this.unread = 0,
     this.policy,
     this.forkOf,
+    this.skillId,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : tags = tags ?? [],
@@ -80,6 +81,7 @@ class Conversation {
   int unread;
   Map<String, String>? policy;
   Map<String, String>? forkOf;
+  String? skillId;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -115,6 +117,7 @@ class Conversation {
         if (unread > 0) 'unread': unread,
         if (policy != null && policy!.isNotEmpty) 'policy': policy,
         if (forkOf != null) 'forkOf': forkOf,
+        if (skillId != null) 'skillId': skillId,
         'createdAt': createdAt.millisecondsSinceEpoch,
         'updatedAt': updatedAt.millisecondsSinceEpoch,
       };
@@ -160,6 +163,7 @@ class Conversation {
                 'before': (j['forkOf'] as Map)['before'] as String,
               }
             : null,
+        skillId: j['skillId'] is String && (j['skillId'] as String).isNotEmpty ? j['skillId'] as String : null,
         createdAt: DateTime.fromMillisecondsSinceEpoch(
             (j['createdAt'] as num?)?.toInt() ?? 0),
         updatedAt: DateTime.fromMillisecondsSinceEpoch(
@@ -174,6 +178,7 @@ class Conversation {
     final out = <String, String>{
       for (final key in const ['readOnlyTools', 'serverRuns'])
         if (raw[key] == 'allow' || raw[key] == 'ask') key: raw[key] as String,
+      if (const ['always', 'changing', 'never'].contains(raw['planFirst'])) 'planFirst': raw['planFirst'] as String,
     };
     return out.isEmpty ? null : out;
   }
@@ -223,6 +228,7 @@ class ChatMessage {
     List<String>? followUps,
     this.serverRunCredits = 0,
     List<Map<String, dynamic>>? serverRuns,
+    List<Map<String, dynamic>>? actions,
     this.team,
     this.tasks,
     this.updatedAt,
@@ -234,9 +240,13 @@ class ChatMessage {
     this.runCap,
     this.sched,
     this.steerOffer,
+    this.ask,
+    this.proposal,
+    this.prWatch,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
+        actions = actions ?? const [],
         repos = repos ?? const [],
         sources = sources ?? const [],
         followUps = followUps ?? const [],
@@ -273,6 +283,7 @@ class ChatMessage {
   final List<String> followUps;
   final double serverRunCredits;
   final List<Map<String, dynamic>> serverRuns;
+  final List<Map<String, dynamic>> actions;
   final Map<String, dynamic>? team;
   final Map<String, dynamic>? tasks;
   final DateTime? updatedAt;
@@ -284,6 +295,9 @@ class ChatMessage {
   final Map<String, dynamic>? runCap;
   final String? sched;
   final String? steerOffer;
+  final Map<String, dynamic>? ask;
+  final Map<String, dynamic>? proposal;
+  final Map<String, dynamic>? prWatch;
   final DateTime at;
 
   ChatMessage copyWith(
@@ -293,6 +307,9 @@ class ChatMessage {
           Map<String, dynamic>? pendingTool,
           Map<String, dynamic>? staged,
           Map<String, dynamic>? tasks,
+          Map<String, dynamic>? ask,
+          Map<String, dynamic>? proposal,
+          Map<String, dynamic>? prWatch,
           DateTime? updatedAt,
           String? wire,
           bool sent = false,
@@ -324,6 +341,7 @@ class ChatMessage {
         followUps: followUps,
         serverRunCredits: serverRunCredits,
         serverRuns: serverRuns,
+        actions: actions,
         team: team,
         tasks: tasks ?? this.tasks,
         updatedAt: updatedAt ?? DateTime.now(),
@@ -335,6 +353,9 @@ class ChatMessage {
         runCap: runCap,
         sched: sched,
         steerOffer: clearSteerOffer ? null : steerOffer,
+        ask: ask ?? this.ask,
+        proposal: proposal ?? this.proposal,
+        prWatch: prWatch ?? this.prWatch,
         at: at,
       );
 
@@ -365,6 +386,7 @@ class ChatMessage {
         if (followUps.isNotEmpty) 'followUps': followUps,
         if (serverRunCredits > 0) 'serverRunCredits': serverRunCredits,
         if (serverRuns.isNotEmpty) 'serverRuns': serverRuns,
+        if (actions.isNotEmpty) 'actions': actions,
         if (team != null) 'team': team,
         if (tasks != null) 'tasks': tasks,
         if (updatedAt != null) 'updatedAt': updatedAt!.millisecondsSinceEpoch,
@@ -376,6 +398,9 @@ class ChatMessage {
         if (runCap != null) 'runCap': runCap,
         if (sched != null) 'sched': sched,
         if (steerOffer != null) 'steerOffer': steerOffer,
+        if (ask != null) 'ask': ask,
+        if (proposal != null) 'proposal': proposal,
+        if (prWatch != null) 'prWatch': prWatch,
         'at': at.millisecondsSinceEpoch,
       };
 
@@ -412,6 +437,7 @@ class ChatMessage {
         followUps: followUpsOf(j['followUps']),
         serverRunCredits: (j['serverRunCredits'] as num?)?.toDouble() ?? 0,
         serverRuns: (j['serverRuns'] as List?)?.whereType<Map<String, dynamic>>().toList(),
+        actions: actionsOf(j['actions']),
         team: j['team'] is Map ? (j['team'] as Map).cast<String, dynamic>() : null,
         tasks: j['tasks'] is Map ? (j['tasks'] as Map).cast<String, dynamic>() : null,
         updatedAt: j['updatedAt'] is num
@@ -427,8 +453,34 @@ class ChatMessage {
         steerOffer: j['steerOffer'] is String && (j['steerOffer'] as String).trim().isNotEmpty
             ? j['steerOffer'] as String
             : null,
+        ask: j['ask'] is Map ? (j['ask'] as Map).cast<String, dynamic>() : null,
+        proposal: j['proposal'] is Map ? (j['proposal'] as Map).cast<String, dynamic>() : null,
+        prWatch: j['prWatch'] is Map ? (j['prWatch'] as Map).cast<String, dynamic>() : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );
+
+  static List<Map<String, dynamic>> actionsOf(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <Map<String, dynamic>>[];
+    for (final a in raw.take(40)) {
+      if (a is! Map) continue;
+      final tool = a['tool'];
+      if (tool is! String || tool.isEmpty) continue;
+      String cut(Object? v, int n) {
+        final s = v is String ? v : '';
+        return s.length > n ? s.substring(0, n) : s;
+      }
+      final at = a['at'];
+      out.add({
+        'connector': cut(a['connector'], 80),
+        'tool': cut(tool, 128),
+        'args': cut(a['args'], 200),
+        'at': at is num && at > 0 ? at.toInt() : DateTime.now().millisecondsSinceEpoch,
+        if (a['error'] == true) 'error': true,
+      });
+    }
+    return out;
+  }
 
   static String? steerOfferOf(Object? raw) {
     if (raw is! Map) return null;

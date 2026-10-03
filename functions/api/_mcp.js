@@ -1,4 +1,6 @@
 import { capStoppedReply, capNextUsage } from "./_caps.js";
+import { ASK_TOOL, ASK_TOOL_NAME, askParse, askErrorText, askPauseReply, pendingQuestion, PLAN_TOOL, PLAN_TOOL_NAME, PLAN_GATE_TEXT, PLAN_REJECTED_TEXT,
+  PLAN_HELD_TEXT, planParse, planErrorText, planPauseReply, pendingPlan, planGate, planMode } from "./_ask.js";
 
 export var MCP_MAX_SERVERS = 3;
 export var MCP_MAX_TOOLS = 40;
@@ -519,7 +521,8 @@ export async function mcpPrepare(servers, deps, progress, policy) {
         entry: entry, tool: tool.name,
         confirm: mcpNeedsConfirm(tool, mcpAutoAllowed(server, tool.name) ||
           (readOnlyOk && !!(tool.annotations && tool.annotations.readOnlyHint === true))),
-        destructive: !!(tool.annotations && tool.annotations.destructiveHint === true)
+        destructive: !!(tool.annotations && tool.annotations.destructiveHint === true),
+        readOnly: !!(tool.annotations && tool.annotations.readOnlyHint === true)
       };
       entry.tools++;
     }
@@ -617,6 +620,9 @@ export function mcpPauseReply(pending) {
     ". Allow it below and I will carry on from exactly here; deny it and nothing runs.";
 }
 
+var MCP_MAX_ACTIONS = 40;
+var MCP_ACTION_ARGS_CHARS = 200;
+
 var MCP_FAILED_NOTE = "I stopped here because the model call for the next step failed. Everything so far is saved, so carrying on picks up from exactly this point, and you were only charged for the steps that ran.";
 
 export async function runMcpToolLoop(ctx) {
@@ -629,6 +635,30 @@ export async function runMcpToolLoop(ctx) {
   if (planOn) tools = tools.concat([ctx.planTool]);
   var filesOn = !!(ctx.files && typeof ctx.files.exec === "function" && ctx.files.tool);
   if (filesOn) tools = tools.concat([ctx.files.tool]);
+  var askOn = ctx.ask === true;
+  if (askOn) tools = tools.concat([ASK_TOOL]);
+  var answer = ctx.answer && typeof ctx.answer.id === "string" ? ctx.answer : null;
+  var gateIn = ctx.planGate && typeof ctx.planGate === "object" ? ctx.planGate : {};
+  var writeTool = function (item) {
+    if (item.kind === "git") return !!(git && typeof git.writes === "function" && git.writes(item.name));
+    if (item.kind === "mcp") {
+      var s = mcpSpec(runtime, item.name);
+      return !!(s && !s.readOnly);
+    }
+    return false;
+  };
+  var anyWrite = (git && typeof git.writes === "function" ? git.tools.some(function (t) { return git.writes(t.function.name); }) : false) ||
+    runtime.tools.some(function (t) { var s = mcpSpec(runtime, t.function.name); return !!(s && !s.readOnly); });
+  var gateMode = ctx.planGate && typeof ctx.planGate === "object" ? planMode(gateIn.mode) : "never";
+  var gateOn = planGate(gateMode, anyWrite, (git ? git.tools.length : 0) + runtime.tools.length > 0);
+  var plan = { approved: !!gateIn.approved, rejected: false };
+  if (gateOn) tools = tools.concat([PLAN_TOOL]);
+  var gated = function (item) {
+    if (!gateOn || plan.approved) return false;
+    if (item.kind === "git" || item.kind === "mcp") return gateMode === "always" ? true : writeTool(item);
+    if (item.kind === "file") return gateMode === "always";
+    return false;
+  };
   var stopped = typeof ctx.stopped === "function" ? ctx.stopped : function () { return false; };
   var convo = ctx.messages.slice();
   var calls = 0;
@@ -645,13 +675,18 @@ export async function runMcpToolLoop(ctx) {
   var guard = ctx.capGuard || null;
   var sofar = "";
 
+  var actions = [];
+
   function done(extra) {
-    return Object.assign({
+    var out = Object.assign({
+      planOk: gateOn && plan.approved ? true : undefined,
       modelCalls: calls,
       outputTokens: outputTokens,
       usage: usage,
       checkpoint: git && git.checkpoint ? git.checkpoint() : null
     }, extra);
+    if (actions.length) out.actions = actions.slice();
+    return out;
   }
 
   async function execItem(item) {
@@ -679,6 +714,56 @@ export async function runMcpToolLoop(ctx) {
   async function drain() {
     while (queue.length) {
       var item = queue[0];
+      if (item.kind === "ask") {
+        if (answer && answer.id === item.id) {
+          queue.shift();
+          convo.push({ role: "tool", tool_call_id: item.id, content: String(answer.text) });
+          answer = null;
+          continue;
+        }
+        var asked = askParse(item.args);
+        if (asked.error) {
+          queue.shift();
+          convo.push({ role: "tool", tool_call_id: item.id, content: askErrorText(asked.error) });
+          continue;
+        }
+        if (queue.slice(1).some(function (q) { return q.kind === "ask"; })) {
+          queue = [item].concat(queue.slice(1).filter(function (q) {
+            if (q.kind !== "ask") return true;
+            convo.push({ role: "tool", tool_call_id: q.id, content: "Error: ask one set of questions at a time; this one was not asked." });
+            return false;
+          }));
+        }
+        return pendingQuestion(item.id, asked.questions);
+      }
+      if (item.kind === "proposal") {
+        if (answer && answer.id === item.id) {
+          queue.shift();
+          convo.push({ role: "tool", tool_call_id: item.id, content: String(answer.text) });
+          if (answer.user) convo.push({ role: "user", content: String(answer.user) });
+          if (answer.decision === "approve") plan.approved = true;
+          else if (answer.decision === "reject") plan.rejected = true;
+          answer = null;
+          continue;
+        }
+        var proposed = plan.rejected ? { error: "rejected" } : planParse(item.args);
+        if (proposed.error) {
+          queue.shift();
+          convo.push({ role: "tool", tool_call_id: item.id, content: proposed.error === "rejected" ? PLAN_REJECTED_TEXT : planErrorText(proposed.error) });
+          continue;
+        }
+        plan.approved = false;
+        queue = [item].concat(queue.slice(1).filter(function (q) {
+          convo.push({ role: "tool", tool_call_id: q.id, content: PLAN_HELD_TEXT });
+          return false;
+        }));
+        return pendingPlan(item.id, proposed);
+      }
+      if (gated(item)) {
+        queue.shift();
+        convo.push({ role: "tool", tool_call_id: item.id, content: plan.rejected ? PLAN_REJECTED_TEXT : PLAN_GATE_TEXT });
+        continue;
+      }
       var spec = item.kind === "mcp" ? mcpSpec(runtime, item.name) : null;
       var gate = item.kind === "git" && git && typeof git.gate === "function" ? git.gate(item, usage) : null;
       if (gate && gate.refuse) {
@@ -717,12 +802,22 @@ export async function runMcpToolLoop(ctx) {
             tool: mcpInert(spec.tool, 128),
             args: mcpArgsPreview(item.args),
             argsLength: mcpArgsLength(item.args),
-            destructive: spec.destructive
+            destructive: spec.destructive,
+            readOnly: !!spec.readOnly
           };
         }
       }
       queue.shift();
       var out = await execItem(item);
+      if (spec && !spec.readOnly && !spec.entry.failed && actions.length < MCP_MAX_ACTIONS) {
+        actions.push({
+          connector: mcpInert(spec.entry.server.name, 80),
+          tool: mcpInert(spec.tool, 128),
+          args: mcpArgsPreview(item.args).slice(0, MCP_ACTION_ARGS_CHARS),
+          at: Date.now(),
+          error: /^Error: /.test(String(out)) ? true : undefined
+        });
+      }
       convo.push({ role: "tool", tool_call_id: item.id, content: String(out).slice(0, resultCap + 400) });
     }
     return null;
@@ -730,7 +825,7 @@ export async function runMcpToolLoop(ctx) {
 
   function paused(pending, text) {
     return done({
-      reply: (text ? text.trim() + "\n\n" : "") + (pending.kind !== "mcp" && git && typeof git.pauseReply === "function" ? git.pauseReply(pending) : mcpPauseReply(pending)),
+      reply: pending.kind === "question" ? askPauseReply(text) : pending.kind === "plan" ? planPauseReply(text) : (text ? text.trim() + "\n\n" : "") + (pending.kind !== "mcp" && git && typeof git.pauseReply === "function" ? git.pauseReply(pending) : mcpPauseReply(pending)),
       pendingTool: pending,
       truncated: false,
       convo: convo,
@@ -800,7 +895,7 @@ export async function runMcpToolLoop(ctx) {
       try { fnArgs = JSON.parse((tc.function && tc.function.arguments) || "{}"); } catch (e) { }
       if (!fnArgs || typeof fnArgs !== "object" || Array.isArray(fnArgs)) fnArgs = {};
       queue.push({ id: tc.id, name: String(fnName || ""), args: fnArgs,
-        kind: planOn && fnName === "plan_update" ? "plan" : (filesOn && fnName === ctx.files.name ? "file" : (gitNames[fnName] ? "git" : "mcp")) });
+        kind: planOn && fnName === "plan_update" ? "plan" : (filesOn && fnName === ctx.files.name ? "file" : (askOn && fnName === ASK_TOOL_NAME ? "ask" : (gateOn && fnName === PLAN_TOOL_NAME ? "proposal" : (gitNames[fnName] ? "git" : "mcp")))) });
     }
     convo.push({ role: "assistant", content: msg.content || null, tool_calls: fixed });
     var stop = await drain();

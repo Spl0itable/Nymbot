@@ -103,7 +103,7 @@ class BackgroundJobs {
   }
 
   static ({String runId, int until})? handover(Object? raw) {
-    if (raw is! Map) return null;
+    if (raw is! Map || raw['waiting'] == true) return null;
     final id = raw['runId'];
     if (id is! String || id.isEmpty) return null;
     return (runId: id, until: (raw['until'] as num?)?.toInt() ?? 0);
@@ -165,7 +165,7 @@ class BackgroundJobs {
     return null;
   }
 
-  static const ended = {'done', 'failed', 'stopped', 'parked', 'waiting'};
+  static const ended = {'done', 'failed', 'stopped', 'parked', 'waiting', 'expired'};
 
   static List<String> legsOf(Object? raw) => [
         for (final l in (raw is List ? raw : const []))

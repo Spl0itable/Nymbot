@@ -36,6 +36,7 @@ object UnifiedPush {
     private const val KEY_TEXTS = "texts"
     private const val KEY_PUSHED = "pushed"
     private const val PUSHED_MAX = 100
+    private val PR_STATES = setOf("ci-failed", "review", "pr")
     private const val B64 = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
 
     private fun prefs(context: Context): SharedPreferences =
@@ -252,7 +253,7 @@ object UnifiedPush {
         } catch (t: Throwable) {
             JSONObject()
         }
-        val title = texts.optString("title:$state").takeIf { it.isNotEmpty() }
+        val title = texts.optString(if (state in PR_STATES) "title:pr" else "title:$state").takeIf { it.isNotEmpty() }
             ?: data.optString("title").takeIf { it.isNotEmpty() }
             ?: "Nymbot"
         val text = texts.optString(state).takeIf { it.isNotEmpty() && state != "done" && state != "due" }

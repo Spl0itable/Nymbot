@@ -20,6 +20,7 @@
         { name: 'system', args: '[text]', group: 'local', hint: () => t('Set this chat\'s custom instructions') },
         { name: 'prompt', args: '[title]', group: 'local', hint: () => t('Insert a saved prompt') },
         { name: 'save', args: '[title]', group: 'local', hint: () => t('Save the composer text as a prompt') },
+        { name: 'skills', args: '[name]', group: 'local', hint: () => t('Run, attach or edit your saved skills; or type / and a skill\'s name') },
         { name: 'search', args: '[text]', group: 'local', hint: () => t('Search every conversation') },
         { name: 'effort', args: '[normal|careful|deep]', group: 'local', hint: () => t('How hard to think about each reply') },
         { name: 'remember', args: '[text]', group: 'local', hint: () => t('Keep a standing fact between chats') },

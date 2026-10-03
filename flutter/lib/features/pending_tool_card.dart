@@ -282,6 +282,14 @@ class _PendingToolCardState extends State<PendingToolCard> {
                 style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
               ),
             ],
+            if (pending['readOnly'] != true) ...[
+              const SizedBox(height: 4),
+              Text(
+                t('Can\'t be undone from Nymbot'),
+                key: const ValueKey('pending-final'),
+                style: TextStyle(fontSize: 12, color: theme.hintColor),
+              ),
+            ],
             const SizedBox(height: 6),
             if (state == 'allowed')
               Text(t('Allowed once.'), style: TextStyle(fontSize: 12, color: theme.hintColor))

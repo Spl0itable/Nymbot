@@ -263,6 +263,10 @@
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H7l-3 3z"></path></svg>
                     <span>Prompt library</span>
                 </button>
+                <button class="side-link" type="button" data-act="open-skills" id="skillsLink">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"></path></svg>
+                    <span>Skills</span>
+                </button>
                 <button class="side-link" type="button" data-act="open-personas">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>
                     <span>Personas</span>
@@ -419,6 +423,10 @@
                     <button class="chip" type="button" data-act="open-personas" id="chipPersona" title="Custom instructions">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>
                         <span class="chip-label">Persona</span>
+                    </button>
+                    <button class="chip" type="button" data-act="open-skills" id="chipSkill" title="Run a saved skill or attach one to this chat">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"></path></svg>
+                        <span class="chip-label">Skills</span>
                     </button>
                     <button class="chip" type="button" data-act="cycle-effort" id="chipEffort" title="How hard to think about each reply">
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3Z"></path><line x1="9.6" y1="18.6" x2="14.4" y2="18.6"></line><line x1="10.6" y1="21" x2="13.4" y2="21"></line></svg>
@@ -694,6 +702,9 @@
                 <a href="https://nymbot.ai/privacy/" target="_blank" rel="noopener">Privacy</a>
                 <a href="https://nymbot.ai/dmca/" target="_blank" rel="noopener">DMCA</a>
             </nav>
+            <div class="about-legal">
+                <p class="about-copyright"><a href="https://nostrservices.com" target="_blank" rel="noopener" data-i18n-skip>© 21 Million LLC</a> · <a href="https://github.com/Spl0itable/Nymbot/blob/main/LICENSE" target="_blank" rel="noopener">Licensed under AGPL-3.0</a></p>
+            </div>
             <div class="about-divider"></div>
             <h3 class="section-head" id="aboutContactHead">Contact the developer</h3>
             <p class="hint">Send feedback, a question or a bug report. It goes to the Nymbot developer as an end-to-end encrypted private message from your own key, never from a throwaway one.</p>
@@ -867,6 +878,8 @@
                             <option value="50">50 credits</option>
                         </select>
                         <p class="hint" id="scheduleConsent"></p>
+                        <label class="check"><input type="checkbox" id="scheduleRunChanges"> Run changes without asking</label>
+                        <p class="hint">Only for this schedule: it skips the plan-first approval and makes its changes straight away.</p>
                     </div>
                     <label class="check"><input type="radio" name="scheduleServer" value="" checked> Neither: only while the app is open</label>
                 </fieldset>
@@ -1114,6 +1127,12 @@
                         <option value="leave">Leave the branch</option>
                     </select>
                 </div>
+                <label for="gitPrWatch">Watch the pull requests tasks open</label>
+                <select id="gitPrWatch">
+                    <option value="">Use the default in Settings</option>
+                    <option value="on">Watch them</option>
+                    <option value="off">Don't watch them</option>
+                </select>
                 <p class="modal-status" id="gitStatus"></p>
                 <div class="gate-actions">
                     <button class="btn btn-primary" type="button" data-act="repo-save" id="repoSaveBtn">Add repository</button>
@@ -1249,6 +1268,30 @@
                 <div class="gate-actions">
                     <button class="btn btn-primary" type="button" data-act="prompt-save" id="promptSaveBtn">Save prompt</button>
                     <button class="btn btn-ghost" type="button" data-act="prompt-reset" id="promptResetBtn" hidden>Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="modalSkills" hidden>
+        <div class="modal-card modal-wide">
+            <header><h2>Skills</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="modal-lede">Saved instructions. Run one on a message by typing / and its name, attach one to a chat so it applies to every message, or start a new chat with it. A skill&rsquo;s text is sent with the message, so it counts toward what the message costs.</p>
+            <input type="search" id="skillSearch" placeholder="Search skills" aria-label="Search skills" aria-controls="skillList" autocomplete="off">
+            <div class="skill-list" id="skillList"></div>
+            <div class="repo-form">
+                <h3 class="section-head" id="skillFormTitle">New skill</h3>
+                <label for="skillName">Name</label>
+                <input type="text" id="skillName" maxlength="60" autocomplete="off" placeholder="Weekly report">
+                <label for="skillDescription">Short description (optional)</label>
+                <input type="text" id="skillDescription" maxlength="160" autocomplete="off">
+                <label for="skillBody">Instructions</label>
+                <textarea id="skillBody" rows="6" maxlength="8000" placeholder="What Nymbot should do when this skill runs. Markdown works."></textarea>
+                <p class="hint" id="skillCount" aria-live="polite"></p>
+                <p class="modal-status" id="skillStatus"></p>
+                <div class="gate-actions">
+                    <button class="btn btn-primary" type="button" data-act="skill-save" id="skillSaveBtn">Save skill</button>
+                    <button class="btn btn-ghost" type="button" data-act="skill-reset" id="skillResetBtn" hidden>Cancel</button>
                 </div>
             </div>
         </div>
@@ -1442,6 +1485,22 @@
         </div>
     </div>
 
+    <div class="modal" id="modalTranscript" hidden>
+        <div class="modal-card modal-wide transcript-card">
+            <header><h2>Transcript</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
+            <p class="transcript-label" id="transcriptTitle" dir="auto"></p>
+            <dl class="transcript-facts" id="transcriptFacts"></dl>
+            <h3 class="transcript-steps-head" id="transcriptStepsHead">Steps</h3>
+            <p class="hint" id="transcriptEmpty" hidden>No steps recorded yet.</p>
+            <ol class="transcript-steps" id="transcriptSteps" aria-labelledby="transcriptStepsHead" tabindex="0"></ol>
+            <div class="task-sr" id="transcriptLive" role="status" aria-live="polite"></div>
+            <footer>
+                <button class="btn btn-small" type="button" data-act="transcript-copy">Copy</button>
+                <button class="btn btn-small btn-ghost" type="button" data-act="transcript-save">Export as text</button>
+            </footer>
+        </div>
+    </div>
+
     <div class="modal" id="modalPolicy" hidden>
         <div class="modal-card">
             <header><h2>Permissions</h2><button class="icon-btn" data-act="close-modal" aria-label="Close">&times;</button></header>
@@ -1457,6 +1516,13 @@
                 <option value="">Use my default</option>
                 <option value="ask">Ask me first</option>
                 <option value="allow">Allow when they fit the reply's budget</option>
+            </select>
+            <label for="chatPolicyPlan">Plan first, then approve</label>
+            <select id="chatPolicyPlan">
+                <option value="">Use my default</option>
+                <option value="changing">When the task can change things</option>
+                <option value="always">For every task that uses tools</option>
+                <option value="never">Never</option>
             </select>
             <p class="hint">Anything that deletes, pushes or could cost more than the reply holds always asks.</p>
             <footer>
@@ -1532,6 +1598,21 @@
             <div id="replyNotifyField" hidden>
                 <label class="check"><input type="checkbox" id="setReplyNotify"> Notify me when a reply is ready</label>
                 <p class="hint">Leave Nymbot while it works and get a notification when the reply is ready. This sends your browser&rsquo;s push address, held only until that reply, and never your chat titles.</p>
+                <div class="notify-events" id="notifyEvents">
+                    <label class="check"><input type="checkbox" id="setNotifyDone"> When a reply or task is done</label>
+                    <label class="check"><input type="checkbox" id="setNotifyFailed"> When it fails</label>
+                    <label class="check"><input type="checkbox" id="setNotifyWaiting"> When it is waiting for me</label>
+                    <label class="check"><input type="checkbox" id="setNotifyPaused"> When it pauses</label>
+                    <label class="check"><input type="checkbox" id="setNotifySchedule"> When a scheduled prompt runs</label>
+                    <label class="check"><input type="checkbox" id="setNotifyPr"> When a pull request I watch fails CI, gets comments, or is merged or closed</label>
+                    <label for="setNotifyMin">Only for replies that take at least</label>
+                    <select id="setNotifyMin">
+                        <option value="0">Any time</option>
+                        <option value="30">30 seconds</option>
+                        <option value="120">2 minutes</option>
+                    </select>
+                    <p class="hint">Anonymous chats only get notifications from this device while Nymbot is open in a tab. They never register with the push server, so nothing reaches you once the tab is closed.</p>
+                </div>
             </div>
 
             <div class="field-grid" id="voiceFields">
@@ -1598,6 +1679,27 @@
                 <option value="leave">Leave the branch</option>
             </select>
             <p class="hint">A repository task with its own branch does this when it finishes. Each repository can choose differently when you edit it.</p>
+            <label for="setPrWatch">Pull requests a task opens</label>
+            <select id="setPrWatch">
+                <option value="on">Watch them</option>
+                <option value="off">Don't watch them</option>
+            </select>
+            <p class="hint">A watched pull request posts to its chat when CI fails, a reviewer comments, or it is merged or closed, even while the app is closed. Nymbot's server keeps the repository token for it sealed for up to 7 days and only reads from the forge. Each repository can choose differently when you edit it.</p>
+            <label for="setPrFix">Offer a fix when CI fails or a reviewer comments</label>
+            <select id="setPrFix">
+                <option value="off">Off</option>
+                <option value="ask">Ask me first</option>
+                <option value="auto">Start a fix run</option>
+            </select>
+            <label for="setPrFixCap">Credits one fix run may spend</label>
+            <select id="setPrFixCap">
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <p class="hint">A fix run works on the pull request's branch with your plan setting, at most 3 times per pull request. What the forge reported is passed to it as data, never as instructions.</p>
 
             <h3 class="section-head">Standing permissions</h3>
             <div class="field-grid">
@@ -1615,7 +1717,16 @@
                         <option value="allow">Allow when they fit the reply's budget</option>
                     </select>
                 </div>
+                <div>
+                    <label for="setPolicyPlan">Plan first, then approve</label>
+                    <select id="setPolicyPlan">
+                        <option value="changing">When the task can change things</option>
+                        <option value="always">For every task that uses tools</option>
+                        <option value="never">Never</option>
+                    </select>
+                </div>
             </div>
+            <p class="hint">With a plan first, Nymbot shows you what it will do and changes nothing until you approve.</p>
             <p class="hint">Anything that deletes, pushes or could cost more than the reply holds always asks.</p>
 
             <h3 class="section-head">Your data</h3>
@@ -1931,6 +2042,7 @@
                 <label for="dialogTextarea" id="dialogAreaLabel"></label>
                 <textarea id="dialogTextarea" rows="6"></textarea>
             </div>
+            <div class="dialog-list" id="dialogList" data-i18n-skip hidden></div>
             <label class="check" id="dialogCheckRow" hidden><input type="checkbox" id="dialogCheck"> <span id="dialogCheckLabel"></span></label>
             <footer>
                 <button class="btn btn-primary" type="button" data-act="dialog-confirm" id="dialogConfirm">OK</button>
@@ -2000,6 +2112,9 @@
     <script src="/app/js/pdftext.js"></script>
     <script src="/app/js/docs.js"></script>
     <script src="/app/js/commands.js"></script>
+    <script src="/app/js/skills.js"></script>
+    <script src="/app/js/ask.js"></script>
+    <script src="/app/js/plan.js"></script>
     <script src="/app/js/speech.js"></script>
     <script src="/app/js/dictate.js"></script>
     <script src="/app/js/chat.js"></script>
@@ -2025,11 +2140,14 @@
     <script src="/app/js/gift.js"></script>
     <script src="/app/js/connectors.js"></script>
     <script src="/app/js/gitrun.js"></script>
+    <script src="/app/js/prwatch.js"></script>
     <script src="/app/js/runner.js"></script>
     <script src="/app/js/serverrun.js"></script>
+    <script src="/app/js/transcripts.js"></script>
     <script src="/app/js/tasks.js"></script>
     <script src="/app/js/runs.js"></script>
     <script src="/app/js/background.js"></script>
+    <script src="/app/js/rewind.js"></script>
     <script src="/app/js/vault.js"></script>
     <script src="/app/js/keybackup.js"></script>
     <script src="/app/js/notify.js"></script>

@@ -16,6 +16,8 @@ import '../models/nostr_event.dart';
 import '../models/workspace.dart';
 import '../state/identity.dart';
 import 'anon.dart';
+import 'ask.dart';
+import 'plan.dart';
 import 'background_jobs.dart';
 import 'connectors.dart';
 import 'doc_library.dart';
@@ -28,6 +30,7 @@ import 'git_review.dart';
 import 'relay_pool.dart';
 import 'research.dart';
 import 'server_runs.dart';
+import 'skills.dart';
 import 'team.dart';
 import 'wire_limits.dart';
 import '../features/i18n/i18n.dart';
@@ -48,7 +51,9 @@ class ChatFailure implements Exception {
       this.lost = false,
       this.offline = false,
       this.runCap,
-      this.checkpoint});
+      this.checkpoint,
+      this.resumeExpired = false,
+      this.pendingInvalid});
 
   final String message;
   final bool noCredits;
@@ -70,6 +75,8 @@ class ChatFailure implements Exception {
   final bool offline;
   final Map<String, dynamic>? runCap;
   final Map<String, dynamic>? checkpoint;
+  final bool resumeExpired;
+  final String? pendingInvalid;
 
   @override
   String toString() => message;
@@ -102,7 +109,10 @@ typedef TurnResult = ({
   String eventId,
   double serverRunCredits,
   List<Map<String, dynamic>> serverRuns,
+  List<Map<String, dynamic>> actions,
   Map<String, dynamic>? team,
+  Map<String, dynamic>? ask,
+  Map<String, dynamic>? proposal,
 });
 
 typedef TurnStep = ({
@@ -196,6 +206,17 @@ class ChatEngine {
 
   final String botPubkey;
   final Identity identity;
+
+  List<Skill> Function() skillsOf = () => const [];
+
+  ({String text, List<String> blocks, Skill? skill}) skillWire(Conversation conv, String text) {
+    final all = Skills.catalog(skillsOf());
+    Skill? attached;
+    for (final s in all) {
+      if (s.id == conv.skillId) attached = s;
+    }
+    return Skills.wire(text, all, attached);
+  }
   final RelayPool relays;
   final PqAnnounce pq;
   final NymbotApi api;
@@ -842,27 +863,40 @@ class ChatEngine {
   }
 
   /// Reverts each written path to the pre-run commit as a new commit; touches no model.
-  Future<Map<String, dynamic>> revert({
-    required GitRepo repo,
-    required Map<String, dynamic> checkpoint,
+  Future<List<Map<String, dynamic>>> revertMarks({
+    required List<(GitRepo, Map<String, dynamic>)> marks,
     required EventSigner signer,
   }) async {
     final res = await api.call('pm-revert', signer, extra: {
-      'git': repo.toPayload(),
-      'checkpoint': {
-        'repo': checkpoint['repo'],
-        'branch': checkpoint['branch'],
-        'baseSha': checkpoint['baseSha'],
-        'paths': checkpoint['paths'] ?? const [],
-        'branches': checkpoint['branches'] ?? const [],
-        'pulls': checkpoint['pulls'] ?? const [],
-      },
+      'marks': [
+        for (final (repo, checkpoint) in marks)
+          {
+            'git': repo.toPayload(),
+            'checkpoint': {
+              'repo': checkpoint['repo'],
+              'provider': checkpoint['provider'] ?? '',
+              'host': checkpoint['host'] ?? '',
+              'branch': checkpoint['branch'],
+              'baseSha': checkpoint['baseSha'],
+              'paths': checkpoint['paths'] ?? const [],
+              'branches': checkpoint['branches'] ?? const [],
+              'pulls': checkpoint['pulls'] ?? const [],
+            },
+          },
+      ],
     });
     final data = res.data;
     if (data['error'] != null) {
       throw ChatFailure(data['error'] as String);
     }
-    return data;
+    final results = data['results'];
+    if (results is! List) throw ChatFailure(t('Could not put that back.'));
+    return [
+      for (var i = 0; i < marks.length; i++)
+        i < results.length && results[i] is Map
+            ? (results[i] as Map).cast<String, dynamic>()
+            : {'error': t('Could not put that back.')},
+    ];
   }
 
   Future<Map<String, dynamic>> applyStaged({
@@ -992,8 +1026,9 @@ class ChatEngine {
     Workspace? space,
     Bot? bot,
     String query,
-    List<Memory> memories,
-  ) {
+    List<Memory> memories, [
+    List<String> skills = const [],
+  ]) {
     final parts = <String>[];
     final instructions = [
       bot?.instructions ?? '',
@@ -1004,6 +1039,7 @@ class ChatEngine {
     if (instructions.isNotEmpty) {
       parts.add('[custom instructions]\n$instructions');
     }
+    parts.addAll(skills);
     if (repos.length > 1) {
       final lines = <String>[];
       for (var i = 0; i < repos.length; i++) {
@@ -1031,9 +1067,10 @@ class ChatEngine {
     Bot? bot,
     String query = '',
     List<Memory> memories = const [],
+    List<String> skills = const [],
   ]) {
     final standing =
-        standingContext(conv, repos, persona, space, bot, query, memories);
+        standingContext(conv, repos, persona, space, bot, query, memories, skills);
     final parts = <String>[];
     if (standing.isNotEmpty) {
       parts.add('${standing.join('\n\n')}\n\n$standingEnd');
@@ -1059,6 +1096,11 @@ class ChatEngine {
     if (cmd != null) {
       final rest = cmd.group(2)!.trim();
       t = rest.isEmpty ? cmd.group(1)! : rest;
+    }
+    final skill = RegExp(r'^/([A-Za-z0-9-]+)\s*(.*)$').firstMatch(t);
+    if (skill != null) {
+      final rest = skill.group(2)!;
+      t = rest.isEmpty ? skill.group(1)!.replaceAll('-', ' ') : rest;
     }
     t = t.replaceFirst(RegExp(r'^[!\s]+'), '');
     if (t.length <= 48) return t[0].toUpperCase() + t.substring(1);
@@ -1179,6 +1221,7 @@ class ChatEngine {
     Map<String, dynamic>? team,
     String? msgId,
     Map<String, dynamic> runExtras = const {},
+    Map<String, dynamic>? pendingAnswer,
   }) async {
     final rootId = conv.rootId;
     final anonymous = conv.anon;
@@ -1204,8 +1247,10 @@ class ChatEngine {
         : (identity.rootLocked ? null : identity.kemPublicKey);
 
     final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
+    final used = skillWire(conv, text);
+    text = used.text;
     final head =
-        preamble(conv, repos, persona, workspace, bot, text, memories);
+        preamble(conv, repos, persona, workspace, bot, text, memories, used.blocks);
     final quoted = (quote == null || quote.isEmpty)
         ? ''
         : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
@@ -1278,12 +1323,14 @@ class ChatEngine {
       'fresh': freshTurn,
       'followUps': true,
       'draft': true,
+      'ask': true,
       if (handed.isNotEmpty) 'history': [for (final w in handed) w.toJson()],
       // Every part in order; the last is `eventId`.
       if (partIds.length > 1) 'parts': partIds,
       if (partIds.length > 1)
         'wraps': [for (final w in partWraps) w.toJson()],
       if (resume != null && resume.isNotEmpty) 'resume': resume,
+      'pendingAnswer': ?pendingAnswer,
       if (maxCost != null && maxCost > 0) 'maxCost': maxCost,
       if (announcement != null) 'pqAnnouncement': announcement.toJson(),
       if (announcement == null &&
@@ -1530,6 +1577,8 @@ class ChatEngine {
           required: (data['required'] as num?)?.toDouble() ?? 0,
           team: data['team'] == true,
           retryable: data['retryable'] == true,
+          resumeExpired: data['resumeExpired'] == true,
+          pendingInvalid: data['pendingInvalid'] is String ? data['pendingInvalid'] as String : null,
           checkpoint: data['checkpoint'] is Map<String, dynamic>
               ? data['checkpoint'] as Map<String, dynamic>
               : null);
@@ -1582,8 +1631,10 @@ class ChatEngine {
     }
 
     final split = splitThinking(opened.rumor['content'] as String? ?? '');
+    final took = Ask.take(split.body);
+    final planned = Plan.take(took.ask != null ? took.text : split.body);
     return (
-      reply: split.body,
+      reply: planned.text,
       thinking: split.thinking,
       cost: (data['costCredits'] as num?)?.toDouble()
           ?? (data['cost'] as num?)?.toDouble() ?? 0,
@@ -1611,9 +1662,12 @@ class ChatEngine {
       eventId: wrap.id,
       serverRunCredits: (data['serverRunCredits'] as num?)?.toDouble() ?? 0,
       serverRuns: ServerRuns.runsOf(data['serverRuns']),
+      actions: ChatMessage.actionsOf(data['actions']),
       team: data['team'] is Map && (data['team'] as Map)['workers'] is List
           ? (data['team'] as Map).cast<String, dynamic>()
           : null,
+      ask: Ask.record(took.ask, data),
+      proposal: Plan.record(planned.plan, data),
     );
   }
 

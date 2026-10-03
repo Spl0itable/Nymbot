@@ -144,7 +144,11 @@ List<Map<String, dynamic>> jobsOf(Map<String, dynamic>? mark) {
   for (final m in marks) {
     final job = m['job'];
     if (job is Map && job['branch'] is String) {
-      out.add({'repo': m['repo'], ...Map<String, dynamic>.from(job)});
+      out.add({
+        'repo': m['repo'],
+        'provider': '${m['provider'] ?? ''}',
+        ...Map<String, dynamic>.from(job),
+      });
     }
   }
   return out;
@@ -183,6 +187,16 @@ String branchState(Map<String, dynamic> job) {
   final base = '${job['base'] ?? ''}';
   final pull = job['pull'];
   if (job['deleted'] == true) return t('Branch deleted.');
+  final reverted = job['reverted'];
+  final revertPull = reverted is Map ? reverted['pull'] : null;
+  if (job['merged'] == true && revertPull is Map && revertPull['number'] != null) {
+    return t('Merged into {base}. Pull request #{n} reverts it.',
+        {'base': base, 'n': revertPull['number']});
+  }
+  if (job['closed'] == true && job['merged'] != true) {
+    return t('Pull request #{n} was closed without merging.',
+        {'n': pull is Map ? pull['number'] : ''});
+  }
   if (job['ended'] != null &&
       job['merged'] != true &&
       !(pull is Map && pull['number'] != null)) {
@@ -226,6 +240,68 @@ Map<String, dynamic> patchJob(
         .whereType<Map<String, dynamic>>()
         .map(fix)
         .toList();
+  }
+  return out;
+}
+
+const List<String> revertForges = ['github', 'gitlab'];
+
+bool canRevertOn(Object? provider) {
+  final p = provider is String && provider.isNotEmpty ? provider.toLowerCase() : 'github';
+  return revertForges.contains(p);
+}
+
+int pullNumberOf(Object? pull) {
+  if (pull is! Map) return 0;
+  final n = pull['number'];
+  final v = n is num ? n.toInt() : int.tryParse('${n ?? ''}') ?? 0;
+  return v > 0 ? v : 0;
+}
+
+List<Map<String, dynamic>> marksOf(Map<String, dynamic>? mark) {
+  if (mark == null) return const [];
+  return [
+    mark,
+    ...((mark['also'] as List?)?.whereType<Map>().map((x) => x.cast<String, dynamic>()) ??
+        const <Map<String, dynamic>>[]),
+  ].where((x) => x['repo'] is String && (x['repo'] as String).isNotEmpty).toList();
+}
+
+List<Map<String, dynamic>> undoMarks(Map<String, dynamic>? mark) => [
+      for (final x in marksOf(mark))
+        if (x['undoable'] == true &&
+            x['undone'] != true &&
+            RegExp(r'^[0-9a-fA-F]{7,64}$').hasMatch('${x['baseSha'] ?? ''}') &&
+            x['paths'] is List &&
+            (x['paths'] as List).isNotEmpty)
+          x,
+    ];
+
+List<Map<String, dynamic>> openPulls(Map<String, dynamic>? mark) {
+  final out = <Map<String, dynamic>>[];
+  for (final x in marksOf(mark)) {
+    final job = x['job'];
+    final jobNo = job is Map ? pullNumberOf(job['pull']) : 0;
+    for (final p in (x['prs'] as List?) ?? const []) {
+      if (p is! Map) continue;
+      final n = pullNumberOf(p);
+      final head = p['head'];
+      if (n == 0 || n == jobNo || head is! String || head.isEmpty) continue;
+      if (p['closed'] == true || p['merged'] == true) continue;
+      out.add({'repo': x['repo'], 'number': n, 'url': '${p['url'] ?? ''}', 'branch': head});
+    }
+  }
+  return out;
+}
+
+Map<String, dynamic> patchMarks(Map<String, dynamic> mark,
+    Map<String, dynamic> Function(Map<String, dynamic> x) fix) {
+  final out = {...fix(mark)};
+  if (mark['also'] is List) {
+    out['also'] = [
+      for (final x in mark['also'] as List)
+        if (x is Map) fix(x.cast<String, dynamic>()) else x,
+    ];
   }
   return out;
 }

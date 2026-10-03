@@ -2,6 +2,9 @@
     'use strict';
 
     const POLL_MS = 5000;
+    const ENDED_GRACE_MS = 60000;
+    const ENDED_KEEP_MS = 3600000;
+    const RESUME_MS = 60000;
     const HEX = /^[0-9a-f]{64}$/;
     const STEER_MAX = 2000;
     const STEER_KEEP_MS = 2 * 3600 * 1000;
@@ -25,13 +28,17 @@
     let polling = null;
     let checking = null;
     const followers = new Set();
+    const ended = new Map();
+    let settleTimer = null;
+    let lastPoll = 0;
+    let watching = false;
 
     function clip(v, max) {
         return String(v == null ? '' : v).replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
     }
 
     function clean(raw) {
-        if (!raw || typeof raw !== 'object' || !HEX.test(String(raw.replyTo || ''))) return null;
+        if (!raw || typeof raw !== 'object' || !HEX.test(String(raw.replyTo || '')) || raw.state === 'awaiting') return null;
         const plan = Chat() && Chat().planOf ? Chat().planOf(raw.plan) : null;
         return {
             replyTo: String(raw.replyTo),
@@ -70,6 +77,48 @@
     function others(ui) {
         const mine = localRunIds(ui);
         return remote.filter(r => !mine.has(r.replyTo));
+    }
+
+    function endedHere(r) {
+        const now = Date.now();
+        for (const [k, at] of [...ended]) if (now - at > ENDED_KEEP_MS) ended.delete(k);
+        const at = ended.get(r.replyTo);
+        if (!at) return false;
+        return r.state !== 'running' || now - at < ENDED_GRACE_MS;
+    }
+
+    function settled(turn) {
+        const id = turn && turn.runId;
+        if (!HEX.test(String(id || ''))) return;
+        ended.set(id, Date.now());
+        remote = remote.filter(r => r.replyTo !== id);
+    }
+
+    function reconcile(ui) {
+        if (!others(ui).length) {
+            clearTimeout(settleTimer);
+            settleTimer = null;
+            return;
+        }
+        if (settleTimer) return;
+        settleTimer = setTimeout(() => {
+            settleTimer = null;
+            if (document.visibilityState === 'hidden' || !others(ui).length) return;
+            poll(ui).catch(() => { });
+        }, api.RECONCILE_MS);
+    }
+
+    function resumed(ui) {
+        if (document.visibilityState === 'hidden') return;
+        if (!others(ui).length && Date.now() - lastPoll < RESUME_MS) return;
+        poll(ui).catch(() => { });
+    }
+
+    function watch(ui) {
+        if (watching) return;
+        watching = true;
+        document.addEventListener('visibilitychange', () => resumed(ui));
+        window.addEventListener('online', () => resumed(ui));
     }
 
     function entries(ui) {
@@ -116,6 +165,8 @@
         const Identity = window.NymbotIdentity;
         if (!Identity || !Identity.pubkey) return remote;
         if (polling) return polling;
+        watch(ui);
+        lastPoll = Date.now();
         polling = (async () => {
             let mine = null;
             try {
@@ -152,8 +203,9 @@
             const nym = mine != null ? mine : remote.filter(r => !r.anon);
             const anon = theirs != null ? theirs.map(r => Object.assign(r, { anon: true }))
                 : kept.filter(r => signer && r.thread === open.rootId);
-            remote = nym.concat(anon);
+            remote = nym.concat(anon).filter(r => !endedHere(r));
             render(ui);
+            reconcile(ui);
             checkSteers(ui).catch(() => { });
             return remote;
         })();
@@ -212,6 +264,7 @@
     }
 
     function render(ui) {
+        if (window.NymbotTranscripts) window.NymbotTranscripts.remote(ui, remote);
         renderCount(ui);
         if (window.NymbotTasks) window.NymbotTasks.refresh(ui);
         const sheet = $('modalRunning');
@@ -363,6 +416,7 @@
             res = { status: 0, data: {} };
         }
         if (res.status === 200 && res.data && res.data.ok) {
+            if (window.NymbotTranscripts) window.NymbotTranscripts.steered(runId, text, conv ? conv.id : null);
             if (typeof res.data.id === 'string' && res.data.id) {
                 steered.set(res.data.id, { text, convId: conv ? conv.id : null, runId, signer: signedBy, remote: !!far, at: Date.now() });
                 if (steered.size > 50) steered.delete(steered.keys().next().value);
@@ -424,8 +478,10 @@
         await deliver(ui, conv, runId, null, text, true);
     }
 
-    window.NymbotRuns = {
+    const api = {
+        RECONCILE_MS: 30000,
         poll,
+        settled,
         follow,
         forConv,
         entries,
@@ -441,4 +497,6 @@
         checkSteers,
         get remote() { return remote.slice(); }
     };
+
+    window.NymbotRuns = api;
 })();

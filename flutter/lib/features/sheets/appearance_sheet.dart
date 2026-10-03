@@ -7,6 +7,7 @@ import '../../app.dart';
 import '../../models/workspace.dart';
 import '../../services/backup.dart';
 import '../../services/git_review.dart';
+import '../../services/pr_watch.dart';
 import '../../services/share_file.dart';
 import '../../services/voice.dart';
 import '../background_settings.dart';
@@ -197,6 +198,63 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                 style: TextStyle(
                     fontSize: 11, color: Theme.of(context).hintColor),
               ),
+              if (s.replyNotify)
+                Padding(
+                  key: const ValueKey('notify-events'),
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      toggle(t('When a reply or task is done'), s.notify.done,
+                          (v) => s.notify.done = v),
+                      toggle(t('When it fails'), s.notify.failed,
+                          (v) => s.notify.failed = v),
+                      toggle(t('When it is waiting for me'), s.notify.waiting,
+                          (v) => s.notify.waiting = v),
+                      toggle(t('When it pauses'), s.notify.paused,
+                          (v) => s.notify.paused = v),
+                      toggle(t('When a scheduled prompt runs'),
+                          s.notify.schedule, (v) => s.notify.schedule = v),
+                      KeyedSubtree(
+                        key: const ValueKey('notify-pr'),
+                        child: toggle(
+                            t('When a pull request I watch fails CI, gets comments, or is merged or closed'),
+                            s.notify.pr,
+                            (v) => s.notify.pr = v),
+                      ),
+                      DropdownButtonFormField<int>(
+                        key: const ValueKey('notify-min'),
+                        isExpanded: true,
+                        initialValue: NotifyPrefs.minChoices
+                                .contains(s.notify.minSeconds)
+                            ? s.notify.minSeconds
+                            : 0,
+                        decoration: InputDecoration(
+                            labelText: t('Only for replies that take at least')),
+                        items: [
+                          DropdownMenuItem(value: 0, child: Text(t('Any time'))),
+                          DropdownMenuItem(
+                              value: 30, child: Text(t('30 seconds'))),
+                          DropdownMenuItem(
+                              value: 120, child: Text(t('2 minutes'))),
+                        ],
+                        onChanged: (v) {
+                          s.notify.minSeconds = v ?? 0;
+                          app.saveSettings(s);
+                        },
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        t('Anonymous chats only get notifications from this '
+                            'device. They never register with the push server, '
+                            'so nothing reaches you once the app has stopped '
+                            'running.'),
+                        style: TextStyle(
+                            fontSize: 11, color: Theme.of(context).hintColor),
+                      ),
+                    ],
+                  ),
+                ),
             ],
             VoicePicker(
               value: s.voiceUri,
@@ -300,6 +358,64 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
               t('A repository task with its own branch does this when it '
                   'finishes. Each repository can choose differently when you '
                   'edit it.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<bool>(
+              key: const ValueKey('pr-watch-default'),
+              initialValue: s.prWatch,
+              isExpanded: true,
+              decoration: InputDecoration(labelText: t('Pull requests a task opens')),
+              items: [
+                DropdownMenuItem(value: true, child: Text(t('Watch them'))),
+                DropdownMenuItem(value: false, child: Text(t("Don't watch them"))),
+              ],
+              onChanged: (v) {
+                s.prWatch = v ?? true;
+                app.saveSettings(s);
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t("A watched pull request posts to its chat when CI fails, a reviewer comments, or it is merged or closed, even while the app is closed. Nymbot's server keeps the repository token for it sealed for up to 7 days and only reads from the forge. Each repository can choose differently when you edit it."),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              key: const ValueKey('pr-fix-mode'),
+              initialValue: PrWatch.fixMode(s.prFix),
+              isExpanded: true,
+              decoration: InputDecoration(
+                  labelText: t('Offer a fix when CI fails or a reviewer comments')),
+              items: [
+                for (final mode in PrWatch.fixModes)
+                  DropdownMenuItem(value: mode, child: Text(PrWatch.fixLabel(mode))),
+              ],
+              onChanged: (v) {
+                s.prFix = PrWatch.fixMode(v);
+                app.saveSettings(s);
+              },
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<int>(
+              key: const ValueKey('pr-fix-cap'),
+              initialValue: PrWatch.capChoices.contains(s.prFixCap) ? s.prFixCap : PrWatch.capDefault,
+              isExpanded: true,
+              decoration: InputDecoration(labelText: t('Credits one fix run may spend')),
+              items: [
+                for (final n in PrWatch.capChoices)
+                  DropdownMenuItem(value: n, child: Text('$n')),
+              ],
+              onChanged: (v) {
+                s.prFixCap = v ?? PrWatch.capDefault;
+                app.saveSettings(s);
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              t("A fix run works on the pull request's branch with your plan setting, at most 3 times per pull request. What the forge reported is passed to it as data, never as instructions."),
               style: TextStyle(
                   fontSize: 11, color: Theme.of(context).hintColor),
             ),

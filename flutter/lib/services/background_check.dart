@@ -33,6 +33,7 @@ class BackgroundCheck {
         signer: identity.signer,
         store: store,
         pushed: pushed,
+        prefs: settings.notify,
         post: (n) => notify.reply(
           chat: n.chat,
           title: n.title,

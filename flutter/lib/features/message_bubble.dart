@@ -10,6 +10,7 @@ import '../models/model_maker.dart';
 import '../models/workspace.dart';
 import '../services/server_runs.dart';
 import '../services/git_review.dart';
+import '../services/pr_watch.dart';
 import 'artifact_screen.dart';
 import 'branch_chip.dart';
 import 'brand_tile.dart';
@@ -22,6 +23,10 @@ import 'media_viewer.dart';
 import 'motion.dart';
 import 'nym_avatar.dart';
 import 'nym_glyph.dart';
+import '../services/ask.dart';
+import 'ask_card.dart';
+import '../services/plan.dart';
+import 'plan_card.dart';
 import 'pending_tool_card.dart';
 import 'server_run_artifacts.dart';
 import 'staged_card.dart';
@@ -41,7 +46,9 @@ enum MessageAction {
   pin,
   remember,
   retry,
+  rewind,
   delete,
+  transcript,
 }
 
 class MessageBubble extends StatefulWidget {
@@ -63,9 +70,17 @@ class MessageBubble extends StatefulWidget {
     this.onOpenArtifact,
     this.onUndoCheckpoint,
     this.onBranchAction,
+    this.onClosePull,
+    this.prWatchOf,
+    this.onPrWatch,
+    this.onPrFix,
+    this.prFixCap = PrWatch.capDefault,
     this.onAllowTool,
     this.onDenyTool,
     this.onAlwaysAllowTool,
+    this.onAnswer,
+    this.onPlan,
+    this.onRevisePlan,
     this.onApplyStaged,
     this.onDiscardStaged,
     this.actionsOpen = false,
@@ -75,17 +90,27 @@ class MessageBubble extends StatefulWidget {
     this.onEditFollowUp,
     this.reveal,
     this.draft = false,
+    this.hasTranscript = false,
   });
 
   final int? reveal;
   final bool draft;
+  final bool hasTranscript;
 
   /// Null when a repo run has nothing to revert, which hides the undo.
   final Future<void> Function()? onUndoCheckpoint;
   final Future<void> Function(Map<String, dynamic> job, String op)? onBranchAction;
+  final Future<void> Function(Map<String, dynamic> pr)? onClosePull;
+  final ({bool on, Map<String, dynamic>? live})? Function(Map<String, dynamic> job)? prWatchOf;
+  final Future<void> Function(Map<String, dynamic> job)? onPrWatch;
+  final Future<void> Function()? onPrFix;
+  final int prFixCap;
   final VoidCallback? onAllowTool;
   final VoidCallback? onDenyTool;
   final VoidCallback? onAlwaysAllowTool;
+  final void Function(Map<String, dynamic> raw)? onAnswer;
+  final void Function(Map<String, dynamic> raw)? onPlan;
+  final void Function(String text)? onRevisePlan;
 
   final Future<void> Function()? onApplyStaged;
   final Future<void> Function()? onDiscardStaged;
@@ -437,6 +462,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             if (m.sources.isNotEmpty) _sources(context, m),
             if (m.checkpoint != null) _checkpoint(context, m),
+            if (m.role == ChatRole.bot && m.prWatch?['offer'] == true) _prFix(context, m),
             if (m.pendingTool != null)
               PendingToolCard(
                 pending: m.pendingTool!,
@@ -444,6 +470,10 @@ class _MessageBubbleState extends State<MessageBubble> {
                 onDeny: widget.onDenyTool,
                 onAlwaysAllow: widget.onAlwaysAllowTool,
               ),
+            if (m.ask != null && Ask.questionsOf(m.ask!['questions']).isNotEmpty)
+              AskCard(ask: m.ask!, onAnswer: widget.onAnswer),
+            if (m.proposal != null && Plan.itemsOf(m.proposal!['items']).isNotEmpty)
+              PlanCard(plan: m.proposal!, onDecide: widget.onPlan, onRevise: widget.onRevisePlan),
             if (m.serverRuns.isNotEmpty) _serverRunList(context, m),
             if (m.role == ChatRole.bot && m.team != null)
               TeamSummary(
@@ -712,104 +742,210 @@ class _MessageBubbleState extends State<MessageBubble> {
   Widget _checkpoint(BuildContext context, ChatMessage m) {
     final theme = Theme.of(context);
     final mark = m.checkpoint!;
-    final paths = (mark['paths'] as List?)?.cast<String>() ?? const <String>[];
-    final branches = (mark['branches'] as List?)?.cast<String>() ?? const <String>[];
-    final pulls = (mark['pulls'] as List?)?.length ?? 0;
-    final undone = mark['undone'] == true;
-    final undoable = mark['undoable'] == true && paths.isNotEmpty;
+    final marks = marksOf(mark);
+    List<String> pathsOf(Map<String, dynamic> x) =>
+        (x['paths'] as List?)?.whereType<String>().toList() ?? const <String>[];
+    final withPaths = marks.where((x) => pathsOf(x).isNotEmpty).toList();
+    final pending = withPaths.where((x) => x['undone'] != true).toList();
+    final undone = withPaths.isNotEmpty && pending.isEmpty;
+    final undo = undoMarks(mark);
+    final blocked = pending
+        .where((x) => !undo.any((u) => identical(u, x) || (u['repo'] == x['repo'] && u['branch'] == x['branch'])))
+        .toList();
     final jobs = jobsOf(mark);
-    final onlyJobs = jobs.isNotEmpty &&
-        paths.isEmpty &&
-        !((mark['also'] as List?) ?? const [])
-            .whereType<Map>()
-            .any((x) => ((x['paths'] as List?) ?? const []).isNotEmpty);
+    final pulls = openPulls(mark);
+    final onlyJobs = jobs.isNotEmpty && withPaths.isEmpty;
+    final hasBranchesOrPulls = marks.any((x) =>
+        ((x['branches'] as List?) ?? const []).isNotEmpty ||
+        ((x['pulls'] as List?) ?? const []).isNotEmpty);
+    final hint = TextStyle(fontSize: 11, color: theme.hintColor);
 
-    final bits = <String>[
-      if (paths.length == 1)
-        t('1 file changed')
-      else if (paths.isNotEmpty)
-        t('{n} files changed', {'n': paths.length}),
-      for (final b in branches) t('branch {name}', {'name': b}),
-      if (pulls == 1) t('1 pull request') else if (pulls > 1) t('{n} pull requests', {'n': pulls}),
-    ];
-
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-      decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(
-            color: undone ? theme.dividerColor : NymbotColors.lightning,
-            width: 2,
-          ),
-          top: BorderSide(color: theme.dividerColor),
-          right: BorderSide(color: theme.dividerColor),
-          bottom: BorderSide(color: theme.dividerColor),
-        ),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Opacity(
-        opacity: undone ? 0.7 : 1,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const NymGlyph('branch', size: 13),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    '${mark['repo']}${mark['branch'] == null ? '' : ' · ${mark['branch']}'}',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 11.5,
-                        fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
-                        color: theme.hintColor),
-                  ),
+    List<Widget> repoBlock(Map<String, dynamic> x) {
+      final paths = pathsOf(x);
+      final branches = (x['branches'] as List?)?.whereType<String>().toList() ?? const <String>[];
+      final prs = (x['pulls'] as List?)?.length ?? 0;
+      final bits = <String>[
+        if (paths.length == 1)
+          t('1 file changed')
+        else if (paths.isNotEmpty)
+          t('{n} files changed', {'n': paths.length}),
+        for (final b in branches) t('branch {name}', {'name': b}),
+        if (prs == 1) t('1 pull request') else if (prs > 1) t('{n} pull requests', {'n': prs}),
+      ];
+      return [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Row(
+            children: [
+              const NymGlyph('branch', size: 13),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  '${x['repo']}${x['branch'] == null ? '' : ' · ${x['branch']}'}',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 11.5,
+                      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
+                      color: theme.hintColor),
                 ),
+              ),
+            ],
+          ),
+        ),
+        if (bits.isNotEmpty) ...[
+          const SizedBox(height: 3),
+          Text(bits.join(' · '), style: const TextStyle(fontSize: 12.5)),
+        ],
+        if (paths.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(paths.join(', '),
+              style: TextStyle(
+                  fontSize: 11,
+                  fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
+                  color: theme.hintColor)),
+        ],
+        if (x['undone'] == true && marks.length > 1) Text(t('Put back.'), style: hint),
+      ];
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: undone ? theme.dividerColor : NymbotColors.lightning,
+                width: 2,
+              ),
+              top: BorderSide(color: theme.dividerColor),
+              right: BorderSide(color: theme.dividerColor),
+              bottom: BorderSide(color: theme.dividerColor),
+            ),
+          ),
+          child: Opacity(
+            opacity: undone ? 0.7 : 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final x in marks) ...repoBlock(x),
+                for (final job in jobs)
+                  BranchChip(job: job, watch: widget.prWatchOf?.call(job), onAction: widget.onBranchAction),
+                for (final pr in pulls) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Wrap(spacing: 6, runSpacing: 6, children: [
+                      OutlinedButton(
+                        key: ValueKey('pull-close-${pr['repo']}-${pr['number']}'),
+                        onPressed: widget.onClosePull == null ? null : () => widget.onClosePull!(pr),
+                        child: Text(t('Close PR #{n}', {'n': pr['number']}),
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                      ..._pullWatch(pr),
+                    ]),
+                  ),
+                  ..._pullLive(pr, hint),
+                ],
+                const SizedBox(height: 6),
+                if (onlyJobs)
+                  const SizedBox.shrink()
+                else if (undone)
+                  Text(t('Put back.'), style: hint)
+                else if (undo.isEmpty)
+                  Text(
+                    t('This one cannot be undone from here — no commit was '
+                        'recorded to read the old files back from.'),
+                    style: hint,
+                  )
+                else ...[
+                  OutlinedButton(
+                    key: const ValueKey('checkpoint-undo'),
+                    onPressed: widget.onUndoCheckpoint,
+                    child: Text(t('Undo these changes')),
+                  ),
+                  if (hasBranchesOrPulls) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      t('Files only. A branch or pull request it opened is left '
+                          'where it is.'),
+                      style: hint,
+                    ),
+                  ],
+                  for (final x in blocked) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      t('{repo} cannot be put back from here: no commit was recorded to read its old files back from.',
+                          {'repo': x['repo']}),
+                      style: hint,
+                    ),
+                  ],
+                ],
               ],
             ),
-            const SizedBox(height: 3),
-            Text(bits.join(' · '), style: const TextStyle(fontSize: 12.5)),
-            if (paths.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(paths.join(', '),
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
-                      color: theme.hintColor)),
-            ],
-            for (final job in jobs)
-              BranchChip(job: job, onAction: widget.onBranchAction),
-            const SizedBox(height: 6),
-            if (onlyJobs)
-              const SizedBox.shrink()
-            else if (undone)
-              Text(t('Put back.'),
-                  style: TextStyle(fontSize: 11, color: theme.hintColor))
-            else if (!undoable)
-              // Explains why instead of showing a button that cannot work.
-              Text(
-                t('This one cannot be undone from here — no commit was '
-                    'recorded to read the old files back from.'),
-                style: TextStyle(fontSize: 11, color: theme.hintColor),
-              )
-            else ...[
-              OutlinedButton(
-                onPressed: widget.onUndoCheckpoint,
-                child: Text(t('Undo these changes')),
-              ),
-              if (branches.isNotEmpty || pulls > 0) ...[
-                const SizedBox(height: 4),
-                Text(
-                  t('Files only. A branch or pull request it opened is left '
-                      'where it is.'),
-                  style: TextStyle(fontSize: 11, color: theme.hintColor),
-                ),
-              ],
-            ],
-          ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Map<String, dynamic> _pullJob(Map<String, dynamic> pr) => {
+        'repo': pr['repo'],
+        'branch': pr['branch'],
+        'pull': {'number': pr['number'], 'url': pr['url']},
+      };
+
+  List<Widget> _pullWatch(Map<String, dynamic> pr) {
+    final job = _pullJob(pr);
+    final watch = widget.prWatchOf?.call(job);
+    if (watch == null) return const [];
+    return [
+      Semantics(
+        toggled: watch.on,
+        child: OutlinedButton(
+          key: ValueKey('pull-watch-${pr['repo']}-${pr['number']}'),
+          onPressed: widget.onPrWatch == null ? null : () => widget.onPrWatch!(job),
+          child: Text(
+              watch.on
+                  ? t('Stop watching PR #{n}', {'n': pr['number']})
+                  : t('Watch PR #{n}', {'n': pr['number']}),
+              style: const TextStyle(fontSize: 12)),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _pullLive(Map<String, dynamic> pr, TextStyle hint) {
+    final watch = widget.prWatchOf?.call(_pullJob(pr));
+    final live = watch == null ? '' : PrWatch.liveText(watch.live);
+    if (live.isEmpty) return const [];
+    return [Text('#${pr['number']} · $live', style: hint)];
+  }
+
+  Widget _prFix(BuildContext context, ChatMessage m) {
+    final w = m.prWatch!;
+    final hint = TextStyle(fontSize: 11, color: Theme.of(context).hintColor);
+    if (w['fixed'] == true) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(t('A fix run was requested.'), style: hint),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          FilledButton(
+            key: ValueKey('pr-fix-${m.id}'),
+            onPressed: widget.onPrFix == null ? null : () => widget.onPrFix!(),
+            child: Text(t('Fix'), style: const TextStyle(fontSize: 12)),
+          ),
+          Text(PrWatch.fixHint('${w['branch'] ?? ''}', widget.prFixCap), style: hint),
+        ],
       ),
     );
   }
@@ -855,6 +991,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           MessageAction.speak, on: widget.speaking);
       add('branch', t('Branch from here'), MessageAction.fork);
       add('quote', t('Quote'), MessageAction.quote);
+      if (widget.hasTranscript) add('tasks', t('Transcript'), MessageAction.transcript);
       add('thumbUp', t('Good reply'), MessageAction.rateUp,
           on: m.rating == 1, solid: m.rating == 1);
       add('thumbDown', t('Poor reply'), MessageAction.rateDown,
@@ -869,6 +1006,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           on: m.pinned, solid: m.pinned);
       add('memory', t('Remember this'), MessageAction.remember);
     }
+    if (!m.support) add('rewind', t('Rewind to here'), MessageAction.rewind);
     buttons.add(const SizedBox(width: 16));
     add('close', t('Delete'), MessageAction.delete);
 

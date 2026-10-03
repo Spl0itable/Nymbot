@@ -2,6 +2,7 @@ const DRIVER_LEASE_MS = 10 * 60 * 1000;
 const DRIVER_BACKOFF_MS = [30000, 120000, 600000];
 const DRIVER_POLL_MS = 30000;
 const DRIVER_MAX_MS = 6 * 3600 * 1000;
+const DRIVER_WAIT_MS = 24 * 3600 * 1000;
 const DRIVER_CALL_MS = 11 * 60 * 1000;
 const DRIVER_SCHED_MAX = 10;
 const DRIVER_SCHED_RETRY_MS = 5 * 60 * 1000;
@@ -10,7 +11,14 @@ const DRIVER_SWEEP_BATCH = 500;
 const DRIVER_FATAL = { 400: true, 401: true, 403: true, 404: true, 409: true, 410: true, 413: true };
 const DRIVER_QUEUE_RETRY_S = 30;
 const DRIVER_END_TRIES = 3;
-const DRIVER_KINDS = { leg: true, end: true, sched: true };
+const DRIVER_KINDS = { leg: true, end: true, sched: true, watch: true };
+const DRIVER_WATCH_MAX = 5;
+const DRIVER_WATCH_MS = 7 * 86400000 + 3600000;
+const DRIVER_WATCH_KEEP_MS = 3 * 86400000;
+const DRIVER_WATCH_MIN_MS = 30000;
+const DRIVER_WATCH_GAP_MS = 6 * 3600000;
+const DRIVER_WATCH_BACKOFF_MS = [30000, 120000, 600000, 1800000, 3600000];
+const DRIVER_WATCH_BLOB_MAX = 256 * 1024;
 
 function driverHex(bytes) {
   const b = new Uint8Array(bytes);
@@ -172,15 +180,25 @@ export class NymRunDriver {
     );
     this.sql.exec("CREATE TABLE IF NOT EXISTS idx (pubkey TEXT PRIMARY KEY, at INTEGER NOT NULL)");
     this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS ends (run_id TEXT PRIMARY KEY, blob TEXT NOT NULL, tok TEXT NOT NULL DEFAULT '', " +
-      "claim INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, tries INTEGER NOT NULL DEFAULT 0)"
+      "CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, blob TEXT NOT NULL, next_at INTEGER NOT NULL, until_at INTEGER NOT NULL, " +
+      "lease_until INTEGER NOT NULL DEFAULT 0, tries INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'active', " +
+      "tok TEXT NOT NULL DEFAULT '', claim INTEGER NOT NULL DEFAULT 0, leg TEXT NOT NULL DEFAULT '', poke TEXT NOT NULL DEFAULT '', " +
+      "created_at INTEGER NOT NULL DEFAULT 0)"
     );
-    if (this.metaGet("schema") !== "2") {
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS ends (run_id TEXT PRIMARY KEY, blob TEXT NOT NULL, tok TEXT NOT NULL DEFAULT '', " +
+      "claim INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, tries INTEGER NOT NULL DEFAULT 0, why TEXT NOT NULL DEFAULT '')"
+    );
+    if (this.metaGet("schema") !== "2" && this.metaGet("schema") !== "3") {
       for (const t of ["runs", "scheds"]) {
         try { this.sql.exec("ALTER TABLE " + t + " ADD COLUMN tok TEXT NOT NULL DEFAULT ''"); } catch (e) { }
         try { this.sql.exec("ALTER TABLE " + t + " ADD COLUMN claim INTEGER NOT NULL DEFAULT 0"); } catch (e) { }
       }
       this.metaSet("schema", "2");
+    }
+    if (this.metaGet("schema") !== "3") {
+      try { this.sql.exec("ALTER TABLE ends ADD COLUMN why TEXT NOT NULL DEFAULT ''"); } catch (e) { }
+      this.metaSet("schema", "3");
     }
     this.ready = true;
   }
@@ -216,15 +234,21 @@ export class NymRunDriver {
     if (!pk) return this.reply({ error: "bad pubkey" }, 400);
     const known = this.metaGet("pubkey");
     if (known && known !== pk) return this.reply({ error: "wrong object" }, 400);
-    if (!known && (op === "run-put" || op === "sched-put")) this.metaSet("pubkey", pk);
+    if (!known && (op === "run-put" || op === "sched-put" || op === "watch-put")) this.metaSet("pubkey", pk);
     switch (op) {
       case "run-put": return this.reply(await this.runPut(body));
       case "run-cancel": return this.reply(await this.runCancel(body));
       case "run-list": return this.reply(this.runList());
+      case "run-peek": return this.reply(this.runPeek(body));
+      case "run-answer": return this.reply(await this.runAnswer(body));
       case "sched-put": return this.reply(await this.schedPut(body));
       case "sched-delete": return this.reply(await this.schedDelete(body));
       case "sched-clear": return this.reply(await this.schedClear());
       case "sched-list": return this.reply(this.schedList());
+      case "watch-put": return this.reply(await this.watchPut(body));
+      case "watch-stop": return this.reply(await this.watchStop(body));
+      case "watch-list": return this.reply(this.watchList());
+      case "watch-poke": return this.reply(await this.watchPoke(body));
       case "clear": return this.reply(await this.clearAll());
       case "sweep": return this.reply(await this.sweep());
       case "claim": return this.reply(this.claim(body));
@@ -284,7 +308,8 @@ export class NymRunDriver {
     const a = this.rows("SELECT COUNT(*) AS n FROM runs")[0].n;
     const b = this.rows("SELECT COUNT(*) AS n FROM scheds")[0].n;
     const c = this.rows("SELECT COUNT(*) AS n FROM ends")[0].n;
-    return Number(a) + Number(b) + Number(c) === 0;
+    const d = this.rows("SELECT COUNT(*) AS n FROM watches")[0].n;
+    return Number(a) + Number(b) + Number(c) + Number(d) === 0;
   }
 
   async arm() {
@@ -300,6 +325,10 @@ export class NymRunDriver {
     if (e && e.t != null) cands.push(Number(e.t));
     const f = this.rows("SELECT MIN(lease_until) AS t FROM ends")[0];
     if (f && f.t != null) cands.push(Number(f.t));
+    const w = this.rows(
+      "SELECT MIN(CASE WHEN state = 'leased' THEN lease_until WHEN state = 'stopped' THEN until_at ELSE next_at END) AS t FROM watches"
+    )[0];
+    if (w && w.t != null) cands.push(Number(w.t));
     if (!cands.length) {
       await this.ctx.storage.deleteAlarm();
       return null;
@@ -333,6 +362,27 @@ export class NymRunDriver {
     this.sql.exec("DELETE FROM runs WHERE run_id = ?", String(b.runId || ""));
     await this.arm();
     return { ok: true, had: had > 0 };
+  }
+
+  runPeek(b) {
+    const r = this.rows("SELECT blob, state, tok, next_at FROM runs WHERE run_id = ?", String(b.runId || ""))[0];
+    if (!r || r.state !== "waiting" || Number(r.next_at) <= this.now()) return { waiting: false };
+    return { waiting: true, blob: r.blob, tok: r.tok, until: Number(r.next_at) };
+  }
+
+  async runAnswer(b) {
+    const id = String(b.runId || "");
+    if (typeof b.tok !== "string" || !b.tok || typeof b.blob !== "string" || !b.blob || b.blob.length > 1024 * 1024) return { ok: false };
+    const now = this.now();
+    const r = this.rows("SELECT state, tok, next_at FROM runs WHERE run_id = ?", id)[0];
+    if (!r || r.state !== "waiting" || r.tok !== b.tok || Number(r.next_at) <= now) return { ok: false };
+    const until = Math.min(driverNum(b.until, now + DRIVER_MAX_MS), now + DRIVER_MAX_MS);
+    this.sql.exec(
+      "UPDATE runs SET blob = ?, state = 'queued', next_at = ?, until_at = ?, created_at = ?, lease_until = 0, tries = 0, tok = '', claim = 0 WHERE run_id = ? AND state = 'waiting'",
+      b.blob, now, until, now, id
+    );
+    await this.arm();
+    return { ok: true, until: until };
   }
 
   runList() {
@@ -397,9 +447,62 @@ export class NymRunDriver {
     return { ok: true, deleted: n };
   }
 
+  async watchPut(b) {
+    const id = typeof b.id === "string" && /^[0-9a-f]{32}$/.test(b.id) ? b.id : "";
+    if (!id) return { ok: false, error: "bad id" };
+    if (typeof b.blob !== "string" || !b.blob || b.blob.length > DRIVER_WATCH_BLOB_MAX) return { ok: false, error: "bad blob" };
+    const now = this.now();
+    const had = this.rows("SELECT state FROM watches WHERE id = ?", id)[0];
+    const live = Number(this.rows("SELECT COUNT(*) AS n FROM watches WHERE state != 'stopped' AND id != ?", id)[0].n);
+    if (live >= DRIVER_WATCH_MAX) return { ok: false, limit: DRIVER_WATCH_MAX };
+    const until = Math.min(Math.floor(driverNum(b.until, now + DRIVER_WATCH_MS)), now + DRIVER_WATCH_MS);
+    if (until <= now) return { ok: false, error: "expired" };
+    const at = Math.max(now, Math.min(Math.floor(driverNum(b.at, now)), until));
+    this.sql.exec(
+      "INSERT INTO watches (id, blob, next_at, until_at, lease_until, tries, state, tok, claim, leg, poke, created_at) " +
+      "VALUES (?, ?, ?, ?, 0, 0, 'active', '', 0, '', '', ?) " +
+      "ON CONFLICT(id) DO UPDATE SET blob = excluded.blob, next_at = excluded.next_at, until_at = excluded.until_at, " +
+      "lease_until = 0, tries = 0, state = 'active', tok = '', claim = 0, leg = '', poke = ''",
+      id, b.blob, at, until, now
+    );
+    await this.indexed(true);
+    await this.arm();
+    return { ok: true, id: id, at: at, until: until, renewed: !!had };
+  }
+
+  async watchStop(b) {
+    const id = String(b.id || "");
+    const n = this.rows("SELECT id FROM watches WHERE id = ?", id).length;
+    this.sql.exec("DELETE FROM watches WHERE id = ?", id);
+    await this.settle();
+    return { ok: true, deleted: n };
+  }
+
+  watchList() {
+    return {
+      watches: this.rows("SELECT id, blob, state, next_at, until_at, tries FROM watches ORDER BY created_at").map((r) => ({
+        id: r.id, blob: r.blob, state: r.state, next_at: Number(r.next_at), until_at: Number(r.until_at), tries: Number(r.tries)
+      }))
+    };
+  }
+
+  async watchPoke(b) {
+    const id = String(b.id || "");
+    const seq = /^[0-9]{1,9}$/.test(String(b.seq == null ? "" : b.seq)) ? String(b.seq) : "";
+    if (!seq) return { ok: false };
+    const r = this.rows("SELECT state FROM watches WHERE id = ?", id)[0];
+    if (!r || r.state === "stopped") return { ok: false, gone: true };
+    const now = this.now();
+    if (r.state === "leased") this.sql.exec("UPDATE watches SET poke = ? WHERE id = ?", seq, id);
+    else this.sql.exec("UPDATE watches SET poke = ?, next_at = ? WHERE id = ?", seq, now, id);
+    await this.arm();
+    return { ok: true };
+  }
+
   async clearAll() {
     const runs = Number(this.rows("SELECT COUNT(*) AS n FROM runs")[0].n);
     const scheds = Number(this.rows("SELECT COUNT(*) AS n FROM scheds")[0].n);
+    this.sql.exec("DELETE FROM watches");
     this.sql.exec("DELETE FROM runs");
     this.sql.exec("DELETE FROM scheds");
     this.sql.exec("DELETE FROM ends");
@@ -411,11 +514,14 @@ export class NymRunDriver {
 
   async sweep() {
     const now = this.now();
-    const old = this.rows("SELECT run_id, blob, leg FROM runs WHERE until_at + 60000 < ? OR created_at + ? < ?", now, DRIVER_MAX_MS + 60000, now);
-    for (const r of old) await this.endRun(r.run_id, r.blob, now);
+    const old = this.rows("SELECT run_id, blob, leg, state FROM runs WHERE until_at + 60000 < ? OR (state != 'waiting' AND created_at + ? < ?)", now, DRIVER_MAX_MS + 60000, now);
+    for (const r of old) await this.endRun(r.run_id, r.blob, now, r.state === "waiting" ? "expired" : "");
     const gone = this.rows("SELECT id FROM scheds WHERE expires_at <= ?", now).length;
     this.sql.exec("DELETE FROM scheds WHERE expires_at <= ?", now);
     this.sql.exec("UPDATE runs SET state = 'queued', next_at = ?, tok = '', claim = 0 WHERE state = 'leased' AND lease_until + ? < ?", now, DRIVER_LEASE_MS, now);
+    const lapsedWatches = this.rows("SELECT id FROM watches WHERE (state = 'stopped' AND until_at <= ?) OR until_at + ? < ?", now, DRIVER_WATCH_KEEP_MS, now).length;
+    this.sql.exec("DELETE FROM watches WHERE (state = 'stopped' AND until_at <= ?) OR until_at + ? < ?", now, DRIVER_WATCH_KEEP_MS, now);
+    this.sql.exec("UPDATE watches SET state = 'active', next_at = ?, tok = '', claim = 0, lease_until = 0 WHERE state = 'leased' AND lease_until + ? < ?", now, DRIVER_LEASE_MS, now);
     const empty = this.empty();
     if (empty) {
       await this.ctx.storage.deleteAlarm();
@@ -423,7 +529,7 @@ export class NymRunDriver {
     } else {
       await this.arm();
     }
-    return { ok: true, killed: old.length, expired: gone, empty: empty };
+    return { ok: true, killed: old.length, expired: gone, watches: lapsedWatches, empty: empty };
   }
 
   async enqueue(kind, id, leg, tok) {
@@ -452,6 +558,8 @@ export class NymRunDriver {
     const now = this.now();
     const expired = this.rows("SELECT run_id FROM runs WHERE until_at + 60000 < ?", now);
     if (expired.length) await this.sweep();
+    const lapsed = this.rows("SELECT run_id, blob FROM runs WHERE state = 'waiting' AND next_at <= ?", now);
+    for (const r of lapsed) await this.endRun(r.run_id, r.blob, now, "expired");
     const due = this.rows(
       "SELECT run_id, blob, leg, state, lease_until, tries FROM runs WHERE (state IN ('queued', 'polling') AND next_at <= ?) " +
       "OR (state = 'leased' AND lease_until <= ?)", now, now
@@ -464,7 +572,34 @@ export class NymRunDriver {
       "(next_at <= ? OR expires_at <= ?) AND lease_until <= ?", now, now, now
     );
     for (const s of scheds) await this.dispatchSched(s, now);
+    this.sql.exec("DELETE FROM watches WHERE state = 'stopped' AND until_at <= ?", now);
+    const watches = this.rows(
+      "SELECT id, next_at, lease_until, tries, state FROM watches WHERE (state = 'active' AND next_at <= ?) OR (state = 'leased' AND lease_until <= ?)", now, now
+    );
+    for (const w of watches) await this.dispatchWatch(w, now);
     await this.settle();
+  }
+
+  watchRetry(w, now) {
+    const tries = Number(w.tries) + 1;
+    if (tries > DRIVER_WATCH_BACKOFF_MS.length) {
+      this.sql.exec("DELETE FROM watches WHERE id = ?", w.id);
+      return { dead: true };
+    }
+    const wait = DRIVER_WATCH_BACKOFF_MS[tries - 1];
+    this.sql.exec("UPDATE watches SET state = 'active', tries = ?, next_at = ?, lease_until = 0, tok = '', claim = 0 WHERE id = ?", tries, now + wait, w.id);
+    return { dead: false, wait: wait };
+  }
+
+  async dispatchWatch(w, now) {
+    if (w.state === "leased") {
+      this.watchRetry(w, now);
+      return;
+    }
+    const tok = driverTok();
+    const leg = "p:" + String(now);
+    this.sql.exec("UPDATE watches SET state = 'leased', lease_until = ?, tok = ?, claim = 0, leg = ? WHERE id = ?", now + DRIVER_LEASE_MS, tok, leg, w.id);
+    if (!(await this.enqueue("watch", w.id, leg, tok))) this.watchRetry(w, now);
   }
 
   failRun(r, now) {
@@ -479,13 +614,13 @@ export class NymRunDriver {
     if (this.failRun(r, now).dead) await this.endRun(r.run_id, r.blob, now);
   }
 
-  async endRun(runId, blob, now) {
+  async endRun(runId, blob, now, why) {
     this.sql.exec("DELETE FROM runs WHERE run_id = ?", runId);
     const tok = driverTok();
     this.sql.exec(
-      "INSERT INTO ends (run_id, blob, tok, claim, lease_until, tries) VALUES (?, ?, ?, 0, ?, 0) " +
-      "ON CONFLICT(run_id) DO UPDATE SET blob = excluded.blob, tok = excluded.tok, claim = 0, lease_until = excluded.lease_until, tries = 0",
-      runId, blob, tok, now + DRIVER_LEASE_MS
+      "INSERT INTO ends (run_id, blob, tok, claim, lease_until, tries, why) VALUES (?, ?, ?, 0, ?, 0, ?) " +
+      "ON CONFLICT(run_id) DO UPDATE SET blob = excluded.blob, tok = excluded.tok, claim = 0, lease_until = excluded.lease_until, tries = 0, why = excluded.why",
+      runId, blob, tok, now + DRIVER_LEASE_MS, why || ""
     );
     if (!(await this.enqueue("end", runId, "end", tok))) {
       this.sql.exec("UPDATE ends SET lease_until = ? WHERE run_id = ?", now + DRIVER_BACKOFF_MS[0], runId);
@@ -543,10 +678,18 @@ export class NymRunDriver {
       return { go: true, action: "pm-bgleg", runId: r.run_id, leg: String(r.leg), extra: { blob: r.blob } };
     }
     if (b.kind === "end") {
-      const e = this.rows("SELECT run_id, blob, tok, claim FROM ends WHERE run_id = ?", id)[0];
+      const e = this.rows("SELECT run_id, blob, tok, claim, why FROM ends WHERE run_id = ?", id)[0];
       if (!e || e.tok !== tok || Number(e.claim)) return { go: false };
       this.sql.exec("UPDATE ends SET claim = 1 WHERE run_id = ?", id);
-      return { go: true, action: "pm-bgend", runId: e.run_id, leg: "end", extra: { blob: e.blob, state: "failed" } };
+      return { go: true, action: "pm-bgend", runId: e.run_id, leg: "end", extra: { blob: e.blob, state: e.why === "expired" ? "expired" : "failed" } };
+    }
+    if (b.kind === "watch") {
+      const w = this.rows("SELECT id, blob, state, lease_until, tok, claim, leg, poke FROM watches WHERE id = ?", id)[0];
+      if (!w || w.tok !== tok || Number(w.claim) || w.state !== "leased" || String(w.leg) !== String(b.leg) || Number(w.lease_until) <= now) {
+        return { go: false };
+      }
+      this.sql.exec("UPDATE watches SET claim = 1, poke = '' WHERE id = ?", id);
+      return { go: true, action: "pm-prwatch", runId: "w:" + w.id, leg: String(w.leg), extra: { blob: w.blob, poke: w.poke || "" } };
     }
     if (b.kind !== "sched") return { go: false };
     const s = this.rows("SELECT id, mode, blob, next_at, expires_at, enabled, fails, day, runs_day, lease_until, tok, claim FROM scheds WHERE id = ?", id)[0];
@@ -584,6 +727,9 @@ export class NymRunDriver {
         this.sql.exec("DELETE FROM ends WHERE run_id = ?", id);
         res = { ok: true };
       }
+    } else if (tok && b.kind === "watch") {
+      const w = this.rows("SELECT id, tries, tok, claim, state FROM watches WHERE id = ?", id)[0];
+      if (w && w.tok === tok && Number(w.claim)) res = this.reportWatch(w, out, now);
     } else if (tok && b.kind === "sched") {
       const s = this.rows("SELECT id, mode, next_at, step, expires_at, fails, retry, day, runs_day, tok, claim FROM scheds WHERE id = ?", id)[0];
       if (s && s.tok === tok && Number(s.claim)) {
@@ -598,6 +744,14 @@ export class NymRunDriver {
 
   async reportLeg(r, out, now) {
     const d = out.data || {};
+    if (out.status === 200 && d.wait && typeof d.wait.blob === "string" && d.wait.blob.length <= 1024 * 1024) {
+      const until = Math.min(Math.max(now, driverNum(d.wait.until, now)), now + driverNum(this.env.DRIVER_WAIT_MS, DRIVER_WAIT_MS));
+      this.sql.exec(
+        "UPDATE runs SET blob = ?, leg = leg + 1, state = 'waiting', next_at = ?, until_at = ?, lease_until = 0, tries = 0, tok = ?, claim = 0 WHERE run_id = ?",
+        d.wait.blob, until, until, driverTok(), r.run_id
+      );
+      return { ok: true };
+    }
     if (out.status === 200 && d.next && typeof d.next.blob === "string") {
       this.sql.exec(
         "UPDATE runs SET blob = ?, leg = leg + 1, state = 'queued', next_at = ?, lease_until = 0, tries = 0, tok = '', claim = 0 WHERE run_id = ?",
@@ -631,6 +785,35 @@ export class NymRunDriver {
     this.sql.exec("UPDATE runs SET state = 'leased', tries = ?, next_at = ?, lease_until = ?, claim = 0 WHERE run_id = ?",
       tries, now + wait, now + wait + DRIVER_LEASE_MS, r.run_id);
     return { ok: true, retry: Math.ceil(wait / 1000) };
+  }
+
+  reportWatch(w, out, now) {
+    const d = out.data || {};
+    if (out.status === 200 && d.next && typeof d.next.blob === "string" && d.next.blob && d.next.blob.length <= DRIVER_WATCH_BLOB_MAX) {
+      const at = Math.min(Math.max(now + driverNum(this.env.DRIVER_WATCH_MIN_MS, DRIVER_WATCH_MIN_MS), Math.floor(driverNum(d.next.at, now))), now + DRIVER_WATCH_GAP_MS);
+      this.sql.exec(
+        "UPDATE watches SET blob = ?, state = 'active', next_at = ?, lease_until = 0, tries = 0, tok = '', claim = 0 WHERE id = ?",
+        d.next.blob, at, w.id
+      );
+      return { ok: true };
+    }
+    if (out.status === 200 && d.stop) {
+      if (typeof d.stop.blob === "string" && d.stop.blob && d.stop.blob.length <= DRIVER_WATCH_BLOB_MAX) {
+        this.sql.exec(
+          "UPDATE watches SET blob = ?, state = 'stopped', next_at = 0, until_at = ?, lease_until = 0, tries = 0, tok = '', claim = 0 WHERE id = ?",
+          d.stop.blob, now + DRIVER_WATCH_KEEP_MS, w.id
+        );
+      } else {
+        this.sql.exec("DELETE FROM watches WHERE id = ?", w.id);
+      }
+      return { ok: true };
+    }
+    if (DRIVER_FATAL[out.status] && d.fatal) {
+      this.sql.exec("DELETE FROM watches WHERE id = ?", w.id);
+      return { ok: true };
+    }
+    this.watchRetry(w, now);
+    return { ok: true };
   }
 
   schedAdvance(s, now, patch) {

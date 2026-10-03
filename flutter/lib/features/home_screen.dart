@@ -21,6 +21,7 @@ import '../services/dev_contact.dart';
 import '../services/dictation.dart';
 import '../services/gifts.dart';
 import '../services/git_review.dart';
+import '../services/pr_watch.dart';
 import '../services/incoming.dart';
 import '../services/mentions.dart';
 import '../services/picture_edit.dart';
@@ -28,8 +29,10 @@ import '../services/spend_caps.dart';
 import '../services/transcript.dart';
 import '../services/voice.dart';
 import '../state/app_controller.dart';
+import '../state/transcript_book.dart';
 import 'artifact_screen.dart';
 import 'tasks_pane.dart';
+import 'transcript_sheet.dart';
 import 'caps_sheet.dart';
 import 'conv_badge.dart';
 import 'code_frame.dart';
@@ -48,6 +51,7 @@ import 'share_target_sheet.dart';
 import 'shared_chat_screen.dart';
 import 'sticky_avatar.dart';
 import '../services/research.dart';
+import '../services/rewind.dart';
 import 'run_output.dart';
 import 'sheets/help_sheet.dart';
 import 'sheets/schedules_sheet.dart';
@@ -76,7 +80,10 @@ import 'sheets/memory_sheet.dart';
 import 'sheets/models_sheet.dart';
 import 'sheets/personas_sheet.dart';
 import 'sheets/prompts_sheet.dart';
+import 'sheets/skills_sheet.dart';
+import '../services/skills.dart';
 import 'sheets/repos_sheet.dart';
+import 'rewind_dialog.dart';
 import 'toolbar.dart';
 import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
@@ -809,6 +816,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         await showSystemPromptSheet(context);
         return true;
+      case 'skills':
+        final run = await showSkillsSheet(context, filter: arg);
+        if (run != null) {
+          _input.setMarkdown(run);
+          setState(() => _suggestTerm = '');
+        }
+        return true;
       case 'prompt':
         final picked = await showPromptsSheet(context, filter: arg);
         if (picked != null) {
@@ -1386,6 +1400,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case MessageAction.copy:
         await Clipboard.setData(ClipboardData(text: m.content));
         _say(t('Copied.'));
+      case MessageAction.transcript:
+        final conv = app.current;
+        final tx = app.transcriptFor(m);
+        if (conv != null && tx != null) {
+          await showTranscriptSheet(context,
+              convId: conv.id, id: tx.id, remote: tx.id == tx.run && tx.end == null);
+        }
       case MessageAction.speak:
         await _voice.toggleSpeak(m.id, m.content,
             rate: app.settings.speechRate,
@@ -1434,6 +1455,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final again = m.retry;
         await app.deleteMessage(m);
         if (again != null) await _send(again);
+      case MessageAction.rewind:
+        await _rewind(m);
       case MessageAction.delete:
         final before = await app.deleteMessage(m);
         if (before != null) {
@@ -1442,21 +1465,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _rewind(ChatMessage m) async {
+    final app = AppScope.read(context);
+    final wait = t('Wait for the reply to finish, or stop it, before rewinding this chat.');
+    if (app.sendingIn(app.current)) {
+      _say(wait);
+      return;
+    }
+    final dropped = Rewind.after(app.messages, m.id);
+    if (dropped.isEmpty) {
+      _say(t('Nothing comes after this message.'));
+      return;
+    }
+    final items = Rewind.effects(dropped);
+    final picked = await showDialog<Set<String>>(
+      context: context,
+      builder: (_) => RewindDialog(count: dropped.length, items: items),
+    );
+    if (picked == null || !mounted) return;
+    final done = await app.rewindTo(m, picked);
+    if (!mounted) return;
+    if (done == null) {
+      _say(wait);
+      return;
+    }
+    final failed = done.results.where((r) => !r.ok && !r.gone).toList();
+    final text = failed.isNotEmpty
+        ? t('Rewound, but {n} of the changes could not be undone: {why}', {
+            'n': failed.length,
+            'why': failed
+                .map((r) => r.error.isNotEmpty
+                    ? r.error
+                    : t('the forge could not be reached'))
+                .join('; '),
+          })
+        : done.results.isNotEmpty
+            ? t('Rewound and undid {n} changes.', {'n': done.results.length})
+            : t('Rewound. {n} messages removed.', {'n': done.ids.length});
+    ScaffoldMessenger.of(context).clearSnackBars();
+    final bar = ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text),
+      duration: const Duration(seconds: 8),
+      persist: false,
+      action: SnackBarAction(
+          label: t('Undo'), onPressed: () => app.restore(done.snapshot)),
+    ));
+    unawaited(bar.closed.then((why) {
+      if (why != SnackBarClosedReason.action) return app.commitRewind(done);
+    }));
+  }
+
   /// Reverting a repo run writes to someone's repository, so it is confirmed first.
   Future<void> _undo(ChatMessage m) async {
     final app = AppScope.read(context);
-    final mark = m.checkpoint;
-    if (mark == null) return;
-    final paths = (mark['paths'] as List?)?.length ?? 0;
+    final marks = undoMarks(m.checkpoint);
+    if (marks.isEmpty) return;
+    final paths = marks.fold<int>(0, (n, x) => n + ((x['paths'] as List?)?.length ?? 0));
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(t('Undo these changes')),
-        content: Text(t(
-            'Put {n} file(s) back to how they were before this reply, on '
-            '{branch}? This commits them as they were — nothing is erased from '
-            'the history.',
-            {'n': paths, 'branch': mark['branch'] ?? ''})),
+        content: Text(marks.length == 1
+            ? t('Put {n} file(s) back to how they were before this reply, on '
+                '{branch}? This commits them as they were — nothing is erased from '
+                'the history.',
+                {'n': paths, 'branch': marks.single['branch'] ?? ''})
+            : t('Put {n} file(s) in {repos} repositories back to how they were before this reply? Each repository gets a commit with them as they were — nothing is erased from the history.',
+                {'n': paths, 'repos': marks.length})),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -1471,15 +1546,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
     if (go != true) return;
     try {
-      final data = await app.revertCheckpoint(m);
-      final done = ((data['restored'] as List?)?.length ?? 0) +
-          ((data['deleted'] as List?)?.length ?? 0);
-      final failed = (data['failed'] as List?)?.length ?? 0;
-      _say(failed > 0
-          ? t('Put {done} back; {failed} could not be. Check the repository.',
-              {'done': done, 'failed': failed})
-          : t('Put back: {n} file(s) are as they were before that reply.',
-              {'n': done}));
+      final rows = await app.revertCheckpoint(m);
+      String said(Map<String, dynamic> r) {
+        if (r['error'] != null) return '${r['error']}';
+        final done = ((r['restored'] as List?)?.length ?? 0) +
+            ((r['deleted'] as List?)?.length ?? 0);
+        final failed = (r['failed'] as List?)?.length ?? 0;
+        return failed > 0
+            ? t('Put {done} back; {failed} could not be. Check the repository.',
+                {'done': done, 'failed': failed})
+            : t('Put back: {n} file(s) are as they were before that reply.',
+                {'n': done});
+      }
+
+      _say(rows.length == 1
+          ? said(rows.single)
+          : rows.map((r) => '${r['repo']}: ${said(r)}').join('\n'));
     } on ChatFailure catch (e) {
       _say(e.message);
     } catch (_) {
@@ -1487,28 +1569,88 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _closePull(ChatMessage m, Map<String, dynamic> pr) async {
+    final app = AppScope.read(context);
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('Close pull request')),
+        content: Text(t(
+            'Close pull request #{n} in {repo} without merging? Only if it is still open on {branch}. The branch stays, and it can be reopened on the forge.',
+            {'n': pr['number'], 'repo': pr['repo'], 'branch': pr['branch']})),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t('Cancel'))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t('Close it')),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    final said = await app.closeRecordedPull(m, pr);
+    if (said.isNotEmpty) _say(said);
+  }
+
+  Future<void> _prWatch(ChatMessage m, Map<String, dynamic> job) async {
+    final said = await AppScope.read(context).prWatchToggle(m, job);
+    if (said.isNotEmpty) _say(said);
+  }
+
+  Future<void> _prFix(ChatMessage m) async {
+    final said = await AppScope.read(context).prWatchFix(m);
+    if (said.isNotEmpty) _say(said);
+  }
+
   Future<void> _branch(ChatMessage m, Map<String, dynamic> job, String op) async {
     final app = AppScope.read(context);
-    if (op == 'merge' || op == 'delete') {
+    if (op == 'watch') {
+      await _prWatch(m, job);
+      return;
+    }
+    if (op == 'merge' || op == 'delete' || op == 'close' || op == 'revert-pr') {
+      final pullNo = pullNumberOf(job['pull']);
+      final title = switch (op) {
+        'merge' => t('Merge this branch'),
+        'close' => t('Close pull request'),
+        'revert-pr' => t('Revert this merge'),
+        _ => t('Delete this branch'),
+      };
+      final body = switch (op) {
+        'merge' => t('Merge {branch} into {base} in {repo} with a merge commit? Nothing is force-pushed.',
+            {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']}),
+        'close' => t('Close pull request #{n} in {repo} without merging? Only if it still ends at the commit Nymbot made. The branch stays, and it can be reopened on the forge.',
+            {'n': pullNo, 'repo': job['repo']}),
+        'revert-pr' => t('Open a new pull request in {repo} that puts back every file pull request #{n} changed on {base}? Nothing is force-pushed and no history is rewritten.',
+            {'repo': job['repo'], 'n': pullNo, 'base': job['base']}),
+        _ => t('Delete {branch} from {repo}? Only if it still ends at the commit Nymbot made; nothing on {base} changes.',
+            {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']}),
+      };
+      final confirm = switch (op) {
+        'merge' => t('Merge'),
+        'close' => t('Close it'),
+        'revert-pr' => t('Open the revert'),
+        _ => t('Delete'),
+      };
+      final danger = op == 'delete' || op == 'close';
       final go = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text(op == 'merge' ? t('Merge this branch') : t('Delete this branch')),
-          content: Text(op == 'merge'
-              ? t('Merge {branch} into {base} in {repo} with a merge commit? Nothing is force-pushed.',
-                  {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']})
-              : t('Delete {branch} from {repo}? Only if it still ends at the commit Nymbot made; nothing on {base} changes.',
-                  {'branch': job['branch'], 'base': job['base'], 'repo': job['repo']})),
+          title: Text(title),
+          content: Text(body),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
                 child: Text(t('Cancel'))),
             FilledButton(
-              style: op == 'delete'
+              style: danger
                   ? FilledButton.styleFrom(backgroundColor: NymbotColors.danger)
                   : null,
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(op == 'merge' ? t('Merge') : t('Delete')),
+              child: Text(confirm),
             ),
           ],
         ),
@@ -2090,6 +2232,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (i < messages.length) entries.add(i);
     }
     final latest = runs.isEmpty ? null : runs.last;
+    final conv = app.current;
+    final transcriptIndex = conv == null
+        ? (ids: <String>{}, runs: <String>{})
+        : app.transcripts.index(conv.id);
 
     _trackDraft(app);
     return StickyAvatarScope(
@@ -2122,8 +2268,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onOpenArtifact: (a) => showArtifact(context, a),
               onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
               onBranchAction: m.checkpoint == null ? null : (job, op) => _branch(m, job, op),
+              onClosePull: m.checkpoint == null ? null : (pr) => _closePull(m, pr),
+              prWatchOf: m.checkpoint == null ? null : (job) => app.prChip(app.current, job),
+              onPrWatch: m.checkpoint == null ? null : (job) => _prWatch(m, job),
+              onPrFix: m.prWatch?['offer'] == true ? () => _prFix(m) : null,
+              prFixCap: PrWatch.fixCap(app.settings.prFixCap),
               onAllowTool: m.pendingTool == null ? null : () => app.allowPendingTool(m),
               onDenyTool: m.pendingTool == null ? null : () => app.denyPendingTool(m),
+              onAnswer: m.ask == null ? null : (raw) => app.answerQuestion(m, raw),
+              onPlan: m.proposal == null ? null : (raw) => app.decidePlan(m, raw),
+              onRevisePlan: m.proposal == null ? null : (text) => app.revisePlan(m, text),
               onAlwaysAllowTool:
                   app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
               onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
@@ -2143,6 +2297,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onFollowUp: (text) => _followUp(m, text),
               onEditFollowUp: _editFollowUp,
               reveal: _revealId == m.id ? _revealAt : null,
+              hasTranscript: m.role == ChatRole.bot && TranscriptBook.covers(transcriptIndex, m),
             );
             final extra = m.pending != null
                 ? PendingActions(message: m, onEdit: _takePending)
@@ -2318,6 +2473,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   if (c.args.isEmpty) _send();
                 },
               ),
+            if (!support && RegExp(r'^/[A-Za-z0-9-]*$').hasMatch(_suggestTerm))
+              SkillSuggestions(
+                term: _suggestTerm,
+                skills: app.allSkills,
+                onPick: (s) {
+                  _input.setMarkdown('/${Skills.slugOf(s)} ');
+                  setState(() => _suggestTerm = '');
+                },
+              ),
             DocTray(convId: app.current?.id),
             if (app.attachments.isNotEmpty)
               Padding(
@@ -2445,7 +2609,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         if (mentioning && app.mentionCatalog == null) {
                           unawaited(app.ensureMentionCatalog());
                         }
-                        final next = (v.startsWith('?') || mentioning) ? v : '';
+                        final next = (v.startsWith('?') || v.startsWith('/') || mentioning) ? v : '';
                         final has = v.trim().isNotEmpty;
                         if (next != _suggestTerm || has != _hasText) {
                           setState(() {
@@ -2683,7 +2847,7 @@ Future<void> exportChat(
   final title = conv.title.isEmpty ? t('New chat') : conv.title;
   switch (format) {
     case 'json':
-      await ShareFile.text(Backup.chat(conv, messages),
+      await ShareFile.text(Backup.chat(conv, messages, transcripts: app.transcripts.listFor(conv.id)),
           name: Backup.fileName(title, 'json'),
           mime: 'application/json',
           subject: title);
@@ -3046,6 +3210,11 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             if (picked != null && context.mounted) Navigator.pop(context);
           }),
           ('personas', t('Personas'), () => showPersonasSheet(context)),
+          ('skills', t('Skills'), () async {
+            final picked = await showSkillsSheet(context);
+            if (picked != null) app.queueInput(picked);
+            if (picked != null && context.mounted) Navigator.pop(context);
+          }),
           ('workspace', t('Workspaces'), () => showWorkspacesSheet(context)),
           ('bot', t('Bots'), () => showBotsSheet(context)),
           ('artifacts', t('Artifacts'), _openArtifactLibrary),

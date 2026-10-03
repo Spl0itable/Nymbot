@@ -15,9 +15,11 @@ import '../state/identity.dart';
 import '../state/store.dart';
 import 'anon.dart';
 import 'connectors.dart';
+import 'skills.dart';
 import 'nostr/event_signer.dart';
 import 'storage_sync.dart';
 import 'support_thread.dart';
+import 'task_transcript.dart';
 
 class AccountSync {
   AccountSync({
@@ -59,6 +61,7 @@ class AccountSync {
   static const List<String> libraryNames = [
     'personas',
     'prompts',
+    'skills',
     'workspaces',
     'folders',
     'schedules',
@@ -303,6 +306,16 @@ class AccountSync {
   static List<Map<String, dynamic>> _lastVersions(Object? versions, int n) {
     final list = _maps(versions);
     return list.length > n ? list.sublist(list.length - n) : list;
+  }
+
+  static List<TaskTranscript> fitTranscripts(
+      Map<String, dynamic> entry, List<TaskTranscript> list) {
+    if (list.isEmpty) return const [];
+    final room = ((sealMaxBytes - utf8.encode(jsonEncode(entry)).length - 4096) / 3).floor();
+    final budget = room < TaskTranscript.syncMaxChars ? room : TaskTranscript.syncMaxChars;
+    if (budget <= 0) return const [];
+    final fitted = TaskTranscript.fit(list, budget);
+    return jsonEncode([for (final x in fitted) x.toJson()]).length > budget ? const [] : fitted;
   }
 
   static List<Map<String, dynamic>> fitArtifacts(
@@ -629,6 +642,9 @@ class AccountSync {
           'tokenElsewhere': r.token.isNotEmpty,
         })
     ];
+    library['skills'] = [
+      for (final k in await _store.skills()) _overlay(_remoteRecord('library.skills', k.id), k.toJson())
+    ];
     library['connectors'] = [
       for (final c in await _store.connectors())
         _overlay(_remoteRecord('library.connectors', c.id), c.toSyncJson())
@@ -653,13 +669,16 @@ class AccountSync {
       final kept = msgs.length > maxMessages
           ? msgs.sublist(msgs.length - maxMessages)
           : msgs;
-      out['chat-${conv.id}'] = {
+      final entry = <String, dynamic>{
         'id': conv.id,
         'messages': fitMessages([
           for (final m in kept)
             _msgToWire(m, _remoteRecord('chat-${conv.id}', m.id))
         ]),
       };
+      final tx = fitTranscripts(entry, _store.transcripts(conv.id));
+      if (tx.isNotEmpty) entry['transcripts'] = [for (final x in tx) x.toJson()];
+      out['chat-${conv.id}'] = entry;
     }
     final knownRows = {..._names.values, ..._remote.keys};
     for (final conv in chats) {
@@ -821,6 +840,17 @@ class AccountSync {
         touched.add('repos');
       }
 
+      final skills = library['skills'];
+      if (skills is List) {
+        final mine = await _store.skills();
+        final merged = _mergeById([for (final k in mine) k.toJson()], _maps(skills), graves);
+        await _store.saveSkills([
+          for (final j in merged)
+            if (Skill.fromJson(j) != null) Skill.fromJson(j)!
+        ]);
+        touched.add('skills');
+      }
+
       final connectors = library['connectors'];
       if (connectors is List) {
         final mine = await _store.connectors();
@@ -890,6 +920,16 @@ class AccountSync {
       if (_messagesChanged(mine, merged)) {
         await _store.saveMessages(id, merged);
         touched.add(key);
+      }
+      final txs = entry['transcripts'];
+      if (txs is List && txs.isNotEmpty) {
+        final held = _store.transcripts(id);
+        final both = TaskTranscript.mergeList(held, txs);
+        String sum(List<TaskTranscript> l) => jsonEncode([for (final x in l) x.toJson()]);
+        if (sum(both) != sum(TaskTranscript.mergeList(held, const []))) {
+          await _store.saveTranscripts(id, both);
+          if (!touched.contains(key)) touched.add(key);
+        }
       }
     }
 

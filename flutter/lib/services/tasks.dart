@@ -1,6 +1,8 @@
 import '../features/i18n/i18n.dart';
 import '../features/progress_lines.dart';
 import '../models/conversation.dart';
+import 'ask.dart';
+import 'plan.dart';
 import 'chat_engine.dart';
 import 'git_review.dart';
 import 'research.dart';
@@ -22,6 +24,8 @@ class TaskItem {
       this.approval = false,
       this.tool = '',
       this.group = false,
+      this.question = false,
+      this.planned = false,
       this.run})
       : children = children ?? [];
 
@@ -34,6 +38,8 @@ class TaskItem {
   final bool approval;
   final String tool;
   final bool group;
+  final bool question;
+  final bool planned;
   Map<String, dynamic>? run;
 }
 
@@ -216,6 +222,10 @@ class Tasks {
         return t('Repository task');
       case 'tool':
         return t('Tool call');
+      case 'question':
+        return t('Question');
+      case 'plan':
+        return t('Plan');
       default:
         return t('Reply');
     }
@@ -502,6 +512,13 @@ class Tasks {
             detail: '${job['repo'] ?? ''} · ${branchState(job)}'));
       }
     }
+    final asked = Ask.taskItem(m.ask);
+    if (asked != null) out.add(TaskItem(asked.label, asked.state, question: true));
+    final proposed = Plan.taskItem(m.proposal);
+    if (proposed != null) {
+      out.add(TaskItem(proposed.label, proposed.state,
+          detail: proposed.detail, children: proposed.children, approval: proposed.state == 'waiting', planned: true));
+    }
     final p = m.pendingTool;
     if (p != null) {
       final run = p['kind'] == 'server-run';
@@ -554,6 +571,10 @@ class Tasks {
         mode = 'repo';
       } else if (m.pendingTool != null) {
         mode = 'tool';
+      } else if (m.ask != null) {
+        mode = 'question';
+      } else if (m.proposal != null) {
+        mode = 'plan';
       }
     }
     if (mode == null) return null;
@@ -626,7 +647,7 @@ class Tasks {
     final recent = list.length > 40 ? list.sublist(list.length - 40) : list;
     return recent.where((m) {
       final p = m.pendingTool;
-      return p != null && (p['state'] == null || p['state'] == 'waiting');
+      return (p != null && (p['state'] == null || p['state'] == 'waiting')) || Ask.pending(m.ask) || Plan.pending(m.proposal);
     }).length;
   }
 }

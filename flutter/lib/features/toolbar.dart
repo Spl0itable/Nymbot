@@ -15,6 +15,8 @@ import 'sheets/compare_sheet.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/models_sheet.dart';
 import 'sheets/personas_sheet.dart';
+import 'sheets/skills_sheet.dart';
+import '../services/skills.dart';
 import 'sheets/connectors_sheet.dart';
 import 'sheets/repos_sheet.dart';
 import 'sheets/schedules_sheet.dart';
@@ -103,6 +105,15 @@ class NymbotToolbar extends StatelessWidget {
                 : t('Persona'),
         active: persona != null || hasSystem,
         onTap: () => showPersonasSheet(context),
+      ),
+      _ChipSpec(
+        glyph: 'bolt',
+        label: app.skillOf(app.current) != null ? Skills.label(app.skillOf(app.current)!) : t('Skills'),
+        active: app.skillOf(app.current) != null,
+        onTap: () async {
+          final picked = await showSkillsSheet(context);
+          if (picked != null) app.queueInput(picked);
+        },
       ),
       _ChipSpec(
         glyph: 'scheduled',
