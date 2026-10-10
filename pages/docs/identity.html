@@ -150,16 +150,26 @@
             <p>What stays on each device is how you unlock identity encryption, and anything in a
                 <a href="/docs/chats/#ghost-mode">ghost chat</a>.</p>
 
-            <h2 id="panic">Wiping this device</h2>
-            <p><strong>Wipe this device</strong>, under Identity, asks once and then destroys everything the app
-                keeps here: your key, every conversation, your repository and connector tokens, stored documents,
-                cached files, the throwaway key and any credits left on it. Before the key is gone it also asks the
-                server to delete the sealed copy of your chats and settings that sync keeps for this account, and
-                everything the <a href="/docs/api/#privacy">API</a> holds for it: every API key, which stops
-                working at once, the query history, usage records, a saved auto top-up wallet and video jobs.
-                Your balance and any charges you still owe stay on the key.</p>
+            <h2 id="panic">Deleting your account</h2>
+            <p><strong>Delete account data and wipe device</strong>, in Settings under Account and in Identity,
+                asks once and then deletes your account. Before the key is gone it asks the server, signed with
+                that key, to delete what it keeps for this account: the sealed copy of your chats and settings
+                that sync keeps, your Nymbot conversation history, background tasks, schedules and pull request
+                watches, the links you shared, your credit balance with its ledger, purchase, invoice and voucher
+                records, and everything the <a href="/docs/api/#privacy">API</a> holds for it: every API key,
+                which stops working at once, the query history, usage records, a saved auto top-up wallet,
+                video jobs and any charges still owed. Then it destroys everything the app keeps on this device: your key,
+                every conversation, your repository and connector tokens, stored documents and cached files. It
+                shows <em>Account data deleted</em> when it is done, and the app starts again from the beginning.</p>
+            <p>Before the server data is deleted, the app stores a small marker signed by your key: its public
+                key, a time, an event id and the signature, nothing else, kept for 90 days. Every other device
+                signed in to the same key checks for it when it opens, comes back to the foreground, before it
+                syncs, and every few minutes, and wipes itself instead of uploading your data again.</p>
+            <p>It cannot delete anything already on public Nostr relays, or key backups you saved to iCloud or
+                Google Drive. Your remaining Nymbot credits are deleted with the account and cannot be restored;
+                use <strong>Move my whole balance</strong> first to keep them.</p>
             <p>It is not a logout and it cannot be undone. If you have backed up your <code>nsec</code> you can
-                come back to the same account later, starting with no chats; if you have not, that identity is gone.</p>
+                come back to the same key later, starting with no chats; if you have not, that identity is gone.</p>
         <!--DOCS-PAGER-->
         </main>
         <!--DOCS-TOC-->

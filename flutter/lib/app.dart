@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/theme/theme.dart';
+import 'features/ai_consent.dart';
 import 'features/gate_screen.dart';
 import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
@@ -155,10 +156,15 @@ class _RootState extends State<_Root> {
       return LanguageSelectScreen(onDone: () => setState(() {}));
     }
     if (!app.signedIn) return const GateScreen();
-    if (!_entered) {
-      _entered = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => app.enter());
-    }
-    return const HomeScreen();
+    return AiConsentGate(
+      pubkey: app.identity.pubkey,
+      builder: (context) {
+        if (!_entered) {
+          _entered = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) => app.enter());
+        }
+        return const HomeScreen();
+      },
+    );
   }
 }

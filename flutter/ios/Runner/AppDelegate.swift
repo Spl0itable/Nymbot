@@ -1,5 +1,6 @@
 import AVFoundation
 import AuthenticationServices
+import CloudKit
 import CryptoKit
 import Flutter
 import LocalAuthentication
@@ -8,82 +9,118 @@ import UIKit
 import UniformTypeIdentifiers
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    GeneratedPluginRegistrant.register(with: self)
-    if let registrar = self.registrar(forPlugin: "NymbotIntents") {
-      Intents.attach(registrar.messenger())
-    }
     ShareInbox.drain()
     _ = NotificationCenter.default.addObserver(
       forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { _ in
       ShareInbox.drain()
     }
-    if let registrar = self.registrar(forPlugin: "NymbotDictation") {
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    let registry = engineBridge.pluginRegistry
+    GeneratedPluginRegistrant.register(with: registry)
+    if let registrar = registry.registrar(forPlugin: "NymbotIntents") {
+      Intents.attach(registrar.messenger())
+    }
+    if let registrar = registry.registrar(forPlugin: "NymbotDictation") {
       let channel = FlutterMethodChannel(
         name: "ai.nymbot/dictate", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
         Dictation.handle(call, result: result)
       }
     }
-    if let registrar = self.registrar(forPlugin: "NymbotVaultKey") {
+    if let registrar = registry.registrar(forPlugin: "NymbotVaultKey") {
       let channel = FlutterMethodChannel(
         name: "ai.nymbot/vault_key", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
         VaultKey.handle(call, result: result)
       }
     }
-    if let registrar = self.registrar(forPlugin: "NymbotSecure") {
+    if let registrar = registry.registrar(forPlugin: "NymbotSecure") {
       let channel = FlutterMethodChannel(
         name: "ai.nymbot/secure", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
         SecretClipboard.handle(call, result: result)
       }
     }
-    if let registrar = self.registrar(forPlugin: "NymbotReplyNotify") {
+    if let registrar = registry.registrar(forPlugin: "NymbotReplyNotify") {
       ReplyNotify.register(with: registrar)
     }
-    if let registrar = self.registrar(forPlugin: "NymbotPasskey") {
+    if let registrar = registry.registrar(forPlugin: "NymbotPasskey") {
       let channel = FlutterMethodChannel(
         name: "ai.nymbot/passkey", binaryMessenger: registrar.messenger())
       channel.setMethodCallHandler { call, result in
         Passkeys.handle(call, result: result)
       }
     }
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
-
-  override func application(
-    _ app: UIApplication,
-    open url: URL,
-    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
-  ) -> Bool {
-    if url.scheme?.lowercased() == "nymbot" {
-      if url.host?.lowercased() == "share" { ShareInbox.drain() }
-      return true
+    if let registrar = registry.registrar(forPlugin: "NymbotCloudKit") {
+      let channel = FlutterMethodChannel(
+        name: "ai.nymbot/cloudkit", binaryMessenger: registrar.messenger())
+      channel.setMethodCallHandler { call, result in
+        KeyBackupCloud.handle(call, result: result)
+      }
     }
-    return super.application(app, open: url, options: options)
-  }
-
-  override func application(
-    _ application: UIApplication,
-    continue userActivity: NSUserActivity,
-    restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
-  ) -> Bool {
-    if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
-      let url = userActivity.webpageURL
-    {
-      Intents.deliver(["type": "link", "url": url.absoluteString])
-      return true
+    if let registrar = registry.registrar(forPlugin: "NymbotLinks") {
+      registrar.addSceneDelegate(SceneLinks.shared)
     }
-    return super.application(
-      application, continue: userActivity, restorationHandler: restorationHandler)
   }
 }
+
+final class SceneLinks: NSObject, FlutterSceneLifeCycleDelegate {
+  static let shared = SceneLinks()
+
+  @objc(scene:willConnectToSession:options:)
+  func scene(
+    _ scene: UIScene, willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions?
+  ) -> Bool {
+    guard let options = connectionOptions else { return false }
+    var handled = false
+    for context in options.urlContexts where handleURL(context.url) {
+      handled = true
+    }
+    for activity in options.userActivities where handleActivity(activity) {
+      handled = true
+    }
+    return handled
+  }
+
+  @objc(scene:openURLContexts:)
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+    var handled = false
+    for context in URLContexts where handleURL(context.url) {
+      handled = true
+    }
+    return handled
+  }
+
+  @objc(scene:continueUserActivity:)
+  func scene(_ scene: UIScene, continue userActivity: NSUserActivity) -> Bool {
+    return handleActivity(userActivity)
+  }
+
+  private func handleURL(_ url: URL) -> Bool {
+    guard url.scheme?.lowercased() == "nymbot" else { return false }
+    if url.host?.lowercased() == "share" { ShareInbox.drain() }
+    return true
+  }
+
+  private func handleActivity(_ activity: NSUserActivity) -> Bool {
+    guard activity.activityType == NSUserActivityTypeBrowsingWeb, let url = activity.webpageURL
+    else { return false }
+    Intents.deliver(["type": "link", "url": url.absoluteString])
+    return true
+  }
+}
+
+class SceneDelegate: FlutterSceneDelegate {}
 
 enum Intents {
   private static var channel: FlutterMethodChannel?
@@ -379,6 +416,139 @@ enum Dictation {
     defer { try? FileManager.default.removeItem(at: file) }
     guard keep, let data = try? Data(contentsOf: file) else { return nil }
     return FlutterStandardTypedData(bytes: data)
+  }
+}
+
+enum KeyBackupCloud {
+  static func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let args = call.arguments as? [String: Any] ?? [:]
+    guard let identifier = args["container"] as? String, !identifier.isEmpty else {
+      result(FlutterError(code: "failed", message: "no container", details: nil))
+      return
+    }
+    let reply: (Any?) -> Void = { value in DispatchQueue.main.async { result(value) } }
+    let container = CKContainer(identifier: identifier)
+    let database = container.privateCloudDatabase
+    switch call.method {
+    case "accountStatus":
+      container.accountStatus { status, error in
+        if let error = error {
+          reply(failure(error))
+          return
+        }
+        switch status {
+        case .available: reply("available")
+        case .noAccount: reply("noAccount")
+        case .restricted: reply("restricted")
+        case .temporarilyUnavailable: reply("temporarilyUnavailable")
+        case .couldNotDetermine: reply("couldNotDetermine")
+        @unknown default: reply("couldNotDetermine")
+        }
+      }
+    case "userRecordName":
+      container.fetchUserRecordID { recordID, error in
+        if let error = error {
+          reply(failure(error))
+          return
+        }
+        reply(recordID?.recordName)
+      }
+    case "query":
+      guard let type = args["recordType"] as? String else {
+        result(FlutterError(code: "failed", message: "bad request", details: nil))
+        return
+      }
+      let query = CKQuery(recordType: type, predicate: NSPredicate(value: true))
+      query.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+      database.fetch(
+        withQuery: query, inZoneWith: nil, desiredKeys: ["payload", "updatedAt"],
+        resultsLimit: CKQueryOperation.maximumResults
+      ) { outcome in
+        collect(outcome, from: database, rows: [], reply: reply)
+      }
+    case "save":
+      guard
+        let type = args["recordType"] as? String,
+        let name = args["recordName"] as? String,
+        let payload = args["payload"] as? String,
+        let format = args["format"] as? String
+      else {
+        result(FlutterError(code: "failed", message: "bad request", details: nil))
+        return
+      }
+      let record = CKRecord(recordType: type, recordID: CKRecord.ID(recordName: name))
+      record["payload"] = payload as CKRecordValue
+      record["format"] = format as CKRecordValue
+      record["updatedAt"] = Date() as CKRecordValue
+      database.save(record) { _, error in
+        reply(error.map(failure))
+      }
+    case "delete":
+      guard let name = args["recordName"] as? String else {
+        result(FlutterError(code: "failed", message: "bad request", details: nil))
+        return
+      }
+      database.delete(withRecordID: CKRecord.ID(recordName: name)) { _, error in
+        if let failed = error as? CKError, failed.code == .unknownItem {
+          reply(nil)
+          return
+        }
+        reply(error.map(failure))
+      }
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private static func collect(
+    _ outcome: Result<
+      (matchResults: [(CKRecord.ID, Result<CKRecord, Error>)], queryCursor: CKQueryOperation.Cursor?),
+      Error
+    >,
+    from database: CKDatabase, rows: [[String: Any]], reply: @escaping (Any?) -> Void
+  ) {
+    switch outcome {
+    case .failure(let error):
+      reply(failure(error))
+    case .success(let page):
+      var found = rows
+      for (_, matched) in page.matchResults {
+        guard case .success(let record) = matched, let payload = record["payload"] as? String
+        else { continue }
+        let at = (record["updatedAt"] as? Date) ?? record.modificationDate ?? Date(timeIntervalSince1970: 0)
+        found.append([
+          "recordName": record.recordID.recordName,
+          "payload": payload,
+          "updatedAt": Int(at.timeIntervalSince1970 * 1000),
+        ])
+      }
+      guard let cursor = page.queryCursor, found.count < 1000 else {
+        reply(found)
+        return
+      }
+      database.fetch(
+        withCursor: cursor, desiredKeys: ["payload", "updatedAt"],
+        resultsLimit: CKQueryOperation.maximumResults
+      ) { next in
+        collect(next, from: database, rows: found, reply: reply)
+      }
+    }
+  }
+
+  private static func failure(_ error: Error) -> FlutterError {
+    guard let failed = error as? CKError else {
+      return FlutterError(code: "failed", message: error.localizedDescription, details: nil)
+    }
+    let code: String
+    switch failed.code {
+    case .notAuthenticated: code = "noAccount"
+    case .quotaExceeded: code = "quota"
+    case .networkUnavailable, .networkFailure: code = "network"
+    case .serviceUnavailable, .requestRateLimited, .zoneBusy, .accountTemporarilyUnavailable:
+      code = "unavailable"
+    default: code = "failed"
+    }
+    return FlutterError(code: code, message: failed.localizedDescription, details: nil)
   }
 }
 

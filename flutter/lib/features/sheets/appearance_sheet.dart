@@ -10,7 +10,10 @@ import '../../services/git_review.dart';
 import '../../services/pr_watch.dart';
 import '../../services/share_file.dart';
 import '../../services/voice.dart';
+import '../../core/theme/theme.dart';
+import '../ai_consent.dart';
 import '../background_settings.dart';
+import '../delete_account.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import 'sheet.dart';
@@ -420,6 +423,7 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                   fontSize: 11, color: Theme.of(context).hintColor),
             ),
             const SizedBox(height: 10),
+            const AiConsentSettings(),
             Text(t('Your data'), style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 6),
             SwitchListTile(
@@ -486,6 +490,30 @@ class _AppearanceSheetState extends State<_AppearanceSheet> {
                   child: Text(t('Reset appearance')),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            Text(t('Account'), style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            Text(
+              t('Deletes your account: your key, conversations and settings on '
+                  'this device, and your account data on our servers, including '
+                  'your credits and purchase records. Other devices signed in to '
+                  'it are wiped too. Anything already on public relays stays '
+                  'there. Any remaining Nymbot credits will be lost. This cannot '
+                  'be undone.'),
+              style: TextStyle(
+                  fontSize: 11, color: Theme.of(context).hintColor),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton(
+                key: const ValueKey('delete-account'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: NymbotColors.danger),
+                onPressed: () => confirmDeleteAccount(context, app),
+                child: Text(deleteAccountLabel()),
+              ),
             ),
           ],
         ),

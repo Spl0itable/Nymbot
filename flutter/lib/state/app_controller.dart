@@ -10,6 +10,7 @@ import '../core/crypto/bech32_codec.dart';
 import '../core/crypto/keys.dart';
 import '../core/crypto/schnorr.dart' as schnorr;
 import '../core/utils/jitter.dart';
+import '../features/ai_consent.dart';
 import '../features/i18n/i18n.dart';
 import '../models/artifact.dart';
 import '../models/bot.dart';
@@ -115,6 +116,7 @@ class AppController extends ChangeNotifier {
     sync = AccountSync(
         store: store, identity: identity, storage: storage, anon: anon);
     DocLibrary.bind(store);
+    AiConsent.instance.scope = () => identity.pubkey;
   }
 
   static PqKeyServer? Function(NymbotApi api) pqKeyServer =
@@ -3445,6 +3447,7 @@ class AppController extends ChangeNotifier {
   /// Called once a key exists; `enter` does the rest.
   void signIn() {
     signedIn = true;
+    deletedElsewhere = false;
     notifyListeners();
   }
 
@@ -3643,6 +3646,7 @@ class AppController extends ChangeNotifier {
     if (_entered) return;
     _entered = true;
     signedIn = true;
+    deletedElsewhere = false;
     relays.onStatus((up, _) {
       relaysUp = up;
       notifyListeners();
@@ -3658,6 +3662,7 @@ class AppController extends ChangeNotifier {
     unawaited(replyNotify.attach());
     _startSupport();
 
+    _watchDeleted();
     sync.onChange = _afterSync;
     sync.follow();
     unawaited(sync.run().then((round) {
@@ -3757,6 +3762,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _gone = true;
+    _deletedTimer?.cancel();
     transcripts.dispose();
     _pendingTimer?.cancel();
     _runsTimer?.cancel();
@@ -5111,6 +5117,11 @@ class AppController extends ChangeNotifier {
     }
 
     try {
+      if (!await AiConsent.instance.allowed()) {
+        await note(AiConsentStrings.offNotice, conv: conv);
+        if (conv.id == current?.id) _capReturned = typed;
+        return bail();
+      }
       MentionResult? mention;
       final head = bare ? null : Mentions.parse(typed);
       if (head != null) {
@@ -7377,6 +7388,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> resumed() async {
     if (!signedIn || identity.pubkey.isEmpty) return;
+    if (await checkDeleted()) return;
     _resumeRuns();
     if (_entered) relays.wake();
     if (_entered) unawaited(sync.kick());
@@ -7807,9 +7819,130 @@ class AppController extends ChangeNotifier {
 
   Future<void> wipe() => _leave(purge: true);
 
+  static const String deletedLoginKey = 'deletedLoginAt';
+  static const String deletedFreshKey = 'deletedLoginFresh';
+  static const int deletedSkewSec = 600;
+  Timer? _deletedTimer;
+  bool _deletedBusy = false;
+  bool _deleting = false;
+
+  int deletedLoginAt() => store.getInt(deletedLoginKey);
+
+  Future<void> noteDeletedLogin({int? at}) async {
+    if (at == null && deletedLoginAt() > 0) return;
+    await store.setInt(
+        deletedLoginKey, at ?? DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    if (at == null) {
+      await store.setBool(deletedFreshKey, true);
+    } else {
+      await store.remove(deletedFreshKey);
+    }
+  }
+
+  bool deletedMarkValid(Map<String, dynamic>? mark, String pubkey, int nowSec) {
+    if (mark == null) return false;
+    final at = mark['at'];
+    final id = mark['id'];
+    final sig = mark['sig'];
+    if (at is! int || id is! String || sig is! String) return false;
+    final loginAt = deletedLoginAt();
+    if (loginAt <= 0 || at <= loginAt) return false;
+    if (at > nowSec + 600 || nowSec - at > 90 * 86400) return false;
+    try {
+      return schnorr.verifyEvent(NostrEvent(
+          id: id,
+          pubkey: pubkey,
+          createdAt: at,
+          kind: 30078,
+          tags: const [
+            ['d', NymbotApi.deletedTag]
+          ],
+          content: '',
+          sig: sig));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool deletedElsewhere = false;
+
+  Future<bool> checkDeleted() async {
+    if (_deleting || _deletedBusy) return false;
+    final pubkey = identity.pubkey;
+    if (pubkey.isEmpty) return false;
+    _deletedBusy = true;
+    try {
+      await noteDeletedLogin();
+      final answer = await api.deletedMark(identity.signer);
+      if (identity.pubkey != pubkey || !answer.answered) return false;
+      final mark = answer.mark;
+      final valid = deletedMarkValid(
+          mark, pubkey, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      if (store.getBool(deletedFreshKey)) {
+        await store.remove(deletedFreshKey);
+        final at = mark?['at'];
+        if (valid && at is int && at - deletedLoginAt() <= deletedSkewSec) {
+          await store.setInt(deletedLoginKey, at);
+          return false;
+        }
+      }
+      if (!valid) return false;
+      _deleting = true;
+      _deletedTimer?.cancel();
+      deletedElsewhere = true;
+      await _leave(purge: false);
+      _deleting = false;
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _deletedBusy = false;
+    }
+  }
+
+  void _watchDeleted() {
+    unawaited(noteDeletedLogin());
+    sync.beforeRun = () async => !(await checkDeleted());
+    _deletedTimer?.cancel();
+    _deletedTimer = Timer.periodic(
+        const Duration(minutes: 5), (_) => unawaited(checkDeleted()));
+  }
+
+  Future<({bool purged, int iCloud})> deleteAccount() async {
+    var purged = false;
+    _deleting = true;
+    _deletedTimer?.cancel();
+    _bootWork?.cancel();
+    _syncTimer?.cancel();
+    sync.stop();
+    sync.forget();
+    var marked = false;
+    if (identity.pubkey.isNotEmpty) {
+      marked = await api
+          .markDeleted(identity.signer, timeout: const Duration(seconds: 12))
+          .timeout(const Duration(seconds: 15), onTimeout: () => false);
+    }
+    if (identity.pubkey.isNotEmpty) {
+      purged = await api
+          .purgeAccount(identity.signer, timeout: const Duration(seconds: 12))
+          .timeout(const Duration(seconds: 15), onTimeout: () => false);
+    }
+    var iCloud = 0;
+    if (AppleBackupStore.available) {
+      try {
+        iCloud = await CloudKitBackups().deleteSaved();
+      } catch (_) {}
+    }
+    await _leave(purge: false);
+    _deleting = false;
+    return (purged: purged && marked, iCloud: iCloud);
+  }
+
   Future<void> disconnectSigner() => _leave(purge: false);
 
   Future<void> _leave({required bool purge}) async {
+    _deletedTimer?.cancel();
+    sync.beforeRun = null;
     _bootWork?.cancel();
     _syncTimer?.cancel();
     _noticeTimer?.cancel();

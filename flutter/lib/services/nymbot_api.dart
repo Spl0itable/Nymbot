@@ -7,6 +7,7 @@ import '../config.dart';
 import '../core/crypto/keys.dart';
 import '../models/nostr_event.dart';
 import '../models/notice.dart';
+import '../features/ai_consent.dart';
 import '../features/i18n/i18n.dart';
 import 'nostr/event_signer.dart';
 import 'server_runs.dart';
@@ -111,6 +112,80 @@ class NymbotApi {
   }
 
   /// Deletes this account's server rows; signed while the key is still here.
+  static const String deletedTag = 'nymbot-account-deleted';
+
+  Future<Map<String, dynamic>?> _storage(
+      EventSigner signer, Map<String, dynamic> fields,
+      {Duration? timeout}) async {
+    final action = fields['action'] as String;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final text = SignedBody.text({...fields, 'pubkey': signer.pubkey});
+    final auth = await signer.sign(UnsignedEvent(
+      pubkey: signer.pubkey,
+      createdAt: nowSec,
+      kind: 27235,
+      tags: [
+        const ['domain', 'nymbot-sync'],
+        const ['method', 'POST'],
+        ['u', NymbotConfig.storageUrl],
+        ['action', action],
+        ['payload', SignedBody.hash(text)],
+      ],
+      content: 'nymbot-sync-auth',
+    ));
+    final resp = await _client
+        .post(
+          Uri.parse(NymbotConfig.storageUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': NymbotConfig.userAgent,
+          },
+          body: SignedBody.withAuth(text, auth.toJson()),
+        )
+        .timeout(timeout ?? const Duration(seconds: 10));
+    final decoded = jsonDecode(resp.body);
+    return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+  }
+
+  Future<bool> markDeleted(EventSigner signer, {Duration? timeout}) async {
+    try {
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final ev = await signer.sign(UnsignedEvent(
+        pubkey: signer.pubkey,
+        createdAt: nowSec,
+        kind: 30078,
+        tags: const [
+          ['d', deletedTag]
+        ],
+        content: '',
+      ));
+      if (ev.pubkey != signer.pubkey) return false;
+      final res = await _storage(signer,
+          {'action': 'panic-mark', 'at': ev.createdAt, 'id': ev.id, 'sig': ev.sig},
+          timeout: timeout);
+      return res != null && res['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<({bool answered, Map<String, dynamic>? mark})> deletedMark(
+      EventSigner signer) async {
+    try {
+      final res = await _storage(signer, {'action': 'panic-check'});
+      if (res == null || !res.containsKey('mark')) {
+        return (answered: false, mark: null);
+      }
+      final mark = res['mark'];
+      return (
+        answered: true,
+        mark: mark is Map ? Map<String, dynamic>.from(mark) : null
+      );
+    } catch (_) {
+      return (answered: false, mark: null);
+    }
+  }
+
   Future<bool> purgeAccount(EventSigner signer, {Duration? timeout}) async {
     try {
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -156,6 +231,10 @@ class NymbotApi {
     Duration? timeout,
     Future<void>? abort,
   }) async {
+    if (kAiConsentActions.contains(action) &&
+        !await AiConsent.instance.allowed()) {
+      return (status: 403, data: <String, dynamic>{'error': AiConsentStrings.offNotice, 'consent': false});
+    }
     var stopped = false;
     unawaited(abort?.whenComplete(() => stopped = true));
     try {
@@ -374,6 +453,9 @@ class NymbotApi {
   }
 
   Future<ServerRunResponse> runnerRun(EventSigner signer, Map<String, dynamic> extra) async {
+    if (!await AiConsent.instance.allowed()) {
+      return ServerRunResponse(status: 403, error: {'error': AiConsentStrings.offNotice, 'consent': false});
+    }
     try {
       final request = http.Request('POST', Uri.parse(NymbotConfig.botUrl))
         ..headers['Content-Type'] = 'application/json'

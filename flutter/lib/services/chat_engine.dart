@@ -33,6 +33,7 @@ import 'server_runs.dart';
 import 'skills.dart';
 import 'team.dart';
 import 'wire_limits.dart';
+import '../features/ai_consent.dart';
 import '../features/i18n/i18n.dart';
 
 class ChatFailure implements Exception {
@@ -1223,6 +1224,9 @@ class ChatEngine {
     Map<String, dynamic> runExtras = const {},
     Map<String, dynamic>? pendingAnswer,
   }) async {
+    if (!await AiConsent.instance.allowed()) {
+      throw ChatFailure(AiConsentStrings.offNotice);
+    }
     final rootId = conv.rootId;
     final anonymous = conv.anon;
     if (pq.botKey == null) {

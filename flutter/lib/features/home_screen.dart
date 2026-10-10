@@ -58,6 +58,7 @@ import 'sheets/schedules_sheet.dart';
 import 'sheets/workspaces_sheet.dart';
 import 'sheets/sheet.dart';
 import 'command_palette.dart';
+import 'delete_account.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'media_viewer.dart';
@@ -99,6 +100,44 @@ String supportSendError(ContactOutcome outcome, {required bool connected}) {
   return t('Could not send the message. Try again.');
 }
 
+class _ThreadScroll extends ScrollController {
+  @override
+  ScrollPosition createScrollPosition(ScrollPhysics physics,
+          ScrollContext context, ScrollPosition? oldPosition) =>
+      _ThreadPosition(
+        physics: physics,
+        context: context,
+        initialPixels: initialScrollOffset,
+        keepScrollOffset: keepScrollOffset,
+        oldPosition: oldPosition,
+        debugLabel: debugLabel,
+      );
+}
+
+class _ThreadPosition extends ScrollPositionWithSingleContext {
+  _ThreadPosition({
+    required super.physics,
+    required super.context,
+    super.initialPixels,
+    super.keepScrollOffset,
+    super.oldPosition,
+    super.debugLabel,
+  });
+
+  @override
+  bool correctForNewDimensions(
+      ScrollMetrics oldPosition, ScrollMetrics newPosition) {
+    final end = newPosition.maxScrollExtent;
+    if (oldPosition.viewportDimension != newPosition.viewportDimension &&
+        oldPosition.extentAfter < 1 &&
+        (pixels - end).abs() > 0.01) {
+      correctPixels(end);
+      return false;
+    }
+    return super.correctForNewDimensions(oldPosition, newPosition);
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -111,7 +150,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _input = MarkdownEditingController();
   late final _inputFocus = FocusNode(onKeyEvent: _composerKey);
   final _inputScroll = ScrollController();
-  final _scroll = ScrollController();
+  final _scroll = _ThreadScroll();
   final _voice = Voice();
   final _keys = <String, GlobalKey>{};
   final _draftKey = GlobalKey();
@@ -1190,6 +1229,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
           case 'settings':
             await showAppearanceSheet(context);
+          case 'delete-account':
+            await confirmDeleteAccount(context, app);
           case 'memory':
             await showMemorySheet(context);
           case 'shortcuts':

@@ -10,6 +10,7 @@ import '../../services/passkey_backup.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
 import '../brand_buttons.dart';
+import '../delete_account.dart';
 import '../key_backup_ui.dart';
 import '../secret_guard.dart';
 import '../vault_dialog.dart';
@@ -415,8 +416,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             ),
             TextButton(
               style: TextButton.styleFrom(foregroundColor: NymbotColors.danger),
-              onPressed: () => _wipe(app),
-              child: Text(t('Wipe this device')),
+              onPressed: () => confirmDeleteAccount(context, app),
+              child: Text(deleteAccountLabel()),
             ),
           ],
         ),
@@ -521,7 +522,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
       key = await app.keyBackups.derive(provider, accountId, pin);
       final payload = encryptBackup(secret, key, pq: _pqCode(app));
       _backupNote(t('Checking for an older backup…'), spin: true);
-      found = openBackups(await store.readAll(), key);
+      found = openBackups(
+          [for (final f in await store.readAll()) if (!f.legacy) f], key);
       final older = [
         for (final candidate in found)
           if (candidate.pubkey == pubkey) ...candidate.ids,
@@ -638,6 +640,8 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             status: _backupNote,
             keep: (candidate) => candidate.pubkey == pubkey,
             wrongPin: t('No backup of this key opens with that PIN.'),
+            legacyAccount: legacyAccountFor(store),
+            everyLegacy: true,
           ) ??
           [];
       if (found.isEmpty || !mounted) return;
@@ -771,33 +775,6 @@ class _IdentitySheetState extends State<_IdentitySheet> {
     );
     if (ok != true) return;
     await app.disconnectSigner();
-    if (!mounted) return;
-    Navigator.of(context).popUntil((r) => r.isFirst);
-  }
-
-  Future<void> _wipe(AppController app) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(t('Wipe this device?')),
-        content: Text(
-          t('Your key, every conversation, and any credits on a throwaway key. '
-          'This cannot be undone.'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text(t('Cancel'))),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: NymbotColors.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(t('Wipe')),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await app.wipe();
     if (!mounted) return;
     Navigator.of(context).popUntil((r) => r.isFirst);
   }

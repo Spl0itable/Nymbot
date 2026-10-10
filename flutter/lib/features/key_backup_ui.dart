@@ -254,6 +254,19 @@ Future<bool> confirmBackupAction(BuildContext context,
   return ok == true;
 }
 
+List<BackupCandidate> _keepOnly(List<BackupCandidate> found,
+    bool Function(BackupCandidate candidate)? keep) {
+  final kept = <BackupCandidate>[];
+  for (final candidate in found) {
+    if (keep == null || keep(candidate)) {
+      kept.add(candidate);
+    } else {
+      candidate.wipe();
+    }
+  }
+  return kept;
+}
+
 Future<List<BackupCandidate>?> unlockBackups(
   BuildContext context, {
   required KeyBackups backups,
@@ -263,7 +276,12 @@ Future<List<BackupCandidate>?> unlockBackups(
   required BackupStatusSink status,
   bool Function(BackupCandidate candidate)? keep,
   String? wrongPin,
+  Future<String> Function()? legacyAccount,
+  bool everyLegacy = false,
+  BackupStore? migrateTo,
 }) async {
+  final current = [for (final f in files) if (!f.legacy) f];
+  final old = [for (final f in files) if (f.legacy) f];
   String? error;
   while (true) {
     final wait = backups.throttle.wait;
@@ -278,20 +296,40 @@ Future<List<BackupCandidate>?> unlockBackups(
     if (pin == null || !context.mounted) return null;
     status(t('Unlocking…'), spin: true);
     Uint8List? key;
-    var found = <BackupCandidate>[];
+    Uint8List? oldKey;
+    var kept = <BackupCandidate>[];
     try {
       key = await backups.derive(provider, accountId, pin);
-      found = openBackups(files, key);
-    } finally {
-      wipeBytes(key);
-    }
-    final kept = <BackupCandidate>[];
-    for (final candidate in found) {
-      if (keep == null || keep(candidate)) {
-        kept.add(candidate);
-      } else {
+      kept = _keepOnly(openBackups(current, key), keep);
+      if (old.isNotEmpty && legacyAccount != null && (kept.isEmpty || everyLegacy)) {
+        status(t('Checking your older Apple backup…'), spin: true);
+        final legacyId = await legacyAccount();
+        oldKey = await backups.derive(provider, legacyId, pin);
+        final moved = _keepOnly(openBackups(old, oldKey), keep);
+        for (final candidate in moved) {
+          if (migrateTo != null) {
+            try {
+              await migrateTo.write(encryptBackup(candidate.secret, key, pq: candidate.pq));
+            } catch (_) {}
+          }
+          final same = kept.where((c) => c.pubkey == candidate.pubkey).firstOrNull;
+          if (same == null) {
+            kept.add(candidate);
+          } else {
+            same.ids.addAll(candidate.ids);
+            same.pq ??= candidate.pq;
+            candidate.wipe();
+          }
+        }
+      }
+    } catch (_) {
+      for (final candidate in kept) {
         candidate.wipe();
       }
+      rethrow;
+    } finally {
+      wipeBytes(key);
+      wipeBytes(oldKey);
     }
     if (!context.mounted) {
       for (final candidate in kept) {

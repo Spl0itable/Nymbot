@@ -275,6 +275,7 @@ html[data-motion="reduce"] *::after {
 
 .gate-title { font-size: 1.35rem; margin-bottom: 0.5rem; }
 .gate-lede { color: var(--text-dim); margin-bottom: 1.25rem; }
+.gate-notice { color: var(--text); background: var(--bg-raised); border: 1px solid var(--line-strong); border-radius: 8px; padding: 0.6rem 0.8rem; margin-bottom: 1rem; text-align: center; }
 .gate-foot { color: var(--text-faint); font-size: 0.8rem; margin-top: 1.25rem; }
 .gate-error { color: var(--danger); margin-top: 0.75rem; }
 .gate-busy { color: var(--text-dim); margin-top: 0.75rem; font-size: 0.85rem; }
@@ -284,7 +285,8 @@ html[data-motion="reduce"] *::after {
 .gate-connect { margin-top: 0.75rem; }
 .gate-connect canvas { display: block; margin: 0 auto 0.6rem; border-radius: 8px; max-width: 100%; height: auto; }
 .gate-nickname { margin-top: 1.25rem; }
-.gate-google { margin-top: 1.75rem; }
+.gate-google, .gate-apple { margin-top: 1rem; }
+.gate-actions + .gate-google, .gate-actions + .gate-apple { margin-top: 1.75rem; }
 .gate-passkey { margin-top: 1rem; }
 .pin-warn { color: var(--text); margin-top: 0.75rem; }
 .pin-pick { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
@@ -344,8 +346,17 @@ html[data-motion="reduce"] *::after {
 }
 html[data-theme="light"] .btn-google { background: #FFFFFF; border-color: #747775; color: #1F1F1F; }
 html[data-theme="light"] .btn-google:hover { background: #F8F9FA; }
+.btn-apple { background: #FFFFFF; border-color: #FFFFFF; color: #000000; gap: 8px; }
+.btn-apple:hover { background: #E8E8ED; border-color: #E8E8ED; }
+@media (prefers-color-scheme: light) {
+    html:not([data-theme]) .btn-apple { background: #000000; border-color: #000000; color: #FFFFFF; }
+    html:not([data-theme]) .btn-apple:hover { background: #1D1D1F; border-color: #1D1D1F; }
+}
+html[data-theme="light"] .btn-apple { background: #000000; border-color: #000000; color: #FFFFFF; }
+html[data-theme="light"] .btn-apple:hover { background: #1D1D1F; border-color: #1D1D1F; }
 .gate-actions .btn-brand { flex: 1 1 100%; width: 100%; }
-#googleBackupRow .reveal-row, #passkeyBackupRow .reveal-row { flex-wrap: wrap; }
+#googleBackupRow .reveal-row, #appleBackupRow .reveal-row, #passkeyBackupRow .reveal-row { flex-wrap: wrap; }
+.apple-signin-slot { display: flex; justify-content: center; min-height: 44px; margin: 0.75rem 0; }
 
 .icon-btn {
     display: grid;
@@ -1344,6 +1355,7 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
     color: var(--text-dim);
 }
 .msg-attachment img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
+.msg-attachment.is-missing { border-style: dashed; }
 
 .msg-actions {
     display: flex;
@@ -3060,3 +3072,10 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
     .skill-row .row-actions { width: 100%; }
     .skill-row .row-btn { min-height: 2rem; }
 }
+
+.delete-done-overlay { position: fixed; inset: 0; z-index: 2147483647; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+.delete-done-status { color: var(--text-dim); font-size: 0.95rem; }
+.delete-done { max-width: min(420px, 88vw); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.delete-done h2 { margin: 0; font-size: 1.3rem; }
+.delete-done p { margin: 0; line-height: 1.5; color: var(--text-dim); }
+.delete-done .btn { margin-top: 8px; min-width: 140px; }

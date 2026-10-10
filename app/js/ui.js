@@ -10,7 +10,7 @@
     const Anon = window.NymbotAnon;
     const Chat = window.NymbotChat;
 
-    const NON_SETTING_CONTROLS = new Set(['langSelect', 'importPicker']);
+    const NON_SETTING_CONTROLS = new Set(['langSelect', 'importPicker', 'setAiConsent']);
     const FREE_LOCKED_CHIPS = ['chipModel', 'chipGit', 'chipServerRuns', 'chipSiteCheck', 'chipConnectors', 'chipEffort',
         'chipResearch', 'chipTeam', 'chipWeb', 'chipAnon', 'chipCompare'];
     const FREE_LOCKED_ACTS = new Set(['open-models', 'open-repos', 'toggle-server-runs', 'open-site-check', 'open-connectors',
@@ -22,6 +22,7 @@
     const LEG_GAP_JITTER_MS = 1500;
     const LEG_STALL_WAITS_MS = [8000, 20000, 45000];
     const NOTICE_EVERY_MS = 15 * 60 * 1000;
+    const DELETED_NOTICE_KEY = 'nymbot_deleted_notice';
     const NOTICE_MIN_GAP_MS = 60 * 1000;
     const NOTICE_KEEP = 200;
     const REPLY_PIN_MARGIN = 8;
@@ -226,16 +227,47 @@
 
             if (!Identity.restore()) {
                 $('gate').hidden = false;
+                this.showDeletedNotice();
                 if (window.nostr) $('gateExtension').hidden = false;
                 $('gateGoogleRow').hidden = !KB.enabled;
+                $('gateAppleRow').hidden = !KB.apple.enabled;
                 $('gatePasskeyRow').hidden = !KB.passkey.available();
+                this.orderBackupButtons();
                 this.maybeFirstLanguage();
                 return;
             }
             this.enter();
         },
 
+        showAiConsent() {
+            const declined = window.NymbotAiConsent.decision() === 'declined';
+            $('gate').hidden = true;
+            $('reveal').hidden = true;
+            $('shell').hidden = true;
+            $('aiConsentTitle').textContent = declined
+                ? t('Nymbot needs AI processing')
+                : t('Nymbot uses AI services');
+            $('aiConsentIntro').textContent = declined
+                ? t('Nymbot answers by sending your messages to AI services, so it cannot work until you allow that. Nothing has been sent. You can allow it whenever you are ready.')
+                : t('Before you start, here is what Nymbot sends to answer you and who receives it.');
+            $('aiConsentDecline').hidden = declined;
+            $('aiConsent').dataset.state = declined ? 'declined' : 'step';
+            $('aiConsent').hidden = false;
+        },
+
         enter() {
+            if (!window.NymbotAiConsent.allowed()) {
+                this.showAiConsent();
+                return;
+            }
+            $('aiConsent').hidden = true;
+            if (this._shellEntered) {
+                $('gate').hidden = true;
+                $('reveal').hidden = true;
+                $('shell').hidden = false;
+                return;
+            }
+            this._shellEntered = true;
             $('gate').hidden = true;
             $('reveal').hidden = true;
             $('shell').hidden = false;
@@ -316,8 +348,69 @@
             this.watchScrolling();
             this.startScheduler();
             setTimeout(() => this.runDueSchedules().catch(() => { }), 4000);
+            this.watchDeleted();
             this.startSync();
             this.startNotices();
+        },
+
+        watchDeleted() {
+            Sync.noteDeletedLogin(false);
+            Sync.beforeRun = async () => !(await this.checkDeleted());
+            if (this._deletedTimer) clearInterval(this._deletedTimer);
+            this._deletedTimer = setInterval(() => { this.checkDeleted().catch(() => { }); }, 300000);
+            if (!this._deletedWatch) {
+                this._deletedWatch = true;
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden) this.checkDeleted().catch(() => { });
+                });
+            }
+            setTimeout(() => this.checkDeleted().catch(() => { }), 800);
+        },
+
+        async checkDeleted() {
+            if (this._deletedWiping) return true;
+            const now = Date.now();
+            if (this._deletedChecking) return this._deletedChecking;
+            if (this._deletedAt && now - this._deletedAt < 5000) return false;
+            this._deletedChecking = (async () => {
+                let gone = false;
+                try { gone = await Sync.deletedElsewhere(); } catch (_) { gone = false; }
+                this._deletedAt = Date.now();
+                if (gone) await this.wipeDeletedHere();
+                return gone;
+            })();
+            try { return await this._deletedChecking; } finally { this._deletedChecking = null; }
+        },
+
+        async wipeDeletedHere() {
+            if (this._deletedWiping) return;
+            this._deletedWiping = true;
+            try { Sync.halt(); } catch (_) { }
+            await Promise.race([
+                Promise.all([
+                    window.NymbotDocs ? window.NymbotDocs.wipe().catch(() => { }) : null,
+                    this.clearCaches(),
+                    this.dropDatabases()
+                ]),
+                new Promise((done) => setTimeout(done, 3000))
+            ]);
+            Store.wipe();
+            Identity.forget();
+            try { localStorage.clear(); sessionStorage.clear(); } catch (_) { }
+            try { localStorage.setItem(DELETED_NOTICE_KEY, '1'); } catch (_) { }
+            location.reload();
+        },
+
+        showDeletedNotice() {
+            const el = $('gateDeletedNotice');
+            let show = false;
+            try {
+                show = localStorage.getItem(DELETED_NOTICE_KEY) === '1';
+                localStorage.removeItem(DELETED_NOTICE_KEY);
+            } catch (_) { show = false; }
+            if (!el) return;
+            el.textContent = show ? t('This identity was deleted from another device.') : '';
+            el.hidden = !show;
         },
 
         startNotices() {
@@ -994,11 +1087,21 @@
                 const tray = el('div', 'msg-attachments');
                 for (const a of m.attachments) {
                     const chip = el('span', 'msg-attachment');
-                    if (a.kind === 'image' && a.dataUrl) {
-                        const img = document.createElement('img');
-                        img.src = a.dataUrl;
-                        img.alt = a.name || '';
-                        chip.appendChild(img);
+                    if (a.kind === 'image') {
+                        const src = a.dataUrl || (a.url ? MD.mediaSrc(a.url) : '');
+                        const missing = () => {
+                            chip.classList.add('is-missing');
+                            chip.insertBefore(Icons.node('picture', { size: 14 }), chip.firstChild);
+                        };
+                        if (src) {
+                            const img = document.createElement('img');
+                            img.alt = a.name || '';
+                            img.addEventListener('error', () => { img.remove(); missing(); }, { once: true });
+                            img.src = src;
+                            chip.appendChild(img);
+                        } else {
+                            missing();
+                        }
                     }
                     chip.appendChild(el('span', null, a.name || 'file'));
                     tray.appendChild(chip);
@@ -6340,6 +6443,15 @@
             $('setNotifyMin').value = String([0, 30, 120].includes(Number(events.minSeconds)) ? Number(events.minSeconds) : 0);
             $('notifyEvents').hidden = !$('setReplyNotify').checked;
             $('setReplyNotify').onchange = () => { $('notifyEvents').hidden = !$('setReplyNotify').checked; };
+            $('setAiConsent').checked = window.NymbotAiConsent.allowed();
+            $('setAiConsent').onchange = () => {
+                const on = $('setAiConsent').checked;
+                window.NymbotAiConsent.set(on);
+                if (!on) {
+                    this.closeModals();
+                    this.showAiConsent();
+                }
+            };
             $('setRate').value = String(s.speechRate || 1);
             $('setAutoDelete').value = String(s.autoDeleteDays || 0);
             $('setAutoContinue').value = String(s.autoContinue || 0);
@@ -9699,6 +9811,8 @@
                     : t('Your key lives on this device and nowhere else.');
             $('signerRow').hidden = !Identity.isRemote;
             $('googleBackupRow').hidden = !(KB.enabled && Identity.isLocal && !!Identity._sk);
+            $('appleBackupRow').hidden = !(KB.apple.enabled && Identity.isLocal && !!Identity._sk);
+            this.orderBackupButtons();
             $('passkeyBackupRow').hidden = !(KB.passkey.available() && Identity.isLocal && !!Identity._sk);
             $('setNpub').value = Identity.pubkey
                 ? NT().nip19.npubEncode(Identity.pubkey)
@@ -9865,11 +9979,20 @@
             let ok;
             for (;;) {
                 const local = Identity.isLocal && Identity._sk;
+                const parts = [
+                    t('On this device: your key, every conversation, your settings and your library.'),
+                    t('On our servers: your synced chats, settings and library, your Nymbot conversation history, API keys, background tasks and schedules, shared links, and your credits and purchase records.'),
+                    t("Public relays: anything sent to Nostr relays is kept by the relay operators and can't be deleted by us."),
+                    t('Key backups you saved to iCloud or Google Drive stay there. Delete them in that service if you no longer want them.'),
+                    t('Any remaining Nymbot credits will be lost. To keep them, use Move my whole balance first.'),
+                    t('Other devices signed in to this account will also be wiped the next time they connect.'),
+                    t('This cannot be undone.')
+                ];
+                if (local) parts.push(t('Your private key is only on this device. Copy it first if you want to sign in again later.'));
                 ok = await this.ask({
-                    title: t('Wipe this device'),
-                    body: t('Wipe everything on this device — your key, every conversation, and any credits on a throwaway key?\n\nThis cannot be undone.')
-                        + (local ? '\n\n' + t('Your private key is only on this device. Copy it first if you want to sign in again later.') : ''),
-                    confirm: t('Wipe'),
+                    title: t('Delete account data and wipe device?'),
+                    body: parts.join('\n\n'),
+                    confirm: t('Delete'),
                     danger: true,
                     alt: local ? t('Copy my private key') : null
                 });
@@ -9880,21 +10003,92 @@
                 await this.writeClipboard(NT().nip19.nsecEncode(sk));
             }
             if (ok !== true) return;
-            // Signed while the key is here; bounded so an unresponsive signer cannot hold up the wipe.
-            await Promise.race([
-                Sync.purge(),
-                new Promise((done) => setTimeout(done, 3000))
+            this.closeModals();
+            const overlay = this.deletingOverlay();
+            if (this._deletedTimer) clearInterval(this._deletedTimer);
+            this._deletedWiping = true;
+            const marked = await Promise.race([
+                Sync.markDeleted().catch(() => false),
+                new Promise((done) => setTimeout(() => done(false), 12000))
+            ]);
+            const purgedOnly = await Promise.race([
+                Sync.purge().catch(() => false),
+                new Promise((done) => setTimeout(() => done(false), 12000))
             ]);
             await Promise.race([
                 Promise.all([
                     window.NymbotDocs ? window.NymbotDocs.wipe().catch(() => { }) : null,
-                    this.clearCaches()
+                    this.clearCaches(),
+                    this.dropDatabases()
                 ]),
                 new Promise((done) => setTimeout(done, 3000))
             ]);
             Store.wipe();
             Identity.forget();
-            location.reload();
+            const sweep = () => {
+                try { Store.wipe(); } catch (_) { }
+                try { localStorage.clear(); sessionStorage.clear(); } catch (_) { }
+            };
+            sweep();
+            setInterval(sweep, 250);
+            window.addEventListener('pagehide', sweep);
+            overlay.done(purgedOnly && marked);
+        },
+
+        async dropDatabases() {
+            try {
+                if (!window.indexedDB || typeof indexedDB.databases !== 'function') return;
+                const list = (await indexedDB.databases()) || [];
+                await Promise.all(list.filter(d => d && d.name).map(d => new Promise((resolve) => {
+                    try {
+                        const req = indexedDB.deleteDatabase(d.name);
+                        req.onsuccess = req.onerror = req.onblocked = () => resolve();
+                    } catch (_) { resolve(); }
+                    setTimeout(resolve, 1500);
+                })));
+            } catch (_) { }
+        },
+
+        deletingOverlay() {
+            const ov = el('div', 'delete-done-overlay');
+            ov.setAttribute('role', 'alertdialog');
+            ov.setAttribute('aria-live', 'polite');
+            const status = el('p', 'delete-done-status', t('Deleting your account data on our servers…'));
+            ov.appendChild(status);
+            document.body.appendChild(ov);
+            return {
+                done(purged) {
+                    ov.textContent = '';
+                    const panel = el('div', 'delete-done');
+                    const h = el('h2', '', t('Account data deleted'));
+                    h.id = 'deleteDoneTitle';
+                    ov.setAttribute('aria-labelledby', 'deleteDoneTitle');
+                    panel.appendChild(h);
+                    panel.appendChild(el('p', '', purged
+                        ? t('Your key, conversations and settings are gone from this device, and your account data is gone from our servers.')
+                        : t("Your key, conversations and settings are gone from this device. We couldn't reach our servers to delete your account data there.")));
+                    panel.appendChild(el('p', '', t('Anything already on public relays stays there.')));
+                    const b = el('button', 'btn btn-primary', t('Done'));
+                    b.type = 'button';
+                    b.addEventListener('click', () => {
+                        try { localStorage.clear(); sessionStorage.clear(); } catch (_) { }
+                        location.reload();
+                    });
+                    panel.appendChild(b);
+                    ov.appendChild(panel);
+                    b.focus();
+                }
+            };
+        },
+
+        openDeleteAccount() {
+            this.openAppearance();
+            setTimeout(() => {
+                const b = $('deleteAccountBtn');
+                if (!b) return;
+                b.scrollIntoView({ block: 'center' });
+                b.focus();
+            }, 60);
         },
 
         async clearCaches() {
@@ -10083,6 +10277,7 @@
                 { label: t('Skills'), hint: '/', run: () => window.NymbotSkills.open(this) },
                 { label: t('Saved messages'), hint: '', run: () => this.openPinned() },
                 { label: t('Settings'), hint: '', run: () => this.openAppearance() },
+                { label: t('Delete account data and wipe device'), hint: '', run: () => this.openDeleteAccount() },
                 { label: t('Memory'), hint: '', run: () => this.openMemory() },
                 { label: t('Keyboard shortcuts'), hint: '', run: () => this.openShortcuts() },
                 { label: t('About Nymbot'), hint: '', run: () => this.openAbout() },
@@ -10601,11 +10796,17 @@
                 'passkey-backup': () => this.backupWithPasskey(),
                 'keybackup-save': () => this.backupToGoogle(),
                 'keybackup-remove': () => this.removeGoogleBackups(),
+                'gate-apple': () => this.gateCloud('apple'),
+                'applebackup-save': () => this.backupToCloud('apple'),
+                'applebackup-remove': () => this.removeCloudBackups('apple'),
+                'apple-cancel': () => this.cancelAppleSignIn(),
                 'pin-submit': () => this.submitPin(),
                 'pin-cancel': () => { if (!this._pinBusy) this.closePin(null); },
                 'nickname-save': () => this.saveNicknameField(),
                 'nickname-clear': () => this.clearNicknameField(),
                 'reveal-done': () => { $('reveal').hidden = true; this.enter(); },
+                'ai-consent-accept': () => { window.NymbotAiConsent.set(true); this.enter(); },
+                'ai-consent-decline': () => { window.NymbotAiConsent.set(false); this.showAiConsent(); },
                 'copy': (target) => this.copy(target.dataset.target),
                 'new-chat': () => this.open(this.newConversation()),
                 'toggle-sidebar': () => this.toggleSidebar(),
@@ -10905,6 +11106,7 @@
 
                 if (e.key === 'Escape') {
                     if (e.shiftKey && this.sending) { this.stop(); return; }
+                    if (this._appleCancel) { this.cancelAppleSignIn(); return; }
                     if (this.dictation && !this.dialogOpen()) { this.cancelDictation(); return; }
                     if (this.dialogOpen()) this.settleDialog(false);
                     else if (this.artifact && !document.querySelector('.modal:not([hidden])')
@@ -11279,6 +11481,8 @@
             $('pinFields').hidden = false;
             $('pinAgainRow').hidden = !o.twice;
             $('pinWarn').hidden = !o.twice;
+            if (this._pinWarnText == null) this._pinWarnText = $('pinWarn').textContent;
+            $('pinWarn').textContent = o.warn || this._pinWarnText;
             $('pinPick').hidden = true;
             $('pinSubmit').hidden = false;
             $('pinSubmit').disabled = false;
@@ -11374,6 +11578,86 @@
             return npub.slice(0, 12) + '…' + npub.slice(-6);
         },
 
+        cloud(kind) {
+            if (kind === 'apple') {
+                const A = KB.apple;
+                return {
+                    kind,
+                    api: A,
+                    context: A.CONTEXT,
+                    enabled: () => A.enabled,
+                    signIn: () => A.signIn((signedIn) => this.appleSignInDialog(signedIn)),
+                    backups: () => A.list(),
+                    waiting: t('Waiting for Apple…'),
+                    looking: t('Looking for a backup in your iCloud…'),
+                    failed: t('Apple backup did not work. Try again.'),
+                    unlockTitle: t('Unlock your Apple backup'),
+                    newBody: t('There is no backup in this Apple account yet, so a new key is made on this device. Choose a PIN: the key is encrypted with it here, and only that encrypted copy goes to your iCloud.'),
+                    saving: t('Saving to iCloud…'),
+                    backupTitle: t('Back up to Apple'),
+                    backupBody: t('Choose a PIN. Your key and post-quantum recovery code are encrypted with it on this device, and only that encrypted copy is stored in your iCloud.'),
+                    replaceBody: t('Your iCloud already had a backup of this key under the same PIN. Remove the older copy and keep only the new one?'),
+                    done: t('Backed up to Apple.'),
+                    none: t('There are no backups in this Apple account.'),
+                    removeBody: t('Delete the backup of this key from your iCloud? The key stays on this device; only the encrypted copy in iCloud is removed.'),
+                    removed: t('Removed from iCloud.'),
+                    warn: t('Nobody can recover this PIN, not even us. Write it down somewhere safe. Anyone who has both your Apple account and this PIN can open your key.')
+                };
+            }
+            return {
+                kind: 'google',
+                api: KB,
+                context: KB.CONTEXT,
+                enabled: () => KB.enabled,
+                signIn: () => KB.signIn(),
+                backups: () => this.googleBackups(),
+                waiting: t('Waiting for Google…'),
+                looking: t('Looking for a backup in your Google Drive…'),
+                failed: t('Google backup did not work. Try again.'),
+                unlockTitle: t('Unlock your Google backup'),
+                newBody: t('There is no backup in this Google account yet, so a new key is made on this device. Choose a PIN: the key is encrypted with it here, and only that encrypted copy goes to your Google Drive.'),
+                saving: t('Uploading to Google Drive…'),
+                backupTitle: t('Back up to Google'),
+                backupBody: t('Choose a PIN. Your key and post-quantum recovery code are encrypted with it on this device, and only that encrypted copy is stored in your Google Drive.'),
+                replaceBody: t('Your Google Drive already had a backup of this key under the same PIN. Remove the older copy and keep only the new one?'),
+                done: t('Backed up to Google.'),
+                none: t('There are no backups in this Google account.'),
+                removeBody: t('Delete the backup of this key from your Google Drive? The key stays on this device; only the encrypted copy in Google Drive is removed.'),
+                removed: t('Removed from Google Drive.'),
+                warn: t('Nobody can recover this PIN, not even us. Write it down somewhere safe. Anyone who has both your Google account and this PIN can open your key.')
+            };
+        },
+
+        orderBackupButtons() {
+            const appleFirst = KB.appleFirst();
+            const pairs = [['gateGoogleRow', 'gateAppleRow'], ['googleBackupRow', 'appleBackupRow']];
+            for (const [google, apple] of pairs) {
+                const g = $(google);
+                const a = $(apple);
+                if (!g || !a || !g.parentNode) continue;
+                if (appleFirst) g.parentNode.insertBefore(a, g);
+                else g.parentNode.insertBefore(a, g.nextSibling);
+            }
+        },
+
+        appleSignInDialog(signedIn) {
+            $('appleScrim').hidden = false;
+            $('appleDialog').hidden = false;
+            const cancelled = new Promise((_, reject) => {
+                this._appleCancel = () => reject(Object.assign(new Error(t('Apple sign-in was closed before it finished.')), { canceled: true }));
+            });
+            const close = () => {
+                this._appleCancel = null;
+                $('appleDialog').hidden = true;
+                $('appleScrim').hidden = true;
+            };
+            return Promise.race([signedIn, cancelled]).then((v) => { close(); return v; }, (e) => { close(); throw e; });
+        },
+
+        cancelAppleSignIn() {
+            if (this._appleCancel) this._appleCancel();
+        },
+
         async googleBackups() {
             const files = await KB.list();
             return Promise.all(files.map(async (f) => ({ id: f.id, payload: await KB.download(f.id) })));
@@ -11398,36 +11682,41 @@
             return found;
         },
 
-        async gateGoogle() {
-            if (this._googleBusy) return;
-            this._googleBusy = true;
+        gateGoogle() {
+            return this.gateCloud('google');
+        },
+
+        async gateCloud(kind) {
+            if (this._cloudBusy) return;
+            this._cloudBusy = true;
+            const p = this.cloud(kind);
             this.gateError('');
             try {
-                this.gateBusy(t('Waiting for Google…'));
-                const account = await KB.signIn();
-                this.gateBusy(t('Looking for a backup in your Google Drive…'));
-                const backups = await this.googleBackups();
+                this.gateBusy(p.waiting);
+                const account = await p.signIn();
+                this.gateBusy(p.looking);
+                const backups = await p.backups();
                 this.gateBusy('');
-                if (backups.length) await this.restoreFromGoogle(account, backups);
-                else await this.newKeyWithGoogle(account);
+                if (backups.length) await this.restoreFromCloud(p, account, backups);
+                else await this.newKeyWithCloud(p, account);
             } catch (e) {
                 this.gateBusy('');
-                this.gateError(e.message || t('Google backup did not work. Try again.'));
+                if (!e || !e.canceled) this.gateError((e && e.message) || p.failed);
             } finally {
-                KB.signOut();
-                this._googleBusy = false;
+                p.api.signOut();
+                this._cloudBusy = false;
             }
         },
 
-        async restoreFromGoogle(account, backups) {
+        async restoreFromCloud(p, account, backups) {
             const found = await this.pinDialog({
-                title: t('Unlock your Google backup'),
+                title: p.unlockTitle,
                 body: t('Enter the PIN you chose when you backed up your key. The encrypted copy is opened here on this device, and the PIN never leaves it.'),
                 confirm: t('Unlock'),
                 busy: t('Unlocking…'),
                 limited: true,
                 check: async (pin) => {
-                    const key = await KB.deriveKey(pin, account);
+                    const key = await KB.deriveKey(pin, account, p.context);
                     const opened = this.openBackups(backups, key);
                     KB.wipe(key);
                     if (!opened.length) return { error: t('Wrong PIN. Wait {seconds} s before trying again.', { seconds: this.wrongPinSeconds() }) };
@@ -11453,21 +11742,22 @@
             }
         },
 
-        async newKeyWithGoogle(account) {
+        async newKeyWithCloud(p, account) {
             const sk = NT().generateSecretKey();
             const code = Identity.newRootCode();
             const done = await this.pinDialog({
                 title: t('Choose a PIN for your backup'),
-                body: t('There is no backup in this Google account yet, so a new key is made on this device. Choose a PIN: the key is encrypted with it here, and only that encrypted copy goes to your Google Drive.'),
+                body: p.newBody,
                 confirm: t('Back up and continue'),
                 busy: t('Encrypting…'),
                 twice: true,
+                warn: p.warn,
                 check: async (pin) => {
-                    const key = await KB.deriveKey(pin, account);
+                    const key = await KB.deriveKey(pin, account, p.context);
                     let payload;
                     try { payload = KB.encrypt(sk, key, code); } finally { KB.wipe(key); }
-                    this.modalStatus('pinStatus', t('Uploading to Google Drive…'));
-                    await KB.upload(payload);
+                    this.modalStatus('pinStatus', p.saving);
+                    await p.api.upload(payload);
                     return true;
                 }
             });
@@ -11478,27 +11768,33 @@
             }
         },
 
-        async backupToGoogle() {
-            if (!KB.enabled || !Identity.isLocal || !Identity._sk || this._googleBusy) return;
-            this._googleBusy = true;
+        backupToGoogle() {
+            return this.backupToCloud('google');
+        },
+
+        async backupToCloud(kind) {
+            const p = this.cloud(kind);
+            if (!p.enabled() || !Identity.isLocal || !Identity._sk || this._cloudBusy) return;
+            this._cloudBusy = true;
             const own = Identity.pubkey;
             try {
-                this.modalStatus('settingsStatus', t('Waiting for Google…'));
-                const account = await KB.signIn();
+                this.modalStatus('settingsStatus', p.waiting);
+                const account = await p.signIn();
                 this.modalStatus('settingsStatus', '');
                 const made = await this.pinDialog({
-                    title: t('Back up to Google'),
-                    body: t('Choose a PIN. Your key and post-quantum recovery code are encrypted with it on this device, and only that encrypted copy is stored in your Google Drive.'),
+                    title: p.backupTitle,
+                    body: p.backupBody,
                     confirm: t('Back up'),
                     busy: t('Encrypting…'),
                     twice: true,
+                    warn: p.warn,
                     check: async (pin) => {
-                        const key = await KB.deriveKey(pin, account);
+                        const key = await KB.deriveKey(pin, account, p.context);
                         try {
                             const payload = KB.encrypt(Identity._sk, key, Identity.rootCode());
-                            this.modalStatus('pinStatus', t('Uploading to Google Drive…'));
-                            const uploaded = await KB.upload(payload);
-                            const others = (await this.googleBackups()).filter((b) => b.id !== uploaded.id);
+                            this.modalStatus('pinStatus', p.saving);
+                            const uploaded = await p.api.upload(payload);
+                            const others = (await p.backups()).filter((b) => b.id !== uploaded.id);
                             const older = [];
                             for (const f of this.openBackups(others, key)) {
                                 if (f.pubkey === own) older.push(...f.ids);
@@ -11514,32 +11810,38 @@
                 if (made.older.length) {
                     const replace = await this.ask({
                         title: t('Replace the older backup?'),
-                        body: t('Your Google Drive already had a backup of this key under the same PIN. Remove the older copy and keep only the new one?'),
+                        body: p.replaceBody,
                         confirm: t('Replace'),
                         cancel: t('Keep both')
                     });
-                    if (replace === true) for (const id of made.older) await KB.remove(id);
+                    if (replace === true) for (const id of made.older) await p.api.remove(id);
                 }
-                this.modalStatus('settingsStatus', t('Backed up to Google.'), 'ok');
+                this.modalStatus('settingsStatus', p.done, 'ok');
             } catch (e) {
-                this.modalStatus('settingsStatus', e.message || t('Google backup did not work. Try again.'), 'warn');
+                if (e && e.canceled) this.modalStatus('settingsStatus', '');
+                else this.modalStatus('settingsStatus', (e && e.message) || p.failed, 'warn');
             } finally {
-                KB.signOut();
-                this._googleBusy = false;
+                p.api.signOut();
+                this._cloudBusy = false;
             }
         },
 
-        async removeGoogleBackups() {
-            if (!KB.enabled || !Identity.isLocal || this._googleBusy) return;
-            this._googleBusy = true;
+        removeGoogleBackups() {
+            return this.removeCloudBackups('google');
+        },
+
+        async removeCloudBackups(kind) {
+            const p = this.cloud(kind);
+            if (!p.enabled() || !Identity.isLocal || this._cloudBusy) return;
+            this._cloudBusy = true;
             const own = Identity.pubkey;
             try {
-                this.modalStatus('settingsStatus', t('Waiting for Google…'));
-                const account = await KB.signIn();
-                this.modalStatus('settingsStatus', t('Looking for a backup in your Google Drive…'));
-                const backups = await this.googleBackups();
+                this.modalStatus('settingsStatus', p.waiting);
+                const account = await p.signIn();
+                this.modalStatus('settingsStatus', p.looking);
+                const backups = await p.backups();
                 if (!backups.length) {
-                    this.modalStatus('settingsStatus', t('There are no backups in this Google account.'), 'ok');
+                    this.modalStatus('settingsStatus', p.none, 'ok');
                     return;
                 }
                 this.modalStatus('settingsStatus', '');
@@ -11550,7 +11852,7 @@
                     busy: t('Unlocking…'),
                     limited: true,
                     check: async (pin) => {
-                        const key = await KB.deriveKey(pin, account);
+                        const key = await KB.deriveKey(pin, account, p.context);
                         const ids = [];
                         for (const f of this.openBackups(backups, key)) {
                             if (f.pubkey === own) ids.push(...f.ids);
@@ -11565,18 +11867,19 @@
                 if (!found) return;
                 const sure = await this.ask({
                     title: t('Remove backups'),
-                    body: t('Delete the backup of this key from your Google Drive? The key stays on this device; only the encrypted copy in Google Drive is removed.'),
+                    body: p.removeBody,
                     confirm: t('Remove'),
                     danger: true
                 });
                 if (sure !== true) return;
-                for (const id of found.ids) await KB.remove(id);
-                this.modalStatus('settingsStatus', t('Removed from Google Drive.'), 'ok');
+                for (const id of found.ids) await p.api.remove(id);
+                this.modalStatus('settingsStatus', p.removed, 'ok');
             } catch (e) {
-                this.modalStatus('settingsStatus', e.message || t('Google backup did not work. Try again.'), 'warn');
+                if (e && e.canceled) this.modalStatus('settingsStatus', '');
+                else this.modalStatus('settingsStatus', (e && e.message) || p.failed, 'warn');
             } finally {
-                KB.signOut();
-                this._googleBusy = false;
+                p.api.signOut();
+                this._cloudBusy = false;
             }
         },
 

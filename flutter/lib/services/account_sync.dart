@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../core/crypto/pq.dart' as pq;
 import '../models/artifact.dart';
@@ -71,6 +72,13 @@ class AccountSync {
   ];
 
   bool blocked = false;
+
+  final Map<String, String> rejected = {};
+
+  void _reject(String dTag, String why) {
+    rejected[dTag] = why;
+    debugPrint('Nymbot sync: the $dTag row was not saved: $why');
+  }
 
   DateTime? lastAt;
 
@@ -169,11 +177,121 @@ class AccountSync {
     return pq.isPq2Payload(first) ? 'pq' : 'c';
   }
 
+  static const List<String> localOnly = [
+    'dataUrl',
+    'bytesBase64',
+    'file',
+    'uploading',
+    'error',
+  ];
+
+  static String? hashOfUrl(Object? url) {
+    if (url is! String) return null;
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.pathSegments.isEmpty) return null;
+    final m = RegExp(r'^([0-9a-fA-F]{64})(\.[a-zA-Z0-9]+)?$')
+        .firstMatch(uri.pathSegments.last);
+    return m?.group(1)!.toLowerCase();
+  }
+
+  static Object? syncAttachment(Object? a) {
+    if (a is! Map) return a;
+    final out = <String, dynamic>{};
+    a.forEach((k, v) {
+      if (!localOnly.contains(k)) out['$k'] = v;
+    });
+    if (out['sha256'] == null) {
+      final sha = hashOfUrl(out['url']);
+      if (sha != null) out['sha256'] = sha;
+    }
+    if (out['text'] is String) out.remove('omitted');
+    return out;
+  }
+
+  static Map<String, dynamic> syncMessage(Map<String, dynamic> m) {
+    final list = m['attachments'];
+    if (list is! List || list.isEmpty) return m;
+    return {
+      ...m,
+      'attachments': [for (final a in list) syncAttachment(a)],
+    };
+  }
+
+  static Map<String, dynamic> _withoutText(Map<String, dynamic> m) {
+    final list = m['attachments'];
+    if (list is! List || !list.any((a) => a is Map && a['text'] is String)) {
+      return m;
+    }
+    return {
+      ...m,
+      'attachments': [
+        for (final a in list)
+          if (a is Map && a['text'] is String)
+            {
+              for (final e in a.entries)
+                if (e.key != 'text') '${e.key}': e.value,
+              'omitted': true,
+            }
+          else
+            a,
+      ],
+    };
+  }
+
+  static List<Map<String, dynamic>> keepLocal(
+      List<Map<String, dynamic>> merged, List<Map<String, dynamic>> mine) {
+    final held = <String, Map<String, dynamic>>{
+      for (final m in mine)
+        if (m['id'] is String && m['attachments'] is List &&
+            (m['attachments'] as List).isNotEmpty)
+          m['id'] as String: m,
+    };
+    if (held.isEmpty) return merged;
+    return [
+      for (final m in merged) _restoreLocal(m, held[m['id']]),
+    ];
+  }
+
+  static Map<String, dynamic> _restoreLocal(
+      Map<String, dynamic> m, Map<String, dynamic>? local) {
+    final list = m['attachments'];
+    if (local == null || identical(local, m) || list is! List) return m;
+    final byId = <Object?, Map>{
+      for (final a in local['attachments'] as List)
+        if (a is Map && a['id'] != null) a['id']: a,
+    };
+    var changed = false;
+    final attachments = [
+      for (final a in list)
+        () {
+          if (a is! Map) return a;
+          final own = byId[a['id']];
+          if (own == null) return a;
+          final back = <String, dynamic>{
+            for (final key in localOnly)
+              if (own[key] != null && a[key] == null) key: own[key],
+            if (a['omitted'] == true && own['text'] is String)
+              'text': own['text'],
+          };
+          if (back.isEmpty) return a;
+          changed = true;
+          final copy = <String, dynamic>{
+            for (final e in a.entries) '${e.key}': e.value,
+            ...back,
+          };
+          if (copy['text'] is String) copy.remove('omitted');
+          return copy;
+        }(),
+    ];
+    return changed ? {...m, 'attachments': attachments} : m;
+  }
+
   static List<Map<String, dynamic>> fitMessages(
       List<Map<String, dynamic>> msgs) {
+    final list = [...msgs];
     var total = 64;
     final sizes = [
-      for (final m in msgs) utf8.encode(jsonEncode(m)).length + 1,
+      for (final m in list) utf8.encode(jsonEncode(m)).length + 1,
     ];
     for (final n in sizes) {
       total += n;
@@ -181,11 +299,19 @@ class AccountSync {
     final budget = sizes.isNotEmpty && 64 + sizes.last > rowMaxBytes
         ? rowHardBytes
         : rowMaxBytes;
+    for (var i = 0; i < list.length && total > budget; i++) {
+      final shed = _withoutText(list[i]);
+      if (identical(shed, list[i])) continue;
+      final n = utf8.encode(jsonEncode(shed)).length + 1;
+      total -= sizes[i] - n;
+      sizes[i] = n;
+      list[i] = shed;
+    }
     var start = 0;
-    while (total > budget && start < msgs.length - 1) {
+    while (total > budget && start < list.length - 1) {
       total -= sizes[start++];
     }
-    return start == 0 ? msgs : msgs.sublist(start);
+    return start == 0 ? list : list.sublist(start);
   }
 
   Future<String?> _seal(String plaintext) async {
@@ -673,7 +799,7 @@ class AccountSync {
         'id': conv.id,
         'messages': fitMessages([
           for (final m in kept)
-            _msgToWire(m, _remoteRecord('chat-${conv.id}', m.id))
+            syncMessage(_msgToWire(m, _remoteRecord('chat-${conv.id}', m.id)))
         ]),
       };
       final tx = fitTranscripts(entry, _store.transcripts(conv.id));
@@ -906,16 +1032,21 @@ class AccountSync {
       if (graves.containsKey(id) || _store.isGhost(id)) continue;
       final mine = _store.messages(id);
       final theirs = _maps(entry['messages']);
-      final merged = _mergeById(
-        [for (final m in mine) _msgToWire(m, null)],
-        supportCut > 0 && id == kSupportChatId
-            ? [
-                for (final m in theirs)
-                  if (supportMessageAt(m) > supportCut) m
-              ]
-            : theirs,
-        graves,
-      ).map(_msgFromWire).toList()
+      final mineWire = [for (final m in mine) _msgToWire(m, null)];
+      final merged = keepLocal(
+              _mergeById(
+                mineWire,
+                supportCut > 0 && id == kSupportChatId
+                    ? [
+                        for (final m in theirs)
+                          if (supportMessageAt(m) > supportCut) m
+                      ]
+                    : theirs,
+                graves,
+              ),
+              mineWire)
+          .map(_msgFromWire)
+          .toList()
         ..sort((a, b) => a.at.compareTo(b.at));
       if (_messagesChanged(mine, merged)) {
         await _store.saveMessages(id, merged);
@@ -1178,7 +1309,11 @@ class AccountSync {
         return true;
       }
       final blob = await _seal(plain);
-      if (blob == null || stale()) return false;
+      if (blob == null) {
+        if (!stale()) _reject(dTag, 'too large to seal');
+        return false;
+      }
+      if (stale()) return false;
       final put = await _storage.settingsPut(_identity.signer,
           category: category,
           blob: blob,
@@ -1193,7 +1328,12 @@ class AccountSync {
         current = merged.value;
         continue;
       }
-      if (!put.ok) return false;
+      if (!put.ok) {
+        final error = put.error;
+        if (error != null) _reject(dTag, error);
+        return false;
+      }
+      rejected.remove(dTag);
       if (dTag == 'settings' && current is Map) {
         await _store.settlePushedSettings(
             _settingsFromWire(current.cast<String, dynamic>()).toJson());
@@ -1220,8 +1360,21 @@ class AccountSync {
     return (value: local[dTag]);
   }
 
-  Future<SyncRound> run() {
-    if (!enabled) return Future.value(const SyncRound.skipped());
+  Future<bool> Function()? beforeRun;
+
+  Future<bool> _gateOpen() async {
+    final gate = beforeRun;
+    if (gate == null) return true;
+    try {
+      return await gate();
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<SyncRound> run() async {
+    if (!enabled) return const SyncRound.skipped();
+    if (!await _gateOpen()) return const SyncRound.skipped();
     final going = _running;
     if (going != null) {
       _again = true;
@@ -1230,8 +1383,9 @@ class AccountSync {
     return _start().done;
   }
 
-  Future<SyncRound> kick() {
-    if (!enabled) return Future.value(const SyncRound.skipped());
+  Future<SyncRound> kick() async {
+    if (!enabled) return const SyncRound.skipped();
+    if (!await _gateOpen()) return const SyncRound.skipped();
     return _restart().done;
   }
 

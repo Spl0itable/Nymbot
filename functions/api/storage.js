@@ -1,7 +1,6 @@
 // D1-backed user storage: flair shop, encrypted settings, profile mirror, PM wrap archive, channel archive.
 
 import { ledgerCall } from "./_ledger.js";
-import { apiDebtCollect } from "./_apibill.js";
 import { bgDriver } from "./_background.js";
 export { NymLedger } from "./_ledger.js";
 import {
@@ -679,7 +678,68 @@ async function handleSettingsAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
-// Scoped by app; credits, shop items, the free-tier counter and zap receipts deliberately survive a wipe.
+var DELETED_MARK_D = "nymbot-account-deleted";
+var DELETED_MARK_TTL_S = 90 * 86400;
+var DELETED_MARK_SKEW_S = 600;
+var DELETED_CHECK_RATE = 30;
+var DELETED_MARK_DDL = "CREATE TABLE IF NOT EXISTS nymbot_deleted_marks (pubkey TEXT PRIMARY KEY, created_at INTEGER NOT NULL, event_id TEXT NOT NULL, sig TEXT NOT NULL)";
+
+function deletedMarkValid(pubkey, at, id, sig) {
+  try {
+    if (!Number.isInteger(at) || at <= 0) return false;
+    if (typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) return false;
+    if (typeof sig !== "string" || !/^[0-9a-f]{128}$/.test(sig)) return false;
+    var ev = { kind: 30078, pubkey: pubkey, created_at: at, tags: [["d", DELETED_MARK_D]], content: "" };
+    if (getEventHash(ev) !== id) return false;
+    return schnorr.verify(sig, id, pubkey);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function handleDeletedMarkAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  };
+  var action = body.action;
+  if (action !== "panic-mark" && action !== "panic-check") return json({ error: "Unknown action" }, 400);
+  if (!hasD1(env.DB_SETTINGS)) return json({ error: "Settings storage is not configured (missing DB_SETTINGS binding)." }, 503);
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  var nowSec = Math.floor(Date.now() / 1000);
+
+  if (action === "panic-check") {
+    if (!(await storageRateTake("deleted-check", userPubkey, 1, DELETED_CHECK_RATE))) return json({ error: "Too many requests." }, 429);
+    var row = null;
+    try {
+      row = await env.DB_SETTINGS.prepare("SELECT created_at, event_id, sig FROM nymbot_deleted_marks WHERE pubkey = ?").bind(userPubkey).first();
+    } catch (e) { row = null; }
+    if (row && Number(row.created_at) < nowSec - DELETED_MARK_TTL_S) {
+      try { await env.DB_SETTINGS.prepare("DELETE FROM nymbot_deleted_marks WHERE pubkey = ?").bind(userPubkey).run(); } catch (e) { }
+      row = null;
+    }
+    return json({ mark: row ? { at: Number(row.created_at), id: row.event_id, sig: row.sig } : null });
+  }
+
+  var at = body.at;
+  if (!Number.isInteger(at) || Math.abs(at - nowSec) > DELETED_MARK_SKEW_S) return json({ error: "Marker time is out of range." }, 400);
+  if (!deletedMarkValid(userPubkey, at, body.id, body.sig)) return json({ error: "Marker signature is invalid." }, 400);
+  await env.DB_SETTINGS.prepare(DELETED_MARK_DDL).run();
+  await env.DB_SETTINGS.prepare(
+    "INSERT INTO nymbot_deleted_marks (pubkey, created_at, event_id, sig) VALUES (?, ?, ?, ?) " +
+    "ON CONFLICT(pubkey) DO UPDATE SET created_at = excluded.created_at, event_id = excluded.event_id, sig = excluded.sig " +
+    "WHERE excluded.created_at > nymbot_deleted_marks.created_at"
+  ).bind(userPubkey, at, body.id, body.sig).run();
+  try { await env.DB_SETTINGS.prepare("DELETE FROM nymbot_deleted_marks WHERE created_at < ?").bind(nowSec - DELETED_MARK_TTL_S).run(); } catch (e) { }
+  return json({ ok: true, at: at });
+}
+
 async function handleAccountAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -700,6 +760,7 @@ async function handleAccountAction(context, body) {
   if (app !== "nymchat" && app !== "nymbot") return json({ error: "Unknown app" }, 400);
 
   var removed = { settings: 0, profile: 0, pm: 0 };
+  var keyIds = [];
   var changes = function (r) { return (r && r.meta && r.meta.changes) || 0; };
 
   if (hasD1(env.DB_SETTINGS)) {
@@ -716,19 +777,35 @@ async function handleAccountAction(context, body) {
       if (!hasD1(db)) return 0;
       try { return changes(await db.prepare("DELETE FROM " + table + " WHERE pubkey = ?").bind(userPubkey).run()); } catch (e) { return 0; }
     };
+    if (hasD1(env.DB_CREDITS)) {
+      try {
+        var keyRows = await env.DB_CREDITS.prepare("SELECT id FROM api_keys WHERE pubkey = ?").bind(userPubkey).all();
+        keyIds = ((keyRows && keyRows.results) || []).map(function (r) { return r.id; });
+      } catch (e) { }
+    }
     removed.apiKeys = await purgeRows(env.DB_CREDITS, "api_keys");
     removed.apiNwc = await purgeRows(env.DB_CREDITS, "api_nwc");
     removed.apiQueries = await purgeRows(env.DB_BOT, "api_queries");
     removed.apiVideoJobs = await purgeRows(env.DB_BOT, "api_video_jobs");
     removed.usage = await purgeRows(env.DB_BOT, "bot_usage");
+    removed.bot = 0;
+    var botTables = ["botpm_thread", "botpm_wraps", "botpm_turns", "botpm_runs", "botpm_results", "botpm_steer", "botpm_locks", "botpm_summary"];
+    for (var bi = 0; bi < botTables.length; bi++) removed.bot += await purgeRows(env.DB_BOT, botTables[bi]);
+    removed.shares = 0;
+    if (hasD1(env.DB_PM)) {
+      try { removed.shares = changes(await env.DB_PM.prepare("DELETE FROM shares WHERE owner = ?").bind(userPubkey).run()); } catch (e) { }
+    }
     try {
       var bgCleared = await bgDriver(env, userPubkey, { drive: "clear" });
       if (bgCleared) removed.schedules = Number(bgCleared.deleted) || 0;
     } catch (e) { }
-    if (hasD1(env.DB_CREDITS)) {
-      for (var tier of ["standard", "pro"]) {
-        try { await apiDebtCollect(env, userPubkey, tier); } catch (e) { }
-      }
+    removed.apiDebt = await purgeRows(env.DB_CREDITS, "api_debt");
+    removed.staleMark = 0;
+    if (hasD1(env.DB_SETTINGS)) {
+      try {
+        removed.staleMark = changes(await env.DB_SETTINGS.prepare("DELETE FROM nymbot_deleted_marks WHERE pubkey = ? AND created_at < ?")
+          .bind(userPubkey, Math.floor(Date.now() / 1000) - 600).run());
+      } catch (e) { }
     }
   }
 
@@ -747,6 +824,23 @@ async function handleAccountAction(context, body) {
     }
   }
 
+  var incomplete = [];
+  var erased = null;
+  try { erased = await ledgerCall(env, { op: "account-erase", pubkey: userPubkey, keyIds: keyIds }); } catch (e) { erased = null; }
+  if (erased && erased.ok) removed.ledger = erased;
+  else incomplete.push("credits");
+  var dropWhere = async function (db, sql) {
+    if (!hasD1(db)) return 0;
+    try { return changes(await db.prepare(sql).bind(userPubkey).run()); } catch (e) { return 0; }
+  };
+  removed.vouchers = await dropWhere(env.DB_CREDITS, "DELETE FROM voucher_redeem WHERE pubkey = ?");
+  removed.shop = await dropWhere(env.DB_SHOP, "DELETE FROM shop WHERE pubkey = ?");
+  removed.codes = await dropWhere(env.DB_CODES, "DELETE FROM codes WHERE owner = ?");
+  removed.invoices = await dropWhere(env.DB_INVOICES, "DELETE FROM invoices WHERE json_extract(data, '$.pubkey') = ?1");
+  removed.zaps = await dropWhere(env.DB_CHANNELS, "DELETE FROM zaps WHERE pubkey = ?1 OR instr(json, ?1) > 0") +
+    (env.DB_PM !== env.DB_CHANNELS ? await dropWhere(env.DB_PM, "DELETE FROM zaps WHERE pubkey = ?1 OR instr(json, ?1) > 0") : 0);
+
+  if (incomplete.length) return json({ ok: false, app: app, removed: removed, incomplete: incomplete, error: "Some account data could not be deleted. Try again." }, 503);
   return json({ ok: true, app: app, removed: removed });
 }
 
@@ -1936,6 +2030,17 @@ async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {
       return await handleSettingsAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && (body.action === "panic-mark" || body.action === "panic-check")) {
+    try {
+      return await handleDeletedMarkAction(context, body);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {

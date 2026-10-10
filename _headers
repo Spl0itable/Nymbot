@@ -1,7 +1,7 @@
 # The one extra sha256 is errors/runtime.js; `npm run build` swaps in the real hash for ERROR-PAGE-RUNTIME.
 
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-ERROR-PAGE-RUNTIME' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client https://cdn.apple-cloudkit.com/ck/2/cloudkit.js; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; manifest-src 'self' data:
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

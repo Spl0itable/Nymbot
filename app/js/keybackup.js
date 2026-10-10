@@ -248,6 +248,197 @@
         await authorized(FILES + '/' + encodeURIComponent(id), { method: 'DELETE' });
     }
 
+    const CLOUDKIT_JS = 'https://cdn.apple-cloudkit.com/ck/2/cloudkit.js';
+    const APPLE_CONTEXT = 'nym-apple-backup';
+    const BACKUP_FORMAT = 'nym-key-backup-v1';
+    const RECORD_TYPE = 'KeyBackup';
+    const RECORD_NAME = /^nymbk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const SIGN_IN_SLOT = 'apple-sign-in-button';
+
+    function appleFirst(nav) {
+        const n = nav || globalThis.navigator || {};
+        const data = n.userAgentData;
+        if (data && typeof data.platform === 'string' && data.platform) return /^(macOS|iOS)$/i.test(data.platform);
+        const ua = String(n.userAgent || '');
+        if (/iPhone|iPad|iPod/.test(ua)) return true;
+        if (/Macintosh/.test(ua) && Number(n.maxTouchPoints) > 1) return true;
+        return /Macintosh/.test(ua);
+    }
+
+    function appleConfig() {
+        const C = globalThis.NymbotConfig || {};
+        return {
+            container: String(C.cloudKitContainer || '').trim(),
+            apiToken: String(C.cloudKitApiToken || '').trim(),
+            environment: String(C.cloudKitEnvironment || 'production').trim()
+        };
+    }
+
+    function appleEnabled() {
+        const c = appleConfig();
+        return !!(c.container && c.apiToken);
+    }
+
+    function recordName() {
+        return 'nymbk-' + globalThis.crypto.randomUUID();
+    }
+
+    function isRecordName(name) {
+        return typeof name === 'string' && RECORD_NAME.test(name);
+    }
+
+    let ckLoading = null;
+    let ckContainer = null;
+    let appleSession = null;
+
+    function loadCloudKit() {
+        if (globalThis.CloudKit && typeof globalThis.CloudKit.configure === 'function') return Promise.resolve();
+        if (ckLoading) return ckLoading;
+        ckLoading = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = CLOUDKIT_JS;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => {
+                ckLoading = null;
+                script.remove();
+                reject(new Error(t('Could not reach Apple. Check your connection and try again.')));
+            };
+            document.head.appendChild(script);
+        });
+        return ckLoading;
+    }
+
+    function container() {
+        if (ckContainer) return ckContainer;
+        const c = appleConfig();
+        const made = globalThis.CloudKit.configure({
+            containers: [{
+                containerIdentifier: c.container,
+                apiTokenAuth: {
+                    apiToken: c.apiToken,
+                    persist: false,
+                    signInButton: { id: SIGN_IN_SLOT, theme: 'black' }
+                },
+                environment: c.environment
+            }]
+        });
+        ckContainer = made && typeof made.getDefaultContainer === 'function'
+            ? made.getDefaultContainer()
+            : globalThis.CloudKit.getDefaultContainer();
+        return ckContainer;
+    }
+
+    function appleError(e) {
+        if (e && e.canceled) return e;
+        const code = e && (e.ckErrorCode || e.serverErrorCode);
+        if (code === 'AUTHENTICATION_REQUIRED' || code === 'AUTHENTICATION_FAILED') {
+            appleSession = null;
+            return new Error(t('Apple no longer accepts this sign-in. Sign in with Apple again.'));
+        }
+        if (code === 'QUOTA_EXCEEDED') return new Error(t('Your iCloud storage is full, so the backup could not be saved. Free up space and try again.'));
+        if (code === 'NETWORK_ERROR') return new Error(t('Could not reach iCloud. Check your connection and try again.'));
+        if (code) return new Error(t('iCloud answered with an error ({code}). Try again.', { code }));
+        return e instanceof Error ? e : new Error(t('Apple backup did not work. Try again.'));
+    }
+
+    async function ck(run) {
+        let resp;
+        try { resp = await run(); } catch (e) { throw appleError(e); }
+        if (resp && resp.hasErrors) throw appleError((resp.errors && resp.errors[0]) || {});
+        return resp;
+    }
+
+    function database() {
+        if (!appleSession) throw new Error(t('Not signed in to Apple.'));
+        return appleSession.container.privateCloudDatabase;
+    }
+
+    async function appleSignIn(waitForUser) {
+        if (!appleEnabled()) throw new Error(t('Apple backup is not set up in this app.'));
+        appleSession = null;
+        await loadCloudKit();
+        const box = container();
+        let identity = await ck(() => box.setUpAuth());
+        if (!identity) {
+            const signedIn = box.whenUserSignsIn();
+            try {
+                identity = await (typeof waitForUser === 'function' ? waitForUser(signedIn) : signedIn);
+            } catch (e) {
+                throw appleError(e);
+            }
+        }
+        const name = identity && identity.userRecordName;
+        if (!name) throw new Error(t('Apple did not say which account this is.'));
+        appleSession = { container: box, account: String(name) };
+        return appleSession.account;
+    }
+
+    function appleSignOut() {
+        const was = appleSession;
+        appleSession = null;
+        if (!was) return;
+        try { was.container.signOut(); } catch (_) { }
+    }
+
+    async function appleList() {
+        const db = database();
+        const out = [];
+        let resp = await ck(() => db.performQuery({
+            recordType: RECORD_TYPE,
+            sortBy: [{ fieldName: 'updatedAt', ascending: false }]
+        }));
+        for (let page = 0; page < 50; page++) {
+            for (const r of (resp && resp.records) || []) {
+                const payload = r && r.fields && r.fields.payload && r.fields.payload.value;
+                if (!isRecordName(r && r.recordName) || typeof payload !== 'string' || !payload) continue;
+                const at = r.fields.updatedAt && r.fields.updatedAt.value;
+                out.push({ id: r.recordName, payload, updatedAt: typeof at === 'number' ? at : 0 });
+            }
+            if (!resp || !resp.moreComing) break;
+            const prev = resp;
+            resp = await ck(() => db.performQuery(prev));
+        }
+        return out.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
+    async function appleUpload(payload) {
+        const db = database();
+        const name = recordName();
+        await ck(() => db.saveRecords([{
+            recordType: RECORD_TYPE,
+            recordName: name,
+            fields: {
+                payload: { value: String(payload) },
+                format: { value: BACKUP_FORMAT },
+                updatedAt: { value: Date.now() }
+            }
+        }]));
+        return { id: name, name };
+    }
+
+    async function appleRemove(id) {
+        if (!isRecordName(id)) return;
+        const db = database();
+        await ck(() => db.deleteRecords([{ recordName: id }]));
+    }
+
+    const apple = {
+        CONTEXT: APPLE_CONTEXT,
+        RECORD_TYPE,
+        FORMAT: BACKUP_FORMAT,
+        SIGN_IN_SLOT,
+        get enabled() { return appleEnabled(); },
+        get accountId() { return appleSession ? appleSession.account : null; },
+        recordName,
+        isRecordName,
+        signIn: appleSignIn,
+        signOut: appleSignOut,
+        list: appleList,
+        upload: appleUpload,
+        remove: appleRemove
+    };
+
     const PASSKEY_FORMAT = 'nym-passkey-backup-v1';
     const PRF_CONTEXT = 'nym-key-backup-v1';
     const ENC_LABEL = 'nym-passkey-enc';
@@ -536,6 +727,8 @@
         download,
         upload,
         remove,
+        appleFirst,
+        apple,
         passkey
     };
 })();

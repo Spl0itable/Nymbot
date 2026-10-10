@@ -38,6 +38,7 @@ List<(String, String, String)> paletteActions() => [
       ('prompts', t('Prompt library'), shortcutLabel('Shift+P')),
       ('saved', t('Saved messages'), ''),
       ('settings', t('Settings'), ''),
+      ('delete-account', t('Delete account data and wipe device'), ''),
       ('memory', t('Memory'), ''),
       ('shortcuts', t('Keyboard shortcuts'), ''),
       ('about', t('About Nymbot'), ''),

@@ -62,8 +62,8 @@
             lines.push(m.content || '');
             for (const a of m.attachments || []) {
                 lines.push('');
-                lines.push(a.kind === 'image'
-                    ? `![${a.name}](${a.dataUrl})`
+                lines.push(a.kind === 'image' && (a.dataUrl || a.url)
+                    ? `![${a.name}](${a.dataUrl || a.url})`
                     : (a.kind === 'video' && a.url
                         ? `**Attached video:** [${a.name}](${a.url})`
                         : `**Attached:** \`${a.name}\``));

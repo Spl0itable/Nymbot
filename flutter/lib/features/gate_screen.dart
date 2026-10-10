@@ -449,6 +449,8 @@ class _GateScreenState extends State<GateScreen> {
               accountId: accountId,
               files: files,
               status: _backupNote,
+              legacyAccount: legacyAccountFor(store),
+              migrateTo: store,
             ) ??
             [];
         if (found.isEmpty || !mounted) return;
@@ -774,6 +776,29 @@ class _GateScreenState extends State<GateScreen> {
         children: [
           _wordmark(context),
           const SizedBox(height: 20),
+          if (AppScope.of(context).deletedElsewhere) ...[
+            Semantics(
+              liveRegion: true,
+              child: Container(
+                key: const ValueKey('gate-deleted-notice'),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.35)),
+                ),
+                child: Text(
+                  t('This identity was deleted from another device.'),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Text(
             t('A private AI assistant. There is no account to make — a key on this '
             'device is the whole of it.'),

@@ -367,7 +367,7 @@ export const OUTLINE = [
           { id: 'encryption-at-rest', title: 'Identity encryption' },
           { id: 'unlock-methods', title: 'Passphrase, passkey or biometrics' },
           { id: 'synced-settings', title: 'What syncs between your devices' },
-          { id: 'panic', title: 'Wiping this device' },
+          { id: 'panic', title: 'Deleting your account' },
         ],
       },
     ],

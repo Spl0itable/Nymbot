@@ -62,4 +62,7 @@ class NymbotConfig {
   static const String appleKeychainGroup = String.fromEnvironment(
       'APPLE_KEYCHAIN_GROUP',
       defaultValue: 'KJ6U2Y9B2M.com.nym.shared');
+  static const String cloudKitContainer = String.fromEnvironment(
+      'CLOUDKIT_CONTAINER',
+      defaultValue: 'iCloud.ai.nymbot');
 }

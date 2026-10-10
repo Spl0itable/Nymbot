@@ -5,10 +5,12 @@ import 'dart:math';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/dart.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../core/crypto/bech32_codec.dart' as bech32;
@@ -37,6 +39,9 @@ final RegExp _pinPattern = RegExp(r'^[0-9]{4,8}$');
 final RegExp _secretPattern = RegExp(r'^[0-9a-f]{64}$');
 final RegExp backupFilePattern = RegExp(r'^nym_bk_[0-9a-f-]{36}\.bin$');
 final RegExp backupItemPattern = RegExp(r'^nym_bk_[0-9a-f-]{36}$');
+const String cloudKitRecordType = 'KeyBackup';
+final RegExp cloudKitRecordPattern = RegExp(
+    r'^nymbk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
 
 bool isValidBackupPin(String pin) => _pinPattern.hasMatch(pin);
 
@@ -130,6 +135,8 @@ String newBackupFileName() => 'nym_bk_${uuidV4()}.bin';
 
 String newBackupItemName() => 'nym_bk_${uuidV4()}';
 
+String newCloudKitRecordName() => 'nymbk-${uuidV4()}';
+
 String? subFromIdToken(String? idToken) {
   if (idToken == null) return null;
   final parts = idToken.split('.');
@@ -155,9 +162,10 @@ class BackupFailure implements Exception {
 }
 
 class StoredBackup {
-  const StoredBackup(this.id, this.payload);
+  const StoredBackup(this.id, this.payload, {this.legacy = false});
   final String id;
   final String payload;
+  final bool legacy;
 }
 
 class BackupCandidate {
@@ -433,9 +441,124 @@ class GoogleBackupStore implements BackupStore {
   }
 }
 
+class CloudKitBackups {
+  CloudKitBackups({MethodChannel? channel}) : _channel = channel ?? defaultChannel;
+
+  static const defaultChannel = MethodChannel('ai.nymbot/cloudkit');
+
+  final MethodChannel _channel;
+
+  Map<String, Object?> _args([Map<String, Object?> more = const {}]) =>
+      {'container': NymbotConfig.cloudKitContainer, ...more};
+
+  Future<T?> _call<T>(String method, [Map<String, Object?> more = const {}]) async {
+    try {
+      return await _channel.invokeMethod<T>(method, _args(more));
+    } on PlatformException catch (e) {
+      throw BackupFailure(_message(e.code));
+    } on MissingPluginException {
+      throw BackupFailure(t('iCloud is not available on this device.'));
+    }
+  }
+
+  static String _message(String code) => switch (code) {
+        'noAccount' => t('Sign in to iCloud in the Settings app to use Apple backup, then try again.'),
+        'restricted' => t('iCloud is restricted on this device, so Apple backup can\'t be used.'),
+        'quota' => t('Your iCloud storage is full, so the backup could not be saved. Free up space and try again.'),
+        'network' => t('Could not reach iCloud. Check your connection and try again.'),
+        'unavailable' => t('iCloud is not available right now. Try again in a moment.'),
+        _ => t('iCloud did not answer as expected. Try again.'),
+      };
+
+  Future<String> account() async {
+    final status = await _call<String>('accountStatus');
+    if (status != 'available') {
+      throw BackupFailure(_message(switch (status) {
+        'noAccount' => 'noAccount',
+        'restricted' => 'restricted',
+        _ => 'unavailable',
+      }));
+    }
+    final name = await _call<String>('userRecordName');
+    if (name == null || name.isEmpty) {
+      throw BackupFailure(t('Apple did not say which account signed in.'));
+    }
+    return name;
+  }
+
+  Future<List<StoredBackup>> list() async {
+    final rows = await _call<List<Object?>>('query', {'recordType': cloudKitRecordType}) ?? const [];
+    final out = <({StoredBackup backup, int at})>[];
+    for (final row in rows.whereType<Map>()) {
+      final name = row['recordName'];
+      final payload = row['payload'];
+      final at = row['updatedAt'];
+      if (name is! String || !cloudKitRecordPattern.hasMatch(name)) continue;
+      if (payload is! String || payload.isEmpty) continue;
+      out.add((backup: StoredBackup(name, payload), at: at is int ? at : 0));
+    }
+    out.sort((a, b) => b.at.compareTo(a.at));
+    return [for (final row in out) row.backup];
+  }
+
+  static const savedKey = 'nymbot_cloudkit_saved_records';
+
+  static Future<List<String>> _saved(SharedPreferences prefs) async {
+    try {
+      final v = jsonDecode(prefs.getString(savedKey) ?? '[]');
+      if (v is List) return [for (final x in v) if (x is String && cloudKitRecordPattern.hasMatch(x)) x];
+    } catch (_) {}
+    return <String>[];
+  }
+
+  Future<void> save(String payload) async {
+    final name = newCloudKitRecordName();
+    await _call<void>('save', {
+      'recordType': cloudKitRecordType,
+      'recordName': name,
+      'payload': payload,
+      'format': backupFormat,
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = await _saved(prefs);
+      if (!list.contains(name)) list.add(name);
+      await prefs.setString(savedKey, jsonEncode(list));
+    } catch (_) {}
+  }
+
+  Future<void> delete(String recordName) async {
+    if (!cloudKitRecordPattern.hasMatch(recordName)) return;
+    await _call<void>('delete', {'recordName': recordName});
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = await _saved(prefs)..remove(recordName);
+      if (list.isEmpty) {
+        await prefs.remove(savedKey);
+      } else {
+        await prefs.setString(savedKey, jsonEncode(list));
+      }
+    } catch (_) {}
+  }
+
+  Future<int> deleteSaved() async {
+    final prefs = await SharedPreferences.getInstance();
+    var n = 0;
+    for (final name in await _saved(prefs)) {
+      try {
+        await _call<void>('delete', {'recordName': name});
+        n++;
+      } catch (_) {}
+    }
+    return n;
+  }
+}
+
 class AppleBackupStore implements BackupStore {
-  AppleBackupStore({FlutterSecureStorage? storage, this.getCredential})
-      : _storage = storage ?? const FlutterSecureStorage();
+  AppleBackupStore(
+      {FlutterSecureStorage? storage, this.getCredential, CloudKitBackups? cloud})
+      : _storage = storage ?? const FlutterSecureStorage(),
+        cloud = cloud ?? CloudKitBackups();
 
   static const service = 'com.nym.apple-backup';
 
@@ -446,6 +569,8 @@ class AppleBackupStore implements BackupStore {
 
   final FlutterSecureStorage _storage;
   final Future<String?> Function()? getCredential;
+  final CloudKitBackups cloud;
+  Future<String>? _legacy;
 
   @override
   BackupProvider get provider => BackupProvider.apple;
@@ -460,7 +585,15 @@ class AppleBackupStore implements BackupStore {
       );
 
   @override
-  Future<String> signIn() async {
+  Future<String> signIn() => cloud.account();
+
+  Future<String> legacyAccount() {
+    final made = _legacy ??= _appleUser();
+    made.then((_) {}, onError: (_) => _legacy = null);
+    return made;
+  }
+
+  Future<String> _appleUser() async {
     String? user;
     try {
       final fetch = getCredential;
@@ -485,8 +618,7 @@ class AppleBackupStore implements BackupStore {
     return user;
   }
 
-  @override
-  Future<List<StoredBackup>> readAll() async {
+  Future<List<StoredBackup>> _legacyItems() async {
     final Map<String, String> all;
     try {
       all = await _storage.readAll(iOptions: _options);
@@ -496,22 +628,32 @@ class AppleBackupStore implements BackupStore {
     return [
       for (final entry in all.entries)
         if (backupItemPattern.hasMatch(entry.key))
-          StoredBackup(entry.key, entry.value),
+          StoredBackup(entry.key, entry.value, legacy: true),
     ];
   }
 
   @override
-  Future<void> write(String payload) async {
+  Future<List<StoredBackup>> readAll() async {
+    final current = await cloud.list();
+    List<StoredBackup> old;
     try {
-      await _storage.write(
-          key: newBackupItemName(), value: payload, iOptions: _options);
-    } catch (_) {
-      throw BackupFailure(t('iCloud Keychain could not save the backup. Try again.'));
+      old = await _legacyItems();
+    } on BackupFailure {
+      if (current.isEmpty) rethrow;
+      old = const [];
     }
+    return [...current, ...old];
   }
 
   @override
+  Future<void> write(String payload) => cloud.save(payload);
+
+  @override
   Future<void> delete(String id) async {
+    if (cloudKitRecordPattern.hasMatch(id)) {
+      await cloud.delete(id);
+      return;
+    }
     if (!backupItemPattern.hasMatch(id)) return;
     try {
       await _storage.delete(key: id, iOptions: _options);
@@ -521,8 +663,13 @@ class AppleBackupStore implements BackupStore {
   }
 
   @override
-  Future<void> signOut() async {}
+  Future<void> signOut() async {
+    _legacy = null;
+  }
 }
+
+Future<String> Function()? legacyAccountFor(BackupStore store) =>
+    store is AppleBackupStore ? store.legacyAccount : null;
 
 class PinThrottle {
   int _failures = 0;

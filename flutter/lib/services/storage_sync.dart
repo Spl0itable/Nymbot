@@ -74,7 +74,7 @@ class StorageSync {
     return resp != null && resp['error'] == null;
   }
 
-  Future<({bool ok, bool conflict, String? current})> settingsPut(
+  Future<({bool ok, bool conflict, String? current, String? error})> settingsPut(
     EventSigner signer, {
     required String category,
     required String blob,
@@ -87,12 +87,20 @@ class StorageSync {
       'contentHash': contentHash,
       'baseHash': baseHash,
     });
-    if (resp == null) return (ok: false, conflict: false, current: null);
+    if (resp == null) {
+      return (ok: false, conflict: false, current: null, error: null);
+    }
     if (resp['conflict'] == true) {
       final now = resp['contentHash'];
-      return (ok: false, conflict: true, current: now is String ? now : '');
+      return (ok: false, conflict: true, current: now is String ? now : '', error: null);
     }
-    return (ok: resp['error'] == null, conflict: false, current: null);
+    final error = resp['error'];
+    return (
+      ok: error == null,
+      conflict: false,
+      current: null,
+      error: error?.toString(),
+    );
   }
 
   Future<Map<String, dynamic>?> _call(

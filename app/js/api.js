@@ -152,6 +152,8 @@
         },
 
         async stream(action, extra, opts) {
+            const consent = window.NymbotAiConsent;
+            if (consent && consent.guards(action) && !consent.allowed()) return consent.blocked();
             const options = opts || {};
             const body = await this.signedBody(action, extra, options);
             try {
@@ -173,6 +175,8 @@
         },
 
         async call(action, extra, opts) {
+            const consent = window.NymbotAiConsent;
+            if (consent && consent.guards(action) && !consent.allowed()) return consent.blocked();
             const options = opts || {};
             const body = await this.signedBody(action, extra, options);
             const outer = options.controller ? options.controller.signal : (options.signal || null);

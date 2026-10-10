@@ -110,17 +110,93 @@
         return NC().isPq2Payload(first) ? 'pq' : 'c';
     }
 
+    const LOCAL_ONLY = ['dataUrl', 'bytesBase64', 'file', 'uploading', 'error'];
+
+    function hashOfUrl(url) {
+        let last = '';
+        try { last = new URL(String(url)).pathname.split('/').pop() || ''; } catch (_) { return ''; }
+        const m = /^([0-9a-f]{64})(\.[a-z0-9]+)?$/i.exec(last);
+        return m ? m[1].toLowerCase() : '';
+    }
+
+    function syncAttachment(a) {
+        if (!a || typeof a !== 'object') return a;
+        const out = {};
+        for (const key of Object.keys(a)) {
+            if (!LOCAL_ONLY.includes(key)) out[key] = a[key];
+        }
+        if (typeof out.url === 'string' && !out.sha256) {
+            const sha = hashOfUrl(out.url);
+            if (sha) out.sha256 = sha;
+        }
+        if (typeof out.text === 'string') delete out.omitted;
+        return out;
+    }
+
+    function syncMessage(m) {
+        if (!m || typeof m !== 'object' || !Array.isArray(m.attachments) || !m.attachments.length) return m;
+        return Object.assign({}, m, { attachments: m.attachments.map(syncAttachment) });
+    }
+
+    function withoutText(m) {
+        if (!m || !Array.isArray(m.attachments) || !m.attachments.some(a => a && typeof a.text === 'string')) return m;
+        return Object.assign({}, m, {
+            attachments: m.attachments.map(a => {
+                if (!a || typeof a.text !== 'string') return a;
+                const copy = Object.assign({}, a, { omitted: true });
+                delete copy.text;
+                return copy;
+            })
+        });
+    }
+
+    function keepLocal(merged, mine) {
+        const held = new Map();
+        for (const m of mine || []) if (m && m.id && Array.isArray(m.attachments) && m.attachments.length) held.set(m.id, m);
+        if (!held.size) return merged;
+        return merged.map(m => {
+            const local = m && held.get(m.id);
+            if (!local || local === m || !Array.isArray(m.attachments)) return m;
+            const byId = new Map(local.attachments.filter(a => a && a.id).map(a => [a.id, a]));
+            let changed = false;
+            const attachments = m.attachments.map(a => {
+                const own = a && a.id ? byId.get(a.id) : null;
+                if (!own) return a;
+                const back = {};
+                for (const key of LOCAL_ONLY) {
+                    if (own[key] !== undefined && a[key] === undefined) back[key] = own[key];
+                }
+                if (a.omitted && typeof own.text === 'string') back.text = own.text;
+                if (!Object.keys(back).length) return a;
+                changed = true;
+                const copy = Object.assign({}, a, back);
+                if (typeof copy.text === 'string') delete copy.omitted;
+                return copy;
+            });
+            return changed ? Object.assign({}, m, { attachments }) : m;
+        });
+    }
+
     function fitMessages(msgs) {
+        const list = msgs.slice();
         let total = 64;
-        const sizes = msgs.map(m => {
+        const sizes = list.map(m => {
             const n = utf8Bytes(JSON.stringify(m)) + 1;
             total += n;
             return n;
         });
         const budget = sizes.length && 64 + sizes[sizes.length - 1] > ROW_MAX_BYTES ? ROW_HARD_BYTES : ROW_MAX_BYTES;
+        for (let i = 0; i < list.length && total > budget; i++) {
+            const shed = withoutText(list[i]);
+            if (shed === list[i]) continue;
+            const n = utf8Bytes(JSON.stringify(shed)) + 1;
+            total -= sizes[i] - n;
+            sizes[i] = n;
+            list[i] = shed;
+        }
         let start = 0;
-        while (total > budget && start < msgs.length - 1) total -= sizes[start++];
-        return start ? msgs.slice(start) : msgs;
+        while (total > budget && start < list.length - 1) total -= sizes[start++];
+        return start ? list.slice(start) : list;
     }
 
     async function seal(plaintext) {
@@ -441,6 +517,15 @@
 
     const Sync = {
         pickSecret,
+        fitMessages,
+        syncMessage,
+        keepLocal,
+        rejected: {},
+
+        _reject(dTag, why) {
+            this.rejected[dTag] = why;
+            try { console.warn('Nymbot sync: the ' + dTag + ' row was not saved: ' + why); } catch (_) { }
+        },
 
         /// Set once a pull returns rows this device cannot open, i.e. an unlinked key.
         blocked: false,
@@ -460,7 +545,13 @@
         profileEvents(pubkeys) { return profileEventsFromD1(pubkeys); },
 
         enabled() {
-            return !!(Identity.pubkey && Store.settings().sync !== false);
+            return !this._halted && !!(Identity.pubkey && Store.settings().sync !== false);
+        },
+
+        halt() {
+            this._halted = true;
+            if (this._timer) clearTimeout(this._timer);
+            this._timer = null;
         },
 
         _load() {
@@ -573,7 +664,7 @@
             for (const conv of chats) {
                 const msgs = Store.messages(conv.id);
                 if (!msgs.length) continue;
-                const entry = { id: conv.id, messages: fitMessages(msgs.slice(-MAX_MESSAGES)) };
+                const entry = { id: conv.id, messages: fitMessages(msgs.slice(-MAX_MESSAGES).map(syncMessage)) };
                 const tx = fitTranscripts(entry, Store.transcripts ? Store.transcripts(conv.id) : []);
                 if (tx.length) entry.transcripts = tx;
                 out['chat-' + conv.id] = entry;
@@ -710,7 +801,7 @@
                 const theirs = supportCut && entry.id === SUPPORT_ID
                     ? entry.messages.filter(m => sentAt(m) > supportCut)
                     : entry.messages;
-                const merged = mergeById(mine, theirs, graves)
+                const merged = keepLocal(mergeById(mine, theirs, graves), mine)
                     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
                 if (merged.length !== mine.length) {
                     Store.saveMessages(entry.id, merged);
@@ -804,7 +895,10 @@
                 }
                 let blob;
                 try { blob = await seal(plain); } catch (_) { return false; }
-                if (!blob) return false;
+                if (!blob) {
+                    this._reject(dTag, 'too large to seal');
+                    return false;
+                }
                 const fields = { category, blob, contentHash: hash };
                 if (!force) fields.baseHash = base || '';
                 const resp = await call('settings-set', fields);
@@ -815,7 +909,12 @@
                     base = typeof resp.contentHash === 'string' ? resp.contentHash : '';
                     continue;
                 }
-                if (!resp || resp.error) return false;
+                if (!resp) return false;
+                if (resp.error) {
+                    this._reject(dTag, String(resp.error));
+                    return false;
+                }
+                delete this.rejected[dTag];
                 if (dTag === 'settings') settledSettings(current);
                 this._hashes.set(category, hash);
                 this._names.set(category, dTag);
@@ -845,6 +944,11 @@
 
         async run(opts) {
             if (!this.enabled()) return { skipped: true };
+            if (typeof this.beforeRun === 'function') {
+                let go = true;
+                try { go = await this.beforeRun(); } catch (_) { go = true; }
+                if (!go) return { skipped: true };
+            }
             // Already going.
             if (this._running) {
                 this._again = true;
@@ -908,6 +1012,10 @@
         /// Signed while the key is still here and sent keepalive so a reload cannot cancel it.
         async purge() {
             if (!Identity.pubkey) return false;
+            this.halt();
+            if (this._running) {
+                try { await Promise.race([this._running, new Promise((r) => setTimeout(r, 4000))]); } catch (_) { }
+            }
             let body;
             try {
                 body = await signedBody('account-purge', {
@@ -918,14 +1026,87 @@
             } catch (_) { return false; }
             this.forget();
             try {
-                await Edge.fetch(url(), {
+                const resp = await Edge.fetch(url(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body,
                     keepalive: true
                 });
-                return true;
+                if (!resp || typeof resp.json !== 'function') return true;
+                const data = await resp.json().catch(() => null);
+                return !!(resp.ok && data && data.ok === true);
             } catch (_) { return false; }
+        },
+
+        DELETED_D: 'nymbot-account-deleted',
+
+        _deletedLoginKey() {
+            return C.storagePrefix + 'deleted_login_at';
+        },
+
+        deletedLoginAt() {
+            try {
+                const v = Number(localStorage.getItem(this._deletedLoginKey()));
+                return Number.isInteger(v) && v > 0 ? v : 0;
+            } catch (_) { return 0; }
+        },
+
+        _deletedFreshKey() {
+            return C.storagePrefix + 'deleted_login_fresh';
+        },
+
+        DELETED_SKEW_S: 600,
+
+        noteDeletedLogin(force) {
+            try {
+                if (force || !this.deletedLoginAt()) {
+                    localStorage.setItem(this._deletedLoginKey(), String(Math.floor(Date.now() / 1000)));
+                    localStorage.setItem(this._deletedFreshKey(), '1');
+                }
+            } catch (_) { }
+        },
+
+        _takeDeletedFresh() {
+            try {
+                const fresh = localStorage.getItem(this._deletedFreshKey()) === '1';
+                localStorage.removeItem(this._deletedFreshKey());
+                return fresh;
+            } catch (_) { return false; }
+        },
+
+        async markDeleted() {
+            if (!Identity.pubkey) return false;
+            let ev;
+            try {
+                ev = await Identity.signEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', this.DELETED_D]], content: '' });
+            } catch (_) { return false; }
+            if (!ev || ev.pubkey !== Identity.pubkey) return false;
+            const res = await call('panic-mark', { at: ev.created_at, id: ev.id, sig: ev.sig });
+            return !!(res && res.ok === true);
+        },
+
+        deletedMarkerValid(mark, pubkey, loginAt, nowSec) {
+            if (!mark || !Number.isInteger(mark.at) || typeof mark.id !== 'string' || typeof mark.sig !== 'string') return false;
+            if (!(loginAt > 0) || mark.at <= loginAt) return false;
+            if (mark.at > nowSec + 600 || nowSec - mark.at > 90 * 86400) return false;
+            const ev = { kind: 30078, pubkey, created_at: mark.at, tags: [['d', this.DELETED_D]], content: '', id: mark.id, sig: mark.sig };
+            try { return NT().verifyEvent(ev) === true; } catch (_) { return false; }
+        },
+
+        async deletedElsewhere() {
+            const pubkey = Identity.pubkey;
+            if (!pubkey) return false;
+            this.noteDeletedLogin(false);
+            const res = await call('panic-check', {});
+            if (!res || Identity.pubkey !== pubkey || !('mark' in res)) return false;
+            const now = Math.floor(Date.now() / 1000);
+            const loginAt = this.deletedLoginAt();
+            const valid = this.deletedMarkerValid(res.mark, pubkey, loginAt, now);
+            if (this._takeDeletedFresh() && valid && res.mark.at - loginAt <= this.DELETED_SKEW_S) {
+                try { localStorage.setItem(this._deletedLoginKey(), String(res.mark.at)); } catch (_) { }
+                return false;
+            }
+            return valid;
         },
 
         async wipeRemote() {
