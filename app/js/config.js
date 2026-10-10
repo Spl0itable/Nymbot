@@ -45,7 +45,7 @@ window.NymbotConfig = {
     googleClientId: '435441872913-q30ml0k3dlgl65qu9qo6i5obb1v14t0d.apps.googleusercontent.com',
 
     cloudKitContainer: 'iCloud.ai.nymbot',
-    cloudKitApiToken: 'b4f690f0212aaa393d662cf958129ef1e0ecd35d7b2e3e7bc8dac7983b36b46b',
+    cloudKitApiToken: '5c698bcf9d0cb847cdd0ab1ea7345d8a3b64ee365057dbf1a126ba4df8b301f9',
     cloudKitEnvironment: 'production',
 
     storagePrefix: 'nymbot_',

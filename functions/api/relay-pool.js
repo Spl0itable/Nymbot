@@ -88,9 +88,11 @@ function tokenBucket(burst, perSec) {
   let last = Date.now();
   return () => {
     const now = Date.now();
-    tokens = Math.min(burst, tokens + ((now - last) / 1000) * perSec);
-    last = now;
-    if (tokens < 1) return false;
+    if (now > last) {
+      tokens = Math.min(burst, tokens + ((now - last) / 1000) * perSec);
+      last = now;
+    }
+    if (tokens < 1 - 1e-9) return false;
     tokens -= 1;
     return true;
   };

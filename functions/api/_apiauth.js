@@ -2,7 +2,7 @@ import { sha256, bytesToHex, utf8ToBytes, randomBytes, getEventHash, schnorr, AU
 import { ledgerCall } from "./_ledger.js";
 import { hasD1 } from "./_d1.js";
 import { deniedStrict } from "./_usage.js";
-import { ApiError, apiIso, API_EMPTY_BODY_SHA256 } from "./_apihttp.js";
+import { ApiError, apiIso, apiRateLimitAll, API_EMPTY_BODY_SHA256 } from "./_apihttp.js";
 
 export const API_KEY_PREFIX = "sk-nymbot-";
 export const API_KEY_RE = /^sk-nymbot-[A-Za-z0-9_-]{43}$/;
@@ -81,6 +81,21 @@ export function apiKeyLimitError(r, row, extraMessage) {
   });
 }
 
+function keyRateError(waitMs) {
+  const secs = Math.max(1, Math.ceil((Number(waitMs) || 1000) / 1000));
+  return new ApiError(429, "rate_limit_error", "This API key is limited to " + API_KEY_RATE_LIMIT + " requests a minute. Retry in " + secs + " s.",
+    { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
+}
+
+async function keyCheck(api, row, now, rated) {
+  const check = await ledgerCall(api.env, {
+    op: "key-reserve", keyId: row.id, sats: 0, limit: row.limit_sats, period: row.reset_period || null, now,
+    rateLimit: rated ? API_KEY_RATE_LIMIT : 0, rateWindowMs: API_KEY_RATE_WINDOW_MS
+  });
+  if (check && check.rateLimited) throw keyRateError(check.retryAfterMs);
+  if (check && check.capped && !(api.route && api.route.opts && api.route.opts.spends === false)) throw apiKeyLimitError(check, row);
+}
+
 export async function apiAuthKey(api) {
   const got = apiKeyFromRequest(api.request);
   if (got.nostr) throw unauth("This endpoint takes an API key, not a Nostr signature. Send `Authorization: Bearer <key>`.", "invalid_api_key");
@@ -93,16 +108,14 @@ export async function apiAuthKey(api) {
   if (row.revoked_at) throw unauth("This API key was revoked on " + apiIso(row.revoked_at) + ".", "revoked_api_key");
   if (row.expire_at && row.expire_at <= now) throw unauth("This API key expired on " + apiIso(row.expire_at) + ".", "expired_api_key");
   await apiDeniedCheck(api.env, row.pubkey);
-  const check = await ledgerCall(api.env, {
-    op: "key-reserve", keyId: row.id, sats: 0, limit: row.limit_sats, period: row.reset_period || null, now,
-    rateLimit: API_KEY_RATE_LIMIT, rateWindowMs: API_KEY_RATE_WINDOW_MS
-  });
-  if (check && check.rateLimited) {
-    const secs = Math.max(1, Math.ceil((Number(check.retryAfterMs) || 1000) / 1000));
-    throw new ApiError(429, "rate_limit_error", "This API key is limited to " + API_KEY_RATE_LIMIT + " requests a minute. Retry in " + secs + " s.",
-      { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
+  const opts = (api.route && api.route.opts) || {};
+  const rates = typeof opts.rates === "function" ? (opts.rates(api, row.pubkey) || []) : [];
+  if (!rates.length) await keyCheck(api, row, now, true);
+  else {
+    if (opts.spends !== false) await keyCheck(api, row, now, false);
+    const own = { keyId: row.id, rule: { limit: API_KEY_RATE_LIMIT, windowMs: API_KEY_RATE_WINDOW_MS }, error: keyRateError };
+    if ((await apiRateLimitAll(api, [own].concat(rates))) < 0) await keyCheck(api, row, now, true);
   }
-  if (check && check.capped && !(api.route && api.route.opts && api.route.opts.spends === false)) throw apiKeyLimitError(check, row);
   if (!row.last_used_at || now - row.last_used_at > API_KEY_TOUCH_MS) {
     const touch = db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now, row.id).run().catch(() => { });
     api.waitUntil(touch);

@@ -1,4 +1,4 @@
-import { getEventHash, schnorr, botBase64Encode, botBase64Decode } from "./_shared.js";
+import { getEventHash, schnorr, botBase64Encode, botBase64Decode, cacheRateTakeAll } from "./_shared.js";
 
 const SHARE_HOSTS = new Set([
   "blossom.band",
@@ -90,8 +90,8 @@ const SHARE_OWNER_MAX_COUNT = 20;
 const SHARE_OWNER_HOURLY_UPLOADS = 10;
 const SHARE_GLOBAL_MAX_BYTES = 1024 * 1024 * 1024;
 const SHARE_IP_HOURLY_PUTS = 30;
+const SHARE_IP_WINDOW_MS = 3600000;
 const SHARE_SWEEP_ROWS = 200;
-const SHARE_RATE_HOST = "https://nymbot-share-rate.invalid";
 const SHARE_LIVE = "COALESCE(expires_at, created_at + " + SHARE_TTL_S + ") > ?";
 const SHARE_SIZE = "COALESCE(size, LENGTH(data) * 3 / 4)";
 
@@ -138,25 +138,11 @@ function clientIp(request) {
   try { return request.headers.get("CF-Connecting-IP") || ""; } catch (_) { return ""; }
 }
 
-async function ipRateOk(request) {
+async function ipRateWait(request) {
   const ip = clientIp(request);
-  if (!ip) return true;
-  try {
-    if (typeof caches === "undefined" || !caches.default) return true;
-    const windowId = Math.floor(Date.now() / 3600000);
-    const key = new Request(SHARE_RATE_HOST + "/put?ip=" + encodeURIComponent(ip) + "&w=" + windowId);
-    let count = 0;
-    const hit = await caches.default.match(key);
-    if (hit) {
-      const n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count >= SHARE_IP_HOURLY_PUTS) return false;
-    await caches.default.put(key, new Response(String(count + 1), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=3600" }
-    }));
-  } catch (_) { }
-  return true;
+  if (!ip) return 0;
+  const gate = await cacheRateTakeAll([{ bucket: "share-put", who: ip, units: 1, limit: SHARE_IP_HOURLY_PUTS, windowMs: SHARE_IP_WINDOW_MS }]);
+  return gate.ok ? 0 : Math.max(1, Math.ceil(gate.retryAfterMs / 1000));
 }
 
 async function quotaRefusal(db, owner, incoming, now) {
@@ -201,7 +187,12 @@ export async function handleSharePut(request, params, cors, env) {
   if (request.method !== "PUT" && request.method !== "POST") return reply({ error: "PUT required" }, 405, cors);
   const db = shareDb(env);
   if (!db) return reply({ error: "Share storage unavailable" }, 503, cors);
-  if (!(await ipRateOk(request))) return reply({ error: "Too many uploads" }, 429, cors);
+  const wait = await ipRateWait(request);
+  if (wait) {
+    const limited = new Headers(cors || {});
+    limited.set("Retry-After", String(wait));
+    return reply({ error: "Too many uploads" }, 429, limited);
+  }
   const declared = parseInt(request.headers.get("Content-Length") || "", 10);
   if (Number.isFinite(declared) && declared > MAX_SHARE_BYTES) return reply({ error: "Too large" }, 413, cors);
   const buf = await readCapped(request, MAX_SHARE_BYTES);

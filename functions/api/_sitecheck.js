@@ -1,6 +1,6 @@
 import { siteUrlCheck, siteSign } from "./_siteurl.js";
 import { runnerCredits } from "./_runner.js";
-import { serverRunOpen, serverRunSettle, serverRunHostArtifacts } from "./_serverrun.js";
+import { serverRunOpen, serverRunCancel, serverRunSettle, serverRunHostArtifacts } from "./_serverrun.js";
 
 export var SITE_CHECK_TOOL = "check_site";
 export var SITE_CHECK_IMAGE = "sitecheck";
@@ -12,6 +12,7 @@ export var SITE_CHECK_STEPS_MAX = 20;
 export var SITE_CHECK_RATE_LIMIT = 20;
 export var SITE_CHECK_RATE_WINDOW_MS = 3600000;
 export var SITE_CHECK_CALL_SLACK_MS = 30000;
+var SITE_CHECK_TOO_MANY = "Too many site checks just now. Try again later.";
 
 var STEP_ACTIONS = ["click", "type", "press", "wait", "waitFor", "assertText", "goto"];
 
@@ -182,6 +183,10 @@ export async function siteCheckRun(o) {
     rateLimit: o.rateLimit, rateWindowMs: o.rateWindowMs
   });
   if (!opened.ok) return { opened: opened };
+  if (typeof o.rateOk === "function" && !(await o.rateOk())) {
+    await serverRunCancel(o.env, opened.run);
+    return { opened: { status: 429, body: { error: SITE_CHECK_TOO_MANY } } };
+  }
   var out;
   try {
     out = await callSiteCheck(o.env, o.request);
@@ -219,8 +224,8 @@ export async function siteCheckAction(o) {
   if (!Number.isFinite(approved) || Math.round(approved * 1000) < maxMilli) {
     return { status: 402, body: { error: "price-changed", maxCredits: runnerCredits(maxMilli) } };
   }
-  if (typeof o.rateOk === "function" && !(await o.rateOk())) {
-    return { status: 429, body: { error: "Too many site checks just now. Try again later." } };
+  if (typeof o.ratePeek === "function" && !(await o.ratePeek())) {
+    return { status: 429, body: { error: SITE_CHECK_TOO_MANY } };
   }
   var ran = await siteCheckRun(Object.assign({}, o, { request: built.request, maxMilli: maxMilli }));
   if (ran.opened) return { status: ran.opened.status, body: ran.opened.body };

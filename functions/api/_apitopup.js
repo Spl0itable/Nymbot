@@ -7,7 +7,7 @@ import {
 import {
   botBtcPrice, botCreditInvoice, botCreditsForSatsTier, botCreditFigure, isPrivateHostUrl, BOT_BULK_BONUS, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT
 } from "./bot.js";
-import { ApiError, apiBad, apiIso, apiJson, apiRateLimit, apiIpBucket } from "./_apihttp.js";
+import { ApiError, apiBad, apiIso, apiJson, apiRateLimitAll, apiIpBucket } from "./_apihttp.js";
 import { apiBalances, apiSatsPer, apiAddSettleHook } from "./_apibill.js";
 import { apiAddAccountField } from "./_apikeys.js";
 
@@ -158,8 +158,10 @@ async function nwcConnect(api) {
   const topup = wholeSats(b.topup_sats, "topup_sats", API_NWC_MIN_SATS, API_NWC_MAX_TOPUP_SATS);
   const tier = tierOf(b.tier, "tier");
   const db = await nwcDbOrFail(api.env);
-  await apiRateLimit(api, "nwcIp", apiIpBucket(api), "wallet connection attempts from this address");
-  await apiRateLimit(api, "nwcPubkey", api.auth.pubkey, "wallet connection attempts for this account");
+  await apiRateLimitAll(api, [
+    { name: "nwcIp", who: apiIpBucket(api), what: "wallet connection attempts from this address" },
+    { name: "nwcPubkey", who: api.auth.pubkey, what: "wallet connection attempts for this account" }
+  ]);
   const info = await nwcGetInfo(uri, { timeoutMs: API_NWC_TIMING.infoMs, infoWaitMs: API_NWC_TIMING.infoWaitMs });
   if (!info.ok) {
     const answered = info.error !== "The wallet did not answer.";
@@ -306,12 +308,18 @@ async function topupSats(body) {
   return Math.round(amount / btc * 1e8);
 }
 
+function topupRates(api, pubkey) {
+  if (api.params.method !== API_TOPUP_METHOD) return [];
+  return [
+    { name: "topupIp", who: apiIpBucket(api), what: "top-up invoices from this address" },
+    { name: "topupPubkey", who: pubkey, what: "top-up invoices for this account" }
+  ];
+}
+
 async function topupCreate(api) {
   if (api.params.method !== API_TOPUP_METHOD) {
     throw apiBad("Unsupported top-up method `" + api.params.method + "`. Nymbot accepts " + API_TOPUP_METHOD + " only.", "method", "unsupported_method");
   }
-  await apiRateLimit(api, "topupIp", apiIpBucket(api), "top-up invoices from this address");
-  await apiRateLimit(api, "topupPubkey", api.auth.pubkey, "top-up invoices for this account");
   const b = api.body || {};
   const tier = tierOf(b.tier, "tier");
   const sats = await topupSats(b);
@@ -378,7 +386,7 @@ apiAddAccountField(nwcAccountField);
 
 export function registerTopup(r) {
   r.add("GET", "/topup/payment-methods", paymentMethods, { auth: "none", spends: false });
-  r.add("POST", "/topup/create/{method}", topupCreate, { auth: "key", spends: false });
+  r.add("POST", "/topup/create/{method}", topupCreate, { auth: "key", spends: false, rates: topupRates });
   r.add("GET", "/topup/status/{invoice_id}", topupStatus, { auth: "key", spends: false });
   r.add("GET", "/nwc-auto-topup", nwcGet, { auth: "nostr" });
   r.add("POST", "/nwc-auto-topup/connect", nwcConnect, { auth: "nostr" });

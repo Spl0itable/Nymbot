@@ -1,3 +1,5 @@
+import { cacheRateTake } from "./_shared.js";
+
 const CLIENT_ORIGIN_HOSTS = new Set([
   "nymbot.ai",
   "www.nymbot.ai"
@@ -73,7 +75,6 @@ function isStandaloneNymbot(request, env) {
 }
 
 const RATE_WINDOW_MS = 60000;
-const RATE_HOST = "https://nymbot-socket-rate.invalid";
 
 function clientIp(request) {
   try { return request.headers.get("CF-Connecting-IP") || ""; } catch (_) { return ""; }
@@ -89,24 +90,7 @@ async function socketRateOk(request, env, bucket, limit, bindingName) {
       return !!(out && out.success);
     } catch (_) {}
   }
-  try {
-    if (typeof caches === "undefined" || !caches.default) return true;
-    const windowId = Math.floor(Date.now() / RATE_WINDOW_MS);
-    const key = new Request(RATE_HOST + "/" + bucket + "?ip=" + encodeURIComponent(ip) + "&w=" + windowId);
-    let count = 0;
-    const hit = await caches.default.match(key);
-    if (hit) {
-      const n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count >= limit) return false;
-    await caches.default.put(key, new Response(String(count + 1), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(RATE_WINDOW_MS / 1000) }
-    }));
-    return true;
-  } catch (_) {
-    return true;
-  }
+  return await cacheRateTake("socket-" + bucket, ip, 1, limit, RATE_WINDOW_MS);
 }
 
 export { CLIENT_ORIGIN_HOSTS, APP_ORIGIN_HOSTS, clientOriginAllowed, isNymchatClient, isStandaloneNymbot, socketRateOk };

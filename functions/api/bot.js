@@ -63,6 +63,9 @@ import {
   verifyClientAuth,
   enforceAuthReplay,
   authReplayRequired,
+  cacheRateTake,
+  cacheRateTakeAll,
+  cacheRatePeekAll,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -299,27 +302,7 @@ var BOT_PROBE_RATE_LIMIT = 10;
 var BOT_PROBE_RATE_WINDOW_MS = 60000;
 
 async function botRateOk(bucket, who, limit, windowMs) {
-  try {
-    if (typeof caches === "undefined" || !caches.default) return true;
-    if (!who) return true;
-    var windowId = Math.floor(Date.now() / windowMs);
-    var key = new Request("https://nymbot-ratelimit.invalid/" + bucket + "?ip=" +
-      encodeURIComponent(who) + "&w=" + windowId);
-    var count = 0;
-    var hit = await caches.default.match(key);
-    if (hit) {
-      var n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count >= limit) return false;
-    var ttlSec = Math.ceil(windowMs / 1000);
-    await caches.default.put(key, new Response(String(count + 1), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + ttlSec }
-    }));
-    return true;
-  } catch (_) {
-    return true;
-  }
+  return await cacheRateTake(bucket, who, 1, limit, windowMs);
 }
 
 var BOT_TRANSCRIBE_KEY_BURST = 12;
@@ -333,10 +316,12 @@ async function botTranscribeRateOk(request, pubkey) {
   var ip = "";
   try { ip = (request && request.headers && request.headers.get("CF-Connecting-IP")) || ""; } catch (_) { ip = ""; }
   var key = String(pubkey || "").toLowerCase();
-  if (!(await botRateOk("transcribe-key", key, BOT_TRANSCRIBE_KEY_BURST, BOT_MINUTE_MS))) return false;
-  if (!(await botRateOk("transcribe-key-h", key, BOT_TRANSCRIBE_KEY_HOURLY, BOT_HOUR_MS))) return false;
-  if (!(await botRateOk("transcribe-ip", ip, BOT_TRANSCRIBE_IP_BURST, BOT_MINUTE_MS))) return false;
-  return await botRateOk("transcribe-ip-h", ip, BOT_TRANSCRIBE_IP_HOURLY, BOT_HOUR_MS);
+  return (await cacheRateTakeAll([
+    { bucket: "transcribe-key", who: key, units: 1, limit: BOT_TRANSCRIBE_KEY_BURST, windowMs: BOT_MINUTE_MS },
+    { bucket: "transcribe-key-h", who: key, units: 1, limit: BOT_TRANSCRIBE_KEY_HOURLY, windowMs: BOT_HOUR_MS },
+    { bucket: "transcribe-ip", who: ip, units: 1, limit: BOT_TRANSCRIBE_IP_BURST, windowMs: BOT_MINUTE_MS },
+    { bucket: "transcribe-ip-h", who: ip, units: 1, limit: BOT_TRANSCRIBE_IP_HOURLY, windowMs: BOT_HOUR_MS }
+  ])).ok;
 }
 
 async function publicCommandRateOk(request) {
@@ -348,8 +333,10 @@ async function publicCommandRateOk(request) {
 async function botProbeRateOk(request, pubkey) {
   var ip = "";
   try { ip = (request && request.headers && request.headers.get("CF-Connecting-IP")) || ""; } catch (_) { ip = ""; }
-  if (!(await botRateOk("probe-key", String(pubkey || "").toLowerCase(), BOT_PROBE_RATE_LIMIT, BOT_PROBE_RATE_WINDOW_MS))) return false;
-  return await botRateOk("probe-ip", ip, BOT_PROBE_RATE_LIMIT * 3, BOT_PROBE_RATE_WINDOW_MS);
+  return (await cacheRateTakeAll([
+    { bucket: "probe-key", who: String(pubkey || "").toLowerCase(), units: 1, limit: BOT_PROBE_RATE_LIMIT, windowMs: BOT_PROBE_RATE_WINDOW_MS },
+    { bucket: "probe-ip", who: ip, units: 1, limit: BOT_PROBE_RATE_LIMIT * 3, windowMs: BOT_PROBE_RATE_WINDOW_MS }
+  ])).ok;
 }
 
 function aiSafeValue(value) {
@@ -8899,6 +8886,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var siteOut = await siteCheckAction(Object.assign(botSiteCheckPrice(env, siteSettings, siteBtc), {
       env: env, context: context, pubkey: userPubkey, body: body,
       rateLimit: BOT_PM_RATE_LIMIT, rateWindowMs: BOT_PM_RATE_WINDOW_MS,
+      ratePeek: async function () {
+        return (await cacheRatePeekAll([{ bucket: "sitecheck", who: userPubkey, units: 1, limit: SITE_CHECK_RATE_LIMIT, windowMs: SITE_CHECK_RATE_WINDOW_MS }])).ok;
+      },
       rateOk: function () { return botRateOk("sitecheck", userPubkey, SITE_CHECK_RATE_LIMIT, SITE_CHECK_RATE_WINDOW_MS); },
       hostArtifact: botArtifactHost(env, botPrivkey, botPubkey), balanceOf: botRunnerBalanceOf(env, userPubkey)
     }));

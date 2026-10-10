@@ -98,10 +98,8 @@ export class ApiRouter {
       api = { request, env, context, url, params: pick.params, requestId, route, waitUntil, auth: null, bodyHex: API_EMPTY_BODY_SHA256, raw: "", body: null };
       const kind = route.opts.auth;
       const anon = anonymous(request);
-      if (kind === "none" || (kind === "paid" && anon)) {
-        await apiIpRateLimit(api, "unauthIp", "requests from this address");
-      }
-      if (kind === "paid" && anon) await apiL402Limit(api);
+      if (kind === "paid" && anon) await apiL402Limit(api, true);
+      else if (kind === "none") await apiIpRateLimit(api, "unauthIp", "requests from this address");
       if (route.opts.body === "json" || route.opts.body === "multipart") apiRequireContentType(request, route.opts.body);
       if (route.opts.body === "multipart") {
         const declared = Number(request.headers.get("Content-Length"));

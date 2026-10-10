@@ -49,9 +49,14 @@ class Incoming {
 
   static String? kindOf(String url) {
     final uri = Uri.tryParse(url.trim());
-    if (uri == null || uri.scheme != 'https') return null;
-    if (uri.host != 'nymbot.ai' && uri.host != 'www.nymbot.ai') return null;
-    final path = uri.path.replaceAll(RegExp(r'/+$'), '');
+    if (uri == null) return null;
+    final custom = uri.scheme == 'nymbot';
+    if (!custom) {
+      if (uri.scheme != 'https') return null;
+      if (uri.host != 'nymbot.ai' && uri.host != 'www.nymbot.ai') return null;
+    }
+    final full = custom ? '/${uri.host}${uri.path}' : uri.path;
+    final path = full.replaceAll(RegExp(r'/{2,}'), '/').replaceAll(RegExp(r'/+$'), '');
     if ((path == '/app/share' || path == '/app/share.html') &&
         uri.fragment.contains('.')) {
       return 'chat';
@@ -64,7 +69,7 @@ class Incoming {
         RegExp(r'(^|&)gift=', caseSensitive: false).hasMatch(uri.fragment)) {
       return 'gift';
     }
-    return null;
+    return custom ? 'open' : null;
   }
 
   static Future<void> listen(void Function(IncomingItem item) onItem) async {

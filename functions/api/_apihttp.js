@@ -412,23 +412,75 @@ function rateError(rule, waitMs, what) {
     { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
 }
 
+function rateKeyId(env, name, who) {
+  return bytesToHex(hmac(sha256, rateKey(env), utf8ToBytes("nymbot-api-rate/" + name + "/" + who))).slice(0, 16);
+}
+
+async function rateHitId(env, keyId, rule) {
+  let r = null;
+  try {
+    r = await ledgerCall(env, { op: "key-reserve", keyId, sats: 0, now: Date.now(), rateLimit: rule.limit, rateWindowMs: rule.windowMs });
+  } catch (e) { r = null; }
+  if (!r || r._noLedger) return -1;
+  return r.rateLimited ? Math.max(1, Number(r.retryAfterMs) || 1000) : 0;
+}
+
 export async function apiRateHit(env, name, who, rule) {
   const r0 = rule || API_RATE_LIMITS[name];
   const id = String(who || "");
   if (!r0 || !id) return 0;
-  const keyId = bytesToHex(hmac(sha256, rateKey(env), utf8ToBytes("nymbot-api-rate/" + name + "/" + id))).slice(0, 16);
+  return rateHitId(env, rateKeyId(env, name, id), r0);
+}
+
+export async function apiRateHitAll(env, checks) {
+  const list = [];
+  (checks || []).forEach((c, i) => {
+    const rule = c.rule || API_RATE_LIMITS[c.name];
+    const who = String(c.who || "");
+    const keyId = c.keyId ? String(c.keyId) : (who ? rateKeyId(env, c.name, who) : "");
+    if (rule && keyId) list.push({ at: i, keyId, rule, peek: !!c.peek });
+  });
+  const taken = list.filter((k) => !k.peek);
+  if (!taken.length) return { wait: 0, index: -1 };
+  const peeked = list.filter((k) => k.peek);
+  const order = taken.concat(peeked);
+  const wire = (k) => ({ keyId: k.keyId, rateLimit: k.rule.limit, rateWindowMs: k.rule.windowMs });
+  const payload = { op: "key-rate", now: Date.now(), keys: taken.map(wire) };
+  if (peeked.length) payload.peek = peeked.map(wire);
   let r = null;
   try {
-    r = await ledgerCall(env, { op: "key-reserve", keyId, sats: 0, now: Date.now(), rateLimit: r0.limit, rateWindowMs: r0.windowMs });
+    r = await ledgerCall(env, payload);
   } catch (e) { r = null; }
-  if (!r || r._noLedger) return -1;
-  return r.rateLimited ? Math.max(1, Number(r.retryAfterMs) || 1000) : 0;
+  if (r && r.error === "unknown op") {
+    let down = false;
+    for (const k of taken) {
+      const wait = await rateHitId(env, k.keyId, k.rule);
+      if (wait > 0) return { wait, index: k.at };
+      if (wait < 0) down = true;
+    }
+    return { wait: down ? -1 : 0, index: -1 };
+  }
+  if (!r || r._noLedger || r.error) return { wait: -1, index: -1 };
+  if (r.rateLimited) {
+    const k = order[r.index] || order[0];
+    return { wait: Math.max(1, Number(r.retryAfterMs) || 1000), index: k.at };
+  }
+  return { wait: 0, index: -1 };
 }
 
 export async function apiRateLimit(api, name, who, what) {
   const rule = API_RATE_LIMITS[name];
   const wait = await apiRateHit(api.env, name, who, rule);
   if (wait > 0) throw rateError(rule, wait, what);
+}
+
+export async function apiRateLimitAll(api, checks) {
+  const hit = await apiRateHitAll(api.env, checks);
+  if (hit.wait > 0) {
+    const c = checks[hit.index];
+    throw c.error ? c.error(hit.wait) : rateError(c.rule || API_RATE_LIMITS[c.name], hit.wait, c.what);
+  }
+  return hit.wait;
 }
 
 export async function apiIpRateLimit(api, name, what) {

@@ -239,6 +239,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           await showSharedChat(context, url);
         case 'gift':
           await showRedeemGiftSheet(context, prefill: url);
+        case 'open':
+          break;
         default:
           _say(t('That link is not one Nymbot can open.'));
       }

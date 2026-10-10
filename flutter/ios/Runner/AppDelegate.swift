@@ -7,6 +7,7 @@ import LocalAuthentication
 import Security
 import UIKit
 import UniformTypeIdentifiers
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -14,6 +15,7 @@ import UniformTypeIdentifiers
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    UNUserNotificationCenter.current().delegate = ReplyNotify.shared
     ShareInbox.drain()
     _ = NotificationCenter.default.addObserver(
       forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
@@ -128,6 +130,7 @@ enum Intents {
   private static var listening = false
 
   static func attach(_ messenger: FlutterBinaryMessenger) {
+    listening = false
     let made = FlutterMethodChannel(name: "ai.nymbot/intents", binaryMessenger: messenger)
     made.setMethodCallHandler { call, result in
       if call.method == "initial" {

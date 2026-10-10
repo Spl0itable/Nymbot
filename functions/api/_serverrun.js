@@ -96,6 +96,14 @@ export async function serverRunOpen(env, o) {
   };
 }
 
+export async function serverRunCancel(env, run) {
+  if (run.settled) return;
+  run.settled = { milli: 0, credits: 0, balance: null };
+  run.stop();
+  await ledgerSafe(env, { op: "credit-release", id: run.holdId });
+  await ledgerSafe(env, { op: "turn-abort", key: run.key });
+}
+
 export function serverRunUsageDetail(image, ev, billedMs, usd, milli, surcharge) {
   var detail = {
     image: image, billedMs: billedMs, usd: usd,

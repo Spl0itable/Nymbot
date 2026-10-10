@@ -1,7 +1,7 @@
 import { sha256, hmac, bytesToHex, hexToBytes, utf8ToBytes, randomBytes, bolt11PaymentHash, bolt11ExpiresAt } from "./_shared.js";
 import { noteUsage } from "./_usage.js";
 import { botCreditInvoice, BOT_SATS_PER_CREDIT, BOT_PRO_SATS_PER_CREDIT, BOT_MIN_CHARGE_MILLI } from "./bot.js";
-import { ApiError, apiBad, apiIso, apiJson, apiRound, apiRateHit, apiRateLimit, apiIpBucket, apiBufferMultipart, API_MULTIPART_MAX_BYTES, API_EMPTY_BODY_SHA256 } from "./_apihttp.js";
+import { ApiError, apiBad, apiIso, apiJson, apiRound, apiRateHit, apiRateLimit, apiRateLimitAll, apiIpRateLimit, apiIpBucket, apiBufferMultipart, API_MULTIPART_MAX_BYTES, API_EMPTY_BODY_SHA256 } from "./_apihttp.js";
 import { apiAuthKey } from "./_apiauth.js";
 import {
   l402RefundToken, l402RefundHash, l402RefundNew, l402RefundMint, l402RefundMintHash, l402RefundSpend, l402RefundCredit, l402RefundPeek,
@@ -235,43 +235,50 @@ function quote(v) {
   return "\"" + String(v).replace(/[\\"]/g, "\\$&") + "\"";
 }
 
-async function rateHit(env, bucket, limit) {
-  const wait = await apiRateHit(env, "l402", bucket, { limit, windowMs: API_L402_LIMITS.windowMs });
-  if (wait < 0) throw ledgerDown();
-  return wait > 0 ? Math.max(1, Math.ceil(wait / 1000)) : 0;
-}
-
 function tooMany(secs, message) {
   return new ApiError(429, "rate_limit_error", message + " Retry in " + secs + " s, or use an API key.",
     { code: "rate_limit_exceeded", headers: { "Retry-After": String(secs) } });
 }
 
-async function challengeLimit(api) {
-  if (api.l402Limited) return;
-  api.l402Limited = true;
+function challengeCheck(who, limit, message) {
+  return {
+    name: "l402", who, rule: { limit, windowMs: API_L402_LIMITS.windowMs },
+    error: (wait) => tooMany(Math.max(1, Math.ceil(wait / 1000)), message)
+  };
+}
+
+async function challengeLimit(api, o) {
+  const opts = o || {};
   const ip = apiIpBucket(api);
-  const limit = ip ? API_L402_LIMITS.perIp : API_L402_LIMITS.noIp;
-  const own = await rateHit(api.env, ip ? "ip/" + ip : "noip", limit);
-  if (own) {
-    throw tooMany(own, ip
+  const checks = [];
+  if (opts.address && ip) checks.push({ name: "unauthIp", who: "ip/" + ip, what: "requests from this address" });
+  if (!api.l402Limited) {
+    api.l402Limited = true;
+    const limit = ip ? API_L402_LIMITS.perIp : API_L402_LIMITS.noIp;
+    checks.push(challengeCheck(ip ? "ip/" + ip : "noip", limit, ip
       ? "Too many payment challenges from this address: " + limit + " a minute."
-      : "Too many payment challenges from clients without a known address: " + limit + " a minute, shared.");
+      : "Too many payment challenges from clients without a known address: " + limit + " a minute, shared."));
   }
+  if (opts.global || checks.length) {
+    const cap = challengeCheck("global", API_L402_LIMITS.global, "Nymbot is issuing too many payment challenges right now.");
+    if (!opts.global) cap.peek = true;
+    checks.push(cap);
+  }
+  if (!checks.length) return;
+  const wait = await apiRateLimitAll(api, checks);
+  if (wait < 0 && checks.some((c) => c.name === "l402")) throw ledgerDown();
 }
 
-async function globalLimit(api) {
-  const all = await rateHit(api.env, "global", API_L402_LIMITS.global);
-  if (all) throw tooMany(all, "Nymbot is issuing too many payment challenges right now.");
-}
-
-export async function apiL402Limit(api) {
-  if (!apiL402Enabled(api.env)) return;
-  await challengeLimit(api);
+export async function apiL402Limit(api, address) {
+  if (!apiL402Enabled(api.env)) {
+    if (address) await apiIpRateLimit(api, "unauthIp", "requests from this address");
+    return;
+  }
+  await challengeLimit(api, { address });
 }
 
 async function challenge(api, q) {
-  await challengeLimit(api);
-  await globalLimit(api);
+  await challengeLimit(api, { global: true });
   const made = await botCreditInvoice(api.env, null, q.sats, q.tier, { store: false });
   if (!made || made.error || !made.pr) {
     throw new ApiError(502, "api_error", "Could not create a Lightning invoice right now. Try again shortly, or use an API key.",

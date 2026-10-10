@@ -3,9 +3,9 @@ import UIKit
 import UserNotifications
 
 final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelegate {
-  private static var shared: ReplyNotify?
+  static let shared = ReplyNotify()
 
-  private let channel: FlutterMethodChannel
+  private var channel: FlutterMethodChannel?
   private var token: String?
   private var waiting: [FlutterResult] = []
   private var viewing: String?
@@ -14,19 +14,21 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
   private var tasks: [Int: UIBackgroundTaskIdentifier] = [:]
   private var nextTask = 1
 
-  init(channel: FlutterMethodChannel) {
-    self.channel = channel
+  private override init() {
     super.init()
   }
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
       name: "ai.nymbot/notify", binaryMessenger: registrar.messenger())
-    let instance = ReplyNotify(channel: channel)
-    shared = instance
-    registrar.addMethodCallDelegate(instance, channel: channel)
-    registrar.addApplicationDelegate(instance)
-    UNUserNotificationCenter.current().delegate = instance
+    shared.attach(channel)
+    registrar.addMethodCallDelegate(shared, channel: channel)
+    registrar.addApplicationDelegate(shared)
+  }
+
+  private func attach(_ channel: FlutterMethodChannel) {
+    self.channel = channel
+    viewing = nil
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -149,6 +151,7 @@ final class ReplyNotify: NSObject, FlutterPlugin, UNUserNotificationCenterDelega
   private func open(_ chat: String, asked: String? = nil) {
     pendingChat = chat
     pendingAsked = asked
+    guard let channel = channel else { return }
     let arguments: Any = asked == nil ? chat : ["chat": chat, "asked": asked!]
     channel.invokeMethod("open", arguments: arguments) { [weak self] reply in
       guard let self = self else { return }

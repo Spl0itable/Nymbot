@@ -39,6 +39,8 @@ import {
   verifyClientAuth,
   enforceAuthReplay,
   authReplayRequired,
+  cacheRateTake,
+  cacheRateTakeAll,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -715,7 +717,7 @@ async function handleDeletedMarkAction(context, body) {
   var nowSec = Math.floor(Date.now() / 1000);
 
   if (action === "panic-check") {
-    if (!(await storageRateTake("deleted-check", userPubkey, 1, DELETED_CHECK_RATE))) return json({ error: "Too many requests." }, 429);
+    if (!(await cacheRateTake("deleted-check", userPubkey, 1, DELETED_CHECK_RATE, STORAGE_RATE_WINDOW_MS))) return json({ error: "Too many requests." }, 429);
     var row = null;
     try {
       row = await env.DB_SETTINGS.prepare("SELECT created_at, event_id, sig FROM nymbot_deleted_marks WHERE pubkey = ?").bind(userPubkey).first();
@@ -996,7 +998,6 @@ function readCachePutRaw(context, path, bodyText, contentType, ttlSeconds) {
     if (context && context.waitUntil) context.waitUntil(op);
   } catch (e) { }
 }
-var STORAGE_RATE_HOST = "https://nymchat-rate.invalid";
 var PM_DEPOSIT_RATE = 600;
 var PM_DEPOSIT_IP_RATE = 3000;
 var ZAP_PUT_RATE = 300;
@@ -1007,27 +1008,6 @@ function storageRequestIp(context) {
     var h = context && context.request && context.request.headers;
     return (h && typeof h.get === "function" && h.get("CF-Connecting-IP")) || "";
   } catch (e) { return ""; }
-}
-
-async function storageRateTake(bucket, who, units, limit) {
-  try {
-    if (typeof caches === "undefined" || !caches.default || !who) return true;
-    var windowId = Math.floor(Date.now() / STORAGE_RATE_WINDOW_MS);
-    var key = new Request(STORAGE_RATE_HOST + "/" + bucket + "?k=" + encodeURIComponent(who) + "&w=" + windowId, { method: "GET" });
-    var count = 0;
-    var hit = await caches.default.match(key);
-    if (hit) {
-      var n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count + units > limit) return false;
-    await caches.default.put(key, new Response(String(count + units), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(STORAGE_RATE_WINDOW_MS / 1000) }
-    }));
-    return true;
-  } catch (e) {
-    return true;
-  }
 }
 
 function readCacheDelete(context, path) {
@@ -1209,9 +1189,16 @@ async function handlePmAction(context, body) {
       : (body.event ? [body.event] : []);
     var depNow = Date.now();
     var depUnits = Math.max(1, depEvents.length);
-    if (!(await storageRateTake("pm-deposit", userPubkey, depUnits, PM_DEPOSIT_RATE)) ||
-      !(await storageRateTake("pm-deposit-ip", storageRequestIp(context), depUnits, PM_DEPOSIT_IP_RATE))) {
-      return json({ error: "Too many messages deposited. Try again in a minute." }, 429);
+    var depGate = await cacheRateTakeAll([
+      { bucket: "pm-deposit", who: userPubkey, units: depUnits, limit: PM_DEPOSIT_RATE, windowMs: STORAGE_RATE_WINDOW_MS },
+      { bucket: "pm-deposit-ip", who: storageRequestIp(context), units: depUnits, limit: PM_DEPOSIT_IP_RATE, windowMs: STORAGE_RATE_WINDOW_MS }
+    ]);
+    if (!depGate.ok) {
+      var depRetry = Math.max(1, Math.ceil(depGate.retryAfterMs / 1000));
+      return new Response(JSON.stringify({ error: "Too many messages deposited. Try again in a minute.", retryAfter: depRetry }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": String(depRetry), ...CLIENT_CORS_HEADERS }
+      });
     }
     var depCeil = Math.floor(depNow / 1000);
     var depStmt = env.DB_PM.prepare("INSERT OR IGNORE INTO pm (pubkey, id, created_at, event, stored_at) VALUES (?, ?, ?, ?, ?)");
@@ -1994,7 +1981,7 @@ async function handleZapAction(context, body) {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
     var now = Date.now();
-    if (!(await storageRateTake("zap-put", userPubkey, Math.max(1, events.length), ZAP_PUT_RATE))) {
+    if (!(await cacheRateTake("zap-put", userPubkey, Math.max(1, events.length), ZAP_PUT_RATE, STORAGE_RATE_WINDOW_MS))) {
       return json({ error: "Too many zap receipts. Try again in a minute." }, 429);
     }
     var chan = [];
