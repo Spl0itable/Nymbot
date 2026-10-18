@@ -19,6 +19,61 @@
         return /^(https?:\/\/|mailto:)/i.test(u) ? u : '';
     }
 
+    const RX_LINK_HOST = /(?<![a-z0-9-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59}))(?![a-z0-9])/g;
+    const RX_LINK_IGNORABLE = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]/g;
+    const RX_LINK_DOTS = /[․。︒﹒｡]/g;
+    const RX_LINK_MARKERS = /[*_~|`\\“”«»]/g;
+    const RX_LINK_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
+    const LINK_FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'py', 'ipynb', 'rb', 'php', 'kt', 'kts', 'swift', 'dart', 'go', 'cpp', 'hpp', 'cs', 'css', 'scss', 'sass', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'env', 'txt', 'csv', 'tsv', 'log', 'lock', 'sql', 'bash', 'zsh', 'bat', 'cmd', 'vue', 'svelte', 'lua', 'scala', 'exs', 'erl', 'hs', 'clj', 'gradle', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'tar', 'gz', 'tgz', 'exe', 'dll', 'dmg', 'apk', 'ipa', 'wasm', 'wav']);
+    const RX_MD_LINK = /\[([^\[\]\n]*)\]\((?:&lt;((?:(?!&gt;)[^\s\u0000])+)&gt;|((?:[^\s()\u0000]|\([^\s()\u0000]*\))+))\)/g;
+    const RX_URL = /https?:\/\/(?:(?!&(?:lt|gt|quot);)[^\s<>"\u0000、。〈-】！（），．：；？‘’“”«»…])+/g;
+
+    function linkHost(url) {
+        try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch (_) { return ''; }
+    }
+
+    function linkLabelText(label) {
+        return String(label)
+            .replace(RX_LINK_IGNORABLE, '')
+            .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+            .replace(RX_LINK_DOTS, '.')
+            .replace(RX_LINK_MARKERS, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function linkLabelDisguises(label, target) {
+        const host = linkHost(target);
+        const text = linkLabelText(label);
+        if (!host || !text || /^https?:\/\//.test(text)) return true;
+        const tld = host.slice(host.lastIndexOf('.') + 1);
+        RX_LINK_HOST.lastIndex = 0;
+        let m;
+        while ((m = RX_LINK_HOST.exec(text)) !== null) {
+            const named = m[1].replace(/^www\./, '');
+            const ext = named.slice(named.lastIndexOf('.') + 1);
+            if (LINK_FILE_EXTS.has(ext) && ext !== tld) continue;
+            if (host !== named && !host.endsWith('.' + named)) return true;
+        }
+        const runs = text.replace(RX_LINK_HOST, ' ').match(RX_LINK_RUN) || [];
+        return runs.some((run) => /\p{L}\.\p{L}/u.test(run) && /[^\x00-\x7F]/.test(run));
+    }
+
+    function trimLinkEnd(url) {
+        let u = url;
+        const count = (s, ch) => s.split(ch).length - 1;
+        for (;;) {
+            const last = u.charAt(u.length - 1);
+            if (last === ';' && /&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);$/i.test(u)) break;
+            if ('.,;:!?\''.indexOf(last) !== -1) { u = u.slice(0, -1); continue; }
+            if (last === ')' && count(u, '(') < count(u, ')')) { u = u.slice(0, -1); continue; }
+            if (last === ']' && count(u, '[') < count(u, ']')) { u = u.slice(0, -1); continue; }
+            if (last === '}' && count(u, '{') < count(u, '}')) { u = u.slice(0, -1); continue; }
+            break;
+        }
+        return u;
+    }
+
     function trustedHosts() {
         const C = window.NymbotConfig || {};
         const B = window.NymbotBlossom;
@@ -93,8 +148,8 @@
         out = out.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>');
         out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
         out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
-        out = out.replace(/(^|[^_\w])__([^_\n]+)__(?!\w)/g, '$1<strong>$2</strong>');
-        out = out.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>');
+        out = out.replace(/(^|[^_\p{L}\p{N}])__([^_\n]+)__(?![\p{L}\p{N}_])/gu, '$1<strong>$2</strong>');
+        out = out.replace(/(^|[^_\p{L}\p{N}])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, '$1<em>$2</em>');
         out = out.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
         out = out.replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
         out = out.replace(/\^\(([^)\n]+)\)/g, '<sup>$1</sup>');
@@ -125,13 +180,24 @@
             const img = `<img class="msg-media" src="${esc(u)}" alt="${label}" loading="lazy" referrerpolicy="no-referrer">`;
             return hold(trusted(raw) ? img : gate(img, raw, 'image'), label);
         });
-        out = out.replace(/\[([^\]\n]+)\]\(([^)\s\u0000]+)\)/g, (m, label, href) => {
-            const u = safeUrl(unesc(href));
-            return u ? hold(`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`, flat(label)) : m;
+        out = out.replace(RX_MD_LINK, (m, label, angled, bare) => {
+            const raw = unesc(angled || bare).trim();
+            if (/^(?:lightning|bitcoin):/i.test(raw)) return m;
+            const labelHtml = emphasis(label);
+            if (/^mailto:/i.test(raw) && label) {
+                return hold(`<a href="${esc(raw)}" target="_blank" rel="noopener noreferrer">${labelHtml}</a>`, flat(label));
+            }
+            if (!/^https?:\/\/./i.test(raw) || !safeUrl(raw)) return label;
+            const shown = unesc(flat(labelHtml).replace(/<[^>]*>/g, ''));
+            const hide = linkLabelDisguises(shown, raw);
+            return hold(`<a href="${esc(raw)}" target="_blank" rel="noopener noreferrer">${hide ? esc(raw) : labelHtml}</a>`, hide ? esc(raw) : flat(label));
         });
-        out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+)/g, (m, pre, u) => {
-            const href = safeUrl(unesc(u));
-            return href ? pre + hold(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${u}</a>`, u) : m;
+        out = out.replace(/\[(https?:\/\/[^\s\[\]<>"\u0000]+)\](?!\()/g, '$1');
+        out = out.replace(/&lt;(https?:\/\/(?:(?!&(?:lt|gt);)[^\s<>"\u0000])+)&gt;/g, '$1');
+        out = out.replace(RX_URL, (u) => {
+            const link = trimLinkEnd(u);
+            const href = /^https?:\/\/./i.test(link) ? safeUrl(unesc(link)) : '';
+            return href ? hold(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${link}</a>`, link) + u.slice(link.length) : u;
         });
 
         return restore(emphasis(out));

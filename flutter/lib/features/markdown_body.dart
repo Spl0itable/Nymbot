@@ -388,83 +388,156 @@ class MarkdownBody extends StatelessWidget {
   static final _token = RegExp(
     r'`([^`\n]+)`'
     r'|!\[([^\]\n]*)\]\((https?://[^)\s]+)\)'
-    r'|\[([^\]\n]+)\]\((https?://[^)\s]+)\)'
+    r'|\[((?:`[^`\n]+`|[^\[\]\n])*)\]\((?:<([^\s>]+)>|((?:[^\s()]|\([^\s()]*\))+))\)'
+    r'|\[(https?://[^\s\[\]]+)\](?!\()'
+    r'|<(https?://[^\s<>]+)>'
     r'|(\*\*\*)([^*\n]+)\*\*\*'
     r'|(\*\*)([^*\n]+)\*\*'
     r'|(?<!\*)\*([^*\n]+)\*(?!\*)'
     r'|~~([^~\n]+)~~'
     r'|==([^=\n]+)=='
-    r'|(https?://[^\s<)]+)',
+    '|(https?://[^\\s<>"、。〈-】！（），．：；？‘’“”«»…]+)',
   );
+
+  static final _httpLink = RegExp(r'^https?://.', caseSensitive: false);
+
+  static final _payLink = RegExp(r'^(?:lightning|bitcoin):', caseSensitive: false);
+
+  static List<MdSegment> inlineSegments(String text) {
+    final out = <MdSegment>[];
+    var ids = 0;
+    void add(String s, MdSegment st) {
+      if (s.isNotEmpty) out.add(st.withText(s));
+    }
+
+    void walk(String s, MdSegment st, bool label) {
+      var at = 0;
+      for (final m in _token.allMatches(s)) {
+        if (m.start > at) add(s.substring(at, m.start), st);
+        at = m.end;
+        if (m.group(1) != null) {
+          add(m.group(1)!, st.styled(code: true));
+        } else if (m.group(3) != null) {
+          out.add(MdSegment(m.group(2) ?? '', href: m.group(3), link: ids++, image: true));
+        } else if (m.group(5) != null || m.group(6) != null) {
+          final target = (m.group(5) ?? m.group(6)!).trim();
+          final title = m.group(4) ?? '';
+          if (_payLink.hasMatch(target)) {
+            add(m.group(0)!, st);
+            continue;
+          }
+          final mail = target.toLowerCase().startsWith('mailto:') && title.isNotEmpty;
+          if (!mail && !_httpLink.hasMatch(target)) {
+            walk(title, st, label);
+            continue;
+          }
+          final id = ids++;
+          final start = out.length;
+          walk(title, st, true);
+          final shown = out.sublist(start).map((x) => x.text).join();
+          if (!mail && _linkLabelDisguises(shown, target)) {
+            out.removeRange(start, out.length);
+            out.add(st.withText(target).linked(target, id));
+          } else {
+            for (var i = start; i < out.length; i++) {
+              out[i] = out[i].linked(target, id);
+            }
+          }
+        } else if (label && (m.group(7) != null || m.group(8) != null || m.group(16) != null)) {
+          add(m.group(0)!, st);
+        } else if (m.group(7) != null || m.group(8) != null) {
+          walk(m.group(7) ?? m.group(8)!, st, label);
+        } else if (m.group(9) != null) {
+          walk(m.group(10)!, st.styled(bold: true, italic: true), label);
+        } else if (m.group(11) != null) {
+          walk(m.group(12)!, st.styled(bold: true), label);
+        } else if (m.group(13) != null) {
+          walk(m.group(13)!, st.styled(italic: true), label);
+        } else if (m.group(14) != null) {
+          walk(m.group(14)!, st.styled(strike: true), label);
+        } else if (m.group(15) != null) {
+          walk(m.group(15)!, st.styled(mark: true), label);
+        } else if (m.group(16) != null) {
+          final url = m.group(16)!;
+          final link = _trimLinkEnd(url);
+          if (_httpLink.hasMatch(link)) {
+            out.add(st.withText(link).linked(link, ids++));
+          } else {
+            add(link, st);
+          }
+          add(url.substring(link.length), st);
+        }
+      }
+      if (at < s.length) add(s.substring(at), st);
+    }
+
+    walk(text, const MdSegment(''), false);
+    return out;
+  }
 
   List<InlineSpan> _spans(BuildContext context, String text, TextStyle base) {
     final theme = Theme.of(context);
+    final segments = inlineSegments(text);
+    final titles = <int, String>{};
+    for (final s in segments) {
+      if (s.href != null && !s.image) titles[s.link] = (titles[s.link] ?? '') + s.text;
+    }
+    final taps = <int, TapGestureRecognizer>{};
     final spans = <InlineSpan>[];
-    var at = 0;
-    for (final m in _token.allMatches(text)) {
-      if (m.start > at) spans.add(TextSpan(text: text.substring(at, m.start)));
-      if (m.group(1) != null) {
-        spans.add(TextSpan(
-          text: m.group(1),
-          style: base.copyWith(
-            fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
-            backgroundColor: theme.dividerColor,
-          ),
-        ));
-      } else if ((m.group(2) != null || m.group(3) != null) &&
-          imageSource(m.group(3)!) == null) {
-        final alt = m.group(2) ?? '';
-        spans.add(_link(context, alt.isEmpty ? m.group(3)! : alt, m.group(3)!, base));
-      } else if (m.group(2) != null || m.group(3) != null) {
+    for (final s in segments) {
+      final href = s.href;
+      if (s.image && href != null) {
+        if (imageSource(href) == null) {
+          spans.add(_link(context, s.text.isEmpty ? href : s.text, href, base));
+          continue;
+        }
         spans.add(WidgetSpan(
           child: MediaGate(
-            url: m.group(3)!,
+            url: href,
             child: ViewableImage(
-              item: ViewerItem.network(m.group(3)!, label: m.group(2) ?? ''),
+              item: ViewerItem.network(href, label: s.text),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 240),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image(image: CachedMediaImage(imageSource(m.group(3)!)!),
+                  child: Image(image: CachedMediaImage(imageSource(href)!),
                       loadingBuilder: (c, child, p) => p == null
                           ? child
                           : mediaWaiting(c, p, width: 200, height: 140),
-                      errorBuilder: (c, e, s) => Text(m.group(2) ?? '')),
+                      errorBuilder: (c, e, st) => Text(s.text)),
                 ),
               ),
             ),
           ),
         ));
-      } else if (m.group(4) != null) {
-        spans.add(_link(context, m.group(4)!, m.group(5)!, base));
-      } else if (m.group(6) != null) {
-        spans.add(TextSpan(
-          text: m.group(7),
-          style: base.copyWith(
-              fontWeight: FontWeight.bold, fontStyle: FontStyle.italic),
-        ));
-      } else if (m.group(8) != null) {
-        spans.add(TextSpan(
-            text: m.group(9), style: base.copyWith(fontWeight: FontWeight.bold)));
-      } else if (m.group(10) != null) {
-        spans.add(TextSpan(
-            text: m.group(10), style: base.copyWith(fontStyle: FontStyle.italic)));
-      } else if (m.group(11) != null) {
-        spans.add(TextSpan(
-          text: m.group(11),
-          style: base.copyWith(decoration: TextDecoration.lineThrough),
-        ));
-      } else if (m.group(12) != null) {
-        spans.add(TextSpan(
-          text: m.group(12),
-          style: base.copyWith(backgroundColor: const Color(0x66F7931A)),
-        ));
-      } else if (m.group(13) != null) {
-        spans.add(_link(context, m.group(13)!, m.group(13)!, base));
+        continue;
       }
-      at = m.end;
+      var style = base;
+      if (s.code) {
+        style = style.copyWith(
+          fontFamily: kMonoFamily, fontFamilyFallback: kMonoFallback,
+          backgroundColor: theme.dividerColor,
+        );
+      }
+      if (s.bold) style = style.copyWith(fontWeight: FontWeight.bold);
+      if (s.italic) style = style.copyWith(fontStyle: FontStyle.italic);
+      if (s.mark) style = style.copyWith(backgroundColor: const Color(0x66F7931A));
+      final lines = <TextDecoration>[
+        if (s.strike) TextDecoration.lineThrough,
+        if (href != null) TextDecoration.underline,
+      ];
+      if (lines.isNotEmpty) style = style.copyWith(decoration: TextDecoration.combine(lines));
+      if (href == null) {
+        spans.add(identical(style, base) ? TextSpan(text: s.text) : TextSpan(text: s.text, style: style));
+        continue;
+      }
+      final tap = taps.putIfAbsent(s.link,
+          () => TapGestureRecognizer()..onTap = () => openLink(context, titles[s.link] ?? href, href));
+      spans.add(TextSpan(
+          text: s.text,
+          style: style.copyWith(color: theme.colorScheme.secondary),
+          recognizer: tap));
     }
-    if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
     return spans;
   }
 
@@ -992,4 +1065,127 @@ class _MediaGateState extends State<MediaGate> {
       onPressed: () => setState(() => _shown = true),
     );
   }
+}
+
+class MdSegment {
+  const MdSegment(
+    this.text, {
+    this.href,
+    this.link = -1,
+    this.image = false,
+    this.code = false,
+    this.bold = false,
+    this.italic = false,
+    this.strike = false,
+    this.mark = false,
+  });
+
+  final String text;
+  final String? href;
+  final int link;
+  final bool image;
+  final bool code;
+  final bool bold;
+  final bool italic;
+  final bool strike;
+  final bool mark;
+
+  MdSegment withText(String value) => MdSegment(value,
+      href: href, link: link, image: image, code: code, bold: bold,
+      italic: italic, strike: strike, mark: mark);
+
+  MdSegment styled({bool code = false, bool bold = false, bool italic = false,
+          bool strike = false, bool mark = false}) =>
+      MdSegment(text,
+          href: href, link: link, image: image, code: this.code || code,
+          bold: this.bold || bold, italic: this.italic || italic,
+          strike: this.strike || strike, mark: this.mark || mark);
+
+  MdSegment linked(String target, int id) => MdSegment(text,
+      href: target, link: id, code: code, bold: bold, italic: italic,
+      strike: strike, mark: mark);
+}
+
+final RegExp _rxLinkHost = RegExp(
+    r'(?<![a-z0-9-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,24}|xn--[a-z0-9-]{1,59}))(?![a-z0-9])');
+
+final RegExp _rxLinkIgnorable = RegExp(
+    '[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0]');
+
+final RegExp _rxLinkFullwidth = RegExp('[\uFF01-\uFF5E]');
+
+final RegExp _rxLinkDots = RegExp('[\u2024\u3002\uFE12\uFE52\uFF61]');
+
+final RegExp _rxLinkMarkers = RegExp('[*_~|`\\\\\u201C\u201D\u00AB\u00BB]');
+
+final RegExp _rxLinkRun = RegExp(r'[\p{L}\p{N}\p{M}.-]+', unicode: true);
+
+final RegExp _rxLetterDotLetter = RegExp(r'\p{L}\.\p{L}', unicode: true);
+
+final RegExp _rxNonAscii = RegExp(r'[^\x00-\x7F]');
+
+const Set<String> _linkFileExts = {
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'py', 'ipynb',
+  'rb', 'php', 'kt', 'kts', 'swift', 'dart', 'go', 'cpp', 'hpp', 'cs', 'css',
+  'scss', 'sass', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'toml', 'ini',
+  'cfg', 'conf', 'env', 'txt', 'csv', 'tsv', 'log', 'lock', 'sql', 'bash',
+  'zsh', 'bat', 'cmd', 'vue', 'svelte', 'lua', 'scala', 'exs', 'erl', 'hs',
+  'clj', 'gradle', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'tar',
+  'gz', 'tgz', 'exe', 'dll', 'dmg', 'apk', 'ipa', 'wasm', 'wav',
+};
+
+String _linkHost(String url) {
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  return host.startsWith('www.') ? host.substring(4) : host;
+}
+
+String _linkLabelText(String label) => label
+    .replaceAll(_rxLinkIgnorable, '')
+    .replaceAllMapped(_rxLinkFullwidth,
+        (m) => String.fromCharCode(m[0]!.codeUnitAt(0) - 0xFEE0))
+    .replaceAll(_rxLinkDots, '.')
+    .replaceAll(_rxLinkMarkers, '')
+    .trim()
+    .toLowerCase();
+
+bool _linkLabelDisguises(String label, String target) {
+  final host = _linkHost(target);
+  final text = _linkLabelText(label);
+  if (host.isEmpty ||
+      text.isEmpty ||
+      text.startsWith('http://') ||
+      text.startsWith('https://')) {
+    return true;
+  }
+  final tld = host.substring(host.lastIndexOf('.') + 1);
+  for (final m in _rxLinkHost.allMatches(text)) {
+    var named = m[1]!;
+    if (named.startsWith('www.')) named = named.substring(4);
+    final ext = named.substring(named.lastIndexOf('.') + 1);
+    if (_linkFileExts.contains(ext) && ext != tld) continue;
+    if (host != named && !host.endsWith('.$named')) return true;
+  }
+  final rest = text.replaceAll(_rxLinkHost, ' ');
+  return _rxLinkRun.allMatches(rest).any((m) =>
+      _rxLetterDotLetter.hasMatch(m[0]!) && _rxNonAscii.hasMatch(m[0]!));
+}
+
+String _trimLinkEnd(String url) {
+  var u = url;
+  int count(String ch) => ch.allMatches(u).length;
+  while (u.isNotEmpty) {
+    final last = u[u.length - 1];
+    if ('.,;:!?\''.contains(last)) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == ')' && count('(') < count(')')) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == ']' && count('[') < count(']')) {
+      u = u.substring(0, u.length - 1);
+    } else if (last == '}' && count('{') < count('}')) {
+      u = u.substring(0, u.length - 1);
+    } else {
+      break;
+    }
+  }
+  return u;
 }
