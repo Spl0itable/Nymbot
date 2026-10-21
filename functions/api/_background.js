@@ -9,6 +9,7 @@ export var BG_HMAC_SKEW_MS = 5 * 60 * 1000;
 export var BG_MAX_CREDITS = 100000;
 export var BG_LEG_GAP_MS = 2000;
 export var BG_SEALED_PREFIX = "bg1.";
+export var BG_JOB_PREFIX = "bj1.";
 
 export var SCHED_MAX = 10;
 export var SCHED_MAX_MS = 90 * 86400 * 1000;
@@ -102,23 +103,47 @@ function aadOf(pk, runId) {
   return enc.encode(String(pk || "").toLowerCase() + "|" + String(runId || ""));
 }
 
-export async function bgSeal(env, pk, runId, obj) {
-  var key = await aesKey(env);
+async function jobKey(env, jk) {
+  var raw = bgSealKeyBytes(env);
+  if (!raw || !jk || jk.length !== 32) return null;
+  var mac = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  var label = enc.encode("nymbot-job/1");
+  var msg = new Uint8Array(label.length + jk.length);
+  msg.set(label, 0);
+  msg.set(jk, label.length);
+  var bits = new Uint8Array(await crypto.subtle.sign("HMAC", mac, msg));
+  var key = await crypto.subtle.importKey("raw", bits, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  bits.fill(0);
+  return key;
+}
+
+export async function bgSeal(env, pk, runId, obj, opts) {
+  var jk = opts && opts.job ? crypto.getRandomValues(new Uint8Array(32)) : null;
+  var key = jk ? await jobKey(env, jk) : await aesKey(env);
   if (!key) return null;
   var plain;
   try { plain = enc.encode(JSON.stringify(obj)); } catch (e) { return null; }
   var packed = await squeeze(plain, "in");
   var iv = crypto.getRandomValues(new Uint8Array(12));
   var ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv, additionalData: aadOf(pk, runId) }, key, packed);
+  if (jk) {
+    var out = BG_JOB_PREFIX + b64u(jk) + "." + b64u(iv) + "." + b64u(ct);
+    jk.fill(0);
+    return out;
+  }
   return BG_SEALED_PREFIX + b64u(iv) + "." + b64u(ct);
 }
 
 export async function bgOpen(env, pk, runId, sealed) {
-  if (typeof sealed !== "string" || sealed.indexOf(BG_SEALED_PREFIX) !== 0) return null;
-  var key = await aesKey(env);
+  if (typeof sealed !== "string") return null;
+  var job = sealed.indexOf(BG_JOB_PREFIX) === 0;
+  if (!job && sealed.indexOf(BG_SEALED_PREFIX) !== 0) return null;
+  var parts = sealed.slice(job ? BG_JOB_PREFIX.length : BG_SEALED_PREFIX.length).split(".");
+  if (parts.length !== (job ? 3 : 2)) return null;
+  var jk = job ? unb64u(parts.shift()) : null;
+  var key = job ? await jobKey(env, jk) : await aesKey(env);
+  if (jk) jk.fill(0);
   if (!key) return null;
-  var parts = sealed.slice(BG_SEALED_PREFIX.length).split(".");
-  if (parts.length !== 2) return null;
   var iv = unb64u(parts[0]);
   var ct = unb64u(parts[1]);
   if (!iv || iv.length !== 12 || !ct) return null;

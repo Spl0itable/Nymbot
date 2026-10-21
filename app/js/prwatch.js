@@ -165,6 +165,8 @@
             const body = watchBody(Chat().repoPayload(repo), job, {
                 thread: conv.rootId, fix: fixMode(settings), cap: fixCap(settings), model, planFirst: policy.planFirst, push
             });
+            const chanJob = Chat().chanJob ? Chat().chanJob(conv) : null;
+            if (chanJob) body.chan = chanJob;
             const { status, data } = await Api().call('pr-watch-put', body, { timeout: 20000 });
             if (status !== 200 || !data || !data.ok) {
                 const err = new Error((data && data.error) || t('The pull request could not be watched.'));
@@ -173,10 +175,11 @@
                 throw err;
             }
             const list = records().filter(r => !(r.repo === job.repo && r.branch === body.watch.branch));
-            list.push({ id: data.id, repo: job.repo, branch: body.watch.branch, number: body.watch.number, convId: conv.id, msgId: m ? m.id : null, at: Date.now(), seen: 0 });
+            const seen = o.resave && data.watch && Array.isArray(data.watch.events) ? data.watch.events.reduce((n, e) => Math.max(n, Number(e && e.seq) || 0), 0) : 0;
+            list.push({ id: data.id, repo: job.repo, branch: body.watch.branch, number: body.watch.number, convId: conv.id, msgId: m ? m.id : null, at: Date.now(), seen, chan: !!chanJob });
             saveRecords(list);
             if (data.watch) this.live.set(data.id, data.watch);
-            this.transcript(ui, conv.id, m ? m.id : null, 'watch', t('Watching pull request #{n}.', { n: body.watch.number }));
+            if (!o.resave) this.transcript(ui, conv.id, m ? m.id : null, 'watch', t('Watching pull request #{n}.', { n: body.watch.number }));
             return data;
         },
 
@@ -239,6 +242,13 @@
         async fix(ui, conv, m) {
             const w = m && m.prWatch;
             if (!w || !w.offer || w.fixed) return;
+            const rec = records().find(r => r.id === w.id);
+            if (rec && rec.chan && typeof ui.send === 'function') {
+                Store().patchMessage(conv.id, m.id, { prWatch: Object.assign({}, w, { fixed: true }) });
+                ui.replaceMessage(Store().messages(conv.id).find(x => x.id === m.id) || m);
+                await ui.send(t('Fix what was reported on pull request #{n}.', { n: rec.number }));
+                return;
+            }
             const res = await Api().call('pr-watch-fix', { id: w.id, seq: w.seq }, { timeout: 20000 });
             if (res.status !== 200 || !res.data || !res.data.ok) {
                 ui.note((res.data && res.data.error) || t('The fix could not be started.'), conv.id);
@@ -304,9 +314,28 @@
                 }
             }
             saveRecords(list.filter(r => !r.stopped || Date.now() - r.at < 7 * 86400000));
+            await this.resaveForChannel(ui);
             if (filed) ui.renderList();
             if (ui.conv && list.some(r => r.convId === ui.conv.id)) ui.renderMessages({ keep: true });
             return filed;
+        },
+
+        async resaveForChannel(ui) {
+            const again = records().filter(r => !r.stopped && !r.chan && !r.chanTried && this.live.has(r.id));
+            if (!again.length || !Chat().chanReady || !(await Chat().chanReady()) || !Chat().chanJob(null)) return 0;
+            saveRecords(records().map(r => (again.some(a => a.id === r.id) ? Object.assign({}, r, { chanTried: true }) : r)));
+            let n = 0;
+            for (const rec of again) {
+                const conv = Store().conversation(rec.convId);
+                if (!conv || conv.anon) continue;
+                const w = this.live.get(rec.id) || {};
+                const m = rec.msgId ? (Store().messages(conv.id).find(x => x.id === rec.msgId) || null) : null;
+                try {
+                    await this.start(ui, conv, m, { repo: rec.repo, branch: rec.branch, number: rec.number, base: w.base || '', sha: w.sha || '' }, { auto: true, resave: true });
+                    n++;
+                } catch (_) { }
+            }
+            return n;
         },
 
         place(ui, conv, msg) {

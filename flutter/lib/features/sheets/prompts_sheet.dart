@@ -185,7 +185,7 @@ class _PromptsSheetState extends State<_PromptsSheet> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(_error!,
+                child: UiText(_error!,
                     style: TextStyle(color: Theme.of(context).colorScheme.error)),
               ),
             const SizedBox(height: 10),

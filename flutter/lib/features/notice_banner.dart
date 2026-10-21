@@ -7,14 +7,27 @@ import 'i18n/i18n.dart';
 import 'nym_glyph.dart';
 import 'sheets/models_sheet.dart';
 
-class NoticeBanner extends StatelessWidget {
+class NoticeBanner extends StatefulWidget {
   const NoticeBanner({super.key});
+
+  @override
+  State<NoticeBanner> createState() => _NoticeBannerState();
+}
+
+class _NoticeBannerState extends State<NoticeBanner> {
+  int? _shown;
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final notice = app.visibleNotice;
-    if (notice == null) return const SizedBox.shrink();
+    final list = app.visibleNotices;
+    if (list.isEmpty) return const SizedBox.shrink();
+    final at = list.indexWhere((n) => n.id == _shown);
+    final index = at < 0 ? 0 : at;
+    final notice = list[index];
+    final many = list.length > 1;
+    void page(int step) =>
+        setState(() => _shown = list[(index + step) % list.length].id);
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     final accent = switch (notice.level) {
@@ -82,23 +95,51 @@ class NoticeBanner extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: theme.hintColor),
                     ),
                   ),
-                if (link != null || model != null)
-                  Wrap(
-                    spacing: 4,
+                if (link != null || model != null || many)
+                  Row(
                     children: [
-                      if (model != null)
-                        TextButton(
-                          style: action,
-                          onPressed: () =>
-                              showModelsSheet(context, filter: model),
-                          child: Text(t('Try it')),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 4,
+                          children: [
+                            if (model != null)
+                              TextButton(
+                                style: action,
+                                onPressed: () =>
+                                    showModelsSheet(context, filter: model),
+                                child: Text(t('Try it')),
+                              ),
+                            if (link != null)
+                              TextButton(
+                                style: action,
+                                onPressed: () => launchSafeUrl(link),
+                                child: Text(notice.linkLabel ?? t('Learn more')),
+                              ),
+                          ],
                         ),
-                      if (link != null)
-                        TextButton(
-                          style: action,
-                          onPressed: () => launchSafeUrl(link),
-                          child: Text(notice.linkLabel ?? t('Learn more')),
+                      ),
+                      if (many) ...[
+                        IconButton(
+                          icon: const NymGlyph('chevron', size: 16, quarterTurns: 1),
+                          tooltip: t('Previous announcement'),
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => page(-1),
                         ),
+                        Text(
+                          t('{n} of {total}', {'n': index + 1, 'total': list.length}),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.hintColor,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const NymGlyph('chevron', size: 16, quarterTurns: 3),
+                          tooltip: t('Next announcement'),
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => page(1),
+                        ),
+                      ],
                     ],
                   )
                 else
@@ -108,9 +149,9 @@ class NoticeBanner extends StatelessWidget {
           ),
           IconButton(
             icon: const NymGlyph('close', size: 16),
-            tooltip: t('Dismiss'),
+            tooltip: many ? t('Dismiss all') : t('Dismiss'),
             visualDensity: VisualDensity.compact,
-            onPressed: () => app.dismissNotice(notice.id),
+            onPressed: () => app.dismissNotices([for (final n in list) n.id]),
           ),
         ],
       ),

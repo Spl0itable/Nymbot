@@ -39,7 +39,7 @@
     function lead(ui, conv) {
         const c = conv || ui.conv || {};
         if (ui.mediaModel(c)) return null;
-        return c.proModel || (ui.settings && ui.settings.proModel) || null;
+        return ui.chatModel(c).pro || null;
     }
 
     function reposOf(conv) {

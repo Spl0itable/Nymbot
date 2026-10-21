@@ -42,7 +42,7 @@ class _BackgroundSettingsState extends State<BackgroundSettings> {
     if (text == null || text.isEmpty || !mounted) return;
     ScaffoldMessenger.maybeOf(context)
       ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(text)));
+      ..showSnackBar(SnackBar(content: UiText(text)));
   }
 
   Future<void> _pick(String? package) async {

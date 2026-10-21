@@ -54,7 +54,7 @@ class _FileCardState extends State<FileCard> {
     final ok = await action(widget.file);
     if (mounted) setState(() => _busy = false);
     if (!ok && saving) {
-      messenger?.showSnackBar(SnackBar(content: Text(t('Opened it outside the app — save it from there.'))));
+      messenger?.showSnackBar(SnackBar(content: UiText(t('Opened it outside the app — save it from there.'))));
     }
   }
 

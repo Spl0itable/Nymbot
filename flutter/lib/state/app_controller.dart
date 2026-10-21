@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -37,6 +38,7 @@ import '../services/blossom.dart';
 import '../services/bot_files.dart';
 import '../services/canary.dart';
 import '../services/chat_engine.dart';
+import '../services/chat_model.dart';
 import '../services/connectors.dart';
 import '../services/dev_contact.dart';
 import '../services/doc_library.dart';
@@ -52,6 +54,7 @@ import '../services/nostr/event_signer.dart';
 import '../services/nostr/nip46.dart';
 import '../services/nostr/signer_links.dart';
 import '../services/nymbot_api.dart';
+import '../services/nymbot_channel.dart';
 import '../services/pr_watch.dart';
 import '../services/passkey_backup.dart';
 import '../core/crypto/pq.dart' as pq_crypto;
@@ -116,6 +119,7 @@ class AppController extends ChangeNotifier {
     sync = AccountSync(
         store: store, identity: identity, storage: storage, anon: anon);
     DocLibrary.bind(store);
+    I18n.revision.addListener(_retextPush);
     AiConsent.instance.scope = () => identity.pubkey;
   }
 
@@ -221,7 +225,202 @@ class AppController extends ChangeNotifier {
     api: api,
     anon: anon,
     botPubkey: botPubkey,
-  );
+  )
+    ..channels = channelsOn
+        ? NymbotChannels(url: Uri.parse(NymbotConfig.botUrl).replace(scheme: 'wss', path: '/api'), botPk: botPubkey)
+        : null
+    ..messagesOf = ((id) => store.messages(id))
+    ..onChanSummary = _keepChanSummary
+    ..onChanSeen = (() => unawaited(store.setBool('chan_seen', true)))
+    ..freshen = ((_) => _freshen())
+    ..recover = ((conv, exclude) => recoverStored(conv, exclude: exclude))
+    ..onChanCtl = _keepChanCtl;
+
+  void _keepChanCtl(String run, String ctl) {
+    final list = _storedClaims();
+    var hit = false;
+    for (final c in list) {
+      if (c['chanRun'] == run) {
+        c['ctl'] = ctl;
+        hit = true;
+      }
+    }
+    if (hit) unawaited(store.setString(_claimsKey, jsonEncode(list)));
+  }
+
+  static bool channelsOn = kIsWeb || !Platform.environment.containsKey('FLUTTER_TEST');
+
+  Future<void>? _freshening;
+  DateTime _freshAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _freshen() {
+    final busy = _freshening;
+    if (busy != null) return busy;
+    if (!signedIn || DateTime.now().difference(_freshAt) < const Duration(seconds: 20)) {
+      return Future<void>.value();
+    }
+    _freshAt = DateTime.now();
+    final f = refreshSync().then((_) {}, onError: (_) {}).whenComplete(() => _freshening = null);
+    _freshening = f;
+    return f;
+  }
+
+  void composing() {
+    final conv = current;
+    if (conv == null || !signedIn) return;
+    if (!conv.anon && !conv.support) unawaited(_freshen());
+    if (conv.anon && conv.anonPk == null) return;
+    if (!conv.support) unawaited(recoverStored(conv));
+    () async {
+      final signer = conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+      chat.prewarm(signer);
+    }()
+        .catchError((_) {});
+  }
+
+  final Map<String, ChanSummary> _chanSummaries = {};
+
+  void _keepChanSummary(String convId, String run, ChanSummary summary) {
+    _chanSummaries[run] = summary;
+  }
+
+  Future<void> moveChanSummaries() async {
+    var moved = false;
+    for (final conv in conversations) {
+      final s = conv.chanSummary;
+      if (s == null) continue;
+      conv.chanSummary = null;
+      moved = true;
+      final list = store.messages(conv.id);
+      if (list.any((m) => m.chanSummary != null && m.chanSummary!.upto >= s.upto)) continue;
+      final at = list.lastIndexWhere((m) => m.role == ChatRole.bot);
+      if (at < 0) continue;
+      final next = [...list];
+      next[at] = list[at].copyWith(chanSummary: s);
+      await _putMessages(conv, next);
+    }
+    if (moved) await store.saveConversations(conversations);
+  }
+
+  void warmPull(Conversation conv, [ChatMessage? shown]) {
+    if (conv.support || chat.channels == null || chat.chanOffered == false) return;
+    if (shown != null) {
+      final token = shown.proposal?['token'] ?? shown.pendingTool?['token'] ?? shown.ask?['token'];
+      if (token is String && token.isNotEmpty && chanTokenOf(token) == null) return;
+    }
+    if (!conv.anon) unawaited(_freshen());
+    unawaited(recoverStored(conv));
+  }
+
+  final Map<String, DateTime> _storedAt = {};
+  final Map<String, Future<void>> _storedReads = {};
+
+  bool _holdsAsk(ChatMessage m) =>
+      turns.values.any((t) => t.askId == m.id || (m.wire != null && (t.msgId == m.wire || t.prepared?.chan?.run == m.wire)));
+
+  Future<void> recoverStored(Conversation conv, {String? exclude}) async {
+    if (conv.support || identity.pubkey.isEmpty || chat.channels == null || chat.chanOffered == false) return;
+    if (conv.anon && conv.anonPk == null) return;
+    final list = store.messages(conv.id);
+    final now = DateTime.now();
+    final open = <ChatMessage>[];
+    for (var i = 0; i < list.length; i++) {
+      final m = list[i];
+      final w = m.wire;
+      if (m.role != ChatRole.self || m.pending != null || w == null || w.isEmpty || w == exclude || m.id == exclude) continue;
+      if (now.difference(m.at) > const Duration(hours: 24) || _holdsAsk(m)) continue;
+      if (i + 1 < list.length && (list[i + 1].role == ChatRole.bot || list[i + 1].role == ChatRole.error)) continue;
+      if (list.any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) continue;
+      open.add(m);
+    }
+    final jobs = <Future<void>>[];
+    for (final m in open.length > 3 ? open.sublist(open.length - 3) : open) {
+      final w = m.wire!;
+      final busy = _storedReads[w];
+      if (busy != null) {
+        jobs.add(busy);
+        continue;
+      }
+      final at = _storedAt[w];
+      if (at != null && now.difference(at) < const Duration(seconds: 20)) continue;
+      _storedAt[w] = now;
+      final job = _readStored(conv, m).catchError((_) {}).whenComplete(() {
+        _storedReads.remove(w);
+        _storedAt[w] = DateTime.now();
+      });
+      _storedReads[w] = job;
+      jobs.add(job);
+    }
+    if (jobs.isNotEmpty) await Future.wait(jobs);
+  }
+
+  Future<void> _readStored(Conversation conv, ChatMessage m) async {
+    final w = m.wire!;
+    final signer = conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
+    final res = await chat.claimChan(conv, w, signer, anonPk: conv.anon ? conv.anonPk : null, onThreadIds: _threadIdsOf(conv));
+    if (res == null || _gone || _holdsAsk(m)) return;
+    if (store.messages(conv.id).any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) return;
+    final turn = ChatTurn(conv, askId: m.id, msgId: w);
+    turn.sent = true;
+    turn.model = modelOf(conv);
+    turns[turn.key] = turn;
+    try {
+      await _land(turn, res);
+    } finally {
+      _endTurn(turn);
+    }
+  }
+
+  static bool _offersNext(ChatMessage m) => m.role == ChatRole.error
+      ? m.retry != null
+      : m.role == ChatRole.bot && (m.followUps.isNotEmpty || m.pendingTool != null || m.ask != null || m.proposal != null);
+
+  @visibleForTesting
+  void wireSyncForTest() {
+    sync.onChange = _afterSync;
+    sync.follow();
+  }
+
+  static int _maxSeq(Object? w) {
+    var n = 0;
+    final events = w is Map ? w['events'] : null;
+    if (events is List) {
+      for (final e in events) {
+        final s = e is Map ? e['seq'] : null;
+        if (s is num && s.toInt() > n) n = s.toInt();
+      }
+    }
+    return n;
+  }
+
+  Future<void> _resavePrWatches() async {
+    final again = prRecords
+        .where((r) => r['stopped'] != true && r['chan'] != true && r['chanTried'] != true && prLive.containsKey(r['id']))
+        .toList();
+    if (again.isEmpty || !identity.present || !await chat.chanReady(identity.signer) || _chanFlag == null) return;
+    await _savePrRecords([
+      for (final r in prRecords) again.any((a) => a['id'] == r['id']) ? {...r, 'chanTried': true} : r,
+    ]);
+    for (final rec in again) {
+      final conv = conversations.where((c) => c.id == rec['convId']).firstOrNull;
+      if (conv == null || conv.anon) continue;
+      final live = prLive[rec['id']] ?? const <String, dynamic>{};
+      final m = _messagesOf(conv).where((x) => x.id == rec['msgId']).firstOrNull;
+      await prWatchStart(conv, m, {
+        'repo': rec['repo'],
+        'branch': rec['branch'],
+        'number': rec['number'],
+        'base': live['base'] ?? '',
+        'sha': live['sha'] ?? '',
+      }, auto: true, resave: true);
+    }
+  }
+
+  Map<String, dynamic>? get _chanFlag {
+    if (!chat.chanSeen) return null;
+    final kem = identity.rootLocked ? null : identity.kemPublicKey;
+    return {'pq': kem == null ? null : base64Url.encode(kem).replaceAll('=', '')};
+  }
 
   Nip46SocketFactory? signerSockets;
 
@@ -513,6 +712,9 @@ class AppController extends ChangeNotifier {
 
   Future<String> Function(CapPrompt prompt)? onCapPrompt;
   String? _capReturned;
+  void Function(String Function(String now) merge)? onGiveBack;
+  void Function(String? from, String to)? onOpen;
+  final Map<String, ({List<Attachment> files, String? quote})> _held = {};
   String? _capWaive;
 
   String? pendingInput;
@@ -533,6 +735,7 @@ class AppController extends ChangeNotifier {
   void _loadSettings() {
     settings = store.settings();
     chat.defaultWhenDone = settings.whenDone;
+    chat.chanSeen = store.getBool('chan_seen');
     final raw = store.getString('settings');
     if (raw != null) {
       try {
@@ -545,8 +748,7 @@ class AppController extends ChangeNotifier {
     dismissedNotices = store.dismissedNotices();
   }
 
-  Future<void> _saveModel() => store.setString(
-      'settings', jsonEncode({'proModel': proModel, 'mediaModel': mediaModel}));
+  Future<void> _saveModel() => store.saveModelPick(proModel, mediaModel);
 
   Future<void> saveSettings(AppSettings next) async {
     settings = next;
@@ -560,6 +762,7 @@ class AppController extends ChangeNotifier {
     await store.resetSettings();
     settings = store.settings();
     chat.defaultWhenDone = settings.whenDone;
+    chat.chanSeen = store.getBool('chan_seen');
     if (kept.at > 0) {
       settings
         ..nickname = kept.name
@@ -587,56 +790,190 @@ class AppController extends ChangeNotifier {
     return nick.isNotEmpty ? nick : (published ?? '');
   }
 
-  Future<void> setProModel(Map<String, dynamic>? model, {bool forChat = false}) async {
-    if (forChat) {
-      final conv = current;
-      if (conv != null) {
-        conv.proModel = model;
-        await store.saveConversations(conversations);
-      }
-    } else {
-      proModel = model;
-      await _saveModel();
-      final conv = current;
-      if (conv != null && conv.proModel != null) {
-        conv.proModel = null;
-        await store.saveConversations(conversations);
-      }
-    }
-    await clearMediaModel();
+  Future<void> setProModel(Map<String, dynamic>? model) async {
+    await _pinChat(model, null);
+    proModel = model;
+    mediaModel = null;
+    await _saveModel();
     notifyListeners();
+    announceModel();
   }
 
-  Map<String, dynamic>? modelOf(Conversation? conv) =>
-      conv?.proModel ?? proModel;
+  Future<void> _pinChat(Map<String, dynamic>? pro, Map<String, dynamic>? media) async {
+    _modelShown = null;
+    final conv = current;
+    if (conv == null) return;
+    conv.proModel = pro;
+    conv.mediaModel = media;
+    conv.modelPin = true;
+    await store.saveConversations(conversations);
+  }
+
+  final ModelNotes modelNote = ModelNotes();
+  int _balanceAt = 0;
+  String? _modelShown;
+  String? _fallbackNoted;
+  Future<void>? _balanceAsk;
+
+  void markBalanceFresh() => _balanceAt = DateTime.now().millisecondsSinceEpoch;
+
+  Map<String, dynamic>? _catalogKeys() {
+    final catalog = mentionCatalog;
+    if (catalog == null) return null;
+    final rows = [
+      for (final m in (catalog['models'] as List?) ?? const [])
+        if (m is Map && m['key'] is String) m
+    ];
+    return {
+      'chat': [
+        for (final m in rows)
+          if (m['command'] == null && (m['kind'] == null || m['kind'] == 'chat')) m['key']
+      ],
+      'media': [for (final m in rows) if (m['command'] != null) m['key']],
+      'aliases': catalog['aliases'] is Map ? catalog['aliases'] : const {},
+    };
+  }
+
+  Map<String, dynamic>? _catalogEntry(String? key) {
+    final row = catalogRow(mentionCatalog, key);
+    if (row != null) return row;
+    final to = (mentionCatalog?['aliases'] as Map?)?[key];
+    return to is String ? catalogRow(mentionCatalog, to) : null;
+  }
+
+  String? _lastReplyKey(Conversation conv) {
+    final list = conv.id == current?.id ? messages : store.messages(conv.id);
+    for (final m in list.reversed) {
+      if (m.role == ChatRole.bot) return m.modelKey;
+    }
+    return null;
+  }
+
+  bool _proUsable(Conversation? conv) {
+    final own = proBalance;
+    final anonOk = (conv?.anon ?? false) && (anonProBalance ?? 0) > 0;
+    return !(own != null && own <= 0) || anonOk;
+  }
+
+  ChatPick chatPick(Conversation? conv) {
+    String? key(Map<String, dynamic>? m) => m?['key'] as String?;
+    final r = ChatModelRule.resolve({
+      'chat': {
+        'pin': conv?.modelPin ?? false,
+        'pro': key(conv?.proModel),
+        'media': key(conv?.mediaModel),
+      },
+      'reply': conv == null ? null : {'key': _lastReplyKey(conv)},
+      'global': {'pro': key(proModel), 'media': key(mediaModel)},
+      'catalog': _catalogKeys(),
+      'proOk': _proUsable(conv),
+    });
+    final source = r['source'] as String;
+    Map<String, dynamic>? pro;
+    Map<String, dynamic>? media;
+    if (source == 'chat') {
+      pro = r['pro'] != null ? conv?.proModel : null;
+      media = r['media'] != null ? conv?.mediaModel : null;
+    } else if (source == 'global') {
+      pro = r['pro'] != null ? proModel : null;
+      media = r['media'] != null ? mediaModel : null;
+    } else if (source == 'reply') {
+      final row = _catalogEntry((r['pro'] ?? r['media']) as String?);
+      if (row != null && r['pro'] != null) {
+        pro = {
+          'key': r['pro'],
+          'label': row['label'],
+          'credits': row['credits'],
+          'max': row['max'],
+          'slug': row['authorSlug'],
+        };
+      }
+      if (row != null && r['media'] != null) media = mediaFor(row, catalog: mentionCatalog);
+    }
+    return ChatPick(
+        pro: pro, media: media, source: source, fallback: r['fallback'] as Map<String, dynamic>?);
+  }
+
+  String _modelName(Map<String, dynamic>? pro, Map<String, dynamic>? media) {
+    if (media != null) return mediaLabel(media);
+    return pro == null ? t('Standard') : '${pro['label'] ?? pro['key']}';
+  }
+
+  void announceModel({bool sending = false}) {
+    final conv = current;
+    if (conv == null) return;
+    final pick = chatPick(conv);
+    final name = _modelName(pick.pro, settledMedia(pick.media, mentionCatalog));
+    final was = _modelShown;
+    _modelShown = name;
+    final fb = pick.fallback;
+    if (fb != null) {
+      final stale = DateTime.now().millisecondsSinceEpoch - _balanceAt > 3000;
+      if (fb['reason'] == 'credits' && stale && !sending) {
+        _balanceAsk ??= refreshBalance()
+            .catchError((_) {})
+            .whenComplete(() => _balanceAsk = null);
+        return;
+      }
+      Map<String, dynamic>? named(Map<String, dynamic>? a, Map<String, dynamic>? b, String? k) =>
+          a?['key'] == k ? a : (b?['key'] == k ? b : null);
+      final lostMedia = fb['media'] as String?;
+      final lostPro = fb['pro'] as String?;
+      final lost = lostMedia != null
+          ? '${named(conv.mediaModel, mediaModel, lostMedia)?['label'] ?? lostMedia}'
+          : _modelName(
+              lostPro == null ? null : (named(conv.proModel, proModel, lostPro) ?? {'key': lostPro}), null);
+      final mark = '${conv.id}|$lost|${fb['reason']}|$name';
+      if (_fallbackNoted == mark) return;
+      _fallbackNoted = mark;
+      modelNote.say(fb['reason'] == 'credits'
+          ? t('{model} needs Pro credits · using {fallback}', {'model': lost, 'fallback': name})
+          : t('{model} is not available · using {fallback}', {'model': lost, 'fallback': name}));
+      return;
+    }
+    if (was != null && was != name) {
+      modelNote.say(t('{model} · this chat\'s model', {'model': name}));
+    }
+  }
+
+  Future<void> _settlePick(Conversation conv) async {
+    var pick = chatPick(conv);
+    if (mentionCatalog == null && (pick.pro != null || pick.media != null)) {
+      await ensureMentionCatalog();
+      pick = chatPick(conv);
+    }
+    if (pick.fallback?['reason'] == 'credits') {
+      await refreshBalance().catchError((_) {});
+      pick = chatPick(conv);
+    }
+    if (pick.fallback != null && conv.id == current?.id) announceModel(sending: true);
+    final owned = pick.source == 'reply' ||
+        (pick.source == 'global' && pick.fallback == null && _lastReplyKey(conv) == null);
+    if (owned && !conv.modelPin) {
+      conv.proModel = pick.pro;
+      conv.mediaModel = pick.media;
+      conv.modelPin = true;
+      await store.saveConversations(conversations);
+    }
+  }
+
+  Map<String, dynamic>? modelOf(Conversation? conv) => chatPick(conv).pro;
 
   Map<String, dynamic>? get activeModel => modelOf(current);
 
   bool get repoNeedsPro => activeRepos.isNotEmpty && activeModel == null;
 
   Map<String, dynamic>? mediaModelOf(Conversation? conv) =>
-      settledMedia(conv?.mediaModel ?? mediaModel, mentionCatalog);
+      settledMedia(chatPick(conv).media, mentionCatalog);
 
   Map<String, dynamic>? get activeMediaModel => mediaModelOf(current);
 
-  Future<void> setMediaModel(Map<String, dynamic>? model,
-      {bool forChat = false}) async {
-    if (forChat) {
-      final conv = current;
-      if (conv != null) {
-        conv.mediaModel = model;
-        await store.saveConversations(conversations);
-      }
-    } else {
-      mediaModel = model;
-      await _saveModel();
-      final conv = current;
-      if (conv != null && conv.mediaModel != null) {
-        conv.mediaModel = null;
-        await store.saveConversations(conversations);
-      }
-    }
+  Future<void> setMediaModel(Map<String, dynamic>? model) async {
+    await _pinChat(chatPick(current).pro, model);
+    mediaModel = model;
+    await _saveModel();
     notifyListeners();
+    announceModel();
   }
 
   static final RegExp _hasModelFlag = RegExp(r'(?:^|\s)(?:--model|-m)[\s=]');
@@ -788,16 +1125,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> clearMediaModel() async {
     if (activeMediaModel == null) return;
-    final conv = current;
-    if (conv != null && conv.mediaModel != null) {
-      conv.mediaModel = null;
-      await store.saveConversations(conversations);
-    }
-    if (mediaModel != null) {
-      mediaModel = null;
-      await _saveModel();
-    }
-    notifyListeners();
+    await setMediaModel(null);
   }
 
   Future<void> dropProMedia() async {
@@ -880,15 +1208,23 @@ class AppController extends ChangeNotifier {
   }
 
   Future<ContactOutcome> sendSupport(String text,
-      {ContactPublish? publish, ContactKem? kem}) async {
-    final contact = developerContact(
-        publish: publish, kem: kem, token: await ensureSupportToken());
-    final outcome = await contact.reply(text);
-    final sent = contact.lastSent;
-    if (outcome == ContactOutcome.sent && sent != null) {
-      await _landSupport(sent);
+      {ContactPublish? publish, ContactKem? kem, bool returns = false}) async {
+    var outcome = ContactOutcome.failed;
+    try {
+      final contact = developerContact(
+          publish: publish, kem: kem, token: await ensureSupportToken());
+      outcome = await contact.reply(text);
+      final sent = contact.lastSent;
+      if (outcome == ContactOutcome.sent && sent != null) {
+        await _landSupport(sent);
+      }
+      return outcome;
+    } finally {
+      final chat = supportChat;
+      if (returns && outcome != ContactOutcome.sent && chat != null) {
+        await _giveBack(chat, text.trim(), const [], null);
+      }
     }
-    return outcome;
   }
 
   Set<String> _seenSupport() {
@@ -1043,7 +1379,7 @@ class AppController extends ChangeNotifier {
     }
     if (on) {
       await anon.flush(identity: identity.signer);
-      await autoTopUp();
+      await _stockHeld();
     }
     notifyListeners();
   }
@@ -1101,14 +1437,14 @@ class AppController extends ChangeNotifier {
       if (here.data['error'] == null) {
         await anon.noteBalanceData(target, here.data);
       }
-      final mine = await api.balance(identity.signer);
-      if (here.data['error'] != null || mine.data['error'] != null) return null;
+      final mine = pk == null ? await api.balance(identity.signer) : null;
+      if (here.data['error'] != null || (mine != null && mine.data['error'] != null)) return null;
 
       final moved = <String, int>{};
       for (final tier in tiers) {
         final key = tier == 'pro' ? 'proBalance' : 'balance';
         final have = (here.data[key] as num?)?.toInt();
-        final nym = (mine.data[key] as num?)?.toInt();
+        final nym = mine == null ? 0 : (mine.data[key] as num?)?.toInt();
         if (have == null || nym == null) continue;
         if (!force && have >= floor) continue;
         if (force && have >= floor + amount) continue;
@@ -1128,7 +1464,11 @@ class AppController extends ChangeNotifier {
         if (credited > 0) moved[tier] = credited;
       }
       if (moved.isEmpty) return null;
-      await refreshBalance();
+      if (pk == null) {
+        await refreshBalance();
+      } else if (current?.anonPk == target) {
+        await refreshAnonBalance();
+      }
       return moved;
     } catch (_) {
       return null;
@@ -1164,28 +1504,9 @@ class AppController extends ChangeNotifier {
       try {
         moved = await anon.redeemHeld(tier, pk: pk, want: short);
       } catch (_) {}
-      final allowed = settings.anonAutoTopTier == 'both' ||
-          settings.anonAutoTopTier == tier;
-      if (moved < short && settings.anonAutoTop && allowed) {
-        final mine = await api.balance(identity.signer);
-        if (mine.data['error'] == null) {
-          final amount =
-              settings.anonAutoTopAmount < 1 ? 1 : settings.anonAutoTopAmount;
-          final gap = short - moved;
-          final nym = _figureOf(mine.data, pro).floor();
-          final want = gap > amount ? gap : amount;
-          final take = want < nym ? want : nym;
-          if (take > 0) {
-            try {
-              moved += await anon.moveCredits(identity.signer, take, tier,
-                  pk: pk);
-            } catch (_) {}
-          }
-        }
-      }
       if (moved <= 0) return null;
       _topping = false;
-      await refreshBalance();
+      if (current?.id == conv.id) await refreshAnonBalance();
       return {tier: moved};
     } catch (_) {
       return null;
@@ -1306,6 +1627,9 @@ class AppController extends ChangeNotifier {
   Notice? get visibleNotice =>
       settings.notices ? Notice.newest(notices, dismissedNotices) : null;
 
+  List<Notice> get visibleNotices =>
+      settings.notices ? Notice.visible(notices, dismissedNotices) : const [];
+
   Future<void> setNotices(bool on) async {
     settings.notices = on;
     await store.saveSettings(settings);
@@ -1327,8 +1651,10 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> dismissNotice(int id) async {
-    dismissedNotices = Notice.dismiss(dismissedNotices, id);
+  Future<void> dismissNotice(int id) => dismissNotices([id]);
+
+  Future<void> dismissNotices(Iterable<int> ids) async {
+    dismissedNotices = Notice.dismissAll(dismissedNotices, ids);
     notifyListeners();
     await store.saveDismissedNotices(dismissedNotices);
   }
@@ -1381,7 +1707,7 @@ class AppController extends ChangeNotifier {
           notifyListeners();
         }
         final fast = turn.draft != null && turn.research == null;
-        await Future<void>.delayed(signer.isRemote
+        await chat.progressIdle(eventId, signer.isRemote
             ? const Duration(seconds: 5)
             : Duration(milliseconds: fast ? 600 : 2000));
       }
@@ -1425,6 +1751,7 @@ class AppController extends ChangeNotifier {
   Future<void> setLanguage(String code) async {
     await store.setString('lang', code);
     await I18n.load(preferred: code);
+    ReplyNotify.warm();
     notifyListeners();
   }
 
@@ -1799,7 +2126,7 @@ class AppController extends ChangeNotifier {
           conv: conv, replyTo: m.replyTo);
       return;
     }
-    final model = modelOf(conv);
+    final model = _runModel(conv, m);
     final text = t('Continue.');
     double? maxCost;
     final waived = _capWaive == conv.id;
@@ -1991,7 +2318,7 @@ class AppController extends ChangeNotifier {
     }
     final token = a['token'] is String ? a['token'] as String : null;
     final text = Ask.answerText(questions, got);
-    final model = modelOf(conv);
+    final model = _runModel(conv, held);
     String? askId;
     final link = held.replyTo;
     if (link != null) {
@@ -2103,11 +2430,17 @@ class AppController extends ChangeNotifier {
     final runId = p['runId'] is String && (p['runId'] as String).isNotEmpty ? p['runId'] as String : held.replyTo;
     var steered = false;
     if (runId != null && RegExp(r'^[0-9a-f]{64}$').hasMatch(runId)) {
-      final res = await api.steerRun(identity.signer, runId, said);
-      steered = res.status == 200 && res.data['ok'] == true;
+      final signer = await _signerOf(conv);
+      final via = await _steerOverChan(runId, said, signer, conv.anon ? conv.anonPk : null);
+      if (via != null) {
+        steered = via;
+      } else {
+        final res = await api.steerRun(signer, runId, said);
+        steered = res.status == 200 && res.data['ok'] == true;
+      }
       if (steered) transcripts.steered(runId, said, convId: conv.id);
     }
-    await decidePlan(held, steered ? {'decision': 'revise'} : {'decision': 'revise', 'edits': {'note': said}});
+    await _decideIn(conv, held, steered ? {'decision': 'revise'} : {'decision': 'revise', 'edits': {'note': said}});
   }
 
   Future<void> approvePlanById(String messageId) async {
@@ -2119,7 +2452,12 @@ class AppController extends ChangeNotifier {
 
   Future<void> decidePlan(ChatMessage m, Map<String, dynamic> raw) async {
     final conv = current;
-    if (conv == null || !_answering.add(m.id)) return;
+    if (conv == null) return;
+    await _decideIn(conv, m, raw);
+  }
+
+  Future<void> _decideIn(Conversation conv, ChatMessage m, Map<String, dynamic> raw) async {
+    if (!_answering.add(m.id)) return;
     try {
       await _decidePlan(conv, m, raw);
     } finally {
@@ -2169,7 +2507,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     final token = p['token'] is String ? p['token'] as String : null;
-    final model = modelOf(conv);
+    final model = _runModel(conv, held);
     String? askId;
     final link = held.replyTo;
     if (link != null) {
@@ -2605,7 +2943,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<String> prWatchStart(Conversation conv, ChatMessage? m, Map<String, dynamic> job,
-      {bool auto = false}) async {
+      {bool auto = false, bool resave = false}) async {
     if (conv.anon) return t('Watching pull requests is not available in anonymous chats.');
     final repo = reposOf(conv).where((r) => r.repo == job['repo']).firstOrNull;
     if (repo == null) return t('That repository is no longer connected.');
@@ -2624,6 +2962,8 @@ class AppController extends ChangeNotifier {
         model: model,
         planFirst: policyOf(conv)['planFirst'],
         push: push);
+    final chanOn = _chanFlag;
+    if (chanOn != null) body['chan'] = chanOn;
     final res = await api.prWatchPut(identity.signer, body);
     if (res.status != 200 || res.data['ok'] != true || res.data['id'] is! String) {
       final error = res.data['error'];
@@ -2642,12 +2982,13 @@ class AppController extends ChangeNotifier {
         'convId': conv.id,
         'msgId': m?.id,
         'at': DateTime.now().millisecondsSinceEpoch,
-        'seen': 0,
+        'seen': resave ? _maxSeq(res.data['watch']) : 0,
+        'chan': chanOn != null,
       });
     await _savePrRecords(list);
     final summary = res.data['watch'];
     if (summary is Map) prLive[id] = summary.cast<String, dynamic>();
-    if (m != null) {
+    if (m != null && !resave) {
       transcripts.prEvent(conv.id, m, 'watch', t('Watching pull request #{n}.', {'n': watch['number']}));
     }
     notifyListeners();
@@ -2715,15 +3056,21 @@ class AppController extends ChangeNotifier {
     final conv = current;
     final w = m.prWatch;
     if (conv == null || w == null || w['offer'] != true || w['fixed'] == true) return '';
+    final rec = prRecords.where((r) => r['id'] == w['id']).firstOrNull;
+    if (rec != null && rec['chan'] == true) {
+      await _putMessages(conv,
+          _messagesOf(conv).map((x) => x.id == m.id ? x.copyWith(prWatch: {...w, 'fixed': true}) : x).toList());
+      await send(t('Fix what was reported on pull request #{n}.', {'n': rec['number']}));
+      return '';
+    }
     final seq = w['seq'];
     final res = await api.prWatchFix(identity.signer, '${w['id']}', seq is num ? seq.toInt() : 0);
     if (res.status != 200 || res.data['ok'] != true) {
       final error = res.data['error'];
       return error is String && error.isNotEmpty ? error : t('The fix could not be started.');
     }
-    messages = messages.map((x) => x.id == m.id ? x.copyWith(prWatch: {...w, 'fixed': true}) : x).toList();
-    await store.saveMessages(conv.id, messages);
-    notifyListeners();
+    await _putMessages(conv,
+        _messagesOf(conv).map((x) => x.id == m.id ? x.copyWith(prWatch: {...w, 'fixed': true}) : x).toList());
     return t('Nymbot will start a fix run on {branch} in a moment. Its reply lands here.', {'branch': w['branch'] ?? ''});
   }
 
@@ -2739,7 +3086,9 @@ class AppController extends ChangeNotifier {
       final res = await api.prWatchList(identity.signer);
       final list = res.data['watches'];
       if (res.status != 200 || list is! List) return 0;
-      return prWatchApply([for (final w in list) if (w is Map) w.cast<String, dynamic>()]);
+      final filed = await prWatchApply([for (final w in list) if (w is Map) w.cast<String, dynamic>()]);
+      await _resavePrWatches();
+      return filed;
     }();
     _prListing = work;
     try {
@@ -2904,7 +3253,7 @@ class AppController extends ChangeNotifier {
     final rows = await _revertMarks(conv, marks);
     bool clean(Map<String, dynamic> r) =>
         r['error'] == null && ((r['failed'] as List?)?.isEmpty ?? true);
-    messages = messages.map((x) {
+    await _putMessages(conv, _messagesOf(conv).map((x) {
       final mark = x.checkpoint;
       if (x.id != m.id || mark == null) return x;
       return x.copyWith(
@@ -2913,9 +3262,7 @@ class AppController extends ChangeNotifier {
             r['repo'] == y['repo'] && '${r['branch'] ?? ''}' == '${y['branch'] ?? ''}');
         return hit.isNotEmpty && clean(hit.first) ? {...y, 'undone': true} : y;
       }));
-    }).toList();
-    await store.saveMessages(conv.id, messages);
-    notifyListeners();
+    }).toList());
     return rows;
   }
 
@@ -2978,7 +3325,7 @@ class AppController extends ChangeNotifier {
       return t('The forge could not be reached.');
     }
     Future<void> mark(String key) async {
-      messages = messages.map((x) {
+      await _putMessages(conv, _messagesOf(conv).map((x) {
         final cp = x.checkpoint;
         if (x.id != m.id || cp == null) return x;
         return x.copyWith(
@@ -2995,9 +3342,7 @@ class AppController extends ChangeNotifier {
             ],
           };
         }));
-      }).toList();
-      await store.saveMessages(conv.id, messages);
-      notifyListeners();
+      }).toList());
     }
 
     if (data['merged'] == true) {
@@ -3015,8 +3360,9 @@ class AppController extends ChangeNotifier {
     if (staged == null || conv == null) return;
     final marks = <Map<String, dynamic>>[];
     Object? failure;
+    final scoped = reposOf(conv);
     for (final one in allStaged(staged)) {
-      final repo = activeRepos.where((r) => r.repo == one['repo']).firstOrNull;
+      final repo = scoped.where((r) => r.repo == one['repo']).firstOrNull;
       if (repo == null) {
         failure = ChatFailure(t('That repository is no longer connected.'));
         break;
@@ -3037,15 +3383,13 @@ class AppController extends ChangeNotifier {
       }
     }
     final mark = checkpointOfApplied(marks);
-    messages = messages
+    await _putMessages(conv, _messagesOf(conv)
         .map((x) => x.id == m.id
             ? x.copyWith(
                 checkpoint: mark,
                 staged: failure == null ? settledStaged(staged, 'applied') : null)
             : x)
-        .toList();
-    await store.saveMessages(conv.id, messages);
-    notifyListeners();
+        .toList());
     if (failure != null) throw failure;
   }
 
@@ -3106,16 +3450,9 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _patchJob(
-      ChatMessage m, String branch, Map<String, dynamic> patch) async {
-    final conv = current;
-    if (conv == null) return;
-    messages = messages.map((x) {
-      final mark = x.checkpoint;
-      if (x.id != m.id || mark == null) return x;
-      return x.copyWith(checkpoint: patchJob(mark, branch, patch));
-    }).toList();
-    await store.saveMessages(conv.id, messages);
+  Future<void> _patchJob(Conversation conv, ChatMessage m, String branch,
+      Map<String, dynamic> patch) async {
+    await _prPatchJob(conv, m, branch, patch);
     notifyListeners();
   }
 
@@ -3139,7 +3476,7 @@ class AppController extends ChangeNotifier {
     final pullNo = pullNumberOf(job['pull']);
     if (op == 'close' || op == 'revert-pr') {
       if (op == 'close' && data['merged'] == true) {
-        await _patchJob(m, branch, {'merged': true});
+        await _patchJob(conv, m, branch, {'merged': true});
         return '${data['error'] ?? ''}';
       }
       if (data['moved'] == true && data['error'] == null) {
@@ -3147,13 +3484,13 @@ class AppController extends ChangeNotifier {
       }
       if (data['error'] != null) return '${data['error']}';
       if (op == 'close') {
-        await _patchJob(m, branch, {'closed': true});
+        await _patchJob(conv, m, branch, {'closed': true});
         return data['already'] == true
             ? t('Pull request #{n} was already closed.', {'n': pullNo})
             : t('Closed pull request #{n}.', {'n': pullNo});
       }
       final pull = data['pull'];
-      await _patchJob(m, branch, {
+      await _patchJob(conv, m, branch, {
         'reverted': {
           'branch': '${data['branch'] ?? ''}',
           'base': '${data['base'] ?? ''}',
@@ -3175,12 +3512,12 @@ class AppController extends ChangeNotifier {
           {'n': pull is Map ? pull['number'] : '', 'branch': data['branch']});
     }
     if (data['conflict'] == true) {
-      await _patchJob(m, branch, {'conflict': true, 'pull': data['pull'] ?? job['pull']});
+      await _patchJob(conv, m, branch, {'conflict': true, 'pull': data['pull'] ?? job['pull']});
       return t('This branch conflicts with {base}. Open the PR to resolve it, or ask Nymbot to update the branch.',
           {'base': base});
     }
     if (data['gone'] == true && data['deleted'] != true) {
-      await _patchJob(m, branch, {'deleted': true});
+      await _patchJob(conv, m, branch, {'deleted': true});
       repo.nymBranches = forgetBranches(repo.nymBranches, [branch]);
       await store.saveRepos(repos);
       return t('That branch is already gone.');
@@ -3196,7 +3533,7 @@ class AppController extends ChangeNotifier {
     if (data['error'] != null) return '${data['error']}';
     switch (op) {
       case 'pr':
-        await _patchJob(m, branch, {
+        await _patchJob(conv, m, branch, {
           'pull': data['pull'] ?? job['pull'],
           if (data['merged'] == true) 'merged': true,
         });
@@ -3209,7 +3546,7 @@ class AppController extends ChangeNotifier {
         }
         return '';
       case 'merge':
-        await _patchJob(m, branch, {
+        await _patchJob(conv, m, branch, {
           'merged': true,
           'conflict': false,
           'pull': data['pull'] ?? job['pull'],
@@ -3217,7 +3554,7 @@ class AppController extends ChangeNotifier {
         return t('Merged {branch} into {base}.', {'branch': branch, 'base': base});
       case 'update':
         final sha = data['sha'] is String ? data['sha'] as String : job['sha'];
-        await _patchJob(m, branch, {'conflict': false, 'sha': sha});
+        await _patchJob(conv, m, branch, {'conflict': false, 'sha': sha});
         repo.nymBranches = rememberBranch(
             repo.nymBranches, {...job, 'sha': sha, 'owner': await _ownerOf(conv)});
         await store.saveRepos(repos);
@@ -3227,7 +3564,7 @@ class AppController extends ChangeNotifier {
             : t('Updated {branch} with a merge commit from {base}.',
                 {'branch': branch, 'base': base});
       default:
-        await _patchJob(m, branch, {'deleted': true});
+        await _patchJob(conv, m, branch, {'deleted': true});
         repo.nymBranches = forgetBranches(repo.nymBranches, [branch]);
         await store.saveRepos(repos);
         return t('Deleted {branch}.', {'branch': branch});
@@ -3655,6 +3992,7 @@ class AppController extends ChangeNotifier {
 
     conversations = store.conversations();
     schedules = store.schedules();
+    await moveChanSummaries();
     // Before anything is drawn.
     await sweepOldChats();
     await openStartingChat();
@@ -3707,7 +4045,7 @@ class AppController extends ChangeNotifier {
       if (conversations.any((c) => pendingIn(c).isNotEmpty)) _watchPending();
       startScheduler();
       await runDueSchedules();
-      await autoTopUp();
+      _scheduleRestock();
       // Whatever the mirror lacked; a no-op otherwise.
       await profiles.load(identity.pubkey);
       notifyListeners();
@@ -3734,6 +4072,7 @@ class AppController extends ChangeNotifier {
           if (c.id == open.id) current = c;
         }
       }
+      if (conversations.any((c) => c.chanSummary != null)) unawaited(moveChanSummaries());
     }
     if (touched.contains('anonKeys') || touched.contains('chats')) {
       unawaited(refreshBalance());
@@ -3761,6 +4100,7 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _restockTimer?.cancel();
     _gone = true;
     _deletedTimer?.cancel();
     transcripts.dispose();
@@ -3774,6 +4114,7 @@ class AppController extends ChangeNotifier {
     }
     _stopSupport();
     replyNotify.detach();
+    I18n.revision.removeListener(_retextPush);
     _bootWork?.cancel();
     _syncTimer?.cancel();
     _noticeTimer?.cancel();
@@ -3820,7 +4161,15 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> open(Conversation conv) async {
+    final was = current;
+    if (was != null && was.id != conv.id && (attachments.isNotEmpty || quote != null)) {
+      _hold(was.id, attachments, quote);
+    }
+    final same = was?.id == conv.id;
+    final held = same ? null : _held.remove(conv.id);
+    if (!same) onOpen?.call(was?.id, conv.id);
     current = conv;
+    if (!same) warmPull(conv);
     if (conv.anon &&
         _anonShownFor != null &&
         shownAnonPk != _anonShownFor) {
@@ -3831,13 +4180,19 @@ class AppController extends ChangeNotifier {
     replyNotify.viewingChat(conv.id);
     messages = store.messages(conv.id);
     artifacts = store.artifacts(conv.id);
-    attachments = [];
-    quote = null;
+    if (!same) {
+      attachments = held?.files ?? [];
+      quote = held?.quote;
+    }
     if (conv.unread > 0) {
       conv.unread = 0;
       await store.saveConversations(conversations);
     }
     notifyListeners();
+    announceModel();
+    if (mentionCatalog == null) {
+      unawaited(ensureMentionCatalog().then((_) => announceModel()));
+    }
     await store.setString(_viewChatKey, conv.id);
   }
 
@@ -4048,6 +4403,7 @@ class AppController extends ChangeNotifier {
       systemPrompt: conv.systemPrompt,
       proModel: conv.proModel,
       mediaModel: conv.mediaModel,
+      modelPin: conv.modelPin,
     );
     conversations.insert(0, copy);
     await store.saveConversations(conversations);
@@ -4087,6 +4443,7 @@ class AppController extends ChangeNotifier {
       systemPrompt: conv.systemPrompt,
       proModel: conv.proModel,
       mediaModel: conv.mediaModel,
+      modelPin: conv.modelPin,
       seed: seed,
     );
     conversations.insert(0, copy);
@@ -4176,8 +4533,6 @@ class AppController extends ChangeNotifier {
     conversations.insert(0, conv);
   }
 
-  Future<void> _add(ChatMessage m) => _addTo(current!, m);
-
   static int placeAt(List<ChatMessage> list, String? link) {
     if (link == null || link.isEmpty) return list.length;
     final ask = list.lastIndexWhere((x) => x.role == ChatRole.self && x.wire == link);
@@ -4199,6 +4554,13 @@ class AppController extends ChangeNotifier {
     final list = _messagesOf(conv);
     final at = placeAt(list, m.replyTo);
     final next = [...list]..insert(at, m);
+    if (conv.id == current?.id) messages = next;
+    await store.saveMessages(conv.id, next);
+    notifyListeners();
+    if (_offersNext(m)) warmPull(conv, m);
+  }
+
+  Future<void> _putMessages(Conversation conv, List<ChatMessage> next) async {
     if (conv.id == current?.id) messages = next;
     await store.saveMessages(conv.id, next);
     notifyListeners();
@@ -4228,7 +4590,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _rethread(Conversation conv) async {
     conv.rootId = bytesToHex(randomBytes(32));
-    final seed = compareSeed();
+    final seed = compareSeed(from: _messagesOf(conv));
     conv.seed = seed.isEmpty ? null : seed;
     await store.setThread(conv.id, const []);
     await store.saveConversations(conversations);
@@ -4416,6 +4778,46 @@ class AppController extends ChangeNotifier {
   void setQuote(String? text) {
     quote = text;
     notifyListeners();
+  }
+
+  ({List<Attachment> files, String? quote}) takeComposer() {
+    final out = (files: attachments, quote: quote);
+    attachments = [];
+    quote = null;
+    notifyListeners();
+    return out;
+  }
+
+  void attachTo(String convId, List<Attachment> files,
+      {String? quote, bool upload = false}) {
+    if (files.isEmpty && quote == null) return;
+    if (upload) {
+      for (final a in files) {
+        unawaited(uploadAttachment(a));
+      }
+    }
+    if (convId != current?.id) {
+      _hold(convId, files, quote);
+      return;
+    }
+    attachments = [
+      ...attachments,
+      ...files.where((a) => !attachments.any((s) => s.id == a.id)),
+    ];
+    this.quote ??= quote;
+    notifyListeners();
+  }
+
+  void _hold(String convId, List<Attachment> files, String? quoted,
+      {bool front = false}) {
+    final was = _held[convId];
+    final old = was?.files ?? const <Attachment>[];
+    _held[convId] = (
+      files: front
+          ? [...files, ...old.where((a) => !files.any((s) => s.id == a.id))]
+          : [...old, ...files.where((a) => !old.any((s) => s.id == a.id))],
+      quote: was?.quote ?? quoted,
+    );
   }
 
   void addAttachment(Attachment a) {
@@ -4641,7 +5043,7 @@ class AppController extends ChangeNotifier {
     try {
       final signer = turn.prepared?.signer ?? await _signerOf(turn.conv);
       final res = await api.cancelRun(signer, turn.runId);
-      if (res.status == 200) unawaited(refreshBalance());
+      if (res.status == 200) unawaited(turn.conv.anon ? refreshAnonBalance() : refreshBalance());
     } catch (_) {}
   }
 
@@ -4802,6 +5204,7 @@ class AppController extends ChangeNotifier {
       repos: res.repos.length > 1 ? res.repos : const [],
       sources: res.sources,
       followUps: res.followUps,
+      chanSummary: _chanSummaries.remove(turn.prepared?.chan?.runId ?? turn.runId),
       serverRunCredits: res.serverRunCredits,
       serverRuns: res.serverRuns,
       actions: res.actions,
@@ -4810,7 +5213,20 @@ class AppController extends ChangeNotifier {
       steerOffer: turn.prepared?.steerOffer,
       ask: res.ask,
       proposal: res.proposal,
+      pick: res.pendingTool != null || res.ask != null || res.proposal != null
+          ? {'pro': turn.model, 'media': null}
+          : null,
     );
+  }
+
+  Map<String, dynamic>? _runModel(Conversation conv, ChatMessage m) {
+    final pick = m.pick;
+    if (pick == null) return modelOf(conv);
+    final pro = pick['pro'];
+    if (pro is Map && pro['key'] is String) return pro.cast<String, dynamic>();
+    final media = pick['media'];
+    final key = media is Map ? media['proKey'] : null;
+    return key is String && mediaNeedsPro(media.cast<String, dynamic>()) ? {'key': key} : null;
   }
 
   String _outcomeOf(TurnResult res) {
@@ -4865,8 +5281,8 @@ class AppController extends ChangeNotifier {
       await store.freeTier.spent();
       await store.freeTier.observe(res.free!.used);
     }
-    if (conv.anon && anonStandardBalance == null) {
-      unawaited(refreshBalance());
+    if (conv.anon && anonStandardBalance == null && current?.id == conv.id) {
+      unawaited(refreshAnonBalance());
     }
     final handed = prepared?.background;
     if (handed != null) {
@@ -5008,21 +5424,13 @@ class AppController extends ChangeNotifier {
           if (choice == 'send') {
             resendWaived = true;
           } else if (composing) {
-            _capReturned = typed;
-          }
-          if (composing) {
-            attachments = sent;
-            quote = quoted;
+            await _giveBack(conv, typed, sent, quoted);
           }
         }
       } else if (e.team && !e.noCredits) {
         await _dropMessage(conv, mine);
         await note(Team.refusal(e), conv: conv);
-        if (composing) {
-          _capReturned = typed;
-          attachments = sent;
-          quote = quoted;
-        }
+        if (composing) await _giveBack(conv, typed, sent, quoted);
       } else if (e.noCredits) {
         _creditBalance(e.pro, e.balance,
             anonKey: conv.anon, anonPk: conv.anonPk);
@@ -5064,8 +5472,58 @@ class AppController extends ChangeNotifier {
     if (turn.phase != 'claiming') _endTurn(turn);
     if (resendWaived) {
       _capWaive = conv.id;
-      await send(typed, target: conv, bare: bare, withAttachments: sent, withQuote: quoted);
+      await send(typed,
+          target: conv,
+          bare: bare,
+          withAttachments: sent,
+          withQuote: quoted,
+          returns: composing);
     }
+  }
+
+  static String joinTyped(String sent, String now) {
+    final a = sent.trim();
+    final b = now.trim();
+    if (b.isEmpty || b == a) return a;
+    if (a.isEmpty) return b;
+    return '$a\n$b';
+  }
+
+  void _mergeBack(List<Attachment> sent, String? quoted) {
+    attachments = [
+      ...sent,
+      ...attachments.where((a) => !sent.any((s) => s.id == a.id)),
+    ];
+    quote ??= quoted;
+  }
+
+  Future<void> _giveBack(Conversation conv, String typed,
+          List<Attachment> sent, String? quoted) =>
+      _intoComposer(conv, (now) => joinTyped(typed, now), sent, quoted);
+
+  Future<void> dictated(Conversation conv, String said) =>
+      _intoComposer(conv, (now) {
+        final draft = now.trimRight();
+        return draft.isEmpty ? said : '$draft $said';
+      }, const [], null);
+
+  Future<void> _intoComposer(Conversation conv, String Function(String now) merge,
+      List<Attachment> files, String? quoted) async {
+    if (conv.id == current?.id) {
+      _mergeBack(files, quoted);
+      final into = onGiveBack;
+      if (into != null) {
+        into(merge);
+      } else {
+        _capReturned = merge(_capReturned ?? '');
+      }
+      notifyListeners();
+      return;
+    }
+    if (files.isNotEmpty || quoted != null) {
+      _hold(conv.id, files, quoted, front: true);
+    }
+    await store.setDraft(conv.id, merge(store.draft(conv.id)));
   }
 
   Future<bool> send(String text,
@@ -5073,15 +5531,21 @@ class AppController extends ChangeNotifier {
       bool bare = false,
       bool unattended = false,
       List<Attachment>? withAttachments,
-      String? withQuote}) async {
+      String? withQuote,
+      bool returns = false}) async {
     final conv = target ?? current;
     if (conv == null || text.trim().isEmpty) return false;
     if (conv.support) {
-      return await sendSupport(text) == ContactOutcome.sent;
+      return await sendSupport(text, returns: returns) == ContactOutcome.sent;
     }
     final typed = text.trim();
     final guard = '${conv.id}\n$typed';
-    if (_starting.contains(guard)) return false;
+    if (_starting.contains(guard)) {
+      if (returns) {
+        await _giveBack(conv, typed, withAttachments ?? const [], withQuote);
+      }
+      return false;
+    }
     _starting.add(guard);
     final composing =
         !bare && withAttachments == null && conv.id == current?.id;
@@ -5091,6 +5555,7 @@ class AppController extends ChangeNotifier {
       attachments = [];
       quote = null;
     }
+    final giving = composing || returns;
     final turn = ChatTurn(conv,
         askId: bytesToHex(randomBytes(8)),
         msgId: bytesToHex(randomBytes(32)),
@@ -5106,21 +5571,17 @@ class AppController extends ChangeNotifier {
       _starting.remove(guard);
     }
 
-    bool bail() {
+    Future<bool> bail() async {
       release();
       _dropRun(turn);
-      if (composing && attachments.isEmpty && quote == null) {
-        attachments = sent;
-        quote = quoted;
-      }
+      if (giving) await _giveBack(conv, typed, sent, quoted);
       return false;
     }
 
     try {
       if (!await AiConsent.instance.allowed()) {
         await note(AiConsentStrings.offNotice, conv: conv);
-        if (conv.id == current?.id) _capReturned = typed;
-        return bail();
+        return await bail();
       }
       MentionResult? mention;
       final head = bare ? null : Mentions.parse(typed);
@@ -5132,15 +5593,13 @@ class AppController extends ChangeNotifier {
         if (mention != null && mention.resolved && mention.text.isEmpty) {
           await note(t('Say what to ask {name} after the mention.',
               {'name': mention.model!['label']}), conv: conv);
-          if (conv.id == current?.id) _capReturned = typed;
-          return bail();
+          return await bail();
         }
         final wallet = conv.anon ? anonProBalance : proBalance;
         if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
           await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
               {'name': mention.model!['key']}), conv: conv);
-          if (conv.id == current?.id) _capReturned = typed;
-          return bail();
+          return await bail();
         }
       }
       if (api.offline && !bare) {
@@ -5160,9 +5619,10 @@ class AppController extends ChangeNotifier {
       }
       // Device-side free-tier count across keys; never reported to the worker (see [freeAllows]).
       final asked = mention != null && mention.resolved ? Mentions.pinned(mention.model!) : null;
+      if (asked == null) await _settlePick(conv);
       if (asked == null && !freeAllows) {
         await note(freeSpentMessage(), conv: conv);
-        return bail();
+        return await bail();
       }
       final research = bare
           ? null
@@ -5176,7 +5636,7 @@ class AppController extends ChangeNotifier {
       }
       if (research?.blocked != null) {
         await note(research!.blocked!, conv: conv);
-        return bail();
+        return await bail();
       }
       final team = bare
           ? null
@@ -5235,8 +5695,7 @@ class AppController extends ChangeNotifier {
           final gate = await _capGate(conv, est.tier == 'pro', est.max,
               unattended: unattended);
           if (gate != 'send' && gate != 'ok') {
-            if (composing) _capReturned = typed;
-            return bail();
+            return await bail();
           }
           if (gate == 'ok') {
             maxCost = SpendCaps.maxCost(conv, botOf(conv), _messagesOf(conv),
@@ -5263,6 +5722,7 @@ class AppController extends ChangeNotifier {
         attachments: sent,
         quote: quoted,
         wire: turn.msgId,
+        seed: conv.seed,
       );
       await _addTo(conv, mine);
       release();
@@ -5279,7 +5739,7 @@ class AppController extends ChangeNotifier {
           typed: typed,
           bare: bare,
           unattended: unattended,
-          composing: composing,
+          composing: giving,
           sent: sent,
           quoted: quoted,
           asked: asked,
@@ -5288,7 +5748,7 @@ class AppController extends ChangeNotifier {
           maxCost: maxCost);
       return true;
     } catch (e) {
-      if (!placed) return bail();
+      if (!placed) return await bail();
       rethrow;
     } finally {
       release();
@@ -5330,6 +5790,7 @@ class AppController extends ChangeNotifier {
       'anonPk': p.anonPk,
       'fresh': p.fresh,
       'at': (turn.since ?? turn.began).millisecondsSinceEpoch,
+      if (p.chan != null) 'chanRun': p.chan!.runId,
     };
     final text = jsonEncode(entry);
     if (text.length > 256 * 1024) return;
@@ -5446,6 +5907,12 @@ class AppController extends ChangeNotifier {
         anonPk: c['anonPk'] as String?,
         fresh: c['fresh'] == true,
       );
+      final chanRun = c['chanRun'];
+      if (chanRun is String && chanRun.isNotEmpty) {
+        turn.prepared!.chan = ChanSpec(rumor: const {}, run: chanRun, opts: const {}, context: const {});
+        final ctl = c['ctl'];
+        if (ctl is String && ctl.isNotEmpty) chat.joinWatch(turn.prepared!, ctl);
+      }
       turns[turn.key] = turn;
       turn.phase = 'claiming';
       turn.status = t('Still working on that one…');
@@ -5664,6 +6131,12 @@ class AppController extends ChangeNotifier {
 
   Future<bool?> Function(String text, Conversation conv)? onSteerMissed;
 
+  Future<bool?> _steerOverChan(String runId, String body, EventSigner signer, String? anonPk) async {
+    if (chat.chanRun(runId) != null) return chat.steerChan(runId, body, signer, anonPk: anonPk);
+    if (chat.chanSeen && RegExp(r'^[0-9a-f]{64}$').hasMatch(runId) && await chat.steerChan(runId, body, signer, anonPk: anonPk)) return true;
+    return null;
+  }
+
   Future<String> steer(String runId, String text, {Conversation? conv}) async {
     final body = text.trim();
     if (body.isEmpty || runId.isEmpty) return 'failed';
@@ -5674,6 +6147,13 @@ class AppController extends ChangeNotifier {
     final owner = local?.conv ?? conv;
     final signer = local?.prepared?.signer ??
         (owner != null ? await _signerOf(owner) : identity.signer);
+    final anonPk = owner != null && owner.anon ? owner.anonPk : null;
+    final via = await _steerOverChan(runId, body, signer, anonPk);
+    if (via == false) return 'failed';
+    if (via == true) {
+      transcripts.steered(runId, body, convId: owner?.id);
+      return 'ok';
+    }
     final res = await api.steerRun(signer, runId, body);
     if (res.status == 200 && res.data['ok'] == true) {
       transcripts.steered(runId, body, convId: owner?.id);
@@ -5838,6 +6318,20 @@ class AppController extends ChangeNotifier {
   String? get unifiedPushDistributor =>
       unifiedPushOn ? store.getString(_distributorKey) : null;
 
+  String? _pushTextsShared;
+
+  void _retextPush() => unawaited(retextPush());
+
+  Future<void> retextPush() async {
+    final distributor = unifiedPushDistributor;
+    if (distributor == null) return;
+    final texts = ReplyNotify.pushTexts();
+    final seal = jsonEncode([t('Replies'), texts]);
+    if (seal == _pushTextsShared) return;
+    _pushTextsShared = seal;
+    await replyNotify.channel.upRegister(distributor, channelName: t('Replies'), texts: texts);
+  }
+
   static const _unifiedPushKey = 'unifiedpush_on';
   static const _distributorKey = 'unifiedpush_distributor';
 
@@ -5856,10 +6350,15 @@ class AppController extends ChangeNotifier {
       return true;
     }
     await replyNotify.askPermission();
-    final ok = await replyNotify.channel.upRegister(distributor,
-        channelName: t('Replies'), texts: ReplyNotify.pushTexts());
+    final name = t('Replies');
+    final texts = ReplyNotify.pushTexts();
+    final ok = await replyNotify.channel.upRegister(distributor, channelName: name, texts: texts);
     await store.setBool(_unifiedPushKey, ok);
-    if (ok) await store.setString(_distributorKey, distributor);
+    if (ok) {
+      await store.setString(_distributorKey, distributor);
+      _pushTextsShared = jsonEncode([name, texts]);
+      await retextPush();
+    }
     notifyListeners();
     return ok;
   }
@@ -6184,6 +6683,8 @@ class AppController extends ChangeNotifier {
         dailyCap: settings.scheduleDailyCap,
         now: DateTime.now().millisecondsSinceEpoch,
         push: push);
+    final chanOn = _chanFlag;
+    if (chanOn != null) body['chan'] = chanOn;
     final res = await api.schedulePut(identity.signer, body);
     final refused = ServerSchedules.refusal(res.status, res.data);
     if (refused != null) {
@@ -6201,6 +6702,7 @@ class AppController extends ChangeNotifier {
         expires is num ? expires.toInt() : body['expiresAt'] as int;
     s.serverError = null;
     s.serverOff = false;
+    s.serverChan = chanOn != null;
     await saveSchedule(s);
     return run ? ServerSchedules.savedRun() : ServerSchedules.savedNotify();
   }
@@ -6220,9 +6722,18 @@ class AppController extends ChangeNotifier {
           if (r is Map && r['id'] is String) r['id'] as String: r,
       };
       var changed = false;
+      final again = [
+        for (final s in schedules)
+          if (s.server != null && s.serverSha != null && !s.serverChan && !s.serverOff && listed[s.id] != null) s.id,
+      ];
+      final resave = again.isNotEmpty && await chat.chanReady(identity.signer) && _chanFlag != null;
       for (final s in [...schedules]) {
         if (s.server == null || s.serverSha == null) continue;
         final r = listed[s.id];
+        if (resave && again.contains(s.id)) {
+          await saveServerSchedule(s, s.server);
+          continue;
+        }
         if (r != null && s.serverSha != null && r['sha256'] != s.serverSha) {
           continue;
         }
@@ -6593,8 +7104,8 @@ class AppController extends ChangeNotifier {
   }
 
   /// The last few turns, as a seed for a model new to this thread.
-  String compareSeed({int limit = 8}) {
-    final kept = messages
+  String compareSeed({int limit = 8, List<ChatMessage>? from}) {
+    final kept = (from ?? messages)
         .where((m) => m.role == ChatRole.self || m.role == ChatRole.bot)
         .toList();
     final tail = kept.length > limit ? kept.sublist(kept.length - limit) : kept;
@@ -6613,6 +7124,11 @@ class AppController extends ChangeNotifier {
     if (conv == null || models.length < 2) return const [];
     final body = text.trim();
     if (body.isEmpty) return const [];
+    final seed = compareSeed(from: _messagesOf(conv));
+    final scoped = reposOf(conv);
+    final persona = personaOf(conv);
+    final space = workspaceOf(conv);
+    final bot = botOf(conv);
 
     final caps = List<double?>.filled(models.length, null);
     if (SpendCaps.any(conv, botOf(conv))) {
@@ -6645,12 +7161,6 @@ class AppController extends ChangeNotifier {
         await store.saveConversations(conversations);
       } catch (_) {}
     }
-
-    final seed = compareSeed();
-    final scoped = activeRepos;
-    final persona = activePersona;
-    final space = activeWorkspace;
-    final bot = activeBot;
 
     Future<CompareRun> once(Map<String, dynamic> model, double? maxCost) async {
       final turn = ChatTurn(conv, label: _labelOf(body));
@@ -6734,7 +7244,7 @@ class AppController extends ChangeNotifier {
     final conv = current;
     if (conv == null || !run.ok) return;
 
-    await _add(ChatMessage(
+    await _addTo(conv, ChatMessage(
       id: bytesToHex(randomBytes(8)),
       role: ChatRole.self,
       content: prompt,
@@ -6753,11 +7263,11 @@ class AppController extends ChangeNotifier {
       sources: run.sources,
       followUps: run.followUps,
     );
-    await _add(reply);
-    await harvestArtifacts(reply);
+    await _addTo(conv, reply);
+    await harvestArtifacts(reply, conv: conv);
 
     conv.rootId = bytesToHex(randomBytes(32));
-    conv.seed = compareSeed();
+    conv.seed = compareSeed(from: _messagesOf(conv));
     if (conv.title.isEmpty) conv.title = ChatEngine.titleFor(prompt);
     conv.messageCount += 1;
     conv.creditsSpent += run.cost;
@@ -7491,8 +8001,78 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  static Duration Function() restockWait =
+      () => Duration(seconds: 120 + math.Random.secure().nextInt(480));
+  Timer? _restockTimer;
+
+  void _scheduleRestock() {
+    _restockTimer?.cancel();
+    _restockTimer = Timer(restockWait(), () => unawaited(restockVouchers()));
+  }
+
+  Future<void> restockVouchers() async {
+    if (_gone || !settings.anonAutoTop || !(anon.ready || conversations.any((c) => c.anon))) return;
+    if ((current?.anon ?? false) || turns.values.any((t) => t.conv.anon)) {
+      _scheduleRestock();
+      return;
+    }
+    await _stockHeld();
+  }
+
+  Future<void> _stockHeld() async {
+    if (_gone || !settings.anonAutoTop) return;
+    final amount = settings.anonAutoTopAmount < 1 ? 1 : settings.anonAutoTopAmount;
+    final want = settings.anonAutoTopTier;
+    final tiers = want == 'both' ? const ['standard', 'pro'] : [want];
+    final mine = await api.balance(identity.signer);
+    if (mine.data['error'] != null) return;
+    for (final tier in tiers) {
+      final nym = _figureOf(mine.data, tier == 'pro').floor();
+      final short = amount - anon.heldCredits(tier);
+      final take = short < nym ? short : nym;
+      if (take <= 0) continue;
+      try {
+        await anon.stock(identity.signer, take, tier);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> refreshAnonBalance({bool announce = false}) async {
+    final conv = current;
+    if (conv == null || !conv.anon) return;
+    final shown = shownAnonPk;
+    final shownId = anon.heldFor(shown);
+    if (shownId == null) return;
+    final mine = await api.balance(anon.signerOf(shownId));
+    if (mine.data['error'] != null) {
+      if (announce) await note(t('Could not reach Nymbot to check your balance.'));
+      return;
+    }
+    await anon.noteBalance(shown,
+        standard: _figureOf(mine.data, false), pro: _figureOf(mine.data, true));
+    if (current?.id != conv.id) return;
+    anonStandardBalance = _figureOf(mine.data, false);
+    anonProBalance = _figureOf(mine.data, true);
+    _anonShownFor = shown;
+    markBalanceFresh();
+    announceModel();
+    notifyListeners();
+    if (announce) {
+      await note(t("This chat's anonymous balance: {standard} Standard, {pro} Pro. "
+          'All your anonymous keys hold {totalStandard} Standard and {totalPro} Pro, the others as of their last use. '
+          'Your nym still holds {nymStandard} Standard and {nymPro} Pro.', {
+        'standard': creditFigure(anonStandardBalance),
+        'pro': creditFigure(anonProBalance),
+        'totalStandard': creditFigure(anonTotalStandard),
+        'totalPro': creditFigure(anonTotalPro),
+        'nymStandard': creditFigure(standardBalance),
+        'nymPro': creditFigure(proBalance),
+      }));
+    }
+  }
+
   Future<void> refreshBalance({bool announce = false}) async {
-    final inAnonChat = current?.anon ?? false;
+    if (current?.anon ?? false) return refreshAnonBalance(announce: announce);
     final res = await api.balance(identity.signer);
     if (res.data['error'] != null) {
       if (announce) await note(t('Could not reach Nymbot to check your balance.'));
@@ -7502,21 +8082,10 @@ class AppController extends ChangeNotifier {
         ?? (res.data['balance'] as num?)?.toDouble() ?? 0;
     proBalance = (res.data['proBalanceCredits'] as num?)?.toDouble()
         ?? (res.data['proBalance'] as num?)?.toDouble() ?? 0;
-    final shown = shownAnonPk;
-    final shownId = anon.heldFor(shown);
-    if (shownId != null) {
-      final mine = await api.balance(anon.signerOf(shownId));
-      if (mine.data['error'] == null) {
-        anonStandardBalance = _figureOf(mine.data, false);
-        anonProBalance = _figureOf(mine.data, true);
-        _anonShownFor = shown;
-        await anon.noteBalance(shown,
-            standard: anonStandardBalance, pro: anonProBalance);
-      }
-    } else {
-      anonStandardBalance = null;
-      anonProBalance = null;
-    }
+    markBalanceFresh();
+    announceModel();
+    anonStandardBalance = null;
+    anonProBalance = null;
     // The worker is authoritative per key; the device count stops a fresh key resetting the day.
     final seen = FreeAllowance.fromJson(res.data['free']);
     if (seen != null) {
@@ -7525,18 +8094,7 @@ class AppController extends ChangeNotifier {
     }
     notifyListeners();
     if (announce) {
-      await note(inAnonChat
-          ? t("This chat's anonymous balance: {standard} Standard, {pro} Pro. "
-              'All your anonymous keys hold {totalStandard} Standard and {totalPro} Pro, the others as of their last use. '
-              'Your nym still holds {nymStandard} Standard and {nymPro} Pro.', {
-              'standard': creditFigure(anonStandardBalance),
-              'pro': creditFigure(anonProBalance),
-              'totalStandard': creditFigure(anonTotalStandard),
-              'totalPro': creditFigure(anonTotalPro),
-              'nymStandard': creditFigure(standardBalance),
-              'nymPro': creditFigure(proBalance),
-            })
-          : t('Your balance: {standard} Standard, {pro} Pro.', {
+      await note(t('Your balance: {standard} Standard, {pro} Pro.', {
               'standard': creditFigure(standardBalance),
               'pro': creditFigure(proBalance)
             }));

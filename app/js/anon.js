@@ -131,15 +131,15 @@
             return this.state;
         },
 
-        save() { Store.write('anon', this.state); },
+        save() { Store.aside(() => Store.write('anon', this.state)); },
 
         enabled() { return !!Store.settings().anon; },
 
         setEnabled(on) {
-            Store.setSettings({ anon: !!on });
+            Store.aside(() => Store.setSettings({ anon: !!on }));
             if (on) {
                 this.ensure();
-                this.flush().then(() => this.autoTopUp()).catch(() => { });
+                this.flush().then(() => this.restock()).catch(() => { });
             }
         },
 
@@ -400,7 +400,7 @@
                 const ok = this.onKeysetChange ? await this.onKeysetChange(pinned, checked.id) : false;
                 if (!ok) throw new Error(t('Voucher keyset rejected.'));
             }
-            Store.write('anon_keyset', checked.id);
+            Store.aside(() => Store.write('anon_keyset', checked.id));
             const keyset = Object.assign({}, data, { keysetId: checked.id, keys: checked.keys });
             this._keyset = keyset;
             return keyset;
@@ -649,7 +649,7 @@
             this._topping = (async () => {
                 const moved = {};
                 try {
-                    const b = await this.balances(target);
+                    const b = await this.balances(target, !!opts.held);
                     for (const tier of tiers) {
                         const here = tier === 'pro' ? b.anonPro : b.anon;
                         const nym = tier === 'pro' ? b.identityPro : b.identity;
@@ -660,7 +660,7 @@
                         try {
                             credited += await this._fromVouchers(tier, target, amount);
                         } catch (_) { }
-                        const take = Math.min(amount - credited, nym || 0);
+                        const take = opts.held ? 0 : Math.min(amount - credited, nym || 0);
                         if (take > 0) {
                             try {
                                 credited += await this.moveCredits(take, tier, target);
@@ -698,17 +698,6 @@
                     try {
                         credited = await this._fromVouchers(which, target, short);
                     } catch (_) { }
-                    const settings = Store.settings();
-                    if (credited < short && settings.anonAutoTop) {
-                        const amount = Math.max(short - credited, parseInt(settings.anonAutoTopAmount, 10) || 25);
-                        const r = await Api.balance();
-                        const take = Math.min(amount, Math.floor(creditsOf(r && r.data, which) || 0));
-                        if (take > 0) {
-                            try {
-                                credited += await this.moveCredits(take, which, target);
-                            } catch (_) { }
-                        }
-                    }
                     return credited > 0 ? { [which]: credited } : null;
                 } catch (_) {
                     return null;
@@ -754,7 +743,33 @@
             return out;
         },
 
-        async balances(identity) {
+        async stock(amount, tier) {
+            amount = Math.floor(Number(amount) || 0);
+            if (amount <= 0 || !splitAmount(amount)) return 0;
+            await this._issue(amount, tier === 'pro' ? 'pro' : 'standard', null);
+            return amount;
+        },
+
+        async restock() {
+            const settings = Store.settings();
+            if (!settings.anonAutoTop) return null;
+            const amount = Math.max(1, parseInt(settings.anonAutoTopAmount, 10) || 25);
+            const want = settings.anonAutoTopTier || 'both';
+            const tiers = want === 'both' ? ['standard', 'pro'] : [want];
+            const held = this.vouchers();
+            const r = await Api.balance();
+            if (!r || !r.data || r.data.error) return null;
+            const out = {};
+            for (const tier of tiers) {
+                const nym = Math.floor(creditsOf(r.data, tier) || 0);
+                const take = Math.min(amount - (held[tier] || 0), nym);
+                if (take <= 0) continue;
+                try { out[tier] = await this.stock(take, tier); } catch (_) { }
+            }
+            return out;
+        },
+
+        async balances(identity, held) {
             const out = { anon: null, anonPro: null, identity: null, identityPro: null };
             if (identity || this.ready()) {
                 const payer = identity || this.ensure();
@@ -762,6 +777,7 @@
                 this.rememberData(payer.pk, a.data);
                 if (a.data && !a.data.error) { out.anon = a.data.balance || 0; out.anonPro = a.data.proBalance || 0; }
             }
+            if (held) return out;
             const r = await Api.balance();
             if (r.data && !r.data.error) { out.identity = r.data.balance || 0; out.identityPro = r.data.proBalance || 0; }
             return out;

@@ -311,7 +311,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
                         await Clipboard.setData(ClipboardData(text: invoice));
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(t('Copied.'))),
+                          SnackBar(content: UiText(t('Copied.'))),
                         );
                       },
                     ),

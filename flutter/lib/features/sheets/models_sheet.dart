@@ -869,7 +869,7 @@ class _ModelsSheetState extends State<_ModelsSheet> {
       await app.setMediaModel(media);
       final name = media == null ? '' : AppController.mediaLabel(media);
       messenger.showSnackBar(SnackBar(
-        content: Text(pinned
+        content: UiText(pinned
             ? t('Back to answering in words.')
             : switch (m['kind']) {
                 'video' => t('{name} pinned. Every message now makes a video.',

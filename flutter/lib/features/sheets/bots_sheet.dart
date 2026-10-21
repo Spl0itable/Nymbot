@@ -348,7 +348,7 @@ class _BotsSheetState extends State<_BotsSheet> {
             ),
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(_status,
+              UiText(_status,
                   style: TextStyle(
                       fontSize: 12, color: theme.colorScheme.error)),
             ],
@@ -501,7 +501,7 @@ class _ShareBotState extends State<_ShareBot> {
             ],
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(_status,
+              UiText(_status,
                   style: TextStyle(fontSize: 12, color: theme.hintColor)),
             ],
           ],
@@ -681,7 +681,7 @@ class _AddBotState extends State<_AddBot> {
             ],
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(_status,
+              UiText(_status,
                   style: TextStyle(fontSize: 12, color: theme.hintColor)),
             ],
           ],

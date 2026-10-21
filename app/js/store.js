@@ -40,16 +40,49 @@
         write('settings', scrub('settings', held));
     }
 
-    const QUIET = /^(?:draft_|thread_|sync_|free_|view_)/;
+    const QUIET = /^(?:draft_|thread_|sync_|free_|view_|chan:|runs_inflight$)/;
     const watchers = [];
 
     // Applying server data is not a local change; without this the sync fed itself.
     let muted = 0;
+    let aside = 0;
+    const CHAT_KEY = /^(?:msgs|tx|artifacts)_(.+)$/;
+
+    function anonChat(id) {
+        const list = load('conversations', []);
+        return Array.isArray(list) && list.some(c => c && c.id === id && c.anon);
+    }
+
+    function keptAside(key) {
+        if (aside) return true;
+        const m = CHAT_KEY.exec(key);
+        return !!(m && anonChat(m[1]));
+    }
+
+    function anonOnly(before, after) {
+        const held = new Map();
+        for (const c of Array.isArray(before) ? before : []) if (c && c.id) held.set(c.id, c);
+        let changed = false;
+        for (const c of after) {
+            if (!c || !c.id) return false;
+            const was = held.get(c.id);
+            held.delete(c.id);
+            if (was && JSON.stringify(was) === JSON.stringify(c)) continue;
+            if (!c.anon) return false;
+            changed = true;
+        }
+        for (const c of held.values()) {
+            if (!c.anon) return false;
+            changed = true;
+        }
+        return changed;
+    }
 
     function announce(key) {
         if (muted || QUIET.test(key)) return;
+        const anon = keptAside(key);
         for (const fn of watchers) {
-            try { fn(key); } catch (_) { }
+            try { fn(key, anon); } catch (_) { }
         }
     }
 
@@ -224,6 +257,11 @@
         quiet(fn) {
             muted++;
             try { return fn(); } finally { muted--; }
+        },
+
+        aside(fn) {
+            aside++;
+            try { return fn(); } finally { aside--; }
         },
 
         watch(fn) {
@@ -489,7 +527,9 @@
         },
 
         saveConversations(list) {
-            write('conversations', list.slice(0, 500));
+            const kept = list.slice(0, 500);
+            if (anonOnly(load('conversations', []), kept)) return this.aside(() => write('conversations', kept));
+            return write('conversations', kept);
         },
 
         conversation(id) {
@@ -568,6 +608,7 @@
                 systemPrompt: source.systemPrompt,
                 proModel: source.proModel,
                 mediaModel: source.mediaModel || null,
+                modelPin: !!source.modelPin,
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32)))
             });
             this.saveMessages(copy.id, this.messages(id));
@@ -767,7 +808,7 @@
             u.credits += cost || 0;
             u[tier] = (Number(u[tier]) || 0) + (cost || 0);
             u.replies += 1;
-            write('usage', u);
+            this.aside(() => write('usage', u));
             return u;
         },
 

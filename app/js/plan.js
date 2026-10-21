@@ -108,7 +108,7 @@
         const at = now || Date.now();
         const exp = p && Number(p.expiresAt) > 0 ? Math.min(Number(p.expiresAt), at + LIMITS.waitMs) : at + LIMITS.waitMs;
         const bg = d.background && d.background.waiting === true && /^[0-9a-f]{64}$/.test(String(d.background.runId || '')) ? String(d.background.runId) : null;
-        const token = !bg && typeof d.resumeToken === 'string' && /^[0-9a-f]{32,64}$/i.test(d.resumeToken) ? d.resumeToken : null;
+        const token = !bg && typeof d.resumeToken === 'string' && /^(?:[0-9a-f]{32,64}|[0-9a-f]{128})$/i.test(d.resumeToken) ? d.resumeToken : null;
         return {
             id: took.plan.id,
             summary: took.plan.summary,
@@ -434,8 +434,8 @@
             if (m && m.proposal) await this.submit(ui, m, { decision: 'approve' });
         },
 
-        async submit(ui, m, raw) {
-            const conv = ui.conv;
+        async submit(ui, m, raw, chat) {
+            const conv = chat || ui.conv;
             if (!conv) return;
             const fresh = Store().messages(conv.id).find(x => x.id === m.id) || m;
             const p = fresh.proposal;
@@ -480,14 +480,14 @@
             let steered = false;
             if (/^[0-9a-f]{64}$/.test(String(run || ''))) {
                 try {
-                    const res = await window.NymbotApi.steerRun(run, said, {});
+                    const res = await window.NymbotApi.steerRun(run, said, { conv });
                     steered = !!(res && res.status === 200 && res.data && res.data.ok);
                 } catch (_) {
                     steered = false;
                 }
                 if (steered && window.NymbotTranscripts) window.NymbotTranscripts.steered(run, said, conv.id);
             }
-            await this.submit(ui, fresh, steered ? { decision: 'revise' } : { decision: 'revise', edits: { note: said } });
+            await this.submit(ui, fresh, steered ? { decision: 'revise' } : { decision: 'revise', edits: { note: said } }, conv);
         },
 
         async answerServer(ui, conv, m, body, kept) {
@@ -539,7 +539,9 @@
                 const B = window.NymbotBackground;
                 const grant = B ? await B.grantWithPush(ui, conv, turn, {}) : null;
                 if (grant) opts.background = grant;
-                const res = await Chat.send(conv, text, ui.settings, opts);
+                const pick = await ui.runPick(conv, m);
+                turn.pick = pick;
+                const res = await Chat.send(ui.withPick(conv, pick), text, ui.settings, opts);
                 ui.stopWatchingTurn(turn);
                 this.patch(ui, conv.id, m, kept);
                 if (turn.stopped) return;

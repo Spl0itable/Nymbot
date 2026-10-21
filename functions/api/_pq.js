@@ -931,5 +931,6 @@ export {
   rumorTagValue,
   rumorInThreadScope,
   buildPqGiftWrappedDM,
-  buildPqGiftWrappedDMPair
+  buildPqGiftWrappedDMPair,
+  wrapDMTo
 };

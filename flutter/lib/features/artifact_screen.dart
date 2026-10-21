@@ -113,7 +113,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
                 messenger
                   ..clearSnackBars()
                   ..showSnackBar(SnackBar(
-                      content: Text(t('Copied.')),
+                      content: UiText(t('Copied.')),
                       duration: const Duration(seconds: 2)));
               },
             ),
@@ -173,7 +173,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
                       .followedBy(const [1])
                       .first;
                   messenger.showSnackBar(
-                    SnackBar(content: Text(t('Saved as version {n}.', {'n': saved}))),
+                    SnackBar(content: UiText(t('Saved as version {n}.', {'n': saved}))),
                   );
                 },
               )
@@ -191,7 +191,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(format == 'pdf' ? t('Making the PDF…') : t('Making the DOCX…'))));
+      ..showSnackBar(SnackBar(content: UiText(format == 'pdf' ? t('Making the PDF…') : t('Making the DOCX…'))));
     try {
       final made = await app.renderArtifactFile(artifact, format, _body.text);
       final file = made.file;
@@ -199,7 +199,7 @@ class _ArtifactScreenState extends State<ArtifactScreen> {
         if (made.error.isNotEmpty) {
           messenger
             ..clearSnackBars()
-            ..showSnackBar(SnackBar(content: Text(made.error)));
+            ..showSnackBar(SnackBar(content: UiText(made.error)));
         }
         return;
       }

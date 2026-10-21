@@ -940,7 +940,7 @@ class _MediaBlockState extends State<MediaBlock> {
     } catch (_) {
       await launchSafeUrl(widget.url);
       messenger.showSnackBar(
-          SnackBar(content: Text(t('Opened it outside the app — save it from there.'))));
+          SnackBar(content: UiText(t('Opened it outside the app — save it from there.'))));
     } finally {
       if (mounted) setState(() => _saving = false);
     }

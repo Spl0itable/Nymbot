@@ -87,7 +87,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
       await Clipboard.setData(ClipboardData(text: value));
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Copied.'))));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: UiText(t('Copied.'))));
   }
 
   @override
@@ -158,7 +158,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
             ),
             if (_nicknameStatus != null) ...[
               const SizedBox(height: 4),
-              Text(_nicknameStatus!,
+              UiText(_nicknameStatus!,
                   style: TextStyle(
                       fontSize: 12, color: Theme.of(context).colorScheme.primary)),
             ],
@@ -705,7 +705,7 @@ class _IdentitySheetState extends State<_IdentitySheet> {
     setState(() {});
     final bio = app.store.vault.biometric;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(switch (action) {
+      content: UiText(switch (action) {
         VaultAction.enable when bio => t("Identity encryption is on. You'll be asked for "
             'your biometrics next time Nymbot opens.'),
         VaultAction.enable => t("Identity encryption is on. You'll be asked for "

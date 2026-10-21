@@ -200,7 +200,7 @@ Future<void> runCodeOnServer(
   final app = AppScope.read(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
   void say(String text, {bool buy = false}) => messenger?.showSnackBar(SnackBar(
-        content: Text(text),
+        content: UiText(text),
         action: buy && context.mounted
             ? SnackBarAction(label: t('Buy'), onPressed: () => showCreditsSheet(context))
             : null,

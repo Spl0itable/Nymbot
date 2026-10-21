@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../config.dart';
+import '../core/crypto/channel.dart';
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart';
 import '../core/crypto/schnorr.dart' as schnorr;
@@ -24,6 +26,7 @@ import 'doc_library.dart';
 import 'memory_keeper.dart';
 import 'nostr/event_signer.dart';
 import 'nymbot_api.dart';
+import 'nymbot_channel.dart';
 import 'pq_announce.dart';
 import 'free_tier.dart';
 import 'git_review.dart';
@@ -170,6 +173,7 @@ class PreparedTurn {
   String? steerOffer;
   ({String runId, int until})? background;
   List<Map<String, dynamic>> plan = const [];
+  ChanSpec? chan;
 
   String get eventId => wrap.id;
 
@@ -223,6 +227,385 @@ class ChatEngine {
   final NymbotApi api;
   final AnonMode anon;
   String defaultWhenDone = '';
+
+  NymbotChannels? channels;
+  bool? chanOffered;
+  bool chanSeen = false;
+  void Function()? onChanSeen;
+  List<ChatMessage> Function(String convId) messagesOf = (_) => const [];
+  void Function(String convId, String run, ChanSummary summary)? onChanSummary;
+  void Function(String run, String ctl)? onChanCtl;
+  Future<void> Function(String convId)? freshen;
+  Future<void> Function(Conversation conv, String? exclude)? recover;
+  final Map<String, ChanRunView> _chanViews = {};
+  final Map<String, ChanRunView> _chanRuns = {};
+  int lastTurnBytes = 0;
+  int joins = 0;
+
+  ChanRunView? chanView(String eventId) => _chanViews[eventId];
+
+  ChanRunView? chanRun(String run) => _chanRuns[run];
+
+  static const Duration pullCap = Duration(milliseconds: 300);
+
+  Future<bool> chanReady(EventSigner signer) async {
+    if (chanOffered == true && chanSeen) return true;
+    final ch = channels;
+    if (ch == null || chanOffered == false) return false;
+    try {
+      final l = await _chanLink(signer);
+      if (l == null) return false;
+      ch.give(signer, l);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void prewarm(EventSigner signer) {
+    final ch = channels;
+    if (ch == null || chanOffered == false) return;
+    ch.prewarm(signer);
+  }
+
+  Future<void> progressIdle(String eventId, Duration wait) =>
+      _chanViews[eventId]?.idle(wait) ?? Future<void>.delayed(wait);
+
+  static String chanFailText(String code) => switch (code) {
+        'credits' => t('You are out of credits.'),
+        'rate' || 'busy' => t('Slow down — too many requests. Try again in a minute.'),
+        'no-run' => t('Could not pass that on. Try again in a moment.'),
+        _ => t('Could not reach Nymbot. Check your connection and try again.'),
+      };
+
+  Future<ChanLink?> _chanLink(EventSigner signer) async {
+    final ch = channels;
+    if (ch == null || chanOffered == false) return null;
+    try {
+      final l = await ch.take(signer);
+      chanOffered = true;
+      if (!chanSeen) {
+        chanSeen = true;
+        onChanSeen?.call();
+      }
+      return l;
+    } on ChanFailure catch (e) {
+      if (!chanSeen && (e.code == 'timeout' || e.code == 'dropped' || e.unsupported)) {
+        chanOffered = false;
+        return null;
+      }
+      throw ChatFailure(chanFailText(e.code), retryable: true);
+    }
+  }
+
+  static (int, Map<String, dynamic>)? chanAnswerFrame(String run, String text, Map<String, dynamic>? pendingAnswer,
+      {String? runApprove, String? runDecline, String? mcpApprove, String? mcpDecline}) {
+    if (pendingAnswer != null && pendingAnswer['decision'] != null) {
+      return (ChannelType.approve, {
+        'run': run,
+        'kind': 'plan',
+        'id': '${pendingAnswer['id'] ?? ''}',
+        'ok': pendingAnswer['decision'] == 'approve',
+        'edits': pendingAnswer['edits'],
+      });
+    }
+    if (pendingAnswer != null) {
+      return (ChannelType.answer, {
+        'run': run,
+        'q': '${pendingAnswer['id'] ?? ''}',
+        'answer': pendingAnswer['skipped'] == true ? null : pendingAnswer['answers'],
+        'text': text,
+      });
+    }
+    final tool = runApprove ?? runDecline;
+    if (tool != null && tool.isNotEmpty) {
+      return (ChannelType.approve, {'run': run, 'kind': 'tool', 'id': tool, 'ok': runApprove != null && runApprove.isNotEmpty});
+    }
+    final mcp = mcpApprove ?? mcpDecline;
+    if (mcp != null && mcp.isNotEmpty) {
+      return (ChannelType.approve, {'run': run, 'kind': 'connector', 'id': mcp, 'ok': mcpApprove != null && mcpApprove.isNotEmpty});
+    }
+    return null;
+  }
+
+  static const _chanDropped = {
+    'eventId', 'wrap', 'history', 'parts', 'wraps', 'resume', 'pendingAnswer', 'pqAnnouncement', 'pqClassical',
+    'mcpApprove', 'mcpDecline', 'runApprove', 'runDecline',
+  };
+
+  Future<ChanEvent> _chanDrive(ChanLink link, ChanRunView view, PreparedTurn p, List<(int, Map<String, dynamic>)> msgs, TurnControl turn) async {
+    final end = Completer<ChanEvent>();
+    view.link = link;
+    final sub = link.events.listen((ev) async {
+      final run = ev.body['run'];
+      if (run != null && run != view.run) return;
+      if (ev.type == ChannelType.accept) {
+        view.accepted = true;
+        final w = ev.body['wrap'];
+        if (w is Map) {
+          try {
+            final r = await readRunWrap(NostrEvent.fromJson(w.cast<String, dynamic>()), p.signer, anonPk: p.anonPk);
+            if (r.ctl != null) {
+              view.ctl = r.ctl;
+              onChanCtl?.call(view.run, r.ctl!);
+            }
+          } catch (_) {}
+        }
+        view.bump();
+      } else if (ev.type == ChannelType.draft || ev.type == ChannelType.plan || ev.type == ChannelType.step) {
+        view.take(ev);
+      } else if (ev.type == ChannelType.reply || ev.type == ChannelType.park || ev.type == ChannelType.error || ev.type == ChannelType.abort) {
+        if (ev.type != ChannelType.error && ev.type != ChannelType.abort) view.arrived();
+        if (!end.isCompleted) end.complete(ev);
+      }
+    });
+    unawaited(turn.abort.then((_) {
+      if (!link.dead) link.send(ChannelType.cancel, {'run': view.run}).then((_) {}, onError: (_) {});
+      if (!end.isCompleted) end.complete(ChanEvent(ChannelType.abort, const {'code': 'cancelled'}));
+    }));
+    try {
+      for (final (type, body) in msgs) {
+        final n = await link.send(type, body);
+        if (type == ChannelType.turn) lastTurnBytes = n;
+      }
+      return await end.future.timeout(NymbotConfig.pmTimeout,
+          onTimeout: () => ChanEvent(ChannelType.abort, const {'code': 'timeout'}));
+    } on ChanFailure catch (e) {
+      return ChanEvent(ChannelType.abort, {'code': e.code});
+    } finally {
+      await sub.cancel();
+    }
+  }
+
+  Future<TurnResult> _deliverChan(PreparedTurn p, TurnControl turn, void Function(List<String> ids) onThreadIds) async {
+    final spec = p.chan!;
+    final view = _chanViews.putIfAbsent(p.eventId, () => ChanRunView(spec.runId));
+    _chanRuns[spec.runId] = view;
+    var link = spec.link;
+    spec.link = null;
+    if (link == null || !link.usable) {
+      link?.close();
+      try {
+        link = await channels!.take(p.signer);
+      } on ChanFailure catch (e) {
+        throw ChatFailure(chanFailText(e.code), retryable: true);
+      }
+    }
+    final msgs = <(int, Map<String, dynamic>)>[];
+    final r = spec.resume;
+    if (r != null) {
+      view.accepted = false;
+      final answer = spec.answer;
+      msgs.add((ChannelType.resume, {'run': r.run, 'k': r.k, 'opts': spec.opts, 'pq': spec.pq, if (answer == null) 'go': true}));
+      if (answer != null) msgs.add(answer);
+    } else {
+      final Object seal = spec.rumors.length > 1
+          ? [for (final r in spec.rumors) (await chanSealTurn(r, p.signer, link.cert)).toJson()]
+          : (await chanSealTurn(spec.rumor, p.signer, link.cert)).toJson();
+      msgs.add((ChannelType.turn, {
+        'seal': seal,
+        ...spec.context,
+        'attachments': const <Object>[],
+        'pq': spec.pq,
+        'opts': spec.opts,
+      }));
+    }
+    var end = await _chanDrive(link, view, p, msgs, turn);
+    if (r != null && !view.accepted && end.type == ChannelType.error && end.body['code'] == 'no-run') {
+      view.link?.close();
+      return finish(p, 410, {
+        'error': t('That continuation has expired or was already used. Ask again and Nymbot will start it fresh.'),
+        'resumeExpired': true,
+      }, onThreadIds: onThreadIds);
+    }
+    var tries = 0;
+    while (end.type == ChannelType.abort && !turn.cancelled && view.ctl != null && tries++ < 3) {
+      ChanLink again;
+      try {
+        again = await channels!.take(p.signer);
+      } on ChanFailure {
+        break;
+      }
+      joins++;
+      end = await _chanDrive(again, view, p, [(ChannelType.join, {'run': view.run, 'c': view.ctl})], turn);
+      if (end.type == ChannelType.error && end.body['code'] == 'no-run') {
+        end = ChanEvent(ChannelType.abort, const {'code': 'no-run'});
+        break;
+      }
+    }
+    view.link?.close();
+    if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+    if (end.type == ChannelType.abort) {
+      final got = await claimChan(p.conv, view.run, p.signer, anonPk: p.anonPk, prepared: p, onThreadIds: onThreadIds);
+      if (got != null) return got;
+      throw ChatFailure(t('Still working on that one…'), lost: true, offline: false);
+    }
+    final info = end.body['info'] is Map ? (end.body['info'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    if (end.type == ChannelType.error) {
+      final code = '${end.body['code']}';
+      return finish(p, code == 'credits' ? 402 : (code == 'rate' ? 429 : 400),
+          {...info, 'error': info['message'] is String ? info['message'] : chanFailText(code)},
+          onThreadIds: onThreadIds);
+    }
+    final w = end.body['wrap'];
+    return finish(p, 200, {...info, 'event': w}, onThreadIds: onThreadIds);
+  }
+
+  Future<TurnResult?> claimChan(Conversation conv, String run, EventSigner signer,
+      {String? anonPk, PreparedTurn? prepared, void Function(List<String> ids)? onThreadIds}) async {
+    final res = await api.call('pm-claim', signer, extra: {'run': run}, timeout: const Duration(seconds: 20));
+    final wraps = res.data['wraps'];
+    if (res.status != 200 || wraps is! List) return null;
+    Map<String, dynamic>? last;
+    for (final w in wraps) {
+      if (w is Map && (w['phase'] == 'done' || w['phase'] == 'park') && w['wrap'] is Map) last = (w['wrap'] as Map).cast<String, dynamic>();
+    }
+    if (last == null) return null;
+    final p = prepared ??
+        (PreparedTurn(
+          conv: conv,
+          signer: signer,
+          extra: const {},
+          wrap: NostrEvent(id: run, pubkey: signer.pubkey, createdAt: 0, kind: 1059),
+          msgId: run,
+          anonPk: anonPk,
+          ghost: true,
+        )..chan = ChanSpec(rumor: const {}, run: run, opts: const {}, context: const {}));
+    return finish(p, 200, {'event': last}, onThreadIds: onThreadIds ?? (_) {});
+  }
+
+  Future<({NostrEvent seal, Map<String, dynamic> rumor})?> _open(NostrEvent wrap, EventSigner signer, {String? anonPk}) async {
+    final opened = anonPk != null
+        ? await anon.open(wrap, pk: anonPk)
+        : await giftwrap.unwrapWith(wrap, signer, identity.kemCandidates());
+    if (opened == null) return null;
+    return (seal: opened.seal, rumor: opened.rumor);
+  }
+
+  static bool _carriesCert(Map<String, dynamic> rumor) {
+    final tags = rumor['tags'];
+    return tags is List && tags.any((t) => t is List && t.isNotEmpty && t[0] == 'nymbot-cert');
+  }
+
+  Future<ChannelRun> readRunWrap(NostrEvent wrap, EventSigner signer, {String? anonPk}) async {
+    final opened = await _open(wrap, signer, anonPk: anonPk);
+    if (opened == null) throw ChannelError('malformed');
+    return channelReadRunRumor(opened.rumor, botPk: botPubkey, userPk: signer.pubkey, seal: opened.seal);
+  }
+
+  Future<String?> readReply(NostrEvent wrap, EventSigner signer, {String? anonPk}) async {
+    final opened = await _open(wrap, signer, anonPk: anonPk);
+    if (opened == null) return null;
+    if (_carriesCert(opened.rumor)) {
+      try {
+        final run = channelReadRunRumor(opened.rumor, botPk: botPubkey, userPk: signer.pubkey, seal: opened.seal);
+        return run.phase == 'park' ? '${run.ask?.body['text'] ?? ''}' : run.text;
+      } on ChannelError {
+        return null;
+      }
+    }
+    return fromBot(opened.seal, opened.rumor, bot: botPubkey) ? opened.rumor['content'] as String? : null;
+  }
+
+  Map<String, dynamic> _chanData(Map<String, dynamic> data, Map<String, dynamic> rumor, ChannelRun run, String convId) {
+    final out = {...data};
+    for (final tg in rumor['tags'] as List) {
+      if (tg is! List || tg.length < 2) continue;
+      if (tg[0] == 'nymbot-meta' && tg[1] is String) {
+        try {
+          final meta = jsonDecode(tg[1] as String);
+          if (meta is Map) {
+            for (final e in meta.entries) {
+              out.putIfAbsent('${e.key}', () => e.value);
+            }
+          }
+        } catch (_) {}
+      } else if (tg[0] == 'nymbot-summary' && tg[1] is String && (tg[1] as String).isNotEmpty) {
+        final upto = tg.length > 2 ? int.tryParse('${tg[2]}') ?? 0 : 0;
+        onChanSummary?.call(convId, run.run, ChanSummary(tg[1] as String, upto));
+      }
+    }
+    if (run.resume != null) {
+      out['resumeToken'] = chanToken(run.run, run.resume!);
+      out['resumable'] = true;
+    }
+    if (run.phase == 'park' && run.ask != null && run.ask!.body['pending'] is Map) {
+      out['pendingTool'] ??= run.ask!.body['pending'];
+    }
+    return out;
+  }
+
+  void joinWatch(PreparedTurn p, String ctl) {
+    final spec = p.chan;
+    final ch = channels;
+    if (spec == null || ch == null) return;
+    final view = _chanViews.putIfAbsent(p.eventId, () => ChanRunView(spec.runId));
+    _chanRuns[spec.runId] = view;
+    view.ctl = ctl;
+    () async {
+      final link = await ch.take(p.signer);
+      joins++;
+      await _chanDrive(link, view, p, [(ChannelType.join, {'run': view.run, 'c': ctl})], TurnControl());
+      link.close();
+    }()
+        .catchError((_) {});
+  }
+
+  Future<bool> steerChan(String run, String text, EventSigner signer, {String? anonPk}) async {
+    final view = _chanRuns[run];
+    if (view == null || view.ctl == null) return _steerFrom(run, text, signer, anonPk);
+    var link = view.link;
+    try {
+      if (link == null || !link.usable) {
+        link = await channels!.take(signer);
+        view.link = link;
+        await link.send(ChannelType.join, {'run': run, 'c': view.ctl});
+      }
+      await link.send(ChannelType.steer, {'run': run, 'text': text});
+      return true;
+    } on ChanFailure {
+      return false;
+    }
+  }
+
+  Future<bool> _steerFrom(String run, String text, EventSigner signer, String? anonPk) async {
+    final ch = channels;
+    if (ch == null || chanOffered == false || !chanSeen) return false;
+    String? ctl;
+    try {
+      final res = await api.claimChanRun(signer, run);
+      final wraps = res.data['wraps'];
+      if (wraps is! List) return false;
+      if (wraps.any((w) => w is Map && (w['phase'] == 'done' || w['phase'] == 'park'))) return false;
+      for (final w in wraps.reversed) {
+        if (w is! Map || w['phase'] != 'live' || w['wrap'] is! Map) continue;
+        final r = await readRunWrap(NostrEvent.fromJson((w['wrap'] as Map).cast<String, dynamic>()), signer, anonPk: anonPk);
+        if (r.run == run) ctl = r.ctl;
+        break;
+      }
+    } catch (_) {
+      return false;
+    }
+    if (ctl == null) return false;
+    try {
+      final link = await ch.take(signer);
+      final answered = link.events
+          .firstWhere((ev) => ev.body['run'] == run && (ev.type == ChannelType.accept || ev.type == ChannelType.error))
+          .timeout(const Duration(seconds: 12));
+      await link.send(ChannelType.join, {'run': run, 'c': ctl});
+      if ((await answered).type != ChannelType.accept) {
+        link.close();
+        return false;
+      }
+      final view = _chanRuns.putIfAbsent(run, () => ChanRunView(run));
+      view.ctl = ctl;
+      view.link = link;
+      await link.send(ChannelType.steer, {'run': run, 'text': text});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   static const heldMax = 8;
   static const heldSend = 4;
@@ -1249,6 +1632,23 @@ class ChatEngine {
     final selfKem = anonId != null
         ? anon.kemOf(anonId)?.publicKey
         : (identity.rootLocked ? null : identity.kemPublicKey);
+    final legacyToken = resume != null && resume.isNotEmpty && chanTokenOf(resume) == null;
+    final opening = legacyToken ? Future<ChanLink?>.value(null) : _chanLink(signer);
+    final pull = freshen;
+    final pulling = !legacyToken && !anonymous && !conv.support && pull != null && channels != null && chanOffered != false
+        ? pull(conv.id).timeout(pullCap, onTimeout: () {}).catchError((_) {})
+        : null;
+    final recovery = recover;
+    final recovering = !legacyToken && !fresh && !RegExp(r'^\s*!\s*\S').hasMatch(text) && recovery != null && channels != null && chanOffered != false
+        ? recovery(conv, msgId).timeout(pullCap, onTimeout: () {}).catchError((_) {})
+        : null;
+    final ChanLink? link;
+    try {
+      link = await opening;
+    } finally {
+      if (pulling != null) await pulling;
+      if (recovering != null) await recovering;
+    }
 
     final freshTurn = fresh || RegExp(r'^\s*!\s*\S').hasMatch(text);
     final used = skillWire(conv, text);
@@ -1280,6 +1680,8 @@ class ChatEngine {
     final partIds = <String>[];
     final partWraps = <NostrEvent>[];
     NostrEvent? wrap;
+    Map<String, dynamic>? chanRumor;
+    final chanRumors = <Map<String, dynamic>>[];
     for (var i = 0; i < bodies.length; i++) {
       final rumor = UnsignedEvent(
         pubkey: signer.pubkey,
@@ -1294,8 +1696,14 @@ class ChatEngine {
         ],
         content: bodies[i],
       );
-      wrap = await _wrap(rumor, signer, botPubkey, botKem);
-      unawaited(relays.publish(wrap, timeout: const Duration(seconds: 5)));
+      if (link != null) {
+        chanRumors.add({...rumor.toJson(), 'id': rumor.computeId()});
+        chanRumor ??= chanRumors.first;
+        wrap = NostrEvent(id: chanRumors.first['id'] as String, pubkey: signer.pubkey, createdAt: rumor.createdAt, kind: 1059);
+      } else {
+        wrap = await _wrap(rumor, signer, botPubkey, botKem);
+        unawaited(relays.publish(wrap, timeout: const Duration(seconds: 5)));
+      }
       partIds.add(wrap.id);
       partWraps.add(wrap);
 
@@ -1368,18 +1776,39 @@ class ChatEngine {
       if (runDecline != null && runDecline.isNotEmpty) 'runDecline': runDecline,
       ...runExtras,
     };
-    return PreparedTurn(
+    final prepared = PreparedTurn(
       conv: conv,
       signer: signer,
       extra: extra,
       wrap: wrap,
-      partWraps: partWraps,
+      partWraps: link != null ? const [] : partWraps,
       msgId: xId,
       anonPk: anonId?['pk'] as String?,
       ghost: ghost,
       fresh: freshTurn,
       repos: repos.map((r) => r.repo).toList(),
     );
+    if (link != null) {
+      final opts = Map<String, dynamic>.of(extra)..removeWhere((k, _) => _chanDropped.contains(k));
+      final resumed = chanTokenOf(resume);
+      prepared.chan = ChanSpec(
+        link: link,
+        rumor: chanRumor!,
+        rumors: chanRumors,
+        run: xId,
+        pq: selfKem == null ? null : base64Url.encode(selfKem).replaceAll('=', ''),
+        opts: opts,
+        context: freshTurn
+            ? const {'history': <Object>[], 'summary': null, 'fold': <Object>[]}
+            : ChanHistory.forChat(messagesOf(conv.id), exclude: xId, threaded: conv.rootId.isNotEmpty, seed: conv.seed),
+        resume: resumed,
+        answer: resumed == null
+            ? null
+            : chanAnswerFrame(resumed.run, text, pendingAnswer,
+                runApprove: runApprove, runDecline: runDecline, mcpApprove: mcpApprove, mcpDecline: mcpDecline),
+      );
+    }
+    return prepared;
   }
 
   Future<TurnResult> deliver(
@@ -1390,6 +1819,15 @@ class ChatEngine {
     required void Function(List<String> ids) onThreadIds,
   }) async {
     final turn = control ?? TurnControl();
+    if (prepared.chan != null) {
+      if (turn.cancelled) throw ChatFailure(t('Stopped.'), cancelled: true);
+      final release = slot == null ? null : await slot();
+      try {
+        return await _deliverChan(prepared, turn, onThreadIds);
+      } finally {
+        if (release != null) release();
+      }
+    }
     // `pending` means an earlier attempt is still generating; the same event id collects it without paying twice.
     ApiResult res;
     var held = 0;
@@ -1407,6 +1845,7 @@ class ChatEngine {
         if (res.status == -1 || turn.cancelled) {
           throw ChatFailure(t('Stopped.'), cancelled: true);
         }
+        if (res.status == 426 && channels != null) chanOffered = null;
         if (res.status == 0 && lost++ < reconnects) {
           await _wait(reconnectWait, turn);
           continue;
@@ -1446,6 +1885,12 @@ class ChatEngine {
     PreparedTurn prepared, {
     required void Function(List<String> ids) onThreadIds,
   }) async {
+    final spec = prepared.chan;
+    if (spec != null) {
+      final got = await claimChan(prepared.conv, spec.runId, prepared.signer,
+          anonPk: prepared.anonPk, prepared: prepared, onThreadIds: onThreadIds);
+      return (result: got, pending: got == null, unknown: false);
+    }
     final res = await api.claimRun(prepared.signer, prepared.eventId);
     if (res.status == 202 || res.data['pending'] == true) {
       return (result: null, pending: true, unknown: false);
@@ -1613,7 +2058,15 @@ class ChatEngine {
     if (opened == null) {
       throw ChatFailure(t('Nymbot replied, but this device could not decrypt it.'));
     }
-    if (!fromBot(opened.seal, opened.rumor, bot: botPubkey)) {
+    ChannelRun? chanRun;
+    if (prepared.chan != null || _carriesCert(opened.rumor)) {
+      try {
+        chanRun = channelReadRunRumor(opened.rumor, botPk: botPubkey, userPk: signer.pubkey, seal: opened.seal);
+      } on ChannelError {
+        throw ChatFailure(t('A reply arrived that Nymbot did not sign, so it was not shown.'));
+      }
+      data = _chanData(data, opened.rumor, chanRun, conv.id);
+    } else if (!fromBot(opened.seal, opened.rumor, bot: botPubkey)) {
       throw ChatFailure(t('A reply arrived that Nymbot did not sign, so it was not shown.'));
     }
     if (onRumor != null) onRumor(opened.rumor);
@@ -1629,12 +2082,14 @@ class ChatEngine {
     prepared.background = BackgroundJobs.handover(data['background']);
 
     // A '!' question stays out of the conversation context on both sides, though the chat shows it.
-    if (!prepared.fresh) {
+    if (!prepared.fresh && chanRun == null) {
       onThreadIds([wrap.id, if (selfEvent != null) selfEvent.id]);
       holdWraps(conv.id, [...prepared.partWraps, ?selfEvent]);
     }
 
-    final split = splitThinking(opened.rumor['content'] as String? ?? '');
+    final split = splitThinking(chanRun != null && chanRun.phase == 'park'
+        ? '${chanRun.ask?.body['text'] ?? ''}'
+        : opened.rumor['content'] as String? ?? '');
     final took = Ask.take(split.body);
     final planned = Plan.take(took.ask != null ? took.text : split.body);
     return (
@@ -1699,6 +2154,13 @@ class ChatEngine {
     void Function(String text, int seq)? onDraft,
     void Function(List<Map<String, dynamic>> plan)? onPlan,
   }) async {
+    final view = _chanViews[eventId];
+    if (view != null) {
+      final d = view.draft;
+      if (onDraft != null && d != null && view.seq > draftAfter) onDraft(d, view.seq);
+      if (onPlan != null && view.plan.isNotEmpty) onPlan(view.plan);
+      return [for (final st in view.steps) if (((st['n'] as num?) ?? 0) > after) st];
+    }
     try {
       final res = await api.call(
         'pm-progress',

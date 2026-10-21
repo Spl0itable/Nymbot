@@ -295,6 +295,9 @@ class NymbotApi {
       call('pm-steer-status', signer,
           extra: {'ids': ids}, timeout: const Duration(seconds: 15));
 
+  Future<ApiResult> claimChanRun(EventSigner signer, String run) =>
+      call('pm-claim', signer, extra: {'run': run}, timeout: const Duration(seconds: 20));
+
   Future<ApiResult> claimRun(EventSigner signer, String eventId) =>
       call('pm-claim', signer,
           extra: {'eventId': eventId}, timeout: const Duration(seconds: 20));

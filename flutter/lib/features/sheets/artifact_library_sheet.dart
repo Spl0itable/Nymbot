@@ -108,7 +108,7 @@ class _ArtifactLibrarySheetState extends State<_ArtifactLibrarySheet> {
     ScaffoldMessenger.maybeOf(context)
       ?..clearSnackBars()
       ..showSnackBar(
-          SnackBar(content: Text(text), duration: const Duration(seconds: 2)));
+          SnackBar(content: UiText(text), duration: const Duration(seconds: 2)));
   }
 
   Widget _row(ArtifactEntry row) {

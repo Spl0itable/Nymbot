@@ -724,8 +724,10 @@ class AccountSync {
     final graves = await _liveGraves();
     final out = <String, dynamic>{};
 
-    out['settings'] =
-        _settingsToWire(_store.settings(), _overlaySource['settings']);
+    out['settings'] = {
+      ..._settingsToWire(_store.settings(), _overlaySource['settings']),
+      ..._store.modelPick(),
+    };
 
     final library = <String, dynamic>{
       'personas': [
@@ -889,6 +891,17 @@ class AccountSync {
         merged['nicknameAt'] = mine['nicknameAt'];
       }
       await _store.saveSettings(AppSettings.fromJson(merged));
+      final pick = _store.modelPick();
+      var picked = false;
+      for (final k in const ['proModel', 'mediaModel']) {
+        if (!raw.containsKey(k) || dirty.contains(k)) continue;
+        final v = raw[k];
+        pick[k] = v is Map ? Map<String, dynamic>.from(v) : null;
+        picked = true;
+      }
+      if (picked) {
+        await _store.saveModelPick(pick['proModel'], pick['mediaModel'], mark: false);
+      }
       touched.add('settings');
     }
 

@@ -433,10 +433,10 @@ class _SchedulesSheetState extends State<_SchedulesSheet> {
             if (_status.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text(_status, style: const TextStyle(fontSize: 12)),
+                child: UiText(_status, style: const TextStyle(fontSize: 12)),
               ),
             if (_error.isNotEmpty)
-              Text(_error,
+              UiText(_error,
                   style: TextStyle(
                       fontSize: 12, color: theme.colorScheme.error)),
             const SizedBox(height: 8),

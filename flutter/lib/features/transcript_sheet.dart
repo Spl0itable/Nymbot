@@ -176,7 +176,7 @@ Future<void> showTranscriptSheet(BuildContext context, {required String convId, 
   if (tx == null) {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(t('There is no transcript for this yet.'))));
+      ..showSnackBar(SnackBar(content: UiText(t('There is no transcript for this yet.'))));
     return Future.value();
   }
   return showNymSheet<void>(
@@ -287,7 +287,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                   await Clipboard.setData(ClipboardData(text: transcriptText(tx, live: head.running)));
                   messenger
                     ..clearSnackBars()
-                    ..showSnackBar(SnackBar(content: Text(t('Copied.'))));
+                    ..showSnackBar(SnackBar(content: UiText(t('Copied.'))));
                 },
               ),
               IconButton(

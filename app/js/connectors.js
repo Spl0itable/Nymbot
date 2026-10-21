@@ -625,14 +625,17 @@
                 };
                 if (approve) opts.mcpApprove = p.id;
                 else opts.mcpDecline = p.id;
-                const res = await Chat.send(conv, t('Continue.'), ui.settings, opts);
+                const pick = await ui.runPick(conv, m);
+                turn.pick = pick;
+                const sent = ui.withPick(conv, pick);
+                const res = await Chat.send(sent, t('Continue.'), ui.settings, opts);
                 ui.stopWatchingTurn(turn);
                 if (turn.stopped) return;
                 if (res.stopped) {
                     ui.runNote(turn, t('Stopped.'));
                     return;
                 }
-                const reply = this.replyFrom(conv, ui.settings, res);
+                const reply = this.replyFrom(sent, ui.settings, res);
                 reply.replyTo = res.replyTo || turn.runId || null;
                 reply.askedBy = turn.asked || null;
                 ui.placeMessage(conv.id, reply, turn);

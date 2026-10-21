@@ -527,7 +527,7 @@ Future<void> importBackup(BuildContext context) async {
   final messenger = ScaffoldMessenger.of(context);
   void say(String text) => messenger
     ..clearSnackBars()
-    ..showSnackBar(SnackBar(content: Text(text)));
+    ..showSnackBar(SnackBar(content: UiText(text)));
   final picked = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['json'],

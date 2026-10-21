@@ -21,7 +21,7 @@ Future<void> showTeamSheet(BuildContext context) async {
   if (reason != null) {
     messenger
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(reason)));
+      ..showSnackBar(SnackBar(content: UiText(reason)));
     return;
   }
   final said = await showNymSheet<String>(context, (_) => const _TeamSheet());
@@ -235,7 +235,7 @@ class _TeamSheetState extends State<_TeamSheet> {
             ],
             if (_status != null) ...[
               const SizedBox(height: 8),
-              Text(_status!,
+              UiText(_status!,
                   style: const TextStyle(fontSize: 12, color: NymbotColors.danger)),
             ],
             const SizedBox(height: 16),

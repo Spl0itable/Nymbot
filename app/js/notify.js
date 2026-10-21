@@ -167,6 +167,13 @@
             };
         },
 
+        warm() {
+            for (const kind of ['turn', 'background', 'schedule', 'prwatch']) this.pushTexts(kind);
+            this.stateText();
+            for (const state of [null, 'failed', 'question', 'done']) this.headingFor(state, false);
+            t('Open the chat to read it.');
+        },
+
         headingFor(state, replied) {
             if (state === 'failed' || state === 'stopped' || state === 'expired') return t('Nymbot could not finish that reply');
             if (state === 'question') return t('Nymbot has a question');
@@ -175,6 +182,10 @@
         },
 
         async shareStateText() {
+            if (!this.retranslates) {
+                this.retranslates = true;
+                window.addEventListener('nymbot:i18n', () => this.shareStateText());
+            }
             try {
                 if (!window.caches) return;
                 const cache = await caches.open(TEXT_CACHE);
@@ -188,6 +199,7 @@
             if (o.prefs) this.prefsOf = o.prefs;
             if (o.titleOf) this.titleOf = o.titleOf;
             if (o.open) this.open = o.open;
+            this.warm();
             if (this._attached || !this.supported()) return;
             this._attached = true;
             this.shareStateText();

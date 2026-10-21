@@ -10,6 +10,8 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -80,6 +82,18 @@ class MainActivity : FlutterFragmentActivity() {
                 setIntent(Intent(Intent.ACTION_MAIN))
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/clipboard")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasImage" -> result.success(clipboardHasImage())
+                    "readImage" -> {
+                        val asked = call.argument<Number>("limit")?.toInt() ?: 0
+                        val limit = if (asked > 0) minOf(asked, MAX_CLIPBOARD_BYTES) else MAX_CLIPBOARD_BYTES
+                        result.success(clipboardImage(limit))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ai.nymbot/secure")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -438,6 +452,49 @@ class MainActivity : FlutterFragmentActivity() {
         return if (one == null) emptyList() else listOf(one)
     }
 
+    private fun clipboardHasImage(): Boolean = try {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        manager.primaryClipDescription?.hasMimeType("image/*") == true
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun clipboardImage(limit: Int): Map<String, Any?>? = try {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = manager.primaryClip
+        val uri = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).uri else null
+        if (uri == null || !clipboardHasImage() || !foreign(uri)) {
+            null
+        } else {
+            val type = contentResolver.getType(uri)?.lowercase() ?: ""
+            val bytes = contentResolver.openInputStream(uri)?.use { stream ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0
+                while (total <= limit) {
+                    val n = stream.read(buffer)
+                    if (n < 0) break
+                    total += n
+                    out.write(buffer, 0, n)
+                }
+                out.toByteArray()
+            } ?: ByteArray(0)
+            when {
+                bytes.isEmpty() -> null
+                type in CLIPBOARD_IMAGE_TYPES || bytes.size > limit ->
+                    mapOf("mimeType" to (if (type in CLIPBOARD_IMAGE_TYPES) type else "image/jpeg"), "bytes" to bytes)
+                else -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { bitmap ->
+                    val out = java.io.ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                    bitmap.recycle()
+                    mapOf("mimeType" to "image/jpeg", "bytes" to out.toByteArray())
+                }
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+
     private fun foreign(uri: Uri): Boolean {
         if (uri.scheme?.lowercase() != ContentResolver.SCHEME_CONTENT) return false
         val authority = uri.authority?.lowercase() ?: return false
@@ -664,3 +721,6 @@ class MainActivity : FlutterFragmentActivity() {
             .authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 }
+
+private const val MAX_CLIPBOARD_BYTES = 64 * 1024 * 1024
+private val CLIPBOARD_IMAGE_TYPES = setOf("image/png", "image/jpeg", "image/gif", "image/webp")

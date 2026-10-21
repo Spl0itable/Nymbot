@@ -134,7 +134,7 @@ class _CapsSheetState extends State<CapsSheet> {
             ),
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(_status,
+              UiText(_status,
                   style: TextStyle(fontSize: 12, color: theme.colorScheme.error)),
             ],
             const SizedBox(height: 12),

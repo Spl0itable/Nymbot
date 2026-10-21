@@ -21,6 +21,7 @@ class Schedule {
     this.serverSha,
     this.serverExpiresAt = 0,
     this.serverError,
+    this.serverChan = false,
     this.serverOff = false,
     this.serverSeenAt = 0,
     this.runChanges = false,
@@ -43,6 +44,7 @@ class Schedule {
   String? serverSha;
   int serverExpiresAt;
   String? serverError;
+  bool serverChan;
   bool serverOff;
   int serverSeenAt;
   bool runChanges;
@@ -90,6 +92,7 @@ class Schedule {
         if (serverSha != null) 'serverSha': serverSha,
         if (serverExpiresAt > 0) 'serverExpiresAt': serverExpiresAt,
         if (serverError != null) 'serverError': serverError,
+        if (serverChan) 'serverChan': true,
         if (serverOff) 'serverOff': true,
         if (serverSeenAt > 0) 'serverSeenAt': serverSeenAt,
         if (runChanges) 'runChanges': true,
@@ -125,6 +128,7 @@ class Schedule {
         serverExpiresAt: (j['serverExpiresAt'] as num?)?.toInt() ?? 0,
         serverError:
             j['serverError'] is String ? j['serverError'] as String : null,
+        serverChan: j['serverChan'] == true,
         serverOff: j['serverOff'] == true,
         serverSeenAt: (j['serverSeenAt'] as num?)?.toInt() ?? 0,
         runChanges: j['runChanges'] == true,

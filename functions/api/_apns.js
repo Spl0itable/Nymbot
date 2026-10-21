@@ -163,7 +163,8 @@ export function pushResolve(kind, reg, fields, startedAt, now) {
   if (!pushWanted(reg, state)) return null;
   const min = reg ? Number(reg.min) || 0 : 0;
   if (min > 0 && Number(startedAt) > 0 && (now || Date.now()) - Number(startedAt) < min * 1000) return null;
-  const out = Object.assign({}, f, { state: state, text: pushText(kind, state, reg, f.fallback) });
+  const fallback = reg && (reg.env === "production" || reg.env === "sandbox") ? "" : f.fallback;
+  const out = Object.assign({}, f, { state: state, text: pushText(kind, state, reg, fallback) });
   delete out.fallback;
   return out;
 }

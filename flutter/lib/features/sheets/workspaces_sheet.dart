@@ -264,7 +264,7 @@ class _WorkspacesSheetState extends State<_WorkspacesSheet> {
             ),
             if (_error.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(_error,
+              UiText(_error,
                   style: TextStyle(
                       fontSize: 12, color: theme.colorScheme.error)),
             ],

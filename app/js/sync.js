@@ -997,7 +997,7 @@
 
         follow() {
             if (this._following) return;
-            this._following = Store.watch(() => this.touch());
+            this._following = Store.watch((key, anon) => { if (!anon) this.touch(); });
         },
 
         touch(delay) {

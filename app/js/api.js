@@ -243,11 +243,20 @@
         refreshSlots() { pump(); },
 
         cancelRun(replyTo, opts) {
+            const cc = window.NymbotChat && window.NymbotChat.channel ? window.NymbotChat.channel() : null;
+            if (cc) cc.cancel(replyTo);
             return this.call('pm-cancel', { replyTo }, Object.assign({ timeout: 10000 }, opts || {}));
         },
 
-        steerRun(replyTo, text, opts) {
-            return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, opts || {}));
+        async steerRun(replyTo, text, opts) {
+            const { conv, ...rest } = opts || {};
+            const Chat = window.NymbotChat;
+            const cc = Chat && Chat.channel ? Chat.channel() : null;
+            if (cc && cc.holds(replyTo)) {
+                return cc.steer(replyTo, text) ? { status: 200, data: { ok: true } } : { status: 404, data: { error: t('That run is no longer reachable from this device.') } };
+            }
+            if (cc && conv && typeof Chat.steerChan === 'function' && await Chat.steerChan(conv, replyTo, text)) return { status: 200, data: { ok: true } };
+            return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, rest));
         },
 
         steerStatus(ids, opts) {

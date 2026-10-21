@@ -70,7 +70,7 @@ class _SiteCheckSheetState extends State<SiteCheckSheet> {
       if (!mounted) return;
       _say(text, warn: true);
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-        content: Text(text),
+        content: UiText(text),
         action: SnackBarAction(label: t('Buy'), onPressed: () => showCreditsSheet(context)),
       ));
       return;

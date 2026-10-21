@@ -132,6 +132,23 @@
             return this.sealedBy(opened, from) ? opened : null;
         },
 
+        async unwrapBot(event, recipient) {
+            const opened = await this.openWrap(event, recipient);
+            const C = window.NymbotConfig;
+            if (!opened) return null;
+            if (this.sealedBy(opened, C.botPubkey)) return opened;
+            const P = window.NymbotChannel;
+            if (!P) return null;
+            try {
+                const userPk = recipient && recipient.sk ? NT().getPublicKey(recipient.sk) : Identity.pubkey;
+                const run = P.readRunRumor(opened.rumor, { botPk: C.botPubkey, userPk, seal: opened.seal });
+                if (run.phase !== 'done') return null;
+                return { seal: opened.seal, rumor: Object.assign({}, opened.rumor, { content: run.text || '' }), run };
+            } catch (_) {
+                return null;
+            }
+        },
+
         sealedBy(opened, author) {
             const T = NT();
             const seal = opened && opened.seal;

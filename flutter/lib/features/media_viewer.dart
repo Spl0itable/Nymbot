@@ -464,10 +464,10 @@ class _MediaViewerState extends State<MediaViewer>
       if (url != null && url.startsWith('http') && await launchSafeUrl(url)) {
         messenger.showSnackBar(SnackBar(
             content:
-                Text(t('Opened it outside the app — save it from there.'))));
+                UiText(t('Opened it outside the app — save it from there.'))));
       } else {
         messenger.showSnackBar(
-            SnackBar(content: Text(t('That file could not be saved.'))));
+            SnackBar(content: UiText(t('That file could not be saved.'))));
       }
     }
     if (mounted) setState(() => _saving = false);

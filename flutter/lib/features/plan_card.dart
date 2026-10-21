@@ -170,7 +170,7 @@ class _PlanCardState extends State<PlanCard> {
         if (_error.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text(_error, style: hint.copyWith(color: Theme.of(context).colorScheme.error)),
+            child: UiText(_error, style: hint.copyWith(color: Theme.of(context).colorScheme.error)),
           ),
         Padding(
           padding: const EdgeInsets.only(top: 8),
@@ -248,7 +248,7 @@ class _PlanCardState extends State<PlanCard> {
             ],
           ),
         ),
-        if (_error.isNotEmpty) Text(_error, style: hint),
+        if (_error.isNotEmpty) UiText(_error, style: hint),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,6 +16,7 @@ import 'artifact_screen.dart';
 import 'branch_chip.dart';
 import 'brand_tile.dart';
 import 'citation_cards.dart';
+import 'desktop_layout.dart';
 import 'doc_tray.dart';
 import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
@@ -145,6 +147,16 @@ class MessageBubble extends StatefulWidget {
 
 class _MessageBubbleState extends State<MessageBubble> {
   bool? _reasoningOpen;
+  bool _hovered = false;
+
+  void _hover(bool on) {
+    if (_hovered != on) setState(() => _hovered = on);
+  }
+
+  void _tapped(TapUpDetails details) {
+    if (details.kind == PointerDeviceKind.mouse) return;
+    widget.onToggleActions?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +193,7 @@ class _MessageBubbleState extends State<MessageBubble> {
           SelectionArea(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: widget.onToggleActions,
+              onTapUp: widget.onToggleActions == null ? null : _tapped,
               child: _content(context, m, self, theme),
             ),
           ),
@@ -201,6 +213,42 @@ class _MessageBubbleState extends State<MessageBubble> {
       ],
     );
 
+    final farStart = self && settings.bubbles;
+    return MouseRegion(
+      onEnter: (_) => _hover(true),
+      onExit: (_) => _hover(false),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          _message(context, m, gap, showAvatar, row),
+          if (_hovered && !widget.actionsOpen)
+            Positioned(
+              key: const ValueKey('hover-actions'),
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Align(
+                alignment: farStart ? AlignmentDirectional.topStart : AlignmentDirectional.topEnd,
+                child: Material(
+                  color: theme.colorScheme.surface,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    side: BorderSide(color: theme.hintColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(1),
+                    child: _actions(context, m, compact: true),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _message(BuildContext context, ChatMessage m, double gap, bool showAvatar, Widget row) {
     return Padding(
       padding: EdgeInsets.only(bottom: gap),
       child: showAvatar
@@ -413,7 +461,7 @@ class _MessageBubbleState extends State<MessageBubble> {
 
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxWidth: bubbles ? MediaQuery.of(context).size.width * 0.82 : double.infinity,
+        maxWidth: bubbles ? paneWidth(context) * 0.82 : double.infinity,
       ),
       child: MediaViewerScope(
         child: Container(
@@ -603,7 +651,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             for (final text in widget.followUps)
               ConstrainedBox(
                 constraints: BoxConstraints(
-                    maxWidth: MediaQuery.sizeOf(context).width * 0.82),
+                    maxWidth: paneWidth(context) * 0.82),
                 child: GestureDetector(
                   onSecondaryTap: widget.onEditFollowUp == null
                       ? null
@@ -950,17 +998,33 @@ class _MessageBubbleState extends State<MessageBubble> {
     );
   }
 
-  Widget _actions(BuildContext context, ChatMessage m) {
+  Widget _actions(BuildContext context, ChatMessage m, {bool compact = false}) {
     final self = m.role == ChatRole.self;
     final bot = m.role == ChatRole.bot;
     final buttons = <Widget>[];
 
-    // Labels are shown inline, since tooltips need a long-press.
     void add(String glyph, String tip, MessageAction action,
         {bool on = false, bool solid = false}) {
       final colour = on
           ? Theme.of(context).colorScheme.primary
           : Theme.of(context).hintColor;
+      if (compact) {
+        buttons.add(Tooltip(
+          message: tip,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => widget.onAction(action, m),
+            child: SizedBox(
+              width: 30,
+              height: 24,
+              child: Center(
+                child: NymGlyph(glyph, size: 15, color: colour, filled: solid),
+              ),
+            ),
+          ),
+        ));
+        return;
+      }
       buttons.add(Tooltip(
         message: tip,
         child: InkWell(
@@ -1011,7 +1075,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     add('close', t('Delete'), MessageAction.delete);
 
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: EdgeInsets.only(top: compact ? 0 : 2),
       child: Wrap(
         spacing: 2,
         runSpacing: 0,

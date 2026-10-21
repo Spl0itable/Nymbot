@@ -368,7 +368,7 @@ class _ReposSheetState extends State<_ReposSheet> {
     final messenger = ScaffoldMessenger.maybeOf(context);
     final said = await app.cleanupRepoBranches(r);
     if (!mounted) return;
-    messenger?.showSnackBar(SnackBar(content: Text(said)));
+    messenger?.showSnackBar(SnackBar(content: UiText(said)));
     setState(() {});
   }
 
@@ -659,7 +659,7 @@ class _ReposSheetState extends State<_ReposSheet> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(_error!,
+                child: UiText(_error!,
                     style: TextStyle(color: Theme.of(context).colorScheme.error)),
               ),
             const SizedBox(height: 10),

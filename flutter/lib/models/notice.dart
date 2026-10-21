@@ -54,20 +54,22 @@ class Notice {
     );
   }
 
-  static Notice? newest(List<Notice> notices, Iterable<int> dismissed) {
+  static List<Notice> visible(List<Notice> notices, Iterable<int> dismissed) {
     final gone = dismissed.toSet();
-    Notice? best;
-    for (final n in notices) {
-      if (gone.contains(n.id)) continue;
-      if (best == null || n.at > best.at || (n.at == best.at && n.id > best.id)) {
-        best = n;
-      }
-    }
-    return best;
+    return notices.where((n) => !gone.contains(n.id)).toList()
+      ..sort((a, b) => a.at != b.at ? b.at.compareTo(a.at) : b.id.compareTo(a.id));
   }
 
-  static List<int> dismiss(List<int> dismissed, int id) {
-    final next = [...dismissed.where((d) => d != id), id];
+  static Notice? newest(List<Notice> notices, Iterable<int> dismissed) {
+    final list = visible(notices, dismissed);
+    return list.isEmpty ? null : list.first;
+  }
+
+  static List<int> dismiss(List<int> dismissed, int id) => dismissAll(dismissed, [id]);
+
+  static List<int> dismissAll(List<int> dismissed, Iterable<int> ids) {
+    final add = ids.toSet();
+    final next = [...dismissed.where((d) => !add.contains(d)), ...add];
     return next.length > dismissedKept
         ? next.sublist(next.length - dismissedKept)
         : next;

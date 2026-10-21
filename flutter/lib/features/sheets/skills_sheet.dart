@@ -246,7 +246,7 @@ class _SkillsSheetState extends State<SkillsSheet> {
                 padding: const EdgeInsets.only(top: 6),
                 child: Semantics(
                   liveRegion: true,
-                  child: Text(_status!,
+                  child: UiText(_status!,
                       key: const ValueKey('skill-status'),
                       style: TextStyle(fontSize: 12, color: _warn ? theme.colorScheme.error : theme.hintColor)),
                 ),

@@ -411,7 +411,7 @@
         let res;
         const signedBy = signer || signerFor(conv);
         try {
-            res = await Api().steerRun(runId, text, { signer: signedBy });
+            res = await Api().steerRun(runId, text, { signer: signedBy, conv });
         } catch (_) {
             res = { status: 0, data: {} };
         }

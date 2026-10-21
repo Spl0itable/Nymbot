@@ -337,7 +337,7 @@ class _GiftSheetState extends State<GiftSheet> {
             if (_made != null) _madeBox(context),
             if (_status != null) ...[
               const SizedBox(height: 8),
-              Text(_status!,
+              UiText(_status!,
                   key: const ValueKey('gift-status'),
                   style: TextStyle(fontSize: 13, color: _warn ? NymbotColors.danger : null)),
             ],
@@ -479,11 +479,11 @@ class _RedeemGiftSheetState extends State<RedeemGiftSheet> {
             ),
             if (_what.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(_what, key: const ValueKey('redeem-what')),
+              UiText(_what, key: const ValueKey('redeem-what')),
             ],
             if (_status != null) ...[
               const SizedBox(height: 6),
-              Text(_status!,
+              UiText(_status!,
                   key: const ValueKey('redeem-status'),
                   style: TextStyle(color: _warn ? NymbotColors.danger : null)),
             ],

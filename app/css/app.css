@@ -667,6 +667,9 @@ kbd {
 .notice-actions { display: flex; align-items: center; gap: 0.3rem; flex: 0 0 auto; }
 .notice-actions .btn-small { padding: 0.2rem 0.6rem; font-size: 0.8rem; text-decoration: none; }
 .notice-close { font-size: 1.1rem; line-height: 1; }
+.notice-pager { display: flex; align-items: center; gap: 0.1rem; }
+.notice-pager[hidden] { display: none; }
+.notice-pos { color: var(--text-dim); font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 560px) {
     .notice-banner { flex-wrap: wrap; }
     .notice-actions { margin-left: auto; }
@@ -681,7 +684,7 @@ kbd {
     position: relative;
 }
 .chat-title { flex: 1; min-width: 0; font-size: 1rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-anon, .chat-badge { display: inline-flex; align-items: center; line-height: 1.4; font-size: 0.7rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.4rem; white-space: nowrap; flex: 0 0 auto; }
+.chat-badge { display: inline-flex; align-items: center; line-height: 1.4; font-size: 0.7rem; color: var(--secondary); border: 1px solid currentColor; border-radius: 999px; padding: 0 0.4rem; white-space: nowrap; flex: 0 0 auto; }
 .chat-badge { color: var(--text-dim); }
 
 .menu {
@@ -1387,6 +1390,26 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
         flex-wrap: wrap;
         gap: 0.15rem 0.35rem;
     }
+}
+
+@media not all and (pointer: coarse) {
+    .msg-actions {
+        position: absolute;
+        top: 0;
+        inset-inline-end: 0;
+        z-index: 5;
+        flex-basis: auto;
+        flex-wrap: nowrap;
+        margin-top: 0;
+        padding: 1px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: var(--bg-raised);
+        pointer-events: none;
+    }
+    html:not([data-bubbles="off"]) .chat-message.self .msg-actions { inset-inline-start: 0; inset-inline-end: auto; }
+    .chat-message:hover .msg-actions,
+    .chat-message:focus-within .msg-actions { pointer-events: auto; }
 }
 
 .msg-action {

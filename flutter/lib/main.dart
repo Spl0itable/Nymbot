@@ -8,6 +8,7 @@ import 'core/crypto/native_schnorr.dart';
 import 'features/i18n/i18n.dart';
 import 'features/unlock_screen.dart';
 import 'services/background_check.dart';
+import 'services/reply_notify.dart';
 import 'state/app_controller.dart';
 import 'state/store.dart';
 
@@ -28,6 +29,7 @@ Future<void> main() async {
   final store = await Store.open();
   // Before the first frame so the app never paints English first.
   await I18n.load(preferred: store.getString('lang'));
+  ReplyNotify.warm();
   if (store.vault.locked) {
     runApp(LockedApp(store: store));
     return;

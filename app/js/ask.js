@@ -116,7 +116,7 @@
         const at = now || Date.now();
         const exp = p && Number(p.expiresAt) > 0 ? Math.min(Number(p.expiresAt), at + LIMITS.waitMs) : at + LIMITS.waitMs;
         const bg = d.background && d.background.waiting === true && /^[0-9a-f]{64}$/.test(String(d.background.runId || '')) ? String(d.background.runId) : null;
-        const token = !bg && typeof d.resumeToken === 'string' && /^[0-9a-f]{32,64}$/i.test(d.resumeToken) ? d.resumeToken : null;
+        const token = !bg && typeof d.resumeToken === 'string' && /^(?:[0-9a-f]{32,64}|[0-9a-f]{128})$/i.test(d.resumeToken) ? d.resumeToken : null;
         return {
             id: took.ask.id,
             questions: took.ask.questions,
@@ -371,7 +371,9 @@
                     const grant = B ? await B.grantWithPush(ui, conv, turn, {}) : null;
                     if (grant) opts.background = grant;
                 }
-                const res = await Chat.send(conv, text, ui.settings, opts);
+                const pick = await ui.runPick(conv, m);
+                turn.pick = pick;
+                const res = await Chat.send(ui.withPick(conv, pick), text, ui.settings, opts);
                 ui.stopWatchingTurn(turn);
                 this.patch(ui, conv.id, m, kept);
                 if (turn.stopped) return;

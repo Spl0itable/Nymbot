@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { errorStrings } from '../errors/pages.mjs';
 import { scriptStrings, sourceStrings } from './extract.mjs';
+import { buildContexts, decodeEscape, hasWords, isFragment, listFiles } from './guard.mjs';
 import { loadSite } from './pages.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -82,9 +83,9 @@ export function dartStrings(source) {
       while (i < code.length) {
         const c = code[i];
         if (c === '\\') {
-          const next = code[i + 1];
-          text += next === 'n' ? '\n' : next === 't' ? '\t' : next;
-          i += 2;
+          const [decoded, used] = decodeEscape(code, i);
+          text += decoded;
+          i += used;
           continue;
         }
         if (c === quote) { closed = true; i++; break; }
@@ -142,10 +143,23 @@ export async function flutterSources() {
   return { sources: [...out], label: 'flutter' };
 }
 
+export async function loadContexts() {
+  const files = [];
+  const add = async (list) => {
+    for (const f of list) files.push({ file: path.relative(ROOT, f), text: await readFile(f, 'utf8') });
+  };
+  await add((await listFiles(path.join(ROOT, 'flutter/lib'), '.dart')).filter((f) => !f.endsWith('/i18n/i18n.dart')));
+  await add((await listFiles(path.join(ROOT, 'app/js'), '.js')).filter((f) => !f.endsWith('/i18n.js')));
+  await add([path.join(ROOT, 'app/index.html'), path.join(ROOT, 'index.html')]);
+  await add(await listFiles(path.join(ROOT, 'pages'), '.html'));
+  return buildContexts(files);
+}
+
 export async function allSurfaces() {
   const surfaces = await Promise.all([siteSources(), errorSources(), appSources(), flutterSources()]);
   const union = new Set();
   for (const surface of surfaces) {
+    surface.sources = surface.sources.filter((s) => hasWords(s) && !isFragment(s));
     for (const s of surface.sources) union.add(s);
   }
   return { surfaces, union: [...union] };

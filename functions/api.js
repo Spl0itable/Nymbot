@@ -5,6 +5,7 @@ import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
 import { verifyClientAuth, getPublicKey, AUTH_REPLAY_TTL_S } from './api/_shared.js';
 import { isNymchatClient } from './api/_client.js';
 import { ledgerCall } from './api/_ledger.js';
+import { chanSocket } from './api/_chanserve.js';
 
 const BOT_ACTIONS = {
   'pm': 1, 'clear-history': 1, 'balance': 1,
@@ -88,11 +89,36 @@ export async function onRequest(context) {
     ? context.waitUntil.bind(context)
     : (p) => { try { if (p && p.catch) p.catch(() => {}); } catch {} };
 
+  const botPrivkey = env.BOT_PRIVKEY || null;
+  let botPub = null;
+  if (botPrivkey) { try { botPub = getPublicKey(botPrivkey); } catch (_) { botPub = null; } }
+  const chan = chanSocket({
+    env,
+    url: reqUrl.replace(/^http/, 'ws'),
+    send,
+    waitUntil,
+    botSk: botPub ? botPrivkey : null,
+    authFresh: (auth) => wsAuthFresh(env, auth),
+    ledger: (a) => ledgerCall(env, a),
+    call: (hooks, body) => handleBotPMAction({
+      env,
+      request: { url: reqUrl, headers: request.headers },
+      waitUntil,
+      _wsAuthedPubkey: hooks.user,
+      _chan: hooks
+    }, body, botPrivkey, botPub)
+  });
+
   server.addEventListener('message', async (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (!Array.isArray(msg)) return;
     const type = msg[0];
+
+    if (chan.handles(type)) {
+      await chan.handle(msg);
+      return;
+    }
 
     if (type === 'AUTH') {
       const auth = msg[1];
@@ -151,7 +177,7 @@ export async function onRequest(context) {
   // Hold the invocation open for the socket's lifetime, or an idle WS worker is reaped as "hung".
   let endLifetime;
   const lifetime = new Promise((resolve) => { endLifetime = resolve; });
-  const closeLifetime = () => { try { endLifetime(); } catch {} };
+  const closeLifetime = () => { try { chan.close(); } catch {} try { endLifetime(); } catch {} };
   server.addEventListener('close', closeLifetime);
   server.addEventListener('error', closeLifetime);
   setTimeout(closeLifetime, 280000);

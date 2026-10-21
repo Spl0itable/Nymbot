@@ -896,14 +896,17 @@
             };
             if (approve) opts.runApprove = p.id;
             else opts.runDecline = p.id;
-            const res = await Chat.send(conv, t('Continue.'), U.settings, opts);
+            const pick = await U.runPick(conv, m);
+            turn.pick = pick;
+            const sent = U.withPick(conv, pick);
+            const res = await Chat.send(sent, t('Continue.'), U.settings, opts);
             U.stopWatchingTurn(turn);
             if (turn.stopped) return;
             if (res.stopped) {
                 U.runNote(turn, t('Stopped.'));
                 return;
             }
-            const reply = K.replyFrom(conv, U.settings, res);
+            const reply = K.replyFrom(sent, U.settings, res);
             reply.replyTo = res.replyTo || turn.runId || null;
             reply.askedBy = turn.asked || null;
             U.placeMessage(conv.id, reply, turn);

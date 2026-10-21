@@ -659,7 +659,7 @@ class _ApiSheetState extends State<_ApiSheet> {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(t('Copied.'))));
+        ?.showSnackBar(SnackBar(content: UiText(t('Copied.'))));
   }
 
   bool get _free =>
@@ -1572,7 +1572,7 @@ class _KeyEditorState extends State<_KeyEditor> {
           if (_status != null)
             Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: Text(_status!,
+              child: UiText(_status!,
                   style: TextStyle(
                       fontSize: 12,
                       color: _statusColor(context, _warn ? 'warn' : null))),

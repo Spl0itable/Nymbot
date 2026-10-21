@@ -250,7 +250,7 @@ class _CompareSheetState extends State<_CompareSheet> {
             ],
             if (_status.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(_status,
+              UiText(_status,
                   style: TextStyle(fontSize: 12, color: theme.hintColor)),
             ],
             for (final run in _runs) ...[

@@ -156,7 +156,22 @@
             }
         },
 
+        async chanStatus(rec, cc) {
+            let res;
+            try { res = await Api().call('pm-claim', { run: rec.runId }, { timeout: 15000 }); } catch (_) { return null; }
+            const data = res && res.status === 200 ? res.data : null;
+            if (!data || !Array.isArray(data.wraps)) return null;
+            const done = data.wraps.filter(w => w && w.phase === 'done' && w.wrap && w.wrap.id);
+            if (!this._chanWraps) this._chanWraps = new Map();
+            for (const w of done) this._chanWraps.set('cw:' + w.wrap.id, w.wrap);
+            const running = data.phase === 'bg' || data.phase === 'live';
+            if (!running) cc.forget(rec.runId);
+            return { state: running ? 'running' : 'done', legs: done.slice(1).map(w => 'cw:' + w.wrap.id), listed: running };
+        },
+
         async status(rec) {
+            const cc = Chat().channel ? Chat().channel() : null;
+            if (cc && cc.live(rec.runId)) return this.chanStatus(rec, cc);
             try {
                 const fresh = Date.now() - (this._logAt.get(rec.runId) || 0) >= this.LOG_MS;
                 if (fresh) this._logAt.set(rec.runId, Date.now());
@@ -180,10 +195,13 @@
 
         async claimLeg(ui, turn, rec, legId) {
             let res;
+            const chanWrap = String(legId).startsWith('cw:') && this._chanWraps ? this._chanWraps.get(legId) : null;
             try {
-                res = await Api().claimRun(legId, { controller: turn.controller });
+                res = chanWrap
+                    ? { status: 200, data: (await Chat().chanData(Store().conversation(rec.convId), chanWrap)) || {} }
+                    : await Api().claimRun(legId, { controller: turn.controller });
             } catch (_) {
-                return { wait: true };
+                return chanWrap ? { skip: true } : { wait: true };
             }
             if (!res || res.aborted || turn.stopped) return { wait: true };
             const data = res.data || {};
@@ -452,9 +470,10 @@
             };
             if (mode === 'run') schedule.maxCreditsPerRun = cap;
             if (push) schedule.push = push;
+            const job = Chat().chanJob ? Chat().chanJob(null) : null;
             let res;
             try {
-                res = await Api().call('schedule-put', { schedule }, { timeout: 15000 });
+                res = await Api().call('schedule-put', job ? { schedule, chan: job } : { schedule }, { timeout: 15000 });
             } catch (_) {
                 res = { status: 0, data: {} };
             }
@@ -462,7 +481,7 @@
             if (res && res.status === 200 && data.ok) {
                 const saved = Store().saveSchedule(Object.assign({}, entry, {
                     server: mode, serverCap: mode === 'run' ? cap : null, serverSha: sha,
-                    serverExpiresAt: Number(data.expiresAt) || schedule.expiresAt, serverError: '', serverOff: false
+                    serverExpiresAt: Number(data.expiresAt) || schedule.expiresAt, serverError: '', serverOff: false, serverChan: !!job
                 }));
                 return { ok: true, entry: saved };
             }
@@ -525,6 +544,10 @@
                     Store().saveSchedule(Object.assign({}, s, { serverOff: off, serverExpiresAt: Number(there.expiresAt) || s.serverExpiresAt }));
                 }
             }
+            const again = Store().schedules().filter(s => s.serverSha && s.server && !s.serverChan && !s.serverOff);
+            if (again.length && Chat().chanReady && await Chat().chanReady() && Chat().chanJob(null)) {
+                for (const s of again) this.put(ui, s, s.server, s.serverCap).catch(() => { });
+            }
             return res.data;
         },
 
@@ -568,7 +591,7 @@
 
         async file(ui, ev) {
             const C = window.NymbotConfig;
-            const opened = await window.NymbotWire.unwrap(ev, null, { from: C.botPubkey });
+            const opened = await window.NymbotWire.unwrapBot(ev, null);
             const rumor = opened && opened.rumor;
             if (!rumor || !Array.isArray(rumor.tags)) return false;
             const tag = rumor.tags.find(x => Array.isArray(x) && x[0] === 'nymsched');

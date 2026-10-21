@@ -76,8 +76,8 @@ class Store {
     }
   }
 
-  void _touched() {
-    if (_muted) return;
+  void _touched({bool aside = false}) {
+    if (_muted || aside) return;
     final watcher = onChanged;
     if (watcher != null) watcher();
   }
@@ -93,8 +93,10 @@ class Store {
 
   Future<String?> secret(String key) => vault.read(key);
   Future<void> setSecret(String key, String value) => vault.write(key, value);
-  Future<void> setSyncedSecret(String key, String value) =>
-      _watched(vault.write(key, value));
+  Future<void> setSyncedSecret(String key, String value, {bool aside = false}) async {
+    await vault.write(key, value);
+    _touched(aside: aside);
+  }
   Future<void> dropSecret(String key) async {
     await vault.remove(key);
     await _legacySecure.delete(key: key);
@@ -132,6 +134,34 @@ class Store {
 
   static const String settingsDirtyKey = 'sync_settings_dirty';
 
+  Map<String, dynamic> modelPick() {
+    final raw = _prefs.getString('settings');
+    Map<String, dynamic>? held;
+    try {
+      final j = raw == null ? null : jsonDecode(raw);
+      if (j is Map<String, dynamic>) held = j;
+    } catch (_) {}
+    return {
+      'proModel': held?['proModel'] is Map ? Map<String, dynamic>.from(held!['proModel'] as Map) : null,
+      'mediaModel': held?['mediaModel'] is Map ? Map<String, dynamic>.from(held!['mediaModel'] as Map) : null,
+    };
+  }
+
+  Future<void> saveModelPick(Map<String, dynamic>? pro, Map<String, dynamic>? media,
+      {bool mark = true}) async {
+    final next = {'proModel': pro, 'mediaModel': media};
+    if (mark && !_muted) {
+      final was = modelPick();
+      final dirty = settingsDirty();
+      final before = dirty.length;
+      for (final key in next.keys) {
+        if (jsonEncode(was[key]) != jsonEncode(next[key])) dirty.add(key);
+      }
+      if (dirty.length != before) await _saveSettingsDirty(dirty);
+    }
+    await _prefs.setString('settings', jsonEncode(next));
+  }
+
   Set<String> settingsDirty() {
     final raw = _prefs.getString(settingsDirtyKey);
     if (raw == null) return {};
@@ -161,7 +191,7 @@ class Store {
   Future<void> settlePushedSettings(Map<String, dynamic> pushed) async {
     final dirty = settingsDirty();
     if (dirty.isEmpty) return;
-    final now = settings().toJson();
+    final now = {...settings().toJson(), ...modelPick()};
     dirty.removeWhere((k) => jsonEncode(now[k]) == jsonEncode(pushed[k]));
     await _saveSettingsDirty(dirty);
   }
@@ -301,8 +331,36 @@ class Store {
   List<Conversation> conversations() =>
       Conversation.decodeList(_prefs.getString('conversations'));
 
-  Future<void> saveConversations(List<Conversation> list) => _watched(_prefs.setString(
-      'conversations', Conversation.encodeList(list.take(500).toList())));
+  Future<void> saveConversations(List<Conversation> list) async {
+    final kept = list.take(500).toList();
+    final aside = _anonOnly(conversations(), kept);
+    await _prefs.setString('conversations', Conversation.encodeList(kept));
+    _touched(aside: aside);
+  }
+
+  static bool _anonOnly(List<Conversation> before, List<Conversation> after) {
+    final held = {for (final c in before) c.id: jsonEncode(c.toJson())};
+    var changed = false;
+    for (final c in after) {
+      final was = held.remove(c.id);
+      if (was != null && was == jsonEncode(c.toJson())) continue;
+      if (!c.anon) return false;
+      changed = true;
+    }
+    for (final c in before) {
+      if (!held.containsKey(c.id)) continue;
+      if (!c.anon) return false;
+      changed = true;
+    }
+    return changed;
+  }
+
+  bool _anonChat(String convId) {
+    for (final c in conversations()) {
+      if (c.id == convId) return c.anon;
+    }
+    return false;
+  }
 
   /// Ghost chats live only in this in-memory map.
   final Map<String, List<ChatMessage>> _ghosts = {};
@@ -338,7 +396,7 @@ class Store {
     }
     _ghosts.remove(convId);
     await _prefs.setString('msgs_$convId', ChatMessage.encodeList(kept));
-    _touched();
+    _touched(aside: _anonChat(convId));
   }
 
   /// Moves a chat's messages off disk into memory.
@@ -406,7 +464,7 @@ class Store {
     } else {
       await _prefs.setString('tx_$convId', _encodeTx(kept));
     }
-    if (!quiet) _touched();
+    if (!quiet) _touched(aside: _anonChat(convId));
   }
 
   /// Wrap ids for this conversation, newest last.
@@ -438,7 +496,7 @@ class Store {
     }
     _ghostArtifacts.remove(convId);
     await _prefs.setString('artifacts_$convId', Artifact.encodeList(kept));
-    _touched();
+    _touched(aside: _anonChat(convId));
   }
 
   String draft(String convId) => _prefs.getString('draft_$convId') ?? '';

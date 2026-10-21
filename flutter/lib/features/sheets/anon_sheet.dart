@@ -194,7 +194,7 @@ class _AnonSheetState extends State<_AnonSheet> {
                   final moved = await app.autoTopUp();
                   if (moved != null) {
                     messenger.showSnackBar(
-                      SnackBar(content: Text(app.describeTopUp(moved))),
+                      SnackBar(content: UiText(app.describeTopUp(moved))),
                     );
                   }
                 }

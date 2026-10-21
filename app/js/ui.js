@@ -304,7 +304,7 @@
                 try { await PQ.announce(); } catch (_) { }
                 if (Identity.rootLocked) this.toast(t('This account already uses another device\'s post-quantum key. Open Identity to link this one.'));
                 this.refreshBalance();
-                Anon.flush().then(() => this.runAutoTopUp()).catch(() => { });
+                Anon.flush().then(() => this.scheduleRestock()).catch(() => { });
                 this.resumeInvoices().catch(() => { });
             }, 300);
 
@@ -445,16 +445,32 @@
             return Array.isArray(list) ? list : [];
         },
 
-        currentNotice() {
-            if (this.settings.notices === false) return null;
+        visibleNotices() {
+            if (this.settings.notices === false) return [];
             const gone = new Set(this.dismissedNotices());
-            return (this.notices || []).find(n => n && n.id != null && !gone.has(n.id)) || null;
+            return (this.notices || [])
+                .filter(n => n && n.id != null && !gone.has(n.id))
+                .sort((a, b) => ((b.at || 0) - (a.at || 0)) || (b.id - a.id));
+        },
+
+        currentNotice() {
+            const list = this.visibleNotices();
+            return list.find(n => n.id === this._noticeShown) || list[0] || null;
+        },
+
+        pageNotice(step) {
+            const list = this.visibleNotices();
+            if (list.length < 2) return;
+            const at = Math.max(0, list.findIndex(n => n.id === this._noticeShown));
+            this._noticeShown = list[(at + step + list.length) % list.length].id;
+            this.renderNotice();
         },
 
         renderNotice() {
             const box = $('noticeBanner');
             if (!box) return;
-            const n = this.currentNotice();
+            const list = this.visibleNotices();
+            const n = list.find(x => x.id === this._noticeShown) || list[0] || null;
             box.hidden = !n;
             if (!n) return;
             box.dataset.level = (n.level === 'success' || n.level === 'warning') ? n.level : 'info';
@@ -473,14 +489,22 @@
                 link.removeAttribute('href');
             }
             $('noticeTry').hidden = !(n.kind === 'model' && n.model);
+            const many = list.length > 1;
+            $('noticePager').hidden = !many;
+            $('noticePos').textContent = many ? t('{n} of {total}', { n: list.indexOf(n) + 1, total: list.length }) : '';
+            const close = box.querySelector('[data-act="notice-dismiss"]');
+            const label = many ? t('Dismiss all') : t('Dismiss');
+            close.setAttribute('aria-label', label);
+            close.title = label;
         },
 
         dismissNotice() {
-            const n = this.currentNotice();
-            if (!n) return;
-            const list = this.dismissedNotices().filter(id => id !== n.id);
-            list.push(n.id);
+            const ids = this.visibleNotices().map(n => n.id);
+            if (!ids.length) return;
+            const list = this.dismissedNotices().filter(id => !ids.includes(id));
+            list.push(...ids);
             Store.write('dismissedNotices', list.slice(-NOTICE_KEEP));
+            this._noticeShown = null;
             this.renderNotice();
         },
 
@@ -630,19 +654,33 @@
             try { history.replaceState(history.state, '', location.pathname + location.search + next); } catch (_) { }
         },
 
+        anonTitle(on) {
+            const el = $('chatTitle');
+            if (on) el.title = t('This chat runs on a throwaway key');
+            else el.removeAttribute('title');
+        },
+
         open(conv) {
             if (!conv) return;
+            const same = !!this.conv && this.conv.id === conv.id;
             if (this.conv && !this.editing) Store.setDraft(this.conv.id, $('input') ? $('input').value : '');
+            if (this.conv && !same && !this.editing && (this.attachments.length || this.quote)) {
+                this.holdFiles(this.conv.id, this.attachments, this.quote, false);
+            }
+            const held = !same && this._held && this._held.get(conv.id);
+            if (held) this._held.delete(conv.id);
             this.conv = conv;
             this.showChatInUrl(conv);
             Notify.viewingChat(conv.id);
-            this.attachments = [];
-            this.quote = null;
-            this.editing = null;
+            if (!same) {
+                this.attachments = held ? held.attachments : [];
+                this.quote = held ? held.quote : null;
+                this.editing = null;
+            }
             this.renderAttachments();
             this.renderQuote();
             $('chatTitle').textContent = conv.support ? t('Support') : (conv.title || t('New chat'));
-            $('chatAnon').hidden = !conv.anon;
+            this.anonTitle(conv.anon);
             const support = !!conv.support;
             $('shell').classList.toggle('is-support', support);
             $('attachBtn').disabled = support;
@@ -653,19 +691,25 @@
             const payer = conv.anon ? Anon.forConv(conv) : null;
             if (payer && payer.pk !== this.anonBalancePk) {
                 this.anonBalance = { standard: null, pro: null };
-                this.refreshBalance().catch(() => { });
+                this.refreshAnonBalance().catch(() => { });
             }
             this.toggleSidebar(false);
             this.closeFind();
             this.closeArtifact();
             if (window.NymbotTasks) window.NymbotTasks.switched(this);
             this.renderMessages();
+            if (!same && Chat.prewarm) Chat.prewarm(conv);
             this.refreshComposer();
             this.renderList();
             this.refreshToolbar();
             this.renderArtifactStrip();
+            this.announceModel();
+            if (!this.models) {
+                const loading = this.loadMentionModels();
+                if (loading) loading.then(() => { this.refreshToolbar(); this.announceModel(); });
+            }
             const input = $('input');
-            input.value = Store.draft(conv.id);
+            if (!same) input.value = Store.draft(conv.id);
             this.autoGrow();
             this.updateHints();
             input.focus();
@@ -1396,6 +1440,7 @@
             const node = this.messageNode(m, grouped);
             old.replaceWith(node);
             this.syncFollowUps();
+            if (this.offersNext(m) && this.conv && Chat.prewarm) Chat.prewarm(this.conv, m);
             if (window.NymbotTasks) window.NymbotTasks.refresh(this);
             return node;
         },
@@ -1477,7 +1522,7 @@
                 }
                 const stored = Store.conversation(convId);
                 if (!stored) return;
-                const conv = turn.askedModel ? Object.assign({}, stored, { proModel: turn.askedModel, mediaModel: null }) : stored;
+                const conv = turn.pick ? this.withPick(stored, turn.pick) : stored;
                 const capStop = this.capStopsLeg(conv);
                 if (capStop) {
                     this.runNote(turn, capStop);
@@ -2025,41 +2070,40 @@
                 release();
                 if (typeof opts.onStarted === 'function') { try { opts.onStarted(); } catch (_) { } }
             };
-            const restore = () => {
-                if (override != null) return;
-                $('input').value = typed;
-                this.autoGrow();
-                this.updateHints();
-            };
-
-            if (override == null && await this.handleCommand(typed)) {
-                input.value = '';
-                Store.setDraft(conv.id, '');
-                this.autoGrow();
-                this.updateHints();
-                this.hideSuggest();
-                return;
-            }
-
             const carried = Array.isArray(opts.attachments);
             const composing = here() && !bare && !carried;
-
-            if (navigator.onLine === false && !opts.reuse) {
-                const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
-                const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
-                if (override == null) {
+            const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
+            const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
+            const giving = override == null || !!opts.returns;
+            const restore = () => {
+                if (!giving) return;
+                this.giveBack(conv, { typed, attachments, quote }, true);
+            };
+            if (override == null) {
+                Store.setDraft(conv.id, '');
+                if (here()) {
                     input.value = '';
-                    Store.setDraft(conv.id, '');
                     this.autoGrow();
                     this.updateHints();
                     this.hideSuggest();
                 }
-                if (composing) {
-                    this.attachments = [];
-                    this.quote = null;
-                    this.renderAttachments();
-                    this.renderQuote();
+            }
+            const clearComposer = () => {
+                if (!composing) return;
+                if (!here()) {
+                    this.dropHeld(conv.id, attachments, quote);
+                    return;
                 }
+                this.attachments = this.attachments.filter(a => !attachments.includes(a));
+                if (this.quote === quote) this.quote = null;
+                this.renderAttachments();
+                this.renderQuote();
+            };
+
+            if (override == null && await this.handleCommand(typed)) return;
+
+            if (navigator.onLine === false && !opts.reuse) {
+                clearComposer();
                 this.holdOffline(conv, typed, attachments, quote, { bare, unattended: !!opts.unattended });
                 started();
                 return;
@@ -2071,38 +2115,30 @@
                 mention = this.models ? Mention.apply(typed, this.models) : { unknown: Mention.parse(typed).name };
                 if (mention && mention.model && !mention.text) {
                     this.note(t('Say what to ask {name} after the mention.', { name: mention.model.label }), conv.id);
+                    restore();
                     return;
                 }
                 const wallet = conv.anon ? this.anonBalance : this.balance;
                 if (mention && mention.model && wallet.pro != null && !(wallet.pro > 0)) {
                     this.note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
                         { name: mention.model.key }), conv.id);
+                    restore();
                     return;
                 }
             }
             const asked = mention && mention.model ? Mention.pinned(mention.model) : null;
-            let text = asked ? mention.text : (bare ? typed : this.withMediaModel(typed, conv));
+            const pick = asked ? { pro: asked, media: null, source: 'chat', fallback: null } : await this.sendPick(conv);
+            const runConv = this.withPick(conv, pick);
+            let text = asked ? mention.text : (bare ? typed : this.withMediaModel(typed, runConv));
 
-            const research = bare ? null : Research.claim(this,
-                asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv, asked ? text : typed);
+            const research = bare ? null : Research.claim(this, runConv, asked ? text : typed);
             if (research && research.blocked) {
                 this.note(research.blocked, conv.id);
+                restore();
                 return;
             }
             if (research) text = research.question;
-            const team = bare ? null : Team.claim(this,
-                asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv, !!research);
-
-            if (override == null) {
-                input.value = '';
-                Store.setDraft(conv.id, '');
-                this.autoGrow();
-                this.updateHints();
-                this.hideSuggest();
-            }
-
-            const attachments = carried ? opts.attachments.slice() : (composing ? this.attachments.slice() : []);
-            const quote = carried ? (opts.quote || null) : (composing ? this.quote : null);
+            const team = bare ? null : Team.claim(this, runConv, !!research);
 
             if (!asked && !this.freeAllows()) {
                 this.offerUpgrade();
@@ -2123,10 +2159,6 @@
                         confirm: t('Send anyway')
                     });
                     if (!go) {
-                        if (composing) {
-                            this.attachments = attachments;
-                            this.renderAttachments();
-                        }
                         restore();
                         return;
                     }
@@ -2144,7 +2176,7 @@
 
             let maxCost = null;
             if (Caps.any(conv)) {
-                const capConv = asked ? Object.assign({}, conv, { proModel: asked, mediaModel: null }) : conv;
+                const capConv = runConv;
                 let est = Caps.estimate(this, text, capConv, { attachments, quote });
                 const waived = this._capWaive === conv.id;
                 if (team && !waived) {
@@ -2162,16 +2194,11 @@
                 if (!gate.waived) maxCost = Caps.maxCost(capConv, est.tier === 'pro', this.models);
             }
 
-            if (composing) {
-                this.attachments = [];
-                this.quote = null;
-                this.renderAttachments();
-                this.renderQuote();
-            }
+            clearComposer();
 
             let mine;
             if (opts.reuse && Store.messages(conv.id).some(m => m.id === opts.reuse.id)) {
-                mine = Store.patchMessage(conv.id, opts.reuse.id, { pending: undefined, ts: Date.now() });
+                mine = Store.patchMessage(conv.id, opts.reuse.id, Object.assign({ pending: undefined, ts: Date.now() }, conv.seed ? { seed: conv.seed } : {}));
                 if (here()) this.renderMessages({ keep: true });
             } else {
                 mine = {
@@ -2183,6 +2210,7 @@
                     quote: quote ? quote.slice(0, 200) : null,
                     docs: window.NymbotDocs ? window.NymbotDocs.usage(conv, text, attachments) : null
                 };
+                if (conv.seed) mine.seed = conv.seed;
                 Store.addMessage(conv.id, mine);
                 this.showMessage(conv.id, mine);
             }
@@ -2207,7 +2235,8 @@
                     { name: mention.unknown }), live.id);
             }
             await this.runTurn(turn, live, mine, {
-                typed, text, asked, research, team, attachments, quote, maxCost, override, composing,
+                typed, text, asked, pick, research, team, attachments, quote, maxCost,
+                override: giving ? null : override, composing: composing || (giving && carried),
                 unattended: !!opts.unattended, toppedUp: !!opts.toppedUp, forkOf: opts.forkOf || null
             });
         },
@@ -2215,7 +2244,7 @@
         runLabel(conv, research, team) {
             if (team) return t('Nymbot is leading a team');
             if (research) return t('Nymbot is researching');
-            if (Chat.reposFor(conv).length && (conv.proModel || this.settings.proModel)) return t('Nymbot is reading your repositories');
+            if (Chat.reposFor(conv).length && this.chatModel(conv).pro) return t('Nymbot is reading your repositories');
             return t('Nymbot is thinking');
         },
 
@@ -2223,9 +2252,12 @@
             const live = conv;
             const here = () => !!(this.conv && this.conv.id === live.id);
             const asked = ctx.asked;
-            const sendConv = asked ? Object.assign({}, live, { proModel: asked, mediaModel: null }) : live;
+            const pick = ctx.pick || (asked ? { pro: asked, media: null } : this.chatModel(live));
+            ctx.pick = pick;
+            const sendConv = this.withPick(live, pick);
             turn.asked = mine.id;
             turn.askedModel = asked;
+            turn.pick = pick;
             if (mine.wire) turn.runId = mine.wire;
             if (ctx.research) turn.research = ctx.research.payload;
             if (ctx.team) turn.team = ctx.team;
@@ -2370,7 +2402,7 @@
             }
             const asked = turn.askedModel || null;
             const label = res.modelLabel
-                || (res.pro ? ((asked || live.proModel || this.settings.proModel || {}).label || null) : null);
+                || (res.pro ? (((turn.pick && turn.pick.pro) || asked || live.proModel || this.settings.proModel || {}).label || null) : null);
             const reply = {
                 id: Store.uid(),
                 role: 'bot',
@@ -2383,6 +2415,7 @@
                 sources: res.sources || null,
                 team: Team.carry(res),
                 followUps: res.followUps || null,
+                chanSummary: res.chanSummary || null,
                 steerOffer: res.steerOffer || null,
                 serverRuns: res.serverRuns || null,
                 serverRunCredits: res.serverRunCredits || 0,
@@ -2453,7 +2486,7 @@
                 if (payer && (res.balance != null || res.balanceCredits != null)) {
                     Anon.remember(payer.pk, res.pro ? 'pro' : 'standard', res.balanceCredits != null ? res.balanceCredits : res.balance);
                 }
-                if (this.anonBalance.standard == null) this.refreshBalance().catch(() => { });
+                if (this.anonBalance.standard == null && this.conv && this.conv.id === live.id) this.refreshAnonBalance().catch(() => { });
             }
             return spent;
         },
@@ -2487,6 +2520,7 @@
             if (!convId) return null;
             if (turn && turn.asked && !m.askedBy) m.askedBy = turn.asked;
             if (turn && turn.runId && !m.replyTo) m.replyTo = turn.runId;
+            if (turn && turn.pick && !m.pick && (m.pendingTool || m.ask || m.proposal)) m.pick = { pro: turn.pick.pro || null, media: turn.pick.media || null };
             if (turn && window.NymbotTranscripts) window.NymbotTranscripts.placed(this, turn, m);
             const list = Store.messages(convId);
             const end = this.anchorIndex(list, { asked: m.askedBy, replyTo: m.replyTo });
@@ -2695,25 +2729,78 @@
             return true;
         },
 
-        unsend(conv, mine, sent) {
-            Store.deleteMessage(conv.id, mine.id);
-            if (!this.conv || this.conv.id !== conv.id) return;
-            this.renderMessages({ keep: true });
+        joinTyped(sent, now) {
+            const a = String(sent || '').trim();
+            const b = String(now || '').trim();
+            if (!b || b === a) return a;
+            if (!a) return b;
+            return a + '\n' + b;
+        },
+
+        giveBack(conv, sent, files) {
+            if (sent.override != null) return;
+            this.intoChat(conv, (now) => this.joinTyped(sent.typed, now),
+                files ? (sent.attachments || []) : [], files ? (sent.quote || null) : null);
+        },
+
+        intoChat(conv, merge, files, quote) {
+            const back = files || [];
+            if (!this.conv || this.conv.id !== conv.id) {
+                Store.setDraft(conv.id, merge(Store.draft(conv.id)));
+                if (back.length || quote) this.holdFiles(conv.id, back, quote || null, true);
+                return;
+            }
             const input = $('input');
-            if (sent.override == null && !String(input.value || '').trim()) {
-                input.value = sent.typed;
-                Store.setDraft(conv.id, sent.typed);
-                this.autoGrow();
-                this.updateHints();
-            }
-            if (sent.composing && !this.attachments.length && sent.attachments.length) {
-                this.attachments = sent.attachments.slice();
+            input.value = merge(input.value);
+            Store.setDraft(conv.id, input.value);
+            if (back.length || quote) {
+                this.attachments = this.mergeFiles(back, this.attachments);
+                if (!this.quote && quote) this.quote = quote;
                 this.renderAttachments();
-            }
-            if (sent.composing && !this.quote && sent.quote) {
-                this.quote = sent.quote;
                 this.renderQuote();
             }
+            this.autoGrow();
+            this.updateHints();
+        },
+
+        mergeFiles(first, rest) {
+            return first.concat(rest.filter(a => !first.some(s => s === a || s.id === a.id)));
+        },
+
+        holdFiles(convId, files, quote, front) {
+            const held = this._held || (this._held = new Map());
+            const was = held.get(convId) || { attachments: [], quote: null };
+            held.set(convId, {
+                attachments: front ? this.mergeFiles(files, was.attachments) : this.mergeFiles(was.attachments, files),
+                quote: was.quote || quote || null
+            });
+        },
+
+        dropHeld(convId, files, quote) {
+            const was = this._held && this._held.get(convId);
+            if (!was) return;
+            const left = {
+                attachments: was.attachments.filter(a => !files.includes(a)),
+                quote: quote && was.quote === quote ? null : was.quote
+            };
+            if (left.attachments.length || left.quote) this._held.set(convId, left);
+            else this._held.delete(convId);
+        },
+
+        attachTo(convId, files) {
+            if (!files.length) return;
+            if (convId && (!this.conv || this.conv.id !== convId)) {
+                this.holdFiles(convId, files, null, false);
+                return;
+            }
+            this.attachments = this.attachments.concat(files);
+            this.renderAttachments();
+        },
+
+        unsend(conv, mine, sent) {
+            Store.deleteMessage(conv.id, mine.id);
+            if (this.conv && this.conv.id === conv.id) this.renderMessages({ keep: true });
+            this.giveBack(conv, sent, sent.composing);
         },
 
         async capRefused(conv, err, sent) {
@@ -2725,28 +2812,13 @@
                 return;
             }
             const choice = await Caps.refused(this, conv, err);
-            const back = here && sent.override == null && this.conv && this.conv.id === conv.id;
-            if (back) {
-                this.attachments = sent.attachments;
-                this.quote = sent.quote;
-                this.renderAttachments();
-                this.renderQuote();
-            }
             if (choice === 'send') {
                 this._capWaive = conv.id;
-                if (back) {
-                    $('input').value = sent.typed;
-                    this.send();
-                } else {
-                    this.send(sent.typed, Store.conversation(conv.id) || conv);
-                }
+                this.send(sent.typed, Store.conversation(conv.id) || conv,
+                    { attachments: sent.attachments || [], quote: sent.quote || null, returns: sent.override == null });
                 return;
             }
-            if (back) {
-                $('input').value = sent.typed;
-                this.autoGrow();
-                this.updateHints();
-            }
+            this.giveBack(conv, sent, true);
         },
 
         teamRefused(conv, err, sent) {
@@ -2754,14 +2826,7 @@
             const here = !!(this.conv && this.conv.id === conv.id);
             if (here) this.renderMessages({ keep: true });
             this.note(Team.refusal(err), conv.id);
-            if (!here || sent.override != null) return;
-            this.attachments = sent.attachments;
-            this.quote = sent.quote;
-            this.renderAttachments();
-            this.renderQuote();
-            $('input').value = sent.typed;
-            this.autoGrow();
-            this.updateHints();
+            this.giveBack(conv, sent, true);
         },
 
         refreshMic() {
@@ -2890,6 +2955,7 @@
                 return;
             }
             this.dictation = 'starting';
+            this._dictateConv = this.conv;
             this.renderDictation();
             Dictate.onLimit = () => {
                 this.toast(t('That is the two-minute limit for one clip, so it stopped there.'));
@@ -2939,6 +3005,8 @@
             if (this.dictation !== 'recording' || !Dictate) return;
             this.stopDictationTimers();
             this.dictation = 'sending';
+            const from = this._dictateConv || this.conv;
+            this._dictateConv = null;
             const run = {};
             this._dictateRun = run;
             this.renderDictation();
@@ -2990,13 +3058,12 @@
                 return;
             }
             settle(null);
-            const input = $('input');
-            const draft = String(input.value || '').replace(/\s+$/, '');
-            input.value = draft ? draft + ' ' + said : said;
-            if (this.conv) Store.setDraft(this.conv.id, input.value);
-            this.autoGrow();
-            this.updateHints();
-            input.focus();
+            if (!from) return;
+            this.intoChat(from, (now) => {
+                const draft = String(now || '').replace(/\s+$/, '');
+                return draft ? draft + ' ' + said : said;
+            });
+            if (this.conv && this.conv.id === from.id) $('input').focus();
         },
 
         friendlyError(text) {
@@ -3342,6 +3409,7 @@
             if (!this.conv || this.conv.id !== convId) return null;
             const node = this.appendMessage(m);
             this.syncFollowUps();
+            if (this.offersNext(m) && Chat.prewarm) Chat.prewarm(this.conv, m);
             return node;
         },
 
@@ -3423,6 +3491,44 @@
             if (!conv || !conv.anon) return '';
             const id = Anon.forConv(conv);
             return id ? id.pk : 'anon';
+        },
+
+        offersNext(m) {
+            if (!m) return false;
+            if (m.role === 'error') return !!m.retry;
+            return m.role === 'bot' && ((Array.isArray(m.followUps) && m.followUps.length > 0) || !!m.pendingTool || !!m.ask || !!m.proposal);
+        },
+
+        recoverReplies(conv, exclude) {
+            if (!conv || conv.support || !Chat.storedReply) return null;
+            const msgs = Store.messages(conv.id);
+            const now = Date.now();
+            const seen = this._recovered || (this._recovered = new Map());
+            const busy = (m) => [...this.turns.values()].some(x => x.asked === m.id || (m.wire && x.runId === m.wire));
+            const open = [];
+            msgs.forEach((m, i) => {
+                if (m.role !== 'self' || m.pending || !m.wire || m.wire === exclude || now - (Number(m.ts) || 0) > 86400000 || busy(m)) return;
+                const next = msgs[i + 1];
+                if ((next && (next.role === 'bot' || next.role === 'error')) || msgs.some(x => (x.role === 'bot' || x.role === 'error') && (x.askedBy === m.id || x.replyTo === m.wire))) return;
+                open.push(m);
+            });
+            const jobs = [];
+            for (const m of open.slice(-3)) {
+                const had = seen.get(m.wire);
+                if (had && had.p) { jobs.push(had.p); continue; }
+                if (had && now - had.at < 20000) continue;
+                const rec = { at: now, p: null };
+                rec.p = Chat.storedReply(conv, m.wire).then(async (res) => {
+                    if (!res || busy(m)) return;
+                    const turn = this.beginTurn(conv, t('Nymbot is thinking'), { asked: m.id, runId: m.wire });
+                    turn.eventId = m.wire;
+                    turn.sent = true;
+                    await this.acceptReply(turn, Store.conversation(conv.id) || conv, res);
+                }).catch(() => null).finally(() => { rec.p = null; rec.at = Date.now(); });
+                seen.set(m.wire, rec);
+                jobs.push(rec.p);
+            }
+            return jobs.length ? Promise.all(jobs) : null;
         },
 
         resumeClaims() {
@@ -3732,6 +3838,7 @@
                 systemPrompt: this.conv.systemPrompt,
                 proModel: this.conv.proModel,
                 mediaModel: this.conv.mediaModel || null,
+                modelPin: !!this.conv.modelPin,
                 effort: this.conv.effort,
                 seed
             });
@@ -3873,7 +3980,7 @@
             const cmd = m[1].toLowerCase();
             const arg = m[2].trim();
             if ((cmd === 'image' || cmd === 'video' || cmd === 'speak') && /^off$/i.test(arg)) {
-                this.setMediaModel(null, !!(this.conv && this.conv.mediaModel));
+                this.setMediaModel(null);
                 this.note(t('Back to answering in words.'));
                 return true;
             }
@@ -4326,7 +4433,7 @@
                     this._pricingTriedAt = Date.now();
                     this.loadMentionModels();
                 }
-                const est = Chat.estimateCredits(text, this.turnSettings(), this.conv, opts, this.models);
+                const est = Chat.estimateCredits(text, this.turnSettings(), this.withPick(this.conv, this.chatModel()), opts, this.models);
                 hint.textContent = Chat.estimateLine(est, creditAmount);
             } else {
                 hint.textContent = '';
@@ -4375,16 +4482,17 @@
                 this.toast(t('Attachments cannot be sent to support.'));
                 return;
             }
+            const convId = this.conv && this.conv.id;
             const added = [];
             for (const file of files) {
                 try {
                     const built = await Attach.fromFile(file);
-                    if (built) { this.attachments.push(built); added.push(built); }
+                    if (built) added.push(built);
                 } catch (e) {
                     this.toast(e.message || t('That file could not be attached.'));
                 }
             }
-            this.renderAttachments();
+            this.attachTo(convId, added);
             for (const a of added) this.uploadAttachment(a);
         },
 
@@ -4462,7 +4570,7 @@
         // Balances
 
         async refreshBalance(announce) {
-            const inAnonChat = !!(this.conv && this.conv.anon);
+            if (this.conv && this.conv.anon) return this.refreshAnonBalance(announce);
             const { data } = await Api.balance({});
             if (!data || data.error) {
                 if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
@@ -4472,35 +4580,64 @@
                 standard: data.balanceCredits != null ? data.balanceCredits : (data.balance || 0),
                 pro: data.proBalanceCredits != null ? data.proBalanceCredits : (data.proBalance || 0)
             };
-            const payer = inAnonChat ? Anon.forConv(this.conv) : (Anon.ready() ? Anon.forConv(null) : null);
-            if (payer) {
-                const mine = await Api.balance({ signer: Anon.signer(payer) });
-                Anon.rememberData(payer.pk, mine.data);
-                if (mine.data && !mine.data.error) {
-                    const d = mine.data;
-                    this.anonBalance = {
-                        standard: d.balanceCredits != null ? d.balanceCredits : (d.balance || 0),
-                        pro: d.proBalanceCredits != null ? d.proBalanceCredits : (d.proBalance || 0)
-                    };
-                    this.anonBalancePk = payer.pk;
-                }
-            } else {
-                this.anonBalance = { standard: null, pro: null };
-                this.anonBalancePk = null;
-            }
+            this._balanceAt = Date.now();
+            this.anonBalance = { standard: null, pro: null };
+            this.anonBalancePk = null;
             this.free = data.free || this.free || null;
             if (this.free) Free.observe(this.free.used);
             this.renderBalance();
+            this.refreshToolbar();
+            this.announceModel();
             if (!$('modalCredits').hidden) this.renderCreditBalances();
             if (announce) {
-                this.note((inAnonChat
-                    ? t('This chat\'s anonymous balance: {standard} Standard, {pro} Pro.',
-                        { standard: creditAmount(this.anonBalance.standard), pro: creditAmount(this.anonBalance.pro) })
-                        + ' ' + t('Your nym still holds {standard} Standard and {pro} Pro.',
-                            { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })
-                    : t('Your balance: {standard} Standard, {pro} Pro.',
-                        { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) })));
+                this.note(t('Your balance: {standard} Standard, {pro} Pro.',
+                    { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) }));
             }
+        },
+
+        async refreshAnonBalance(announce) {
+            const conv = this.conv;
+            const payer = conv && conv.anon ? Anon.forConv(conv) : null;
+            if (!payer) return;
+            const mine = await Api.balance({ signer: Anon.signer(payer) });
+            const d = mine && mine.data;
+            if (!d || d.error) {
+                if (announce) this.note(t('Could not reach Nymbot to check your balance.'));
+                return;
+            }
+            Anon.rememberData(payer.pk, d);
+            if (this.conv !== conv) return;
+            this.anonBalance = {
+                standard: d.balanceCredits != null ? d.balanceCredits : (d.balance || 0),
+                pro: d.proBalanceCredits != null ? d.proBalanceCredits : (d.proBalance || 0)
+            };
+            this.anonBalancePk = payer.pk;
+            this._balanceAt = Date.now();
+            this.renderBalance();
+            this.refreshToolbar();
+            this.announceModel();
+            if (!$('modalCredits').hidden) this.renderCreditBalances();
+            if (announce) {
+                this.note(t('This chat\'s anonymous balance: {standard} Standard, {pro} Pro.',
+                    { standard: creditAmount(this.anonBalance.standard), pro: creditAmount(this.anonBalance.pro) })
+                    + ' ' + t('Your nym still holds {standard} Standard and {pro} Pro.',
+                        { standard: creditAmount(this.balance.standard), pro: creditAmount(this.balance.pro) }));
+            }
+        },
+
+        scheduleRestock() {
+            clearTimeout(this._restockTimer);
+            this._restockTimer = setTimeout(() => this.restockVouchers().catch(() => { }), 120000 + Math.floor(Math.random() * 480000));
+        },
+
+        async restockVouchers() {
+            if (!this.settings.anonAutoTop || !(Anon.enabled() || Store.conversations().some((c) => c.anon))) return null;
+            const busy = [...this.turns.values()].some((x) => { const c = Store.conversation(x.convId); return !!(c && c.anon); });
+            if ((this.conv && this.conv.anon) || busy) {
+                this.scheduleRestock();
+                return null;
+            }
+            return Anon.restock();
         },
 
         async fundAnon(conv, text, opts) {
@@ -4516,13 +4653,13 @@
             if (moved.standard) parts.push(t('{n} Standard', { n: moved.standard }));
             if (moved.pro) parts.push(t('{n} Pro', { n: moved.pro }));
             this.note(t('Moved {what} onto the throwaway key.', { what: parts.join(', ') }), conv.id);
-            await this.refreshBalance().catch(() => { });
+            if (this.conv && this.conv.id === conv.id) await this.refreshAnonBalance().catch(() => { });
             return moved;
         },
 
         proTier() {
-            return !!((this.conv && this.conv.proModel) || this.settings.proModel)
-                || this.mediaNeedsPro(this.mediaModel());
+            const pick = this.chatModel();
+            return !!pick.pro || this.mediaNeedsPro(pick.media);
         },
 
         creditBalance(pro, value) {
@@ -4644,8 +4781,9 @@
         refreshToolbar() {
             Caps.renderBadge(this);
             const conv = this.conv || {};
-            const model = conv.proModel || this.settings.proModel;
-            const media = this.mediaModel();
+            const picked = this.chatModel(conv);
+            const model = picked.pro;
+            const media = picked.media;
             const pro = !!model || this.mediaNeedsPro(media);
             $('toolbar').classList.toggle('is-pro', pro);
             for (const b of document.querySelectorAll('#toolbar .tier-btn')) {
@@ -4938,22 +5076,150 @@
             bar.hidden = chips.length === 0;
         },
 
-        setModel(model, forChat) {
-            if (forChat) {
-                this.conv = Store.updateConversation(this.conv.id, { proModel: model });
-            } else {
-                this.saveSettings({ proModel: model, tier: model ? 'pro' : 'standard' });
-                if (this.conv && this.conv.proModel) {
-                    this.conv = Store.updateConversation(this.conv.id, { proModel: null });
-                }
-            }
-            this.clearMediaModel();
+        setModel(model) {
+            this.pinChatModel({ proModel: model || null, mediaModel: null });
+            this.saveSettings({ proModel: model || null, mediaModel: null, tier: model ? 'pro' : 'standard' });
             this.refreshToolbar();
+            this.announceModel();
+        },
+
+        pinChatModel(patch) {
+            this._modelShown = null;
+            if (!this.conv || !this.conv.id) return;
+            this.conv = Store.updateConversation(this.conv.id, Object.assign({ modelPin: true }, patch)) || this.conv;
+            this.renderList();
         },
 
         mediaModel(conv) {
-            const scope = conv || this.conv;
-            return (scope && scope.mediaModel) || this.settings.mediaModel || null;
+            return this.chatModel(conv).media;
+        },
+
+        catalogKeys() {
+            const cat = this.models;
+            if (!cat || !Array.isArray(cat.models)) return null;
+            const rows = cat.models.filter(m => m && m.key);
+            return {
+                chat: rows.filter(m => !m.command && (!m.kind || m.kind === 'chat')).map(m => m.key),
+                media: rows.filter(m => !!m.command).map(m => m.key),
+                aliases: cat.aliases || {}
+            };
+        },
+
+        catalogRow(key) {
+            const cat = this.models;
+            if (!cat || !Array.isArray(cat.models) || !key) return null;
+            const to = (cat.aliases || {})[key];
+            return cat.models.find(m => m && m.key === key) || (to ? cat.models.find(m => m && m.key === to) : null) || null;
+        },
+
+        lastReplyModel(convId) {
+            if (!convId) return null;
+            const list = Store.messages(convId);
+            for (let i = list.length - 1; i >= 0; i--) {
+                const m = list[i];
+                if (m && m.role === 'bot') return m.modelKey ? { key: m.modelKey } : null;
+            }
+            return null;
+        },
+
+        proUsable(conv) {
+            const own = this.balance || {};
+            const anon = conv && conv.anon && this.anonBalance && this.anonBalance.pro > 0;
+            return !(own.pro != null && !(own.pro > 0)) || !!anon;
+        },
+
+        chatModel(conv) {
+            const c = conv || this.conv || {};
+            if (c.frozenModel) return { pro: c.proModel || null, media: c.mediaModel || null, source: 'chat', fallback: null };
+            const s = this.settings || {};
+            const key = (m) => (m && m.key) || null;
+            const r = window.NymbotChatModel.resolve({
+                chat: { pin: !!c.modelPin, pro: key(c.proModel), media: key(c.mediaModel) },
+                reply: this.lastReplyModel(c.id),
+                global: { pro: key(s.proModel), media: key(s.mediaModel) },
+                catalog: this.catalogKeys(),
+                proOk: this.proUsable(c)
+            });
+            let pro = null;
+            let media = null;
+            if (r.source === 'chat') {
+                pro = r.pro ? c.proModel : null;
+                media = r.media ? c.mediaModel : null;
+            } else if (r.source === 'global') {
+                pro = r.pro ? s.proModel : null;
+                media = r.media ? s.mediaModel : null;
+            } else if (r.source === 'reply') {
+                const row = this.catalogRow(r.pro || r.media);
+                const maker = row ? this.makerOf(row) : null;
+                const slug = maker ? maker.slug : null;
+                if (row && r.pro) pro = { key: r.pro, label: row.label, credits: row.credits, max: row.max, slug };
+                if (row && r.media) media = this.mediaFor(row, slug);
+            }
+            return { pro, media, source: r.source, fallback: r.fallback };
+        },
+
+        withPick(conv, pick) {
+            return Object.assign({}, conv, { proModel: pick.pro || null, mediaModel: pick.media || null, modelPin: true, frozenModel: true });
+        },
+
+        async runPick(conv, m) {
+            if (m && m.pick) return m.pick;
+            return this.sendPick(conv);
+        },
+
+        async sendPick(conv) {
+            let pick = this.chatModel(conv);
+            if (!this.models && (pick.pro || pick.media)) {
+                await this.loadMentionModels();
+                pick = this.chatModel(conv);
+            }
+            if (pick.fallback && pick.fallback.reason === 'credits') {
+                await this.refreshBalance().catch(() => { });
+                pick = this.chatModel(conv);
+            }
+            if (pick.fallback) this.announceModel(true);
+            const owned = pick.source === 'reply' || (pick.source === 'global' && !pick.fallback && !this.lastReplyModel(conv.id));
+            if (owned && conv.id && !conv.modelPin) {
+                const saved = Store.updateConversation(conv.id, { proModel: pick.pro, mediaModel: pick.media, modelPin: true });
+                if (saved && this.conv && this.conv.id === conv.id) this.conv = saved;
+            }
+            return pick;
+        },
+
+        modelName(model, media) {
+            if (media) return this.mediaLabel(media);
+            return model ? model.label || model.key : t('Standard');
+        },
+
+        announceModel(sending) {
+            const conv = this.conv;
+            if (!conv || conv.support) return;
+            const pick = this.chatModel(conv);
+            const name = this.modelName(pick.pro, pick.media);
+            const was = this._modelShown;
+            this._modelShown = { id: conv.id, name };
+            if (pick.fallback) {
+                const stale = Date.now() - (this._balanceAt || 0) > 3000;
+                if (pick.fallback.reason === 'credits' && stale && !sending) {
+                    if (!this._balanceAsk) {
+                        this._balanceAsk = this.refreshBalance().catch(() => { }).then(() => { this._balanceAsk = null; });
+                    }
+                    return;
+                }
+                const lostPick = pick.fallback.media
+                    ? (conv.mediaModel && conv.mediaModel.key === pick.fallback.media ? conv.mediaModel : (this.settings.mediaModel || { label: pick.fallback.media }))
+                    : null;
+                const lostPro = conv.proModel && conv.proModel.key === pick.fallback.pro ? conv.proModel : (this.settings.proModel || { key: pick.fallback.pro });
+                const lost = lostPick ? (lostPick.label || lostPick.key) : this.modelName(lostPro, null);
+                const mark = [conv.id, lost, pick.fallback.reason, name].join('|');
+                if (this._fallbackNoted === mark) return;
+                this._fallbackNoted = mark;
+                this.toast(pick.fallback.reason === 'credits'
+                    ? t('{model} needs Pro credits · using {fallback}', { model: lost, fallback: name })
+                    : t('{model} is not available · using {fallback}', { model: lost, fallback: name }));
+                return;
+            }
+            if (was && was.name !== name) this.toast(t('{model} · this chat\'s model', { model: name }));
         },
 
         mediaFor(m, slug, res) {
@@ -5038,11 +5304,7 @@
 
         clearMediaModel() {
             if (!this.mediaModel()) return;
-            if (this.conv && this.conv.mediaModel) {
-                this.conv = Store.updateConversation(this.conv.id, { mediaModel: null });
-            }
-            if (this.settings.mediaModel) this.saveSettings({ mediaModel: null });
-            this.refreshToolbar();
+            this.setMediaModel(null);
         },
 
         dropProMedia() {
@@ -5068,16 +5330,12 @@
             return best && best.key;
         },
 
-        setMediaModel(model, forChat) {
-            if (forChat) {
-                this.conv = Store.updateConversation(this.conv.id, { mediaModel: model });
-            } else {
-                this.saveSettings({ mediaModel: model });
-                if (this.conv && this.conv.mediaModel) {
-                    this.conv = Store.updateConversation(this.conv.id, { mediaModel: null });
-                }
-            }
+        setMediaModel(model) {
+            const now = this.chatModel();
+            this.pinChatModel({ proModel: now.pro || null, mediaModel: model || null });
+            this.saveSettings({ mediaModel: model || null });
             this.refreshToolbar();
+            this.announceModel();
         },
 
         withMediaModel(text, conv) {
@@ -5108,7 +5366,6 @@
             $('modelTools').hidden = !!own;
             $('modelsHint').hidden = !!own;
             $('modelsTitle').textContent = this.modelPick ? this.modelPick.title : t('Nymbot Pro model');
-            $('modelForChatRow').hidden = !!this.modelPick;
             $('modelOff').hidden = !!this.modelPick && !this.modelPick.none;
             $('modelOff').classList.toggle('is-active', !!this.modelPick && !!this.modelPick.none && !this.modelPick.current);
             for (const b of document.querySelectorAll('#modelFilters .pill')) {
@@ -5259,10 +5516,9 @@
             const picking = this.modelPick && $('modalModels') && !$('modalModels').hidden ? this.modelPick : null;
             const current = picking
                 ? { key: picking.current }
-                : ((this.conv && this.conv.proModel) || this.settings.proModel);
+                : this.chatModel().pro;
             const media = picking ? null : this.mediaModel();
             const taken = picking && picking.taken ? picking.taken : null;
-            const forChat = $('modelForChat').checked;
             const own = picking && picking.catalog ? picking.catalog : null;
             const source = own || this.models;
             const byKey = new Map(source.models.map(m => [m.key, m]));
@@ -5357,7 +5613,7 @@
                     const pinGenerator = (res) => {
                         const off = res == null && pinned;
                         const media = off ? null : this.mediaFor(m, group.authorSlug, res);
-                        this.setMediaModel(media, forChat);
+                        this.setMediaModel(media);
                         this.closeModals();
                         const label = media ? this.mediaLabel(media) : m.label;
                         this.toast(off
@@ -5384,11 +5640,9 @@
                         this.setModel({
                             key: m.key, label: m.label, credits: m.credits, max: m.max,
                             slug: m.authorSlug || group.authorSlug || null
-                        }, forChat);
+                        });
                         this.closeModals();
-                        this.toast(forChat
-                            ? t('{name} pinned to this chat.', { name: m.label })
-                            : t('{name} pinned.', { name: m.label }));
+                        this.toast(t('{name} pinned.', { name: m.label }));
                     });
                     list.appendChild(row);
                 }
@@ -7299,7 +7553,8 @@
         },
 
         async applyStaged(m, apply, discard) {
-            const convId = this.conv.id;
+            const conv = this.conv;
+            const convId = conv.id;
             const staged = m.staged;
             apply.disabled = true;
             if (discard) discard.disabled = true;
@@ -7307,7 +7562,7 @@
             const marks = [];
             try {
                 for (const one of GitRun.all(staged)) {
-                    const res = await Chat.applyStaged(this.conv, one);
+                    const res = await Chat.applyStaged(Store.conversation(convId) || conv, one);
                     if (res.checkpoint) marks.push(res.checkpoint);
                 }
             } catch (e) {
@@ -7341,7 +7596,8 @@
         },
 
         async revertCheckpoint(m, button) {
-            const convId = this.conv.id;
+            const conv = this.conv;
+            const convId = conv.id;
             const marks = GitRun.undoMarks(m.checkpoint);
             if (!marks.length) return;
             const files = marks.reduce((n, x) => n + x.paths.length, 0);
@@ -7358,7 +7614,7 @@
             button.textContent = t('Putting it back…');
             let rows;
             try {
-                rows = await Chat.revertMarks(this.conv, marks);
+                rows = await Chat.revertMarks(Store.conversation(convId) || conv, marks);
             } catch (e) {
                 button.disabled = false;
                 button.textContent = t('Undo these changes');
@@ -8898,7 +9154,7 @@
                     t('The model catalog is unavailable right now.'), 'warn');
                 return;
             }
-            const current = (this.conv && this.conv.proModel) || this.settings.proModel;
+            const current = this.chatModel().pro;
             this.comparePicks = this.compareDefaults(current ? current.key : null);
             slots.hidden = false;
             this.renderCompareSlots();
@@ -9061,6 +9317,9 @@
 
         async runCompare() {
             if (this._compareBusy) return;
+            const conv = this.conv;
+            if (!conv) return;
+            const seed = this.seedFrom(Store.messages(conv.id));
             const text = ($('comparePrompt').value || '').trim();
             if (!text) {
                 this.modalStatus('compareStatus', t('Type a prompt for both of them first.'), 'warn');
@@ -9082,14 +9341,14 @@
                 return;
             }
             let maxCost = null;
-            if (Caps.any(this.conv)) {
-                const estA = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: a, mediaModel: null }), {}, this.models);
-                const estB = Chat.estimateCredits(text, this.settings, Object.assign({}, this.conv, { proModel: b, mediaModel: null }), {}, this.models);
+            if (Caps.any(conv)) {
+                const estA = Chat.estimateCredits(text, this.settings, Object.assign({}, conv, { proModel: a, mediaModel: null }), {}, this.models);
+                const estB = Chat.estimateCredits(text, this.settings, Object.assign({}, conv, { proModel: b, mediaModel: null }), {}, this.models);
                 const low = Math.max(price, (Number(estA.low) || 0) + (Number(estB.low) || 0));
                 const high = Math.max(price, (Number(estA.max) || Number(estA.high) || 0) + (Number(estB.max) || Number(estB.high) || 0));
-                const gate = await Caps.gate(this, this.conv, { tier: 'pro', low, high });
+                const gate = await Caps.gate(this, conv, { tier: 'pro', low, high });
                 if (!gate.go) return;
-                const room = gate.waived ? null : Caps.maxCost(this.conv, true, this.models);
+                const room = gate.waived ? null : Caps.maxCost(conv, true, this.models);
                 if (room != null) maxCost = Math.max(0.001, Math.floor(room / 2 * 1000) / 1000);
             }
             const go = await this.ask({
@@ -9100,7 +9359,8 @@
             });
             if (!go) return;
 
-            const turn = this.beginTurn(this.conv, null, { quiet: true });
+            const live = Store.conversation(conv.id) || conv;
+            const turn = this.beginTurn(live, null, { quiet: true });
             this.modalStatus('compareStatus', t('Waiting on both…'));
             $('compareGrid').hidden = false;
             $('compareGrid').innerHTML = '';
@@ -9108,8 +9368,8 @@
             this.renderCompareSlots();
             let out;
             try {
-                out = await Chat.compare(this.conv, text, this.settings, [a, b], {
-                    seed: this.compareSeed(),
+                out = await Chat.compare(live, text, this.settings, [a, b], {
+                    seed,
                     maxCost,
                     controller: turn.controller
                 });
@@ -9123,10 +9383,10 @@
             this.endTurn(turn);
             this._compareBusy = false;
             this.renderCompareSlots();
-            this.compare = { prompt: text, runs: out };
+            this.compare = { prompt: text, runs: out, convId: conv.id };
             const spent = out.reduce((n, r) => n + ((r.result && r.result.cost) || 0), 0);
             Store.recordUsage(spent, true);
-            this.bumpStats(this.conv, spent, true);
+            this.bumpStats(Store.conversation(conv.id) || live, spent, true);
             const balance = out.map(r => r.result).filter(r => r && r.balance != null).pop();
             if (balance) {
                 this.creditBalance(balance.pro,
@@ -9185,6 +9445,9 @@
         keepCompare(index) {
             const run = this.compare && this.compare.runs[index];
             if (!run || !run.ok) return;
+            const cid = this.compare.convId || (this.conv && this.conv.id);
+            if (!cid) return;
+            const here = () => !!(this.conv && this.conv.id === cid);
 
             const mine = {
                 id: Store.uid(), role: 'self', content: this.compare.prompt, ts: Date.now()
@@ -9207,28 +9470,30 @@
                 task: run.result.taskType || null,
                 ts: Date.now()
             };
-            Store.addMessage(this.conv.id, mine);
-            Store.addMessage(this.conv.id, reply);
-            Artifacts.harvest(this.conv.id, reply);
+            Store.addMessage(cid, mine);
+            Store.addMessage(cid, reply);
+            Artifacts.harvest(cid, reply);
 
-            this.conv = Store.updateConversation(this.conv.id, {
+            let kept = Store.updateConversation(cid, {
                 rootId: window.NymbotHex.hex(crypto.getRandomValues(new Uint8Array(32))),
-                seed: this.compareSeed()
+                seed: this.seedFrom(Store.messages(cid))
             });
-            Store.dropThread(this.conv.id);
-            if (!this.conv.title) {
-                this.conv = Store.updateConversation(this.conv.id,
-                    { title: Chat.titleFor(this.compare.prompt) });
-                $('chatTitle').textContent = this.conv.title;
+            Store.dropThread(cid);
+            if (!kept.title) {
+                kept = Store.updateConversation(cid, { title: Chat.titleFor(this.compare.prompt) });
+                if (here()) $('chatTitle').textContent = kept.title;
             }
+            if (here()) this.conv = kept;
 
             this.compare = null;
             this.closeModals();
-            $('input').value = '';
-            Store.setDraft(this.conv.id, '');
-            this.autoGrow();
-            this.renderMessages();
-            this.renderArtifactStrip();
+            if (here()) {
+                $('input').value = '';
+                Store.setDraft(cid, '');
+                this.autoGrow();
+                this.renderMessages();
+                this.renderArtifactStrip();
+            }
             this.renderList();
             this.toast(t('Kept {model}.', { model: run.model.label }));
         },
@@ -9355,7 +9620,7 @@
                 const empty = !Store.messages(conv.id).some(m => m.role === 'self' || m.role === 'bot');
                 if (empty) {
                     this.conv = Store.updateConversation(conv.id, { anon: on });
-                    $('chatAnon').hidden = !on;
+                    this.anonTitle(on);
                     this.renderList();
                     this.modalStatus('anonStatus', on
                         ? t('This chat is anonymous now.')
@@ -9372,7 +9637,6 @@
             }
             this.refreshToolbar();
             this.renderBalance();
-            if (on) this.runAutoTopUp({ announce: true });
         },
 
         async runAutoTopUp(options) {
@@ -9381,7 +9645,7 @@
             if (!this.settings.anonAutoTop || !(Anon.enabled() || conv)) return null;
             const identity = conv ? Anon.forConv(conv) : (Anon.ready() ? Anon.forConv(null) : null);
             if (!identity) return null;
-            const moved = await Anon.autoTopUp(Object.assign({}, opts, { identity })).catch(() => null);
+            const moved = await Anon.autoTopUp(Object.assign({}, opts, { identity, held: !!conv })).catch(() => null);
             if (!moved) return null;
             const parts = [];
             if (moved.standard) parts.push(t('{n} Standard', { n: moved.standard }));
@@ -9389,7 +9653,8 @@
             const text = t('Moved {what} onto the throwaway key.', { what: parts.join(', ') });
             if (opts.announce) this.toast(text);
             else if (this.conv) this.note(text);
-            this.refreshBalance();
+            if (!conv) this.refreshBalance();
+            else if (this.conv && this.conv.id === conv.id) this.refreshAnonBalance().catch(() => { });
             if (!$('modalAnon').hidden) this.openAnon();
             return moved;
         },
@@ -10863,6 +11128,8 @@
                     this.renderModels();
                 },
                 'notice-dismiss': () => this.dismissNotice(),
+                'notice-prev': () => this.pageNotice(-1),
+                'notice-next': () => this.pageNotice(1),
                 'notice-try': () => this.tryNoticeModel(),
                 'tier': (target) => {
                     if (target.dataset.tier === 'pro') { this.openModels(); return; }
@@ -11166,6 +11433,7 @@
                 this.updateSuggest();
                 this.updateHints();
                 if (this.conv) Store.setDraft(this.conv.id, input.value);
+                if (this.conv && input.value.trim() && Chat.warm) Chat.warm(this.conv);
             });
             input.addEventListener('keydown', (e) => {
                 // Inside the composer Cmd/Ctrl+B means bold, not the sidebar toggle.
@@ -11229,10 +11497,10 @@
                 const files = Array.from(data.items || []).filter(i => i.kind === 'file');
                 if (files.length) {
                     e.preventDefault();
+                    const convId = this.conv && this.conv.id;
                     const built = await Attach.fromClipboard(data.items,
                         (err) => this.toast((err && err.message) || t('That file could not be attached.')));
-                    this.attachments = this.attachments.concat(built);
-                    this.renderAttachments();
+                    this.attachTo(convId, built);
                     for (const a of built) this.uploadAttachment(a);
                     return;
                 }
@@ -11370,7 +11638,6 @@
                 if (e.key === 'Enter') { e.preventDefault(); this.stepFind(e.shiftKey ? -1 : 1); }
             });
             $('creditAmount').addEventListener('input', () => this.creditSats());
-            $('modelForChat').addEventListener('change', () => this.renderModels());
             $('anonToggle').addEventListener('change', (e) => this.setAnon(e.target.checked));
             $('anonAutoTop').addEventListener('change', (e) => {
                 this.saveSettings({ anonAutoTop: e.target.checked });

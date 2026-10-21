@@ -3,6 +3,20 @@ import 'dart:convert';
 import 'workspace.dart';
 
 /// One chat; [rootId] is the `nymthread` marker the worker scopes reply context by.
+class ChanSummary {
+  const ChanSummary(this.text, this.upto);
+  final String text;
+  final int upto;
+
+  Map<String, dynamic> toJson() => {'text': text, 'upto': upto};
+
+  static ChanSummary? fromJson(Object? raw) {
+    if (raw is! Map || raw['text'] is! String || (raw['text'] as String).isEmpty) return null;
+    final upto = raw['upto'];
+    return ChanSummary(raw['text'] as String, upto is num ? upto.toInt() : 0);
+  }
+}
+
 class Conversation {
   Conversation({
     required this.id,
@@ -24,6 +38,7 @@ class Conversation {
     this.systemPrompt = '',
     this.proModel,
     this.mediaModel,
+    this.modelPin = false,
     this.seed,
     this.messageCount = 0,
     this.creditsSpent = 0,
@@ -37,6 +52,7 @@ class Conversation {
     this.policy,
     this.forkOf,
     this.skillId,
+    this.chanSummary,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : tags = tags ?? [],
@@ -69,6 +85,7 @@ class Conversation {
   String systemPrompt;
   Map<String, dynamic>? proModel;
   Map<String, dynamic>? mediaModel;
+  bool modelPin;
   String? seed;
   int messageCount;
   double creditsSpent;
@@ -82,6 +99,7 @@ class Conversation {
   Map<String, String>? policy;
   Map<String, String>? forkOf;
   String? skillId;
+  ChanSummary? chanSummary;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -91,6 +109,7 @@ class Conversation {
         'title': title,
         'anon': anon,
         if (anonPk != null) 'anonPk': anonPk,
+        if (chanSummary != null) 'chanSummary': chanSummary!.toJson(),
         'ephemeral': ephemeral,
         'effort': effort,
         'pinned': pinned,
@@ -105,6 +124,7 @@ class Conversation {
         'systemPrompt': systemPrompt,
         'proModel': proModel,
         'mediaModel': mediaModel,
+        if (modelPin) 'modelPin': true,
         'seed': seed,
         'messageCount': messageCount,
         'creditsSpent': creditsSpent,
@@ -128,6 +148,7 @@ class Conversation {
         title: j['title'] as String? ?? '',
         anon: j['anon'] as bool? ?? false,
         anonPk: j['anonPk'] is String ? j['anonPk'] as String : null,
+        chanSummary: ChanSummary.fromJson(j['chanSummary']),
         ephemeral: j['ephemeral'] as bool? ?? false,
         effort: j['effort'] as String? ?? 'normal',
         pinned: j['pinned'] as bool? ?? false,
@@ -142,6 +163,7 @@ class Conversation {
         systemPrompt: j['systemPrompt'] as String? ?? '',
         proModel: j['proModel'] as Map<String, dynamic>?,
         mediaModel: j['mediaModel'] as Map<String, dynamic>?,
+        modelPin: j['modelPin'] == true,
         seed: j['seed'] as String?,
         messageCount: (j['messageCount'] as num?)?.toInt() ?? 0,
         creditsSpent: (j['creditsSpent'] as num?)?.toDouble() ?? 0,
@@ -222,6 +244,8 @@ class ChatMessage {
     this.edited = false,
     this.retry,
     this.quote,
+    this.chanSummary,
+    this.seed,
     List<Attachment>? attachments,
     List<String>? repos,
     List<Map<String, dynamic>>? sources,
@@ -243,6 +267,7 @@ class ChatMessage {
     this.ask,
     this.proposal,
     this.prWatch,
+    this.pick,
     DateTime? at,
   })  : attachments = attachments ?? const [],
         serverRuns = serverRuns ?? const [],
@@ -277,6 +302,8 @@ class ChatMessage {
   final bool edited;
   final String? retry;
   final String? quote;
+  final ChanSummary? chanSummary;
+  final String? seed;
   final List<Attachment> attachments;
   final List<String> repos;
   final List<Map<String, dynamic>> sources;
@@ -298,10 +325,13 @@ class ChatMessage {
   final Map<String, dynamic>? ask;
   final Map<String, dynamic>? proposal;
   final Map<String, dynamic>? prWatch;
+  final Map<String, dynamic>? pick;
   final DateTime at;
 
   ChatMessage copyWith(
-          {int? rating,
+          {ChanSummary? chanSummary,
+          String? seed,
+          int? rating,
           bool? pinned,
           Map<String, dynamic>? checkpoint,
           Map<String, dynamic>? pendingTool,
@@ -335,6 +365,8 @@ class ChatMessage {
         edited: edited,
         retry: retry,
         quote: quote,
+        chanSummary: chanSummary ?? this.chanSummary,
+        seed: seed ?? this.seed,
         attachments: attachments,
         repos: repos,
         sources: sources,
@@ -356,6 +388,7 @@ class ChatMessage {
         ask: ask ?? this.ask,
         proposal: proposal ?? this.proposal,
         prWatch: prWatch ?? this.prWatch,
+        pick: pick,
         at: at,
       );
 
@@ -380,6 +413,8 @@ class ChatMessage {
         'edited': edited,
         'retry': retry,
         'quote': quote,
+        if (chanSummary != null) 'chanSummary': chanSummary!.toJson(),
+        if (seed != null) 'seed': seed,
         'attachments': attachments.map((a) => a.toJson()).toList(),
         'repos': repos,
         'sources': sources,
@@ -400,6 +435,7 @@ class ChatMessage {
         if (steerOffer != null) 'steerOffer': steerOffer,
         if (ask != null) 'ask': ask,
         if (proposal != null) 'proposal': proposal,
+        if (pick != null) 'pick': pick,
         if (prWatch != null) 'prWatch': prWatch,
         'at': at.millisecondsSinceEpoch,
       };
@@ -428,6 +464,8 @@ class ChatMessage {
         edited: j['edited'] == true,
         retry: j['retry'] as String?,
         quote: j['quote'] as String?,
+        chanSummary: ChanSummary.fromJson(j['chanSummary']),
+        seed: j['seed'] is String ? j['seed'] as String : null,
         attachments: (j['attachments'] as List?)
             ?.whereType<Map<String, dynamic>>()
             .map(Attachment.fromJson)
@@ -455,6 +493,7 @@ class ChatMessage {
             : null,
         ask: j['ask'] is Map ? (j['ask'] as Map).cast<String, dynamic>() : null,
         proposal: j['proposal'] is Map ? (j['proposal'] as Map).cast<String, dynamic>() : null,
+        pick: j['pick'] is Map ? (j['pick'] as Map).cast<String, dynamic>() : null,
         prWatch: j['prWatch'] is Map ? (j['prWatch'] as Map).cast<String, dynamic>() : null,
         at: DateTime.fromMillisecondsSinceEpoch((j['at'] as num?)?.toInt() ?? 0),
       );

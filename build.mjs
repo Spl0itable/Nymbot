@@ -5,7 +5,7 @@ import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isRtl, TRANSLATED_LANGUAGES } from "./i18n/languages.mjs";
-import { buildPacks, writePacks } from "./i18n/packs.mjs";
+import { MIN_COVERAGE, buildPacks, writePacks } from "./i18n/packs.mjs";
 import { appSources, flutterSources } from "./i18n/surfaces.mjs";
 import { loadCache } from "./i18n/translate.mjs";
 import { loadSite } from "./i18n/pages.mjs";
@@ -97,7 +97,7 @@ for (const lang of TRANSLATED_LANGUAGES) {
   everyCache.set(lang.code, cache);
   const have = sources.filter((s) => typeof cache[s] === "string").length;
   if (have === 0) continue;
-  if (have < sources.length) {
+  if (have < sources.length * MIN_COVERAGE) {
     partial.push(`${lang.code} (${have}/${sources.length})`);
     continue;
   }

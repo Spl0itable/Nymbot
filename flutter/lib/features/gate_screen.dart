@@ -320,7 +320,7 @@ class _GateScreenState extends State<GateScreen> {
   void _notice(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text, key: const ValueKey('backup-notice')),
+      content: UiText(text, key: const ValueKey('backup-notice')),
       duration: const Duration(seconds: 12),
     ));
   }
@@ -619,7 +619,7 @@ class _GateScreenState extends State<GateScreen> {
     wipeBytes(secret);
     if (notice != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(notice, key: const ValueKey('passkey-notice')),
+        content: UiText(notice, key: const ValueKey('passkey-notice')),
         duration: const Duration(seconds: 12),
       ));
     }
@@ -901,7 +901,7 @@ class _GateScreenState extends State<GateScreen> {
           ],
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: NymbotColors.danger)),
+            UiText(_error!, style: const TextStyle(color: NymbotColors.danger)),
           ],
           const SizedBox(height: 20),
           _agreement(context),
@@ -1025,7 +1025,7 @@ class _GateScreenState extends State<GateScreen> {
                 await SecretScreen.copy(link);
                 if (!mounted) return;
                 ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(t('Copied.'))));
+                    .showSnackBar(SnackBar(content: UiText(t('Copied.'))));
               },
             ),
           ],
@@ -1042,7 +1042,7 @@ class _GateScreenState extends State<GateScreen> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(_signerStatus!,
+              child: UiText(_signerStatus!,
                   key: const ValueKey('gate-signer-status'),
                   style: const TextStyle(fontSize: 12)),
             ),
@@ -1160,7 +1160,7 @@ class _GateScreenState extends State<GateScreen> {
                   await SecretScreen.copy(value);
                   if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(t('Copied.'))),
+                    SnackBar(content: UiText(t('Copied.'))),
                   );
                 },
               ),

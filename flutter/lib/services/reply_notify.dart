@@ -476,6 +476,18 @@ class ReplyNotify with WidgetsBindingObserver {
         'title:pr': t('Pull request update'),
       };
 
+  static void warm() {
+    for (final kind in const ['turn', 'background', 'schedule', 'prwatch']) {
+      kindTexts(kind);
+    }
+    pushTexts();
+    for (final state in const [null, 'failed', 'question', 'done']) {
+      headingFor(state, replied: false);
+    }
+    t('Open the chat to read it.');
+    t('Replies');
+  }
+
   static String headingFor(String? state, {required bool replied}) {
     if (state == 'failed' || state == 'stopped' || state == 'expired') {
       return t('Nymbot could not finish that reply');

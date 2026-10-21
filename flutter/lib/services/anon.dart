@@ -115,7 +115,7 @@ class AnonMode {
   }
 
   Future<void> _save() =>
-      _store.setSyncedSecret(_stateKey, jsonEncode(_state));
+      _store.setSyncedSecret(_stateKey, jsonEncode(_state), aside: true);
 
   Future<void> setEnabled(bool on) async {
     await _store.setBool(_enabledKey, on);
@@ -702,6 +702,12 @@ class AnonMode {
     };
     await _save();
     await _finishIssue(identity, _state['pending'] as Map<String, dynamic>);
+  }
+
+  Future<int> stock(EventSigner identity, int amount, String tier) async {
+    if (amount <= 0) return 0;
+    await _issue(identity, amount, tier, held: true);
+    return amount;
   }
 
   Future<int> moveCredits(EventSigner identity, int amount, String tier,

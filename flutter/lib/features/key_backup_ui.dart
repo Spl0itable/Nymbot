@@ -178,7 +178,7 @@ class _PinDialogState extends State<_PinDialog> {
                 last: true),
           if (_error != null) ...[
             const SizedBox(height: 8),
-            Text(_error!,
+            UiText(_error!,
                 key: const ValueKey('backup-pin-error'),
                 style: const TextStyle(color: NymbotColors.danger)),
           ],

@@ -92,7 +92,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
-          content: Text(t('Copied.')), duration: const Duration(seconds: 3)));
+          content: UiText(t('Copied.')), duration: const Duration(seconds: 3)));
   }
 
   Future<void> _stop(ShareRecord record) async {
@@ -416,7 +416,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
             if (_status.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Text(_status, style: const TextStyle(fontSize: 12)),
+                child: UiText(_status, style: const TextStyle(fontSize: 12)),
               ),
             FilledButton(
               onPressed: _busy || shown.isEmpty ? null : _create,

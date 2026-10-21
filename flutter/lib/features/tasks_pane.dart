@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -13,6 +14,7 @@ import '../services/task_transcript.dart';
 import '../services/tasks.dart';
 import '../state/app_controller.dart';
 import 'citation_cards.dart';
+import 'desktop_layout.dart';
 import 'i18n/i18n.dart';
 import 'motion.dart';
 import 'nym_glyph.dart';
@@ -20,9 +22,7 @@ import 'run_card.dart';
 import 'sheets/sheet.dart';
 import 'transcript_sheet.dart';
 
-const double kTasksWide = 900;
-
-bool tasksBeside(BuildContext context) => MediaQuery.sizeOf(context).width >= kTasksWide;
+bool tasksBeside(BuildContext context) => desktopLayout(context);
 
 String tasksLabel(bool running, int waiting) {
   if (running) return t('Tasks: work is running');
@@ -132,21 +132,21 @@ class TasksSplit extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, box) {
-      if (!open || box.maxWidth < kTasksWide) return child;
-      return Row(
+    if (!open || !tasksBeside(context)) return PaneWidthScope(child: child);
+    return LayoutBuilder(
+      builder: (context, box) => Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(child: child),
+          Expanded(child: PaneWidthScope(child: child)),
           const VerticalDivider(width: 1),
           SizedBox(
             key: const ValueKey('tasks-side'),
-            width: 380,
+            width: math.min(440, box.maxWidth * 0.38),
             child: Material(child: TasksPane(onJump: onJump, onClose: onClose)),
           ),
         ],
-      );
-    });
+      ),
+    );
   }
 }
 

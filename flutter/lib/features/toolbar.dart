@@ -5,6 +5,7 @@ import '../models/workspace.dart';
 import '../services/chat_engine.dart';
 import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
+import 'desktop_layout.dart';
 import 'brand_tile.dart';
 import 'i18n/i18n.dart';
 import 'sheets/anon_sheet.dart';
@@ -243,7 +244,7 @@ class NymbotToolbar extends StatelessWidget {
       onTap: () => showCreditsSheet(context),
     );
     if (MediaQuery.textScalerOf(context).scale(1) > 1.15 ||
-        MediaQuery.sizeOf(context).width < scrollBelow) {
+        paneWidth(context) < scrollBelow) {
       return Container(
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: theme.dividerColor)),

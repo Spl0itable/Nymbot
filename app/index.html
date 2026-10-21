@@ -362,6 +362,11 @@
                 <div class="notice-actions">
                     <button class="btn btn-small" type="button" data-act="notice-try" id="noticeTry" hidden>Try it</button>
                     <a class="btn btn-small btn-ghost" id="noticeLink" target="_blank" rel="noopener noreferrer" hidden>Learn more</a>
+                    <div class="notice-pager" id="noticePager" hidden>
+                        <button class="icon-btn" type="button" data-act="notice-prev" aria-label="Previous announcement" title="Previous announcement"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
+                        <span class="notice-pos" id="noticePos"></span>
+                        <button class="icon-btn" type="button" data-act="notice-next" aria-label="Next announcement" title="Next announcement"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></button>
+                    </div>
                     <button class="icon-btn notice-close" type="button" data-act="notice-dismiss" aria-label="Dismiss" title="Dismiss">&times;</button>
                 </div>
             </div>
@@ -370,7 +375,6 @@
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
                 <h1 class="chat-title" id="chatTitle">New chat</h1>
-                <span class="chat-anon" id="chatAnon" hidden title="This chat runs on a throwaway key">Anon</span>
                 <span class="chat-badge" id="chatPersona" hidden></span>
                 <button class="chat-badge chat-cap" type="button" id="chatCap" data-act="open-caps" title="Spending caps for this chat" hidden></button>
                 <button class="icon-btn tasks-btn" type="button" data-act="open-tasks" id="tasksBtn" title="Tasks" aria-label="Tasks" aria-controls="tasksPanel" aria-expanded="false">
@@ -637,7 +641,6 @@
                 <button class="pill" type="button" data-act="model-filter" data-filter="favourites">Starred</button>
             </div>
             <div class="model-tools" id="modelTools">
-                <label class="check" id="modelForChatRow"><input type="checkbox" id="modelForChat"> Only for this chat</label>
                 <label class="model-sort">Sort
                     <select id="modelSort">
                         <option value="provider">Provider</option>
@@ -2149,6 +2152,7 @@
     <script src="/app/js/vendor/ml-kem.js"></script>
     <script src="/app/js/vendor/nostr-tools.js"></script>
     <script src="/app/js/vendor/nym-crypto.js"></script>
+    <script src="/app/js/channel.js"></script>
     <script src="/app/js/store.js"></script>
     <script src="/app/js/identity.js"></script>
     <script src="/app/js/nip46.js"></script>
@@ -2210,6 +2214,7 @@
     <script src="/app/js/canary.js"></script>
     <script src="/app/js/apikeys.js"></script>
     <script src="/app/js/support.js"></script>
+    <script src="/app/js/chat-model.js"></script>
     <script src="/app/js/ui.js"></script>
     <script src="/app/js/sw-register.js"></script>
 </body>

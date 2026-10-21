@@ -1,15 +1,18 @@
 // Fills i18n/cache/<lang>.json with uncached strings (npm run i18n); args: --only=es,ja,fr, --list.
 
 import { TRANSLATED_LANGUAGES } from './languages.mjs';
-import { allSurfaces } from './surfaces.mjs';
+import { isShortLabel } from './guard.mjs';
+import { allSurfaces, loadContexts } from './surfaces.mjs';
 import { loadCache, translateMissing } from './translate.mjs';
 
 const args = process.argv.slice(2);
 const only = (args.find((a) => a.startsWith('--only=')) || '').slice('--only='.length);
 const listOnly = args.includes('--list');
+const redoLabels = args.includes('--redo-labels');
 const wanted = only ? new Set(only.split(',').map((s) => s.trim())) : null;
 
 const { surfaces, union: sources } = await allSurfaces();
+const contexts = listOnly ? new Map() : await loadContexts();
 const targets = TRANSLATED_LANGUAGES.filter((l) => !wanted || wanted.has(l.code));
 
 console.log(`${sources.length} source strings (`
@@ -40,7 +43,7 @@ let done = 0;
 
 async function runLang(lang) {
   try {
-    const { translated } = await translateMissing(lang.code, sources);
+    const { translated } = await translateMissing(lang.code, sources, { contexts, redo: redoLabels ? isShortLabel : null });
     done++;
     process.stdout.write(`  ${lang.code.padEnd(7)} ${translated === 0 ? 'cached' : `+${translated}`}`.padEnd(28)
       + `${lang.name}  (${done}/${targets.length})\n`);

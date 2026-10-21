@@ -836,6 +836,9 @@ export class NymRunDriver {
   reportSched(s, out, now, day) {
     const runsDay = s.day === day ? Number(s.runs_day) : 0;
     const d = out.data || {};
+    if (typeof d.reblob === "string" && d.reblob.indexOf("bj1.") === 0 && d.reblob.length <= 262144) {
+      this.sql.exec("UPDATE scheds SET blob = ? WHERE id = ?", d.reblob, s.id);
+    }
     if (s.mode === "notify") {
       if (out.status === 200 && d.expired) {
         this.sql.exec("DELETE FROM scheds WHERE id = ?", s.id);

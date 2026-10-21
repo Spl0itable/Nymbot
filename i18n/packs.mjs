@@ -7,6 +7,8 @@ import { loadCache } from './translate.mjs';
 
 const byCode = new Map(LANGUAGES.map((l) => [l.code, l]));
 
+export const MIN_COVERAGE = 0.75;
+
 /// A language ships only when the whole surface is covered; half a pack mixes two languages.
 export async function buildPacks(sources) {
   const wanted = new Set(sources);
@@ -24,7 +26,7 @@ export async function buildPacks(sources) {
       have++;
     }
     if (have === 0) continue;
-    if (have < wanted.size) {
+    if (have < wanted.size * MIN_COVERAGE) {
       partial.push(`${lang.code} (${have}/${wanted.size})`);
       continue;
     }

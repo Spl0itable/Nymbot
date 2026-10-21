@@ -13,7 +13,7 @@
 
     function pinned(ui, conv) {
         const c = conv || ui.conv || {};
-        return c.proModel || (ui.settings && ui.settings.proModel) || null;
+        return ui.chatModel(c).pro || null;
     }
 
     function entryFor(ui, model) {

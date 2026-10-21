@@ -1,5 +1,6 @@
 // Nymchat bot: public `?` commands (see ?help) plus the private, paid Nymbot conversation.
 
+import { chanRequired, chanWrapsGet, chanRunGet, chanRunEnd, chanReplyTags, chanLegHooks } from "./_chanserve.js";
 import { ledgerCall } from "./_ledger.js";
 import { btcPriceGet, btcPriceSane, BtcPriceUnavailable } from "./_btcprice.js";
 import { mediaUsd, mediaRate, mediaSeconds, mediaTier as mediaResTier, mediaTiers, transcribeUsd } from "./_mediaprice.js";
@@ -26,6 +27,7 @@ import {
   buildPqGiftWrappedDMPair
 } from "./_pq.js";
 export { NymLedger } from "./_ledger.js";
+import { atRestSplit, atRestJoin } from "./_atrest.js";
 export { suppliedWraps, wrapsFor, wrapsToCache, scopeLabelInThread,
   botCachedWraps, fetchGiftWrapsByIds };
 export { botClock, botDraftSink, botDraftText, botQuickTask, suppliedHistoryWraps,
@@ -358,6 +360,7 @@ function aiSafeValue(value) {
 }
 
 function aiRun(ai, model, input, options) {
+  if (options && options.gateway) options = Object.assign({}, options, { gateway: Object.assign({}, options.gateway, { collectLog: false }) });
   return options ? ai.run(model, aiSafeValue(input), options) : ai.run(model, aiSafeValue(input));
 }
 
@@ -2615,6 +2618,7 @@ function proErrorDetail(data) {
 }
 
 async function proHttpChat(url, headers, body, draft, shape) {
+  if (!/^https:\/\/api\.cloudflare\.com\//.test(String(url))) headers = Object.assign({}, headers, { "cf-aig-collect-log": "false" });
   var streaming = !!(draft && body && body.stream === true);
   var res = await fetch(url, { method: "POST", headers: headers, body: JSON.stringify(aiSafeValue(body)) });
   if (streaming && res.ok && res.body && /event-stream/i.test(res.headers.get("Content-Type") || "")) {
@@ -3638,9 +3642,36 @@ function botRandomHex(n) {
   return Array.from(b, function (x) { return x.toString(16).padStart(2, "0"); }).join("");
 }
 
+function botLogLine(label, e) {
+  var kind = e && typeof e === "object" ? String(e.name || (e.constructor && e.constructor.name) || "Error") : typeof e;
+  var code = e && typeof e === "object" ? Number(e.status) : 0;
+  return label + ": " + kind.slice(0, 60) + (Number.isFinite(code) && code > 0 ? " status " + code : "");
+}
+
+async function botResultPut(env, pk, keys, result, at) {
+  var parts = atRestSplit(result && result.body);
+  if (parts.side) {
+    var ids = (keys || []).filter(Boolean).map(function (k) { return "r:" + pk + ":" + k; });
+    var ttl = Math.ceil(((Number(at) || Date.now()) + RUN_RESULT_KEEP_MS - Date.now()) / 1000);
+    if (ids.length && ttl > 0) {
+      try { await ledgerCall(env, { op: "side-put", keys: ids, side: parts.side, ttl: ttl }); } catch (e) { }
+    }
+  }
+  return runResultPut(env.DB_BOT, pk, keys, parts.side ? Object.assign({}, result, { body: parts.rest }) : result, at);
+}
+
+async function botResultGet(env, pk, key) {
+  var row = await runResultGet(env.DB_BOT, pk, key);
+  if (!row || !row.body || typeof row.body !== "object") return row;
+  var got = null;
+  try { got = await ledgerCall(env, { op: "side-get", key: "r:" + pk + ":" + key }); } catch (e) { got = null; }
+  if (!got || !got.side) return row;
+  return Object.assign({}, row, { body: atRestJoin(row.body, got.side) });
+}
+
 function botFailText(generic, where, e) {
   var ref = botRandomHex(3);
-  console.error("ref " + ref + " " + where + " failed:", e);
+  console.error(botLogLine("ref " + ref + " " + where + " failed", e));
   if (e && e.userFacing && e.message) return String(e.message) + " (ref " + ref + ")";
   return generic + " (ref " + ref + ")";
 }
@@ -6318,11 +6349,35 @@ function botLegRumor(userPubkey, leg) {
   return { author: userPubkey, rumor: { kind: 14, content: String(leg.message || ""), tags: tags, pubkey: userPubkey } };
 }
 
-async function botResumePut(env, id, owner, runId, state) {
-  var stored = await bgResumeSeal(env, owner, runId, state);
+var PRW_PAUSE_MS = 30 * 60000;
+
+function chanJobOf(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  var pq = typeof raw.pq === "string" && /^[A-Za-z0-9_-]{1500,1700}$/.test(raw.pq) ? raw.pq : null;
+  return { pq: pq };
+}
+
+async function botSchedReseal(env, pk, runId, blob, res) {
+  if (!res || res.status !== 200) return res;
+  var data = null;
+  try { data = await res.clone().json(); } catch (e) { return res; }
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.expired) return res;
+  var opened = await bgOpen(env, pk, runId, blob);
+  var fresh = opened ? await bgSeal(env, pk, runId, opened, { job: true }) : null;
+  if (!fresh) return res;
+  data.reblob = fresh;
+  return new Response(JSON.stringify(data), { status: 200, headers: res.headers });
+}
+
+async function botResumePut(env, id, owner, runId, state, chan) {
+  if (chan && chan.leg && chan.resumeKey) id = chan.resumeKey().id;
+  var stored = chan && chan.resumeSeal ? chan.resumeSeal(runId, state) : await bgResumeSeal(env, owner, runId, state);
   var put = { op: "resume-put", id: id, owner: owner, state: stored };
   if (state && state.pending) put.ttl = Math.floor(ASK_WAIT_MS / 1000);
-  return await ledgerCall(env, put);
+  var res = await ledgerCall(env, put);
+  if (res && res.ok) res.id = id;
+  else if (chan && chan.resumeDrop) chan.resumeDrop();
+  return res;
 }
 
 async function botBackgroundStart(env, userPubkey, o) {
@@ -6330,12 +6385,12 @@ async function botBackgroundStart(env, userPubkey, o) {
   var now = Date.now();
   var until = now + BG_MAX_MS;
   var envelope = {
-    v: 1, run: o.runId, thread: o.thread || "", req: o.req, resume: o.resume, legs: 1, ids: [],
+    v: 1, run: o.runId, thread: o.thread || "", req: o.req, resume: o.resume, legs: 1, ids: [], chan: o.chan || undefined,
     spent: Math.max(0, Number(o.spent) || 0), next: Math.max(0, Number(o.next) || 0),
     maxLegs: o.grant.maxLegs, maxCredits: o.grant.maxCredits, notify: o.grant.notify || null,
     until: until, start: now
   };
-  var blob = await bgSeal(env, pk, o.runId, envelope);
+  var blob = await bgSeal(env, pk, o.runId, envelope, { job: true });
   if (!blob) return null;
   var put = await bgDriver(env, pk, {
     drive: "run-put", runId: o.runId, blob: blob, leg: 2, until: until,
@@ -6771,7 +6826,7 @@ async function botEarlyClaim(env, pk, eventId, json) {
     if (waited.pending) return json({ pending: true, message: BOT_PENDING_TEXT }, 202);
     return null;
   }
-  var stored = await runResultGet(env.DB_BOT, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
+  var stored = await botResultGet(env, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
   if (stored && stored.body) return json(stored.body, stored.status || 200);
   return null;
 }
@@ -8324,6 +8379,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
     });
   };
+  var chanCtx = context && context._chan ? context._chan : null;
+  if (body && body.action === "pm" && !chanCtx && chanRequired(env)) {
+    return json({ error: "This version of Nymbot needs an update to keep chatting. Update the app, then send your message again.", code: "channel-required", channelRequired: true, update: true }, 426);
+  }
   if (body.action === "pq-key") {
     var who = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
     if (!/^[0-9a-f]{64}$/.test(who)) return json({ error: "Invalid pubkey" }, 400);
@@ -8574,7 +8633,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   var replyLink = null;
   var replySched = null;
   var replyPrw = null;
-  var runCipher = botRunCipher(botPrivkey, userPubkey);
+  var runCipher = chanCtx && chanCtx.cipher ? chanCtx.cipher : botRunCipher(botPrivkey, userPubkey);
   // `threadRoot` files the reply in the user's thread; `model` is omitted for replies no model wrote.
   async function wrapReplyPair(text, threadRoot, model) {
     var opts = null;
@@ -8586,6 +8645,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (replySched) opts.sched = replySched;
       if (replyPrw) opts.prw = replyPrw;
     }
+    if (chanCtx && chanCtx.finish) return { event: { chanText: String(text || ""), chanTags: chanReplyTags(opts) }, selfEvent: null };
     return buildPqGiftWrappedDMPair(
       text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(), opts);
   }
@@ -8621,6 +8681,13 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "pm-claim") {
+    if (typeof body.run === "string" && /^[\x21-\x7e]{1,128}$/.test(body.run)) {
+      var chanPk = String(userPubkey).toLowerCase();
+      var chanRow = await chanRunGet(env, chanPk, body.run);
+      var chanList = await chanWrapsGet(env, chanPk, body.run);
+      if (!chanRow && !chanList.length) return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
+      return json({ run: body.run, phase: chanRow ? chanRow.phase : null, wraps: chanList.map(function (w) { return { seq: w.seq, phase: w.phase, wrap: w.wrap }; }) });
+    }
     if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
     var claimKey = botTurnKey(userPubkey, body.eventId);
     var claimPoll = null;
@@ -8629,7 +8696,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       return json(claimPoll.result.body, claimPoll.result.status || 200);
     }
     if (claimPoll && claimPoll.state === "running") return json({ pending: true, state: "running" }, 202);
-    var claimStored = await runResultGet(env.DB_BOT, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
+    var claimStored = await botResultGet(env, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
     if (claimStored && claimStored.body) return json(claimStored.body, claimStored.status || 200);
     return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
   }
@@ -8669,7 +8736,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     delete anNext.waitAt;
     delete anNext.waitUntil;
     delete anNext.left;
-    var anBlob = await bgSeal(env, anPk, anRun, anNext);
+    var anBlob = await bgSeal(env, anPk, anRun, anNext, { job: true });
     if (!anBlob) return json({ error: "Background tasks are not available right now.", unavailable: true }, 503);
     var anPut = await bgDriver(env, anPk, { drive: "run-answer", runId: anRun, tok: anPeek.tok, blob: anBlob, until: anUntil });
     if (!anPut || !anPut.ok) return json(anGone, 409);
@@ -8735,7 +8802,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       botRunLocalEntry(ctlPk, ctlAsked).cancel = true;
       var cancelRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
       var cancelState = await runCancelFlag(env.DB_BOT, ctlPk, ctlAsked, Date.now());
-      if (cancelRow && botRunUnpack(runCipher, cancelRow.progress).bg) {
+      if (cancelRow && (botRunUnpack(runCipher, cancelRow.progress).bg || (cancelRow.progress && !runCipher.open(cancelRow.progress)))) {
         await bgDriver(env, ctlPk, { drive: "run-cancel", runId: ctlAsked });
       }
       return json({ ok: true, state: cancelState || "pending" });
@@ -8744,6 +8811,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (!steerText) return json({ error: "There is nothing to pass on." }, 400);
     if (steerText.length > RUN_STEER_CHARS) return json({ error: "That update is too long; keep it under " + RUN_STEER_CHARS + " characters." }, 413);
     var steerRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
+    if (steerRow && !chanCtx && ((steerRow.progress && !runCipher.open(steerRow.progress)) || (await chanRunGet(env, ctlPk, ctlAsked)))) {
+      return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
+    }
     var steerNow = Date.now();
     var steerNo = botSteerRefusal(steerRow, runCipher, steerNow);
     if (steerNo) return json(steerNo.body, steerNo.status);
@@ -9338,9 +9408,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         var steerMissed = await runCtl.missed();
         if (steerMissed.length) obj.steerMissed = steerMissed;
       }
+      if (chanCtx && chanCtx.finish) obj = await chanCtx.finish(obj, status);
       var storeKeys = ["e:" + String(currentId).toLowerCase()];
       if (typeof msgId === "string" && isHex64(msgId)) storeKeys.push("x:" + msgId.toLowerCase());
-      await runResultPut(env.DB_BOT, runPk, storeKeys, { body: obj, status: status || 200 }, leg && leg.keepAt ? leg.keepAt : Date.now());
+      await botResultPut(env, runPk, storeKeys, { body: obj, status: status || 200 }, leg && leg.keepAt ? leg.keepAt : Date.now());
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status, context);
@@ -9368,9 +9439,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       return null;
     };
 
-    var threadRead = botGetThread(env, userPubkey);
+    var threadRead = chanCtx ? Promise.resolve([]) : botGetThread(env, userPubkey);
     threadRead.catch(function () { });
-    var turnRowsRead = runTurnsRecent(env.DB_BOT, runPk, 120);
+    var turnRowsRead = chanCtx ? Promise.resolve([]) : runTurnsRecent(env.DB_BOT, runPk, 120);
     turnRowsRead.catch(function () { });
     var claimFrom = Date.now();
     try { if (!context._botTurnAt) context._botTurnAt = claimFrom; } catch (e) { }
@@ -9385,6 +9456,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     // Progress writes are best-effort and advisory; set up before the slow relay fetch.
     var progressKey = turnKeys.length ? turnKeys[0] : null;
     var sendProgress = function (step) {
+      if (chanCtx && chanCtx.step) { chanCtx.step(step); return; }
       if (!progressKey) return;
       try {
         var p = ledgerCall(env, { op: "progress-push", key: progressKey, step: step });
@@ -9399,7 +9471,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         sendProgress({ kind: "plan", items: runCtl.plan });
       }
     };
-    var draft = body.draft === true ? botDraftSink(env, progressKey, clock) : null;
+    var draft = chanCtx && chanCtx.draft ? chanCtx.draft() : (body.draft === true ? botDraftSink(env, progressKey, clock) : null);
 
     var thread = await clock.time("thread", threadRead);
     var turnRows = await turnRowsRead;
@@ -9411,7 +9483,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
     // A long question arrives in several wraps; `eventId` is still the last one.
     var partIds = [];
-    if (Array.isArray(body.parts)) {
+    if (!chanCtx && Array.isArray(body.parts)) {
       for (var pi = 0; pi < body.parts.length; pi++) {
         var pid = body.parts[pi];
         if (!isHex64(pid) || partIds.indexOf(pid) !== -1) continue;
@@ -9427,7 +9499,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var askIds = partIds.length ? partIds.slice() : [currentId];
     if (askIds.indexOf(currentId) === -1) askIds.push(currentId);
 
-    var fetched = suppliedWraps(body);
+    var fetched = chanCtx ? {} : suppliedWraps(body);
     var scopeOf = {};
     var heldHistoryRead = null;
     var historySupplied = 0;
@@ -9444,7 +9516,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       heldHistoryRead.catch(function () { });
     }
     var askFrom = Date.now();
-    var askMissing = leg ? [] : askIds.filter(function (id) { return !fetched[id]; });
+    var askMissing = (leg || chanCtx) ? [] : askIds.filter(function (id) { return !fetched[id]; });
     if (askMissing.length) {
       var askCached = (await botCachedWraps(env, userPubkey, askMissing)).rows;
       for (var ak in askCached) {
@@ -9460,13 +9532,15 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       for (var apk in askPulled) { if (!fetched[apk]) fetched[apk] = askPulled[apk]; }
     }
     clock.since("ask", askFrom);
-    var currentWrap = leg ? null : fetched[currentId];
-    if (!currentWrap && !leg) {
+    var currentWrap = (leg || chanCtx) ? null : fetched[currentId];
+    if (!currentWrap && !leg && !chanCtx) {
       return await turnFail({ error: "Could not fetch your encrypted message from the relays yet — please try again." }, 504);
     }
     pushProgress({ kind: "stage", stage: "opening" });
     var openFrom = Date.now();
-    var currentUnwrapped = leg ? botLegRumor(userPubkey, leg) : unwrapBotGiftWrap(currentWrap, botPrivkey, botPq);
+    var currentUnwrapped = chanCtx && chanCtx.turn
+      ? { author: chanCtx.turn.rumor.pubkey, rumor: chanCtx.turn.rumor }
+      : (leg ? botLegRumor(userPubkey, leg) : unwrapBotGiftWrap(currentWrap, botPrivkey, botPq));
     if (!currentUnwrapped) return await turnFail({ error: "Could not decrypt your message." }, 400);
     // The current message must be authored by the authenticated user.
     if (currentUnwrapped.author !== userPubkey) {
@@ -9697,8 +9771,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       });
     }
     clock.since("histDec", histDecFrom);
+    if (chanCtx && chanCtx.turn) {
+      history = chanCtx.turn.history.map(function (m) {
+        var isBot = m.role === "assistant";
+        var t = isBot ? m.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "") : stripStandingContext(m.content);
+        return { text: truncateText(t, BOT_HISTORY_DECRYPT_MAX), isBot: isBot, msgId: null, model: null };
+      });
+    }
 
     var recordTurn = async function (selfEvent, remember) {
+      if (chanCtx) return;
       var keep = thread.slice();
       if (remember) await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.concat([selfEvent.id]), usageT0);
       await botCacheWraps(env, userPubkey,
@@ -10027,8 +10109,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var resumeState = null;
     var resumeHeld = null;
     if (typeof body.resume === "string" && body.resume) {
-      var took = await ledgerCall(env, { op: "resume-take", id: body.resume, owner: userPubkey });
-      var tookOpen = took && took.ok && took.state ? await bgResumeOpen(env, userPubkey, took.state) : null;
+      var took = chanCtx && chanCtx.resumeTaken ? chanCtx.resumeTaken : await ledgerCall(env, { op: "resume-take", id: body.resume, owner: userPubkey });
+      var tookOpen = took && took.ok && took.state
+        ? (chanCtx && chanCtx.resumeOpen ? chanCtx.resumeOpen(took.state) : await bgResumeOpen(env, userPubkey, took.state))
+        : null;
       if (tookOpen && tookOpen.state) {
         resumeState = tookOpen.state;
         resumeHeld = body.resume;
@@ -10047,8 +10131,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (!resumeHeld || !resumeState) return null;
       var id = resumeHeld;
       resumeHeld = null;
-      var back = await botResumePut(env, id, userPubkey, runRoot, resumeState);
-      return back && back.ok ? id : null;
+      var back = await botResumePut(env, id, userPubkey, runRoot, resumeState, chanCtx);
+      return back && back.ok ? back.id || id : null;
     };
     var turnFailResumable = async function (obj, status) {
       var back = await resumeGiveBack();
@@ -10298,6 +10382,24 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
     var compactSummary = "";
     var compactSide = null;
+    if (chanCtx && chanCtx.turn && !fresh) {
+      compactSummary = chanCtx.turn.summary || "";
+      var chanFold = chanCtx.turn.fold || [];
+      if (chanFold.length >= BOT_COMPACT_MIN_ROWS * 2 && env.AI && !freeTurn && !teamRun && !researchRun) {
+        pushProgress({ kind: "stage", stage: "compacting" });
+        try {
+          var chanFolded = await botCompact(env, compactSummary, chanFold.map(function (m) {
+            var ft = m.role === "assistant" ? m.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "") : stripStandingContext(m.content);
+            return (m.role === "assistant" ? "Nymbot: " : "User: ") + truncateText(ft, 800);
+          }));
+          if (chanFolded.text) {
+            compactSummary = chanFolded.text;
+            chanCtx.turn.setSummary(chanFolded.text, Number(chanFold[chanFold.length - 1].at) || 0);
+            if (botUsageBilled(chanFolded.usage)) compactSide = [{ model: chanFolded.model, usage: chanFolded.usage }];
+          }
+        } catch (e) { }
+      }
+    }
     if (!fresh && !continuing && !freeTurn && !teamRun && !researchRun && turnRows.length) {
       var sumRow = await runSummaryGet(env.DB_BOT, runPk, threadKey);
       compactSummary = sumRow ? runCipher.open(sumRow.text) : "";
@@ -10649,16 +10751,17 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         } else {
           bgPark = await botBackgroundStart(env, userPubkey, {
             runId: runRoot, thread: threadKey, req: bgRequestOf(body), resume: chatResult.resumeState,
+            chan: chanCtx ? { pq: chanCtx.pq || null, c: chanCtx.ctl ? chanCtx.ctl() || undefined : undefined } : undefined,
             spent: bgSpent, next: bgNextReserve, grant: bgAsk, retryAfter: bgRetry
           });
         }
         if (bgPark && runCtl) runCtl.bg = bgPark.until;
       }
       if (!bgPark) {
-        var token = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-        var parked = await botResumePut(env, token, userPubkey, runRoot, chatResult.resumeState);
+        var token = chanCtx && chanCtx.resumeKey ? chanCtx.resumeKey().id : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+        var parked = await botResumePut(env, token, userPubkey, runRoot, chatResult.resumeState, chanCtx);
         if (parked && parked.ok) {
-          resumeToken = token;
+          resumeToken = parked.id || token;
           resumeExpiresIn = parked.expiresIn || 0;
         }
       }
@@ -10747,6 +10850,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
 
   var botBgPublish = async function (obj) {
     if (!obj || typeof obj !== "object") return;
+    if (chanCtx && chanCtx.finish && obj.event && typeof obj.event.chanText === "string") obj = await chanCtx.finish(obj);
     var evs = [obj.event, obj.selfEvent].filter(function (e) { return e && typeof e === "object" && e.id; });
     for (var i = 0; i < evs.length; i++) {
       try { await publishEventToRelays(evs[i]); } catch (e) { }
@@ -10774,6 +10878,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (!/^[0-9a-f]{64}$/.test(bgRun)) return json({ error: "That run cannot be carried on.", fatal: true }, 400);
     var bgEnv = await bgOpen(env, bgPk, bgRun, body.blob);
     if (!bgEnv || bgEnv.run !== bgRun) return json({ error: "That run cannot be carried on.", fatal: true }, 400);
+    if (bgEnv.chan && !chanCtx) chanCtx = chanLegHooks(env, botPrivkey, bgPk, bgRun, bgEnv.chan.pq, bgEnv.chan.c);
+    if (chanCtx && chanCtx.cipher) runCipher = chanCtx.cipher;
     var bgFields = function (state) {
       return {
         asked: bgRun, state: state, chat: bgEnv.notify ? bgEnv.notify.chat : undefined,
@@ -10782,7 +10888,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     };
     if (body.action === "pm-bgend") {
       var endKey = "b:" + bgRun + ":end";
-      var endStored = await runResultGet(env.DB_BOT, bgPk, endKey);
+      var endStored = await botResultGet(env, bgPk, endKey);
       if (endStored && endStored.body) return json(endStored.body);
       await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":");
       var endWhy = body.state === "expired" && bgEnv.pending ? "expired" : "failed";
@@ -10796,22 +10902,23 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           event: endPair.event, selfEvent: endPair.selfEvent, cost: 0, costCredits: 0,
           pro: !!(bgEnv.req && bgEnv.req.proModel), expired: true, replyTo: bgRun, askedId: endIds.msgId
         };
-        await runResultPut(env.DB_BOT, bgPk, ["e:" + endIds.eventId, "x:" + endIds.msgId], { body: endReply, status: 200 },
+        await botResultPut(env, bgPk, ["e:" + endIds.eventId, "x:" + endIds.msgId], { body: endReply, status: 200 },
           Date.now() + BG_KEEP_AFTER_MS - RUN_RESULT_KEEP_MS);
         await botBgPublish(endReply);
         endLegs = endLegs.concat([endIds.eventId]);
       }
       await botBgRepack(bgPk, bgRun, endLegs, endWhy, null);
       await botBgNotify(bgEnv.notify, bgFields(endWhy));
+      if (bgEnv.chan) await chanRunEnd(env, bgPk, bgRun);
       var endBody = { ok: true, end: endWhy };
-      await runResultPut(env.DB_BOT, bgPk, [endKey], { body: endBody, status: 200 }, Date.now());
+      await botResultPut(env, bgPk, [endKey], { body: endBody, status: 200 }, Date.now());
       return json(endBody);
     }
     var bgN = Math.floor(Number(bgEnv.legs) || 0) + 1;
     if (String(body.leg) !== String(bgN)) return json({ error: "That step is not the next one.", fatal: true }, 409);
     var bgIds = await bgLegIds(bgRun, bgN);
     var bgCtlKey = "b:" + bgRun + ":" + bgN;
-    var bgStored = await runResultGet(env.DB_BOT, bgPk, bgCtlKey);
+    var bgStored = await botResultGet(env, bgPk, bgCtlKey);
     if (bgStored && bgStored.body) return json(bgStored.body);
     if (bgN > 2) await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":" + (bgN - 1));
     var bgPoll = null;
@@ -10822,7 +10929,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var bgEnd = async function (control, state) {
       if (state && state !== "stopped") await botBgNotify(bgEnv.notify, bgFields(state));
       if (control.end) await runResultDrop(env.DB_BOT, bgPk, "b:" + bgRun + ":");
-      await runResultPut(env.DB_BOT, bgPk, [bgCtlKey], { body: control, status: 200 }, Date.now());
+      if (control.end && bgEnv.chan) await chanRunEnd(env, bgPk, bgRun);
+      await botResultPut(env, bgPk, [bgCtlKey], { body: control, status: 200 }, Date.now());
       return json(control);
     };
     var bgNow = Date.now();
@@ -10835,8 +10943,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       replyLink = [bgRun, bgIds.msgId];
       var capPair = await wrapReplyPair(botBgCapText(capWhy, bgEnv), bgEnv.thread || null);
       var capToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-      var capPut = await botResumePut(env, capToken, bgPk, bgRun, bgEnv.resume);
+      var capPut = await botResumePut(env, capToken, bgPk, bgRun, bgEnv.resume, chanCtx);
       var capOk = !!(capPut && capPut.ok);
+      if (capOk) capToken = capPut.id || capToken;
       var capBody = {
         event: capPair.event, selfEvent: capPair.selfEvent, capStopped: true, truncated: true,
         cost: 0, costCredits: 0, pro: !!(bgEnv.req && bgEnv.req.proModel),
@@ -10844,7 +10953,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         resumeToken: capOk ? capToken : undefined, resumeExpiresIn: capOk ? capPut.expiresIn || 0 : undefined,
         resumable: capOk || undefined, replyTo: bgRun, askedId: bgIds.msgId
       };
-      await runResultPut(env.DB_BOT, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: capBody, status: 200 }, bgKeepAt);
+      if (chanCtx && chanCtx.finish) capBody = await chanCtx.finish(capBody);
+      await botResultPut(env, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: capBody, status: 200 }, bgKeepAt);
       await botBgRepack(bgPk, bgRun, bgLegList, "parked", capOk ? capToken : null);
       await botBgPublish(capBody);
       return await bgEnd({ ok: true, end: "paused", reason: capWhy }, "paused");
@@ -10864,14 +10974,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var legOut = await botLegResult(await botRunLeg(legBody, legRun));
     var legObj = legOut.obj;
     if (legObj && (legObj.event || legObj.selfEvent)) await botBgPublish(legObj);
-    if (legOut.status === 200 && legObj && legObj.pendingTool && legRun.waitPending && legRun.nextResume) {
+    if (legOut.status === 200 && legObj && (legObj.pendingTool || (legObj.background && legObj.background.waiting)) && legRun.waitPending && legRun.nextResume) {
       var waitNow = Date.now();
       var waitEnv = Object.assign({}, bgEnv, {
         resume: legRun.nextResume, pending: legRun.waitPending, answer: null, legs: bgN, ids: bgLegList,
         spent: (Number(bgEnv.spent) || 0) + (Number(legRun.spentMilli) || 0),
         left: Math.max(BG_LEG_GAP_MS, Number(bgEnv.until) - waitNow), waitAt: waitNow, waitUntil: waitNow + ASK_WAIT_MS
       });
-      var waitBlob = await bgSeal(env, bgPk, bgRun, waitEnv);
+      var waitBlob = await bgSeal(env, bgPk, bgRun, waitEnv, { job: true });
       if (waitBlob) {
         await botBgNotify(bgEnv.notify, bgFields(legRun.waitPending.kind === "plan" ? "approval" : "question"));
         return await bgEnd({ ok: true, wait: { blob: waitBlob, until: waitEnv.waitUntil } }, null);
@@ -10883,31 +10993,39 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         resume: legRun.nextResume, pending: null, answer: null, legs: bgN, ids: bgLegList,
         spent: (Number(bgEnv.spent) || 0) + (Number(legRun.spentMilli) || 0), next: Number(legRun.nextReserve) || 0
       });
-      var nextBlob = await bgSeal(env, bgPk, bgRun, nextEnv);
+      var nextBlob = await bgSeal(env, bgPk, bgRun, nextEnv, { job: true });
       if (nextBlob) {
         return await bgEnd({ ok: true, next: { blob: nextBlob, at: Date.now() + Math.max(BG_LEG_GAP_MS, Number(legRun.retryAfter) || 0) } }, null);
       }
       var lostToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-      var lostPut = await botResumePut(env, lostToken, bgPk, bgRun, legRun.nextResume);
-      await botBgRepack(bgPk, bgRun, bgLegList, "parked", lostPut && lostPut.ok ? lostToken : null);
+      var lostPut = await botResumePut(env, lostToken, bgPk, bgRun, legRun.nextResume, chanCtx);
+      var lostOk = !!(lostPut && lostPut.ok);
+      if (lostOk && chanCtx && chanCtx.finish) await botBgPublish({ event: { chanText: "" }, background: { state: "paused" } });
+      await botBgRepack(bgPk, bgRun, bgLegList, "parked", lostOk ? lostPut.id || lostToken : null);
       return await bgEnd({ ok: true, end: "paused" }, "paused");
     }
     if (legObj && (legObj.noCredits || (legOut.status === 200 && (!legObj.event || (legObj.background && !legRun.nextResume))))) {
       var pauseBody = Object.assign({}, legObj, { replyTo: bgRun, askedId: bgIds.msgId });
-      if (!pauseBody.resumeToken) {
+      var pauseHad = pauseBody.resumeToken || (chanCtx && chanCtx.parkedId ? chanCtx.parkedId() : null);
+      if (!pauseHad) {
         var pauseToken = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-        var pausePut = await botResumePut(env, pauseToken, bgPk, bgRun, bgEnv.resume);
+        var pausePut = await botResumePut(env, pauseToken, bgPk, bgRun, bgEnv.resume, chanCtx);
         if (pausePut && pausePut.ok) {
-          pauseBody.resumeToken = pauseToken;
-          pauseBody.resumable = true;
+          pauseHad = pausePut.id || pauseToken;
+          if (chanCtx && chanCtx.finish) {
+            pauseBody = await chanCtx.finish(Object.assign(pauseBody, { event: { chanText: "" }, background: { state: "paused" } }));
+          } else {
+            pauseBody.resumeToken = pauseHad;
+            pauseBody.resumable = true;
+          }
         }
       }
-      await runResultPut(env.DB_BOT, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: pauseBody, status: legObj.noCredits ? 402 : 200 }, bgKeepAt);
-      await botBgRepack(bgPk, bgRun, bgLegList, "parked", pauseBody.resumeToken || null);
+      await botResultPut(env, bgPk, ["e:" + bgIds.eventId, "x:" + bgIds.msgId], { body: pauseBody, status: legObj.noCredits ? 402 : 200 }, bgKeepAt);
+      await botBgRepack(bgPk, bgRun, bgLegList, "parked", pauseHad || null);
       return await bgEnd({ ok: true, end: "paused", reason: legObj.noCredits ? "credits" : "cap" }, "paused");
     }
     if (legOut.status === 200 && legObj) {
-      var fin = legObj.stopped ? "stopped" : (legObj.pendingTool ? "approval" : (legObj.resumeToken ? "paused" : "done"));
+      var fin = legObj.stopped ? "stopped" : (legObj.pendingTool || legObj.phase === "park" ? "approval" : (legObj.resumeToken || legObj.resumable ? "paused" : "done"));
       return await bgEnd({ ok: true, end: fin }, fin);
     }
     if (!legObj || legOut.status >= 500 || (legOut.status === 429 && !legObj.runCap) || legOut.status === 202) {
@@ -10931,10 +11049,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var sNow = Date.now();
     if (!(Number(sealed.expiresAt) > sNow)) return json({ ok: true, expired: true });
     var sKey = "s:" + sId + ":" + sLeg;
-    var sStored = await runResultGet(env.DB_BOT, sPk, sKey);
+    var sStored = await botResultGet(env, sPk, sKey);
     if (sStored && sStored.body) return json(sStored.body);
     var sKeep = async function (control) {
-      await runResultPut(env.DB_BOT, sPk, [sKey], { body: control, status: 200 }, Date.now());
+      await botResultPut(env, sPk, [sKey], { body: control, status: 200 }, Date.now());
       return json(control);
     };
     var sPush = sealed.push || null;
@@ -10946,7 +11064,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var sDay = body.day && typeof body.day === "object" ? body.day : {};
     if ((Number(sDay.runs) || 0) >= Number(sealed.maxRunsPerDay)) return json({ ok: true, skipped: "runs" });
     if ((Number(sDay.credits) || 0) + Number(sealed.maxCreditsPerRun) > Number(sealed.dailyCap)) return json({ ok: true, skipped: "credits" });
+    if (!sealed.chan && chanRequired(env)) return json({ ok: true, skipped: "channel" });
     var sIds = await bgSchedIds(sId, firedAt);
+    if (sealed.chan && !chanCtx) chanCtx = chanLegHooks(env, botPrivkey, sPk, sIds.msgId, sealed.chan.pq);
+    if (chanCtx && chanCtx.cipher) runCipher = chanCtx.cipher;
     var sBody = { action: "pm", pubkey: sPk, eventId: sIds.eventId, fresh: true, maxCost: Number(sealed.maxCreditsPerRun) };
     if (sealed.tier === "pro" && sealed.model) sBody.proModel = sealed.model;
     if (sealed.ask === true) sBody.ask = true;
@@ -11015,6 +11136,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var sParsed = schedParse(body.schedule, Date.now(), isPrivateHostUrl);
     if (sParsed.error) return json({ error: sParsed.error, push: sParsed.push || undefined, expired: sParsed.expired || undefined }, 400);
     var sc = sParsed.sched;
+    var sChan = chanJobOf(body.chan);
+    if (!sChan && sc.mode === "run" && chanRequired(env)) return json({ error: "This version of Nymbot needs an update to keep running schedules. Update the app, then save the schedule again.", code: "channel-required", channelRequired: true, update: true }, 426);
     if ((await sha256Hex(body.schedule.payload)) !== sc.sha256) {
       return json({ error: "The schedule does not match the hash it was signed with." }, 400);
     }
@@ -11034,9 +11157,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       : {
         v: 1, id: sc.id, mode: "run", prompt: sc.prompt, title: sc.title, thread: sc.thread, tier: sc.tier, model: sc.model,
         maxCreditsPerRun: sc.maxCreditsPerRun, maxRunsPerDay: sc.maxRunsPerDay, dailyCap: sc.dailyCap,
-        expiresAt: sc.expiresAt, repeat: sc.repeat, push: sc.push, ask: sc.ask === true, runChanges: sc.runChanges === true
+        expiresAt: sc.expiresAt, repeat: sc.repeat, push: sc.push, ask: sc.ask === true, runChanges: sc.runChanges === true,
+        chan: sChan || undefined
       };
-    var sBlob = await bgSeal(env, aPk, "s:" + sc.id, sSealed);
+    var sBlob = await bgSeal(env, aPk, "s:" + sc.id, sSealed, { job: true });
     if (!sBlob) return json({ error: "Server schedules are not available right now.", unavailable: true }, 503);
     var sPut = await bgDriver(env, aPk, {
       drive: "sched-put", id: sc.id, mode: sc.mode, sha: sc.sha256, blob: sBlob, nextAt: sc.nextAt, step: sc.step,
@@ -11112,23 +11236,26 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var wLeg = String(body.leg || "");
     if (wRun.indexOf("w:") !== 0 || !prwIdOk(wId) || !/^p:[0-9]{1,16}$/.test(wLeg)) return json({ error: "Unknown watch.", fatal: true }, 400);
     var wKey = "w:" + wId + ":" + wLeg;
-    var wStored = await runResultGet(env.DB_BOT, wPk, wKey);
+    var wStored = await botResultGet(env, wPk, wKey);
     if (wStored && wStored.body) return json(wStored.body);
     var st = await bgOpen(env, wPk, wRun, body.blob);
     if (!st || st.id !== wId) return json({ ok: true, stop: { reason: "gone" } });
+    if (st.chan && !chanCtx) chanCtx = chanLegHooks(env, botPrivkey, wPk, wRun + ":" + wLeg.slice(2), st.chan.pq);
+    if (chanCtx && chanCtx.cipher) runCipher = chanCtx.cipher;
     var wKeep = async function (control) {
-      await runResultPut(env.DB_BOT, wPk, [wKey], { body: control, status: 200 }, Date.now());
+      await botResultPut(env, wPk, [wKey], { body: control, status: 200 }, Date.now());
       return json(control);
     };
     var wEnd = async function (ev) {
       st.stopped = ev.kind;
       if (ev.kind) await botPrwPost(st, ev);
       st.offers = {};
-      var gone = await bgSeal(env, wPk, wRun, st);
+      var gone = await bgSeal(env, wPk, wRun, st, { job: true });
       return await wKeep({ ok: true, stop: { reason: ev.kind, blob: gone || undefined } });
     };
     var now = Date.now();
     if (now >= Number(st.until)) return await wEnd({ kind: "expired" });
+    if (!st.chan && chanRequired(env)) return json({ ok: true, paused: "channel", next: { blob: body.blob, at: now + PRW_PAUSE_MS } });
     var cfg = parseGitConfig(st.git);
     if (!cfg || cfg.repo !== st.repo || cfg.provider !== st.provider) return await wEnd({ kind: "gone" });
     st.git = Object.assign({}, st.git, { provider: cfg.provider, host: cfg.host, repo: cfg.repo });
@@ -11157,7 +11284,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if ((Number(st.fixes) || 0) >= PRW_FIX_MAX) return await wEnd({ kind: "limit" });
       await botPrwFix(st, pick, wPk);
     }
-    var blob = await bgSeal(env, wPk, wRun, st);
+    var blob = await bgSeal(env, wPk, wRun, st, { job: true });
     if (!blob) return json({ error: "That watch could not be saved.", retry: true }, 503);
     var wGap = pick ? PRW_IDLE_MS[0] / 2.5 : Number(polled.wait) || PRW_IDLE_MS[0];
     var wCap = Number(env.PRWATCH_POLL_MS);
@@ -11254,6 +11381,13 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     }
     var id = await prwId(cfg.provider, cfg.host, cfg.repo, w.branch);
     var seed = prwNew(id, Object.assign({}, body.git, { provider: cfg.provider, host: cfg.host, repo: cfg.repo, token: cfg.token }), w, null, push, Date.now());
+    var wChan = chanJobOf(body.chan);
+    if (wChan) {
+      seed.chan = wChan;
+      seed.thread = null;
+    } else if (chanRequired(env)) {
+      return json({ error: "This version of Nymbot needs an update to keep watching pull requests. Update the app, then try again.", code: "channel-required", channelRequired: true, update: true }, 426);
+    }
     var first;
     try {
       first = await botPrwReader(cfg)(prwPaths(seed).pull, "");
@@ -11274,7 +11408,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (pull.state !== "open") return json({ error: "That pull request is already " + pull.state + ".", state: pull.state }, 409);
     seed.pull = pull;
     seed.sha = w.sha || pull.sha;
-    var blob = await bgSeal(env, aPk, "w:" + id, seed);
+    var blob = await bgSeal(env, aPk, "w:" + id, seed, { job: true });
     if (!blob) return json({ error: "Watching pull requests is not available right now.", unavailable: true }, 503);
     var put = await bgDriver(env, aPk, { drive: "watch-put", id: id, blob: blob, at: Date.now() + 5000, until: seed.until });
     if (!put) return json({ error: "Watching pull requests is not available right now.", unavailable: true }, 503);
@@ -11290,7 +11424,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   }
 
   if (body.action === "pm-schedfire" || body.action === "pm-schednotify") {
-    return await botScheduleFire();
+    return await botSchedReseal(env, String(userPubkey).toLowerCase(), String(body.runId || ""), body.blob, await botScheduleFire());
   }
 
   if (body.action === "pm-prwatch") {
@@ -11422,7 +11556,7 @@ async function onRequest(context) {
     } catch (e) {
       await botReleaseStrandedTurn(context);
       if (e instanceof BtcPriceUnavailable) return botPriceRefusal(e);
-      console.error("bot PM action error:", e);
+      console.error(botLogLine("bot PM action error", e));
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
@@ -11554,7 +11688,7 @@ async function onRequest(context) {
         });
     }
   } catch (e) {
-    console.error("command processing error:", e);
+    console.error(botLogLine("command processing error", e));
     response = "Sorry, something went wrong processing that command.";
   }
 
@@ -15292,6 +15426,11 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botResultPut,
+  botResultGet,
+  botLogLine,
+  botFailText,
+  proHttpChat,
   BOT_STREAM_TIMING,
   botSchedState,
   botCreditInvoice,

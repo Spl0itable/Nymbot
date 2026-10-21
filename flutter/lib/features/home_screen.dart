@@ -13,6 +13,7 @@ import '../models/conversation.dart';
 import '../models/memory.dart';
 import '../models/workspace.dart';
 import '../services/attachments.dart';
+import 'clipboard_image_paste.dart';
 import '../services/background_jobs.dart';
 import '../services/backup.dart';
 import '../services/share_file.dart';
@@ -59,6 +60,7 @@ import 'sheets/workspaces_sheet.dart';
 import 'sheets/sheet.dart';
 import 'command_palette.dart';
 import 'delete_account.dart';
+import 'desktop_layout.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'media_viewer.dart';
@@ -179,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _revealTimer;
   Completer<void>? _revealDone;
   String? _dictation;
+  Conversation? _dictateChat;
   DateTime? _dictateFrom;
   Timer? _dictateTick;
   DictationMeter? _meter;
@@ -198,6 +201,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _input.addListener(() {
       final empty = _input.text.trim().isEmpty;
       if (empty != _inputEmpty) setState(() => _inputEmpty = empty);
+      if (!empty && mounted) AppScope.of(context).composing();
     });
     _voice.addListener(() => setState(() {}));
     RunOutputs.toComposer.addListener(_takeRunOutput);
@@ -206,6 +210,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final conv = app.current;
       if (conv != null) _input.setMarkdown(app.store.draft(conv.id));
       app.onCapPrompt = _capPrompt;
+      app.onGiveBack = (merge) {
+        if (!mounted) return;
+        _input.setMarkdown(merge(_input.markdown));
+        _edited();
+      };
+      app.onOpen = (from, to) {
+        if (!mounted) return;
+        if (from != null) unawaited(app.store.setDraft(from, _input.markdown));
+        _input.setMarkdown(app.store.draft(to));
+        _lastInput = _input.text;
+        setState(() => _hasText = _input.text.trim().isNotEmpty);
+      };
       app.onBackgroundPrompt = _backgroundPrompt;
       app.onSteerMissed = (text, conv) async =>
           mounted ? await offerAsMessage(context) : null;
@@ -219,7 +235,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _app = AppScope.of(context);
+    final app = AppScope.of(context);
+    if (!identical(app, _app)) {
+      _app?.modelNote.removeListener(_sayModel);
+      app.modelNote.addListener(_sayModel);
+    }
+    _app = app;
+  }
+
+  void _sayModel() {
+    final text = _app?.modelNote.value;
+    if (text != null) _say(text);
   }
 
   @override
@@ -263,10 +289,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _edited();
     }
     if (item.files.isNotEmpty) {
+      final into = app.current?.id;
       final picked = await Attachments.intake(item.files);
-      for (final a in picked.files) {
-        app.addAttachment(a);
-      }
+      if (into != null) app.attachTo(into, picked.files, upload: true);
       if (picked.problems.isNotEmpty) {
         _say(t('Could not attach: {names}',
             {'names': picked.problems.join('; ')}));
@@ -278,6 +303,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _toggleDictation() async {
     if (_dictation == 'recording') return _finishDictation();
     if (_dictation != null) return;
+    _dictateChat = AppScope.read(context).current;
     setState(() => _dictation = 'starting');
     try {
       await Dictation.start();
@@ -368,6 +394,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _stopLevels();
     final silent = _meter?.silentClip ?? false;
     _meter = null;
+    final from = _dictateChat ?? AppScope.read(context).current;
+    _dictateChat = null;
     setState(() => _dictation = 'sending');
     void settle(String? message) {
       if (!mounted) return;
@@ -409,10 +437,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     settle(null);
-    final draft = _input.markdown.trimRight();
-    _input.setMarkdown(draft.isEmpty ? said : '$draft $said');
-    _edited();
-    _inputFocus.requestFocus();
+    if (from == null) return;
+    await app.dictated(from, said);
+    if (mounted && app.current?.id == from.id) _inputFocus.requestFocus();
   }
 
   Widget _dictationStrip(BuildContext context) {
@@ -505,6 +532,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _app?.modelNote.removeListener(_sayModel);
     RunOutputs.toComposer.removeListener(_takeRunOutput);
     Incoming.stop();
     WidgetsBinding.instance.removeObserver(this);
@@ -687,6 +715,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (dragged ||
         (n is UserScrollNotification && n.direction != ScrollDirection.idle)) {
       _followDraft = false;
+      _settling++;
     }
     if (dragged && _inputFocus.hasFocus) _inputFocus.unfocus();
     return false;
@@ -701,7 +730,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+      ..showSnackBar(SnackBar(content: UiText(text), duration: const Duration(seconds: 3)));
   }
 
   /// Shows an undoable notice for anything the app keeps on your behalf.
@@ -710,7 +739,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
-        content: Text(text),
+        content: UiText(text),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(label: t('Undo'), onPressed: undo),
       ));
@@ -725,7 +754,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final arg = m.group(2)!.trim();
     if ((cmd == 'image' || cmd == 'video' || cmd == 'speak') &&
         RegExp(r'^off$', caseSensitive: false).hasMatch(arg)) {
-      await app.setMediaModel(null, forChat: app.current?.mediaModel != null);
+      await app.setMediaModel(null);
       await app.note(t('Back to answering in words.'));
       return true;
     }
@@ -1162,7 +1191,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _say(t('Copied.'));
     }, shift: true);
     bindings[const SingleActivator(LogicalKeyboardKey.escape)] = () {
-      if (_findTerm != null) setState(() => _findTerm = null);
+      if (_findTerm != null) {
+        setState(() => _findTerm = null);
+      } else if (_tasksOpen && tasksBeside(context)) {
+        setState(() => _tasksOpen = false);
+      }
     };
     bindings[const SingleActivator(LogicalKeyboardKey.escape, shift: true)] =
         () {
@@ -1310,6 +1343,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final text = override ?? _input.markdown.trim();
     if (text.isEmpty) return;
     final app = AppScope.read(context);
+    final conv = app.current;
+    if (conv == null) return;
+    final held = override == null && !conv.support ? app.takeComposer() : null;
     if (_touchKeyboard &&
         (!fromKey || MediaQuery.viewInsetsOf(context).bottom > 0)) {
       _inputFocus.unfocus();
@@ -1317,25 +1353,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (override == null) {
       _input.clear();
       setState(() => _suggestTerm = '');
-      await app.store.setDraft(app.current!.id, '');
+      await app.store.setDraft(conv.id, '');
     }
-    if (app.current?.support ?? false) {
+    if (conv.support) {
       _toBottom();
-      final outcome = await app.sendSupport(text);
+      final outcome =
+          await app.sendSupport(text, returns: override == null);
       if (!mounted) return;
       if (outcome == ContactOutcome.sent) {
         _toBottom();
         return;
       }
-      if (override == null && _input.markdown.trim().isEmpty) {
-        _input.setMarkdown(text);
-        _lastInput = _input.text;
-        setState(() => _hasText = true);
-      }
       _say(supportSendError(outcome, connected: app.relays.connected > 0));
       return;
     }
     if (override == null && await _localCommand(text)) {
+      if (held != null) app.attachTo(conv.id, held.files, quote: held.quote);
       _toBottom();
       return;
     }
@@ -1356,14 +1389,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }
     }
-    final asked = app.current?.id;
-    final went = await app.send(text, bare: bare);
-    final back = app.takeCapReturned();
-    if (back != null && mounted && app.current?.id == asked) {
-      _input.setMarkdown(back);
-      _lastInput = _input.text;
-      setState(() => _hasText = true);
-    }
+    final asked = conv.id;
+    final went = await app.send(text,
+        target: conv,
+        bare: bare,
+        withAttachments: held?.files,
+        withQuote: held?.quote,
+        returns: override == null);
     if (went && app.current?.id == asked) {
       final last = app.messages.isEmpty ? null : app.messages.last;
       final streamed = last != null && app.streamedReplies.contains(last.id);
@@ -1547,7 +1579,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : t('Rewound. {n} messages removed.', {'n': done.ids.length});
     ScaffoldMessenger.of(context).clearSnackBars();
     final bar = ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(text),
+      content: UiText(text),
       duration: const Duration(seconds: 8),
       persist: false,
       action: SnackBarAction(
@@ -1836,6 +1868,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     void loading(bool busy) {
       if (busy && mounted) _say(t('Getting your files ready…'));
     }
+    final pickFor = app.current?.id;
     try {
       picked = source == 'camera'
           ? await Attachments.capture(video: video)
@@ -1845,13 +1878,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'device settings.'));
       return;
     }
-    for (final a in picked.files) {
-      app.addAttachment(a);
-    }
+    if (pickFor != null) app.attachTo(pickFor, picked.files, upload: true);
     if (picked.problems.isNotEmpty && mounted) {
       _say(t('Could not attach: {names}', {'names': picked.problems.join('; ')}));
     }
   }
+
+  Future<void> _pasteImage(PastedImage image) async {
+    if (!mounted) return;
+    final app = AppScope.read(context);
+    if (app.current?.support ?? false) {
+      _say(t('Attachments cannot be sent to support.'));
+      return;
+    }
+    final name = image.fileName;
+    final refused = Attachments.tooLarge(name, image.bytes.length);
+    if (refused != null) {
+      _say(t('Could not attach: {names}', {'names': '$name ($refused)'}));
+      return;
+    }
+    final pasteFor = app.current?.id;
+    final picked = await Attachments.intake([(name: name, bytes: image.bytes)]);
+    if (!mounted) return;
+    if (pasteFor != null) app.attachTo(pasteFor, picked.files, upload: true);
+    if (picked.problems.isNotEmpty) {
+      _say(t('Could not attach: {names}', {'names': picked.problems.join('; ')}));
+    }
+  }
+
+  void _onPastedImage(PastedImage image) => unawaited(_pasteImage(image));
 
   Future<void> _openSearch({String term = ''}) async {
     final app = AppScope.read(context);
@@ -1975,13 +2030,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
     }
 
+    final desktop = desktopLayout(context);
+    final heading = conv?.support ?? false
+        ? t('Support')
+        : conv == null || conv.title.isEmpty
+            ? t('New chat')
+            : conv.title;
+
     return CallbackShortcuts(
       bindings: _shortcuts(app),
       child: Focus(
         autofocus: true,
-        child: Scaffold(
-          drawer: _ChatDrawer(onJump: _jumpFromLibrary),
-          drawerEdgeDragWidth: MediaQuery.sizeOf(context).width * 0.5,
+        child: _beside(desktop, Scaffold(
+          drawer: desktop ? null : _ChatDrawer(onJump: _jumpFromLibrary),
+          drawerEdgeDragWidth: desktop ? null : MediaQuery.sizeOf(context).width * 0.5,
           appBar: AppBar(
             title: Semantics(
               button: true,
@@ -1996,11 +2058,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     children: [
                       Flexible(
                         child: Text(
-                          conv?.support ?? false
-                              ? t('Support')
-                              : conv == null || conv.title.isEmpty
-                                  ? t('New chat')
-                                  : conv.title,
+                          heading,
+                          semanticsLabel: conv?.anon ?? false
+                              ? '$heading, ${t('Anonymous chat')}'
+                              : null,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -2019,15 +2080,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
             actions: [
-              if (conv?.anon ?? false)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Chip(
-                    label: Text(t('Anon'), style: const TextStyle(fontSize: 11)),
-                    visualDensity: VisualDensity.compact,
-                    side: BorderSide(color: Theme.of(context).colorScheme.secondary),
-                  ),
-                ),
               TasksButton(open: _tasksOpen, onPressed: () => _openTasks(context)),
               IconButton(
                 icon: const NymGlyph('search', size: 20),
@@ -2076,8 +2128,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ],
           ),
           ),
-        ),
+        )),
       ),
+    );
+  }
+
+  Widget _beside(bool desktop, Widget chat) {
+    if (!desktop) return chat;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          key: const ValueKey('docked-sidebar'),
+          width: kSidebarWidth,
+          child: _ChatDrawer(onJump: _jumpFromLibrary, docked: true),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(child: chat),
+      ],
     );
   }
 
@@ -2623,15 +2691,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: CodeFrame(
                     controller: _input,
                     scroll: _inputScroll,
-                    child: TextField(
+                    child: ImagePasteScope(
+                      limit: Attachments.maxImageSourceBytes,
+                      onImage: _onPastedImage,
+                      child: TextField(
                       controller: _input,
                       focusNode: _inputFocus,
                       scrollController: _inputScroll,
+                      contentInsertionConfiguration:
+                          ImagePasteScope.keyboardInsertion(_onPastedImage),
+                      contextMenuBuilder: (context, state) =>
+                          ImagePasteScope.contextMenu(context, state,
+                              limit: Attachments.maxImageSourceBytes,
+                              onImage: _onPastedImage),
                       minLines: 1,
                       maxLines: 6,
-                      textInputAction: app.settings.sendOnEnter
-                          ? TextInputAction.send
-                          : TextInputAction.newline,
+                      textInputAction: TextInputAction.newline,
                       onChanged: (v) {
                         // Only a paste can add this much in one change; it becomes an attachment.
                         final run = _insertedRun(_lastInput, v);
@@ -2661,11 +2736,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           });
                         }
                       },
-                      onSubmitted: app.settings.sendOnEnter
-                          ? (_) {
-                              if (!_pickMention()) _send();
-                            }
-                          : null,
                       decoration: InputDecoration(
                         hintText: support
                             ? t('Write to the Nymbot developer')
@@ -2694,6 +2764,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               )
                             : null,
                       ),
+                    ),
                     ),
                   ),
                 ),
@@ -2861,7 +2932,7 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
       messenger
         ..clearSnackBars()
         ..showSnackBar(SnackBar(
-            content: Text(t('Copied.')),
+            content: UiText(t('Copied.')),
             duration: const Duration(seconds: 3)));
     case 'clear':
       final before = await app.clearCurrent(target: conv);
@@ -2869,7 +2940,7 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
         messenger
           ..clearSnackBars()
           ..showSnackBar(SnackBar(
-            content: Text(t('Cleared.')),
+            content: UiText(t('Cleared.')),
             duration: const Duration(seconds: 8),
             action: SnackBarAction(
                 label: t('Undo'), onPressed: () => app.restore(before)),
@@ -2955,9 +3026,10 @@ Future<void> confirmDeleteChat(
 }
 
 class _ChatDrawer extends StatefulWidget {
-  const _ChatDrawer({required this.onJump});
+  const _ChatDrawer({required this.onJump, this.docked = false});
 
   final Future<void> Function(ArtifactJump jump) onJump;
+  final bool docked;
 
   @override
   State<_ChatDrawer> createState() => _ChatDrawerState();
@@ -2984,7 +3056,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
-        content: Text(round.state == 'skipped'
+        content: UiText(round.state == 'skipped'
             ? t('Sync is off, so there is nothing to bring in.')
             : t('Could not sync just now. Try again in a moment.')),
         duration: const Duration(seconds: 3),
@@ -2996,7 +3068,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     if (!mounted) return;
     setState(() => _artifactCount = artifactIndex(AppScope.read(context)).length);
     if (jump == null) return;
-    Navigator.pop(context);
+    _close();
     await widget.onJump(jump);
   }
 
@@ -3008,6 +3080,10 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         'running' => app.runningCount,
         _ => null,
       };
+
+  void _close() {
+    if (!widget.docked && mounted) Navigator.pop(context);
+  }
 
   void _toggleMenu() {
     setState(() => _libraryOpen = !_libraryOpen);
@@ -3124,7 +3200,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         ),
         onTap: () async {
           await app.open(conv);
-          if (context.mounted) Navigator.pop(context);
+          _close();
         },
       ));
     }
@@ -3169,7 +3245,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
               tooltip: t('New chat'),
               onPressed: () async {
                 await app.newConversation();
-                if (context.mounted) Navigator.pop(context);
+                _close();
               },
             ),
           ],
@@ -3250,20 +3326,20 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           ('prompt-library', t('Prompt library'), () async {
             final picked = await showPromptsSheet(context);
             if (picked != null) app.queueInput(picked);
-            if (picked != null && context.mounted) Navigator.pop(context);
+            if (picked != null) _close();
           }),
           ('personas', t('Personas'), () => showPersonasSheet(context)),
           ('skills', t('Skills'), () async {
             final picked = await showSkillsSheet(context);
             if (picked != null) app.queueInput(picked);
-            if (picked != null && context.mounted) Navigator.pop(context);
+            if (picked != null) _close();
           }),
           ('workspace', t('Workspaces'), () => showWorkspacesSheet(context)),
           ('bot', t('Bots'), () => showBotsSheet(context)),
           ('artifacts', t('Artifacts'), _openArtifactLibrary),
           ('scheduled', t('Scheduled'), () async {
             final went = await showSchedulesSheet(context);
-            if (went != null && context.mounted) Navigator.pop(context);
+            if (went != null) _close();
           }),
           ('running', t('Running now'), () => showRunningNow(context)),
           ('saved-messages', t('Saved messages'), () async {
@@ -3370,6 +3446,9 @@ class _ChatDrawerState extends State<_ChatDrawer> {
     );
 
     return Drawer(
+      width: widget.docked ? kSidebarWidth : null,
+      elevation: widget.docked ? 0 : null,
+      shape: widget.docked ? const RoundedRectangleBorder() : null,
       child: SafeArea(
         child: LayoutBuilder(
           builder: (context, box) {

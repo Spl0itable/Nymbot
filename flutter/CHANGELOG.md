@@ -5,6 +5,131 @@ All notable changes to the Nymbot mobile app. The format is
 the section whose heading matches the version read out of the APK, so every
 release needs a block here and a matching `version:` in `pubspec.yaml`.
 
+## [1.0.8] - 2026-10-20
+
+Added
+- Paste an image from the clipboard into the composer and it attaches and
+  uploads like a picked image.
+- Plan first, then approve: Nymbot can show its plan before a task runs, and
+  you approve, edit, reject or ask for a revision.
+- Nymbot can ask you a question mid-task and waits for the answer even with
+  the app closed. Skills get their own puzzle-piece icon.
+- Pull requests a task opens are watched: CI, reviews, comments, merge state
+  and optional fix runs.
+- Undo across every repo a reply changed, close a task's pull request, or open
+  a revert for merged changes.
+- A transcript of every Nymbot task, kept with the chat, and Rewind to here.
+- Per-event notification settings and clearer push text for each task state.
+- Delete account data and wipe the device from Settings > Account; other
+  devices signed in to a deleted key wipe too.
+
+Changed
+- Each message to Nymbot travels over a connection whose keys are made for
+  that one turn, and the reply is sealed with a key made for that turn too.
+  Your device sends the recent chat with each message and keeps a running
+  summary of older messages with the chat, so other devices pick it up.
+- On a window wider than 720 points, such as the iPhone and iPad app on a
+  Mac, an iPad with a trackpad, a docked or desktop-mode Android or a resized
+  window, the chat list stays docked beside the chat and Tasks opens beside
+  it, as in the web app. Escape closes Tasks. Phones keep the slide-out list.
+- With a mouse or trackpad, pointing at a message shows its actions with
+  tooltips in a small bar over the message's top corner, so messages never
+  shift when a mouse, trackpad or Apple Pencil comes and goes; a touch tap
+  still opens the labeled row.
+- We no longer store or log the text of your Nymbot messages: live drafts,
+  progress steps, plans, questions, follow-ups and sources stay in server
+  memory only, logs keep just the error type, Cloudflare AI Gateway is asked
+  not to log requests, and iPhone notifications never show a scheduled
+  task's name. Our server still reads each message while answering it, and
+  the AI provider sees it. A reply picked up after a server restart still
+  arrives, though its question form, follow-ups or sources may be missing.
+- Each chat keeps its own model. Picking a model or a generator, from the
+  picker or with ?model or ?image, sets it for the chat you are in and for new
+  chats; other chats keep theirs. Opening a chat shows its model at once with a
+  short note when it differs, an older chat picks up the model of its latest
+  reply, and a running task keeps the model it started with, including when
+  you allow a tool, answer a question or decide on a plan after picking
+  another model.
+- A chat whose model is gone, or needs Pro credits you do not have, falls back
+  to your current pick or Standard and says so before anything is sent.
+- Your current model pick syncs across devices like the web app.
+- The on-screen keyboard's Enter key starts a new line. Enter sends only from
+  a hardware keyboard, as in Nymchat.
+- Announcements page with back and forward buttons (for example 2 of 5), and
+  closing the banner dismisses them all.
+- Nymbot asks before anything is sent to its AI services, as a first-run step
+  on every platform.
+- The Apple key backup moves to CloudKit; older iCloud Keychain backups still
+  restore.
+- An anonymous chat's header no longer shows an Anon pill, so the chat title
+  gets that room. The toolbar's Anon control and the Anon label on your
+  messages still show that the chat is anonymous, and screen readers hear it
+  with the title.
+- A line a language pack lacks is machine-translated on the device in every
+  place it shows, including notices at the bottom of the screen, status lines,
+  notification words and UnifiedPush texts; the translation replaces the English
+  in place when it arrives, and is fetched once per language and app version.
+
+Fixed
+- An anonymous chat only checks and tops up its own throwaway key: opening it,
+  its replies and a low balance never ask for your nym's balance or move
+  credits from it. With auto top-up on, vouchers are bought ahead and the chat
+  redeems them when it needs credits.
+- A reply that finished while every device was away is fetched before your
+  next message, so Nymbot sees it in the conversation.
+- Standalone chats over the per-turn channel: answers to questions and approvals
+  from before the update continue where they stopped, long messages and
+  attached text files send in parts again, the running summary syncs with the
+  chat between the app and the web app, deleting, editing or rewinding a
+  message no longer sends the removed turns, any device can steer a run, and
+  schedules and pull request watches saved earlier are saved again for the
+  channel.
+- Sending, receiving a reply or binding a key in an anonymous chat no longer
+  starts the account sync, which your identity signs, so nothing ties its
+  timing to the anonymous chat; the chat still reaches your other devices with
+  the next sync.
+- In standalone chats, sending from a follow-up chip, an answer, an approval or
+  a retry rarely waits for the latest synced state, revising a plan steers the
+  running task over the per-turn channel like the web app, and an older running
+  summary kept on a chat no longer replaces a newer one.
+- Mouse wheel and trackpad scrolling no longer stop working on a wide window
+  after Settings or another sheet opened from the chat list closes, and a
+  wheel turn right after opening a chat is no longer undone.
+- Links in replies render cleanly, including [title](url), bracketed and
+  angle-bracket links and trailing punctuation; payment links inside a link
+  stay plain text.
+- Translations that came out garbled show in English until they are redone.
+- nymbot:// and nymbot.ai/app links open in the app on Android, and tapping a
+  notification that cold-launches the app on iOS opens its chat.
+- The app launches on iOS 27 (UIScene lifecycle).
+- The newest messages stay above the composer when the keyboard opens.
+- Switching to another chat while Apply, Undo, Close PR, a branch action or a
+  PR-watch fix is still working no longer wipes or changes the first chat's
+  messages, and a send that stops after you switch no longer puts its
+  attachments into the other chat's composer.
+- Revising a plan, then switching chats, now sends the revision for the
+  plan's own chat and keeps working there, and Apply reaches every repository
+  of its chat even if the chat you switch to has fewer.
+- When a spending cap or team refusal hands a message back, its text, files
+  and quote now join whatever you added since instead of replacing it, and
+  land in the draft of the chat it was sent from if you have moved on.
+- Comparing two models keeps the asking chat's history, repositories and
+  persona even if you switch chats while it starts.
+- A message that stops before it is sent, for any reason, goes back to the
+  chat it was typed in, merged with anything typed or attached since. Another
+  chat is never touched, and "Send once anyway" refused again also gives the
+  text and files back.
+- Pressing send again while the same message is still being prepared keeps
+  its text and files, and a support message that fails to send goes back to
+  the support chat, never to a chat opened while it was sending.
+- Each chat keeps its own unsent text and files when you switch chats, and
+  dictation or a file that finishes loading after a switch lands in the chat
+  where it started.
+- A chat's first send no longer pins it to a fallback model while Pro credits
+  are empty; it keeps the model it already had.
+- Opening the chat that is already on screen, from the chat list, a
+  notification, a link or search, keeps its unsent text, files and quote.
+
 ## [1.0.7] - 2026-09-24
 
 Added

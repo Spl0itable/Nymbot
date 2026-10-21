@@ -17,7 +17,7 @@ void _toast(BuildContext context, String text) {
   messenger
     ?..clearSnackBars()
     ..showSnackBar(
-        SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+        SnackBar(content: UiText(text), duration: const Duration(seconds: 3)));
 }
 
 Future<void> addInstructions(BuildContext context,

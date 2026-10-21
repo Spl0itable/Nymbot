@@ -14,6 +14,111 @@
 
     const CLEANUP_EVERY_MS = 6 * 60 * 60 * 1000;
 
+    let chanClient = null;
+    let pulledAt = 0;
+    let pulling = null;
+    const PULL_FRESH_MS = 20000;
+
+    function chan() {
+        if (chanClient || !window.NymbotChanClient || !window.NymbotChannel || typeof WebSocket !== 'function') return chanClient;
+        chanClient = window.NymbotChanClient.create({
+            socket: (u) => new WebSocket(u),
+            url: () => 'wss://' + C.apiHost + '/api',
+            botPk: () => C.botPubkey,
+            store: {
+                get: (k) => { try { return Store.read('chan:' + k, null); } catch (_) { return null; } },
+                set: (k, v) => { try { Store.write('chan:' + k, v); } catch (_) { } }
+            },
+            open: (wrap, key) => key.open(wrap),
+            claim: async (run, key) => {
+                const res = await Api.call('pm-claim', { run }, { timeout: 20000, signer: key.signer || null });
+                return res && res.status === 200 ? res.data : null;
+            }
+        });
+        return chanClient;
+    }
+
+    function chanKey(conv, payer) {
+        const NT = window.NostrTools;
+        if (conv && conv.anon) {
+            const id = payer || Anon.forConv(conv);
+            if (!id) return null;
+            const sender = Anon.sender(id);
+            return {
+                pubkey: sender.pubkey,
+                sk: sender.sk,
+                sign: async (tmpl) => NT.finalizeEvent(tmpl, sender.sk),
+                signer: Anon.signer(id),
+                pq: (() => { const kp = Anon.kem(id); return kp ? window.NymbotChannel.encodeFrame(kp.publicKey) : null; })(),
+                open: async (wrap) => {
+                    for (const recipient of Anon.openers(id, wrap)) {
+                        const got = await Wire.openWrap(wrap, recipient).catch(() => null);
+                        if (got && got.rumor) return got;
+                    }
+                    return null;
+                }
+            };
+        }
+        if (!Identity.pubkey) return null;
+        const own = !Identity.rootLocked && PQ.selfKeys ? PQ.selfKeys() : null;
+        return {
+            pubkey: Identity.pubkey,
+            sk: Identity._sk || null,
+            sign: (tmpl) => Identity.signEvent(tmpl),
+            encrypt: (pk, text) => Identity.encryptTo(pk, text),
+            signer: null,
+            pq: own && own.kemPk ? window.NymbotChannel.encodeFrame(own.kemPk) : null,
+            open: (wrap) => Wire.openWrap(wrap, null)
+        };
+    }
+
+    let chanProbe = null;
+
+    function pullFresh() {
+        const Sync = window.NymbotSync;
+        if (!Sync || typeof Sync.run !== 'function' || !Sync.enabled()) return Promise.resolve();
+        if (pulling) return pulling;
+        if (Date.now() - pulledAt < PULL_FRESH_MS) return Promise.resolve();
+        pulling = Promise.resolve(Sync.run()).catch(() => null).finally(() => { pulledAt = Date.now(); pulling = null; });
+        return pulling;
+    }
+
+    function recoverStored(conv, exclude) {
+        const ui = window.NymbotUI;
+        return ui && typeof ui.recoverReplies === 'function' ? ui.recoverReplies(conv, exclude) : null;
+    }
+
+    function chanHistory(conv, exclude) {
+        const CC = window.NymbotChanClient;
+        return CC.contextFor({ threaded: !!conv.rootId, seed: conv.seed || null, messages: CC.storeRows(Store.messages(conv.id), exclude || null) });
+    }
+
+    const CHAN_DROP = ['wrap', 'wraps', 'parts', 'history', 'eventId', 'resume', 'pendingAnswer', 'pqAnnouncement', 'pqClassical',
+        'runApprove', 'runDecline', 'mcpApprove', 'mcpDecline'];
+
+    function chanOpts(extra) {
+        const out = Object.assign({}, extra);
+        for (const k of CHAN_DROP) delete out[k];
+        return out;
+    }
+
+    function chanFailText(code) {
+        if (code === 'rate' || code === 'busy') return t('Too many requests just now. Try again in a moment.');
+        if (code === 'credits') return t('You are out of credits.');
+        return t('Nymbot could not open a secure connection for this message. Try again.');
+    }
+
+    function chanResult(fin) {
+        if (fin && !fin.error) return { status: 200, data: window.NymbotChanClient.dataOf(fin) };
+        const code = fin ? fin.error : 'lost';
+        const info = (fin && fin.info) || {};
+        if (code === 'lost') return { status: 0, data: { lost: true } };
+        const data = Object.assign({}, info, { error: info.message || chanFailText(code) });
+        if (code === 'credits' && !data.runCap) data.noCredits = true;
+        if (code === 'failed' || code === 'tamper' || code === 'wrong-seal' || code === 'malformed') data.retryable = true;
+        return { status: code === 'credits' ? 402 : (code === 'rate' ? 429 : 500), data };
+    }
+
     function splitThinking(text) {
         const patterns = [
             /^\s*<think>([\s\S]*?)<\/think>\s*/i,
@@ -323,9 +428,14 @@
         return window.NymbotConnectors ? window.NymbotConnectors.forConv(conv) : [];
     }
 
+    function pickedModel(conv, settings) {
+        if (conv && (conv.frozenModel || conv.modelPin)) return conv.proModel || null;
+        return (conv && conv.proModel) || (settings && settings.proModel) || null;
+    }
+
     function repoNeedsPro(conv, settings) {
         return reposFor(conv || {}).length > 0
-            && !((conv && conv.proModel) || (settings && settings.proModel));
+            && !pickedModel(conv, settings);
     }
 
     function overLimitMessage(wireText) {
@@ -616,7 +726,7 @@
 
     function estimateCredits(text, settings, conv, options, pricing) {
         const extra = partSurcharge(conv, text, options);
-        const model = catalogModel((conv && conv.proModel) || (settings && settings.proModel), pricing);
+        const model = catalogModel(pickedModel(conv, settings), pricing);
         const wire = wireTextFor(conv || {}, text || '', options || {});
         const web = !!((settings && settings.webSearch) || (options && options.web));
         const history = estHistory(conv);
@@ -727,13 +837,14 @@
             const repos = reposFor(conv);
             if (repos.length && !opts.replay) this.cleanupSoon(conv);
             const ghost = !!conv.ephemeral;
-            let prepared = opts.replay && opts.replay.extra ? opts.replay : null;
-            if (!prepared) prepared = await this.prepare(conv, text, settings, opts, { anon, payer, repos, ghost });
+            const viaChan = await this.channelFor(conv, opts, payer);
+            let prepared = opts.replay && opts.replay.extra && (!viaChan || opts.replay.rumor) ? opts.replay : null;
+            if (!prepared) prepared = await this.prepare(conv, text, settings, opts, { anon, payer, repos, ghost, chan: viaChan });
             const extra = Object.assign({}, prepared.extra);
             const runs = validRuns(opts.maxRuns != null ? opts.maxRuns : (anon ? null : settings && settings.maxRuns));
             if (runs) extra.maxRuns = runs;
             else delete extra.maxRuns;
-            const replay = { extra: Object.assign({}, extra), msgId: prepared.msgId, isFresh: prepared.isFresh, partWraps: prepared.partWraps };
+            const replay = { extra: Object.assign({}, extra), msgId: prepared.msgId, isFresh: prepared.isFresh, partWraps: prepared.partWraps, rumor: prepared.rumor || null, rumors: prepared.rumors || null, text: prepared.text || null };
             if (typeof opts.onTurn === 'function') {
                 try { opts.onTurn(extra.eventId, signer, { msgId: prepared.msgId, replay }); } catch (_) { }
             }
@@ -759,7 +870,19 @@
                 return err;
             };
             let status, data;
-            try {
+            if (viaChan) {
+                try {
+                    ({ status, data } = await this.chanSend(conv, prepared, extra, opts, viaChan, controller));
+                } finally {
+                    if (ownsController && this.controller === controller) this.controller = null;
+                }
+                if (controller.signal.aborted) throw fail(stoppedErr());
+                if (data && data.lost) {
+                    const err = fail(new Error(t('Nymbot could not finish that one. Try again; it will not be charged twice.')));
+                    err.late = true;
+                    throw err;
+                }
+            } else try {
                 let waited = 0;
                 let late = false;
                 for (;;) {
@@ -780,6 +903,10 @@
                         if (typeof opts.onClaiming === 'function') { try { opts.onClaiming(false); } catch (_) { } }
                     }
                     ({ status, data } = res);
+                    if (status === 426 && data && data.code === 'channel-required') {
+                        const cc = chan();
+                        if (cc) cc.markOffered();
+                    }
                     if (data && data.lost) {
                         const err = fail(new Error(t('Nymbot could not finish that one. Try again; it will not be charged twice.')));
                         err.late = true;
@@ -851,8 +978,122 @@
             });
         },
 
+        channel() { return chan(); },
+
+        async chanData(conv, wrap) {
+            const key = chanKey(conv, null);
+            const opened = key ? await key.open(wrap) : null;
+            if (!opened || !opened.rumor || !opened.seal) return null;
+            const run = window.NymbotChannel.readRunRumor(opened.rumor, { botPk: C.botPubkey, userPk: key.pubkey, seal: opened.seal });
+            return window.NymbotChanClient.dataOf({ phase: run.phase, wrap, info: {}, opened: { seal: opened.seal, rumor: opened.rumor, run } });
+        },
+
+        async steerChan(conv, run, text) {
+            const cc = chan();
+            if (!cc || !cc.offered()) return false;
+            const key = chanKey(conv, null);
+            return key ? cc.steerFrom(key, run, String(text || '')) : false;
+        },
+
+        chanReady() {
+            const cc = chan();
+            if (!cc) return Promise.resolve(false);
+            if (cc.offered()) return Promise.resolve(true);
+            if (!chanProbe) {
+                const key = chanKey({}, null);
+                chanProbe = key ? Promise.resolve().then(() => cc.channel(key)).catch(() => null).then(() => cc.offered()) : Promise.resolve(false);
+            }
+            return chanProbe;
+        },
+
+        chanJob(conv) {
+            const cc = chan();
+            if (!cc || !cc.offered()) return null;
+            const key = chanKey(conv || {}, null);
+            return { pq: key && key.pq ? key.pq : null };
+        },
+
+        warm(conv) {
+            const cc = chan();
+            if (!cc || !conv || conv.support) return;
+            const key = chanKey(conv, null);
+            if (key) cc.warm(key);
+            if (window.NymbotChanClient.pullAllowed(conv)) pullFresh();
+            if (cc.offered()) recoverStored(conv, null);
+        },
+
+        prewarm(conv, m) {
+            const cc = chan();
+            const CC = window.NymbotChanClient;
+            if (!cc || !conv || conv.support || !cc.offered()) return;
+            const token = m ? ((m.proposal && m.proposal.token) || (m.pendingTool && m.pendingTool.token) || (m.ask && m.ask.token) || '') : '';
+            if (token && !CC.splitToken(String(token))) return;
+            if (CC.pullAllowed(conv)) pullFresh();
+            recoverStored(conv, null);
+        },
+
+        async storedReply(conv, run) {
+            const cc = chan();
+            if (!cc || !conv || !run) return null;
+            const payer = conv.anon ? Anon.forConv(conv) : null;
+            const key = chanKey(conv, payer);
+            if (!key) return null;
+            const fin = await cc.stored(key, run);
+            if (!fin || fin.error) return null;
+            const res = chanResult(fin);
+            if (res.status !== 200 || !res.data) return null;
+            return this.settle(conv, res.data, {
+                anon: !!conv.anon, payer, ghost: !!conv.ephemeral, repos: reposFor(conv), isFresh: false,
+                eventId: run, msgId: run, partWraps: []
+            });
+        },
+
+        async channelFor(conv, opts, payer) {
+            const cc = chan();
+            if (!cc) return null;
+            if (opts.resume && !window.NymbotChanClient.splitToken(opts.resume)) return null;
+            const key = chanKey(conv, payer);
+            if (!key) return null;
+            if (cc.offered()) return key;
+            try {
+                await cc.channel(key);
+                return key;
+            } catch (e) {
+                if (cc.offered()) return key;
+                return null;
+            }
+        },
+
+        async chanSend(conv, prepared, extra, opts, key, controller) {
+            const cc = chan();
+            const CC = window.NymbotChanClient;
+            const token = CC.splitToken(opts.resume || '');
+            const turnOpts = chanOpts(extra);
+            let fin;
+            try {
+                if (token) {
+                    const pa = opts.pendingAnswer && typeof opts.pendingAnswer === 'object' ? opts.pendingAnswer : null;
+                    let then = null;
+                    if (pa && pa.decision) then = { approve: true, body: { kind: 'plan', id: String(pa.id || ''), ok: pa.decision === 'approve', edits: pa.edits || null } };
+                    else if (pa) then = { body: { q: String(pa.id || ''), answer: pa.skipped ? [] : pa.answers, text: prepared.text || (prepared.rumor ? prepared.rumor.content : '') } };
+                    else if (opts.runApprove || opts.runDecline) then = { approve: true, body: { kind: 'tool', id: String(opts.runApprove || opts.runDecline), ok: !!opts.runApprove } };
+                    else if (opts.mcpApprove || opts.mcpDecline) then = { approve: true, body: { kind: 'connector', id: String(opts.mcpApprove || opts.mcpDecline), ok: !!opts.mcpApprove } };
+                    fin = await cc.resume(key, opts.resume, then, turnOpts, key.pq, { signal: controller.signal });
+                } else {
+                    await CC.preTurn({ anon: !CC.pullAllowed(conv), fresh: prepared.isFresh, pull: pullFresh, fetch: () => recoverStored(conv, prepared.msgId), open: () => cc.channel(key), cap: CC.PULL_CAP_MS });
+                    const h = prepared.isFresh ? { history: [], fold: [], summary: null } : chanHistory(conv, prepared.msgId);
+                    fin = await cc.turn(key, {
+                        rumor: prepared.rumor, rumors: prepared.rumors, history: h.history, summary: h.summary, fold: h.fold, attachments: [], pq: key.pq, opts: turnOpts
+                    }, { signal: controller.signal });
+                }
+            } catch (e) {
+                return { status: 0, data: { error: chanFailText(e && e.code), retryable: true, chanFailed: (e && e.code) || 'dead' } };
+            }
+            return chanResult(fin);
+        },
+
         async prepare(conv, text, settings, opts, ctx) {
-            if (!PQ.botKey) { try { await PQ.resolveBot(); } catch (_) { } }
+            if (!PQ.botKey && !ctx.chan) { try { await PQ.resolveBot(); } catch (_) { } }
             const { anon, payer, repos, ghost } = ctx;
             const sender = anon ? Anon.sender(payer) : null;
             const senderPubkey = anon ? sender.pubkey : Identity.pubkey;
@@ -874,14 +1115,18 @@
             }
             const partIds = [];
             const partWraps = [];
+            const partRumors = [];
             let wrap = null;
             for (let i = 0; i < bodies.length; i++) {
                 const rumor = Wire.rumor(bodies[i], C.botPubkey, conv.rootId, msgId, senderPubkey,
                     bodies.length > 1 ? { index: i + 1, of: bodies.length } : null);
-                wrap = await Wire.wrap(rumor, C.botPubkey, botKem, sender);
-                Relays.publish(wrap, 5000);
-                partIds.push(wrap.id);
-                partWraps.push(wrap);
+                partRumors.push(rumor);
+                if (!ctx.chan) {
+                    wrap = await Wire.wrap(rumor, C.botPubkey, botKem, sender);
+                    Relays.publish(wrap, 5000);
+                    partIds.push(wrap.id);
+                    partWraps.push(wrap);
+                }
                 if (!ghost) {
                     try {
                         const selfWrap = await Wire.wrap(rumor, senderPubkey, selfKemPk, sender);
@@ -890,17 +1135,19 @@
                 }
             }
 
-            const model = conv.proModel || settings.proModel;
-            const media = conv.mediaModel || settings.mediaModel;
+            const model = pickedModel(conv, settings);
+            const media = conv.frozenModel || conv.modelPin ? (conv.mediaModel || null) : (conv.mediaModel || settings.mediaModel);
+            const chanRun = ctx.chan ? ((window.NymbotChanClient.splitToken(opts.resume || '') || {}).run || msgId) : null;
             const extra = {
-                eventId: wrap.id,
+                eventId: ctx.chan ? chanRun : wrap.id,
                 wrap,
                 fresh: isFresh,
                 followUps: true,
                 draft: true,
                 ask: true
             };
-            if (!isFresh) {
+            if (ctx.chan) delete extra.wrap;
+            if (!isFresh && !ctx.chan) {
                 const handed = heldHistory(conv.id, Store.thread(conv.id));
                 if (handed.length) extra.history = handed;
             }
@@ -948,7 +1195,9 @@
                 extra.forkOf = { thread: String(opts.forkOf.thread || ''), before: String(opts.forkOf.before) };
             }
             if (opts.runKind === 'compare') extra.runKind = 'compare';
-            return { extra, msgId, isFresh, partWraps };
+            const rumors = ctx.chan ? partRumors.map(r => Object.assign({}, r, { id: window.NostrTools.getEventHash(r) })) : null;
+            const rumor = rumors ? rumors[0] : null;
+            return { extra, msgId, isFresh, partWraps, rumor, rumors, text: wireText, pq: ctx.chan ? ctx.chan.pq : null };
         },
 
         async claim(extra, opts) {
@@ -994,9 +1243,9 @@
                     Relays.publish(data.selfEvent, 3000);
                 }
             }
-            const opened = anon
+            const opened = data.chanOpened ? data.chanOpened : anon
                 ? await this.openReply(data.event, payer)
-                : await Wire.unwrap(data.event, null, { from: C.botPubkey });
+                : await Wire.unwrapBot(data.event, null);
             if (!opened || !opened.rumor) throw new Error(t('Nymbot replied, but this device could not decrypt it.'));
 
             if (!ctx.isFresh && ctx.eventId) {
@@ -1053,6 +1302,7 @@
                 sources: Array.isArray(data.sources) ? data.sources : null,
                 team: data.team && typeof data.team === 'object' && Array.isArray(data.team.workers) ? data.team : null,
                 followUps: followUpsOf(data.followUps),
+                chanSummary: data.chanSummary && typeof data.chanSummary.text === 'string' ? data.chanSummary : null,
                 steerOffer: steerOfferOf(data.steerOffer),
                 serverRuns: Array.isArray(data.serverRuns) && data.serverRuns.length ? data.serverRuns : null,
                 serverRunCredits: Number(data.serverRunCredits) > 0 ? Number(data.serverRunCredits) : 0,
@@ -1074,7 +1324,11 @@
             const anon = !!conv.anon;
             const payer = anon ? Anon.forConv(conv) : null;
             const signer = payer ? Anon.signer(payer) : null;
-            const res = await this.claim({ eventId }, { signer, controller: options.controller });
+            const cc = chan();
+            const key = cc && cc.live(eventId) ? chanKey(conv, payer) : null;
+            const res = key
+                ? chanResult(await cc.join(key, eventId, { signal: options.controller ? options.controller.signal : null }))
+                : await this.claim({ eventId }, { signer, controller: options.controller });
             if (res.aborted) {
                 const err = new Error(t('Stopped.'));
                 err.name = 'AbortError';
@@ -1138,6 +1392,15 @@
         /// Advisory: a failure returns nothing rather than disturbing the turn.
         async progress(eventId, after, opts) {
             const options = opts || {};
+            const cc = chan();
+            const held = cc ? cc.progress(eventId) : null;
+            if (held || (cc && cc.holds(eventId))) {
+                const got = held || { steps: [], draft: null, plan: null };
+                if (typeof options.onDraft === 'function' && got.draft && got.draft.seq > (options.draftAfter || 0)) options.onDraft(got.draft);
+                const plan = planOf(got.plan);
+                if (typeof options.onPlan === 'function' && plan) options.onPlan(plan);
+                return got.steps.filter(x => x && x.n > (after || 0));
+            }
             try {
                 const { data } = await Api.call('pm-progress',
                     { eventId, after: after || 0, draftAfter: options.draftAfter || 0 },
@@ -1176,7 +1439,7 @@
         async openReply(event, identity) {
             for (const recipient of Anon.openers(identity, event)) {
                 try {
-                    const opened = await Wire.unwrap(event, recipient, { from: C.botPubkey });
+                    const opened = await Wire.unwrapBot(event, recipient);
                     if (opened && opened.rumor) return opened;
                 } catch (_) { }
             }

@@ -230,7 +230,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 10),
-                      child: Text(_error!,
+                      child: UiText(_error!,
                           style: const TextStyle(color: NymbotColors.danger)),
                     ),
                   const SizedBox(height: 16),
