@@ -244,6 +244,7 @@ class ChatMessage {
     this.edited = false,
     this.retry,
     this.quote,
+    this.cut = 0,
     this.chanSummary,
     this.seed,
     List<Attachment>? attachments,
@@ -302,6 +303,7 @@ class ChatMessage {
   final bool edited;
   final String? retry;
   final String? quote;
+  final int cut;
   final ChanSummary? chanSummary;
   final String? seed;
   final List<Attachment> attachments;
@@ -365,6 +367,7 @@ class ChatMessage {
         edited: edited,
         retry: retry,
         quote: quote,
+        cut: cut,
         chanSummary: chanSummary ?? this.chanSummary,
         seed: seed ?? this.seed,
         attachments: attachments,
@@ -413,6 +416,7 @@ class ChatMessage {
         'edited': edited,
         'retry': retry,
         'quote': quote,
+        if (cut > 0) 'cut': cut,
         if (chanSummary != null) 'chanSummary': chanSummary!.toJson(),
         if (seed != null) 'seed': seed,
         'attachments': attachments.map((a) => a.toJson()).toList(),
@@ -464,6 +468,7 @@ class ChatMessage {
         edited: j['edited'] == true,
         retry: j['retry'] as String?,
         quote: j['quote'] as String?,
+        cut: j['cut'] is num ? (j['cut'] as num).toInt() : 0,
         chanSummary: ChanSummary.fromJson(j['chanSummary']),
         seed: j['seed'] is String ? j['seed'] as String : null,
         attachments: (j['attachments'] as List?)

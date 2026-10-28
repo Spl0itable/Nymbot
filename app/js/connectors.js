@@ -249,7 +249,9 @@
                 row.appendChild(check);
 
                 const main = el('div', 'repo-main');
-                main.appendChild(el('span', 'repo-name', c.name || t('Connector')));
+                const connectorName = el('span', 'repo-name', c.name || t('Connector'));
+                if (c.name) connectorName.dataset.i18nSkip = '';
+                main.appendChild(connectorName);
                 const bits = [publicUrl(c.url) || c.url];
                 if (c.auth === 'bearer') bits.push(t('bearer token'));
                 if (c.auth === 'header') bits.push(t('header {name}', { name: c.headerName || '' }));

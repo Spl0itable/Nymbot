@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 const double kNarrowMaxWidth = 720;
@@ -5,6 +7,25 @@ const double kSidebarWidth = 288;
 
 bool desktopLayout(BuildContext context) =>
     MediaQuery.sizeOf(context).width > kNarrowMaxWidth;
+
+MouseTracker get mouseTracker => RendererBinding.instance.mouseTracker;
+
+bool _mouseSeen = false;
+
+bool pointerIsMouse(TargetPlatform platform, {required bool mouseSeen}) =>
+    mouseSeen ||
+    switch (platform) {
+      TargetPlatform.macOS || TargetPlatform.windows || TargetPlatform.linux => true,
+      _ => false,
+    };
+
+bool mousePointer() {
+  if (!_mouseSeen && mouseTracker.mouseIsConnected) _mouseSeen = true;
+  return pointerIsMouse(defaultTargetPlatform, mouseSeen: _mouseSeen);
+}
+
+@visibleForTesting
+void forgetMouse() => _mouseSeen = false;
 
 double paneWidth(BuildContext context) =>
     context.dependOnInheritedWidgetOfExactType<_PaneWidth>()?.width ??

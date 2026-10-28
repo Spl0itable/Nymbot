@@ -1,4 +1,3 @@
-// Kept on this device only, under a hash of the identity, so it can never link two keys.
 (function () {
     'use strict';
 

@@ -385,12 +385,22 @@
         try { return b64uDecode(text); } catch (_) { throw chanError('malformed'); }
     }
 
+    function controlOpen(o) {
+        if (!o || !(o.c instanceof Uint8Array) || o.c.length !== 32 || (o.dir !== 'c2s' && o.dir !== 's2c') || typeof o.run !== 'string' || !o.run || !HEX64.test(String(o.userPk))) throw chanError('malformed');
+        const b = decodeFrame(o.blob);
+        if (b.length < 1 + 12 + TAG_LEN || b[0] !== VERSION) throw chanError('malformed');
+        const aad = concat(label('/ctl ' + o.dir), unhex(o.userPk), enc.encode(o.run));
+        let out;
+        try { out = NT()._chacha20poly1305(o.c, b.subarray(1, 13), aad).decrypt(b.subarray(13)); } catch (_) { throw chanError('tamper'); }
+        return new TextDecoder().decode(out);
+    }
+
     root.NymbotChannel = Object.freeze({
         PROTO, TYPES, FLAG_MORE, MAX_BODY, MAX_LIFETIME,
         x25519Public, x25519Shared,
         canonicalHello, helloPayload, newHello, authTemplate,
         parseCert, verifyCert, checkReplyCert, readRunRumor, sealTurn, fingerprint, fingerprintHex,
-        clientFinish, stateFromKeys, sealFrame, openFrame, encodeFrame, decodeFrame
+        clientFinish, stateFromKeys, sealFrame, openFrame, encodeFrame, decodeFrame, controlOpen
     });
 })(typeof self !== 'undefined' ? self : this);
 
@@ -402,6 +412,8 @@
     const KEEP = 40;
     const FOLD_MAX = 40;
     const OPEN_MS = 12000;
+    const PROBE_MS = 3000;
+    const DECIDE_WAIT_MS = 8000;
     const RENEW_S = 90;
     const JOIN_TRIES = 3;
     const CLAIM_TRIES = 40;
@@ -562,6 +574,7 @@
         const botPk = () => (typeof deps.botPk === 'function' ? deps.botPk() : deps.botPk);
         const url = () => (typeof deps.url === 'function' ? deps.url() : deps.url);
         const openMs = Number(deps.openMs) > 0 ? Number(deps.openMs) : OPEN_MS;
+        const probeMs = Number(deps.probeMs) > 0 ? Number(deps.probeMs) : PROBE_MS;
 
         const offered = () => store.get('offered') === true;
         const markOffered = () => { if (!offered()) store.set('offered', true); };
@@ -580,22 +593,24 @@
             store.set('live', all);
         }
 
+        const waiting = [];
+        let head = null;
+
         function pool(u) {
             const had = pools.get(u);
             if (had && !had.dead) return had;
             const ws = deps.socket(url());
-            const p = { ws, dead: false, chans: new Map() };
+            const p = { ws, dead: false, chans: new Map(), rx: 0 };
             p.opened = new Promise((resolve) => {
                 ws.onopen = () => resolve(true);
                 ws.onerror = () => resolve(false);
                 ws.onclose = () => {
                     resolve(false);
-                    p.dead = true;
-                    if (pools.get(u) === p) pools.delete(u);
-                    for (const ch of p.chans.values()) drop(ch);
+                    kill(u, p);
                 };
             });
             ws.onmessage = (ev) => {
+                p.rx++;
                 let m;
                 try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data)); } catch (_) { return; }
                 if (!Array.isArray(m) || typeof m[1] !== 'string') return;
@@ -606,9 +621,86 @@
             return p;
         }
 
+        function kill(u, p) {
+            p.dead = true;
+            if (pools.get(u) === p) pools.delete(u);
+            for (const ch of [...p.chans.values()]) drop(ch);
+        }
+
+        async function probe(u, p) {
+            const before = p.rx;
+            const n = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, '0')).join('');
+            const answered = new Promise((resolve) => {
+                p.chans.set(n, { feed: () => resolve(true), runs: new Set(), dead: false });
+            });
+            try { p.ws.send(JSON.stringify(['CHAN_KEY', n, ''])); } catch (_) { }
+            const ok = await within(answered, probeMs);
+            p.chans.delete(n);
+            if (ok || p.dead || p.rx !== before || pools.get(u) !== p) return;
+            kill(u, p);
+            try { p.ws.close(); } catch (_) { }
+        }
+
+        function revive(u, p) {
+            if (p.dead || pools.get(u) !== p) return;
+            if (![...p.chans.values()].some((ch) => ch.runs && ch.runs.size)) {
+                kill(u, p);
+                try { p.ws.close(); } catch (_) { }
+                return;
+            }
+            p.probing = true;
+            probe(u, p).finally(() => { p.probing = false; });
+        }
+
+        function act(u, p, late) {
+            if (typeof deps.acted === 'function') deps.acted(u, late);
+            revive(u, p);
+        }
+
+        function arm(w) {
+            head = w;
+            const wait = typeof deps.slot === 'function' ? Math.max(1, Number(deps.slot(w.u)) || 0) : 1;
+            later(wait).then(() => {
+                if (head !== w) return;
+                if (!w.p.dead && pools.get(w.u) === w.p && typeof deps.ready === 'function' && !deps.ready(w.u)) {
+                    arm(w);
+                    return;
+                }
+                head = null;
+                w.p.probing = false;
+                if (!w.p.dead && pools.get(w.u) === w.p) act(w.u, w.p, true);
+                pump();
+            });
+        }
+
+        function pump() {
+            while (!head && waiting.length) {
+                const w = waiting.shift();
+                if (w.p.dead || pools.get(w.u) !== w.p) {
+                    w.p.probing = false;
+                    continue;
+                }
+                arm(w);
+            }
+        }
+
+        function resumed() {
+            for (const [u, p] of [...pools.entries()]) {
+                if (p.dead || p.probing) continue;
+                if (typeof deps.shown === 'function' && !deps.shown(u)) {
+                    p.probing = true;
+                    waiting.push({ u, p });
+                    continue;
+                }
+                act(u, p, false);
+            }
+            pump();
+        }
+
         async function open(key) {
             const p = pool(key.pubkey);
             if (!(await within(p.opened, openMs))) {
+                kill(key.pubkey, p);
                 try { p.ws.close(); } catch (_) { }
                 throw fail('unreachable');
             }
@@ -620,11 +712,17 @@
                 ch.feed = (m) => { if (m[0] === 'CHAN_CERT' || m[0] === 'CHAN_ERR') resolve(m); };
             });
             p.chans.set(ch.n, ch);
+            const rx = p.rx;
             p.ws.send(JSON.stringify(['CHAN_OPEN', h.hello, auth]));
             const m = await within(answer, openMs);
             if (!m) {
                 p.chans.delete(ch.n);
-                throw fail(p.dead ? 'unreachable' : 'timeout');
+                const was = p.dead;
+                if (!was && p.rx === rx) {
+                    kill(key.pubkey, p);
+                    try { p.ws.close(); } catch (_) { }
+                }
+                throw fail(was ? 'unreachable' : 'timeout');
             }
             markOffered();
             if (m[0] === 'CHAN_ERR') {
@@ -690,7 +788,8 @@
             ch.buf = [];
             let body;
             try { body = JSON.parse(new TextDecoder().decode(concat(parts))); } catch (_) { return; }
-            const r = body && typeof body.run === 'string' ? runs.get(body.run) : null;
+            if (body && typeof body.run === 'string' && steerAck(ch, fr.type, body)) return;
+            const r = body && typeof body.run === 'string' ? runs.get(body.run) || kept.get(body.run) : null;
             if (r && r.ch === ch) r.push(fr.type, body);
         }
 
@@ -756,6 +855,14 @@
         async function handle(r, type, body) {
             const T = P().TYPES;
             const hk = r.hooks || {};
+            if (type === T.ACCEPT && typeof body.answered === 'string') {
+                if (r.deciding && r.deciding.length) r.deciding.shift()(true);
+                return;
+            }
+            if (type === T.ERROR && typeof body.refused === 'string') {
+                if (r.deciding && r.deciding.length) r.deciding.shift()(false);
+                return;
+            }
             if (r.ended) return;
             if (type === T.ACCEPT) {
                 r.joining = false;
@@ -796,11 +903,18 @@
             }
         }
 
+        function storedEnd(got) {
+            if (got && got.phase === 'live') return null;
+            const wraps = (got && Array.isArray(got.wraps) ? got.wraps : []).filter((w) => w && typeof w.phase === 'string');
+            const tail = wraps.slice(wraps.map((w) => w.phase).lastIndexOf('live') + 1);
+            return tail.filter((w) => w.phase === 'done' || w.phase === 'park').pop() || null;
+        }
+
         async function claimOnce(r) {
             let got = null;
             try { got = await deps.claim(r.run, r.key); } catch (_) { got = null; }
             const wraps = got && Array.isArray(got.wraps) ? got.wraps : [];
-            const last = wraps.filter((w) => w && (w.phase === 'done' || w.phase === 'park')).pop();
+            const last = storedEnd(got);
             if (last) {
                 await settleWith(r, last.phase === 'park' ? P().TYPES.PARK : P().TYPES.REPLY, { run: r.run, wrap: last.wrap, info: (got && got.info) || {} });
                 return true;
@@ -911,19 +1025,63 @@
             return r && r.c && r.ch && !r.ch.dead ? r : null;
         }
 
+        function steerAck(ch, type, body) {
+            const T = P().TYPES;
+            const ok = type === T.ACCEPT && typeof body.steered === 'string';
+            if (!ok && !(type === T.ERROR && body.refused === 'steer')) return false;
+            const list = ch.steers && ch.steers.get(body.run);
+            const settle = list && list.shift();
+            if (list && !list.length) ch.steers.delete(body.run);
+            if (settle) settle(ok ? { status: 200, data: body.steered ? { ok: true, id: body.steered } : { ok: true } } : steerRefusal(body.code));
+            return true;
+        }
+
+        function steerRefusal(code) {
+            if (code === 'final') return { status: 409, data: { final: true, state: 'running' } };
+            if (code === 'finished') return { status: 409, data: { finished: true } };
+            if (code === 'no-run') return { status: 404, data: {} };
+            if (code === 'long') return { status: 413, data: {} };
+            if (code === 'rate') return { status: 429, data: {} };
+            return { status: 500, data: {} };
+        }
+
         function steer(run, text) {
             const r = holder(run);
-            if (!r) return false;
-            try { sendOn(r.ch, P().TYPES.STEER, { run, text: String(text || '') }); return true; } catch (_) { return false; }
+            if (!r) return Promise.resolve(false);
+            const ch = r.ch;
+            return new Promise((resolve) => {
+                let timer = null;
+                const settle = (res) => {
+                    clearTimeout(timer);
+                    const list = ch.steers && ch.steers.get(run);
+                    if (list) {
+                        const i = list.indexOf(settle);
+                        if (i >= 0) list.splice(i, 1);
+                        if (!list.length) ch.steers.delete(run);
+                    }
+                    resolve(res);
+                };
+                ch.steers = ch.steers || new Map();
+                ch.steers.set(run, (ch.steers.get(run) || []).concat([settle]));
+                timer = setTimeout(() => settle({ status: 200, data: { ok: true } }), DECIDE_WAIT_MS);
+                try { sendOn(ch, P().TYPES.STEER, { run, text: String(text || '') }); } catch (_) { settle(false); }
+            });
+        }
+
+        function claimEnded(got) {
+            if (got && typeof got.phase === 'string') return got.phase !== 'live' && got.phase !== 'bg';
+            const wraps = got && Array.isArray(got.wraps) ? got.wraps : [];
+            const last = wraps.filter((w) => w && typeof w.phase === 'string').pop();
+            return !!last && (last.phase === 'done' || last.phase === 'park');
         }
 
         async function steerFrom(key, run, text) {
-            if (steer(run, text)) return true;
+            if (holder(run)) return steer(run, text);
             if (runs.has(run) || kept.has(run)) return false;
             let got = null;
             try { got = await deps.claim(run, key); } catch (_) { got = null; }
             const wraps = got && Array.isArray(got.wraps) ? got.wraps : [];
-            if (wraps.some((w) => w && (w.phase === 'done' || w.phase === 'park'))) return false;
+            if (claimEnded(got)) return false;
             const live = wraps.filter((w) => w && w.phase === 'live').pop();
             const o = live ? await openRun(live.wrap, key).catch(() => null) : null;
             if (!o || o.run.run !== run || !o.run.ctl) return false;
@@ -941,10 +1099,76 @@
             return steer(run, text);
         }
 
+        const ctls = new Map();
+
+        async function ctlOf(key, run) {
+            const r = runs.get(run) || kept.get(run);
+            if (r && r.c) return { c: r.c };
+            const live = liveAll()[run];
+            if (live && live.u === key.pubkey && HEX64.test(String(live.c))) return { c: live.c };
+            const k = key.pubkey + ':' + run;
+            if (!ctls.has(k)) {
+                const p = (async () => {
+                    let got = null;
+                    try { got = await deps.claim(run, key); } catch (_) { got = null; }
+                    const wraps = got && Array.isArray(got.wraps) ? got.wraps : [];
+                    if (claimEnded(got)) return { ended: true };
+                    const w = wraps.filter((x) => x && x.phase === 'live').pop();
+                    const o = w ? await openRun(w.wrap, key).catch(() => null) : null;
+                    return o && o.run.run === run && o.run.ctl ? { c: o.run.ctl } : null;
+                })();
+                ctls.set(k, p);
+                if (ctls.size > 50) ctls.delete(ctls.keys().next().value);
+            }
+            const got = await ctls.get(k);
+            if (!got || got.ended) ctls.delete(k);
+            return got;
+        }
+
+        async function openSealed(key, run, sealed) {
+            if (!key || !run || !sealed || typeof sealed !== 'object') return null;
+            const got = await ctlOf(key, run).catch(() => null);
+            if (got && got.ended) return { ended: true, label: '', progress: '', plan: null, final: false };
+            if (!got || !HEX64.test(String(got.c))) return null;
+            const c = Uint8Array.from(got.c.match(/../g).map((x) => parseInt(x, 16)));
+            const open = (blob) => {
+                if (typeof blob !== 'string' || !blob) return '';
+                for (const dir of ['s2c', 'c2s']) {
+                    try { return P().controlOpen({ c, dir, run, userPk: key.pubkey, blob }); } catch (_) { }
+                }
+                return '';
+            };
+            let o = {};
+            try { o = JSON.parse(open(sealed.progress) || '{}') || {}; } catch (_) { o = {}; }
+            return {
+                ended: false,
+                label: open(sealed.label),
+                progress: typeof o.p === 'string' ? o.p : '',
+                plan: Array.isArray(o.plan) ? o.plan : null,
+                final: o.f === 1
+            };
+        }
+
         function cancel(run) {
             const r = holder(run);
             if (!r) return false;
             try { sendOn(r.ch, P().TYPES.CANCEL, { run }); return true; } catch (_) { return false; }
+        }
+
+        function decide(run, body, approve) {
+            const r = holder(run);
+            if (!r) return Promise.resolve(false);
+            return new Promise((resolve) => {
+                let timer = null;
+                const settle = (ok) => {
+                    clearTimeout(timer);
+                    if (r.deciding) r.deciding = r.deciding.filter((x) => x !== settle);
+                    resolve(ok);
+                };
+                r.deciding = (r.deciding || []).concat([settle]);
+                timer = setTimeout(() => settle(false), DECIDE_WAIT_MS);
+                try { sendOn(r.ch, approve ? P().TYPES.APPROVE : P().TYPES.ANSWER, Object.assign({}, body, { run, c: r.c })); } catch (_) { settle(false); }
+            });
         }
 
         function progress(run) {
@@ -956,12 +1180,37 @@
             if (key && key.pubkey) channel(key).catch(() => { });
         }
 
-        async function stored(key, run) {
+        async function claimed(key, run) {
+            if (!key || !run) return null;
+            let got = null;
+            try { got = await deps.claim(run, key); } catch (_) { got = null; }
+            const last = storedEnd(got);
+            const o = last ? await openRun(last.wrap, key).catch(() => null) : null;
+            if (!o || o.run.run !== run || (o.run.phase !== 'done' && o.run.phase !== 'park')) return null;
+            return dataOf({ phase: o.run.phase, wrap: last.wrap, info: (got && got.info) || {}, opened: o });
+        }
+
+        async function stored(key, run, hooks) {
             if (!key || !run || runs.has(run) || kept.has(run)) return null;
             let got = null;
             try { got = await deps.claim(run, key); } catch (_) { got = null; }
-            const last = (got && Array.isArray(got.wraps) ? got.wraps : []).filter((w) => w && (w.phase === 'done' || w.phase === 'park')).pop();
-            if (!last || runs.has(run) || kept.has(run)) return null;
+            const wraps = got && Array.isArray(got.wraps) ? got.wraps : [];
+            const last = storedEnd(got);
+            if (!last) {
+                const running = !!got && (got.phase === 'live' || got.phase === 'bg');
+                if (!running) return null;
+                const live = got.phase === 'live' ? wraps.filter((w) => w && w.phase === 'live').pop() : null;
+                const o = live ? await openRun(live.wrap, key).catch(() => null) : null;
+                if (!o || o.run.run !== run || !o.run.ctl || runs.has(run) || kept.has(run)) return { running: true };
+                const r = track(key, run, {});
+                r.c = o.run.ctl;
+                const sig = hooks && typeof hooks.onLive === 'function' ? hooks.onLive(run) : null;
+                if (sig) watchAbort(run, sig);
+                rejoin(r);
+                const fin = await r.done;
+                return fin && !fin.error ? fin : { running: true };
+            }
+            if (runs.has(run) || kept.has(run)) return null;
             const r = track(key, run, {});
             await settleWith(r, last.phase === 'park' ? P().TYPES.PARK : P().TYPES.REPLY, { run, wrap: last.wrap, info: (got && got.info) || {} });
             return r.done;
@@ -972,7 +1221,7 @@
         }
 
         return {
-            offered, markOffered, warm, channel, turn, resume, join, stored, steer, steerFrom, cancel, progress, sockets,
+            offered, markOffered, warm, channel, turn, resume, join, stored, claimed, steer, steerFrom, openSealed, cancel, decide, progress, sockets, resumed,
             holds: (run) => runs.has(run) || kept.has(run),
             forget: (run) => { kept.delete(run); liveSave(run, null, null); },
             live: (run) => liveAll()[run] || null

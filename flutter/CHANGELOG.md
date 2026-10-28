@@ -5,25 +5,30 @@ All notable changes to the Nymbot mobile app. The format is
 the section whose heading matches the version read out of the APK, so every
 release needs a block here and a matching `version:` in `pubspec.yaml`.
 
-## [1.0.8] - 2026-10-20
+## [1.0.9] - 2026-10-28
 
 Added
-- Paste an image from the clipboard into the composer and it attaches and
-  uploads like a picked image.
-- Plan first, then approve: Nymbot can show its plan before a task runs, and
-  you approve, edit, reject or ask for a revision.
-- Nymbot can ask you a question mid-task and waits for the answer even with
-  the app closed. Skills get their own puzzle-piece icon.
-- Pull requests a task opens are watched: CI, reviews, comments, merge state
-  and optional fix runs.
-- Undo across every repo a reply changed, close a task's pull request, or open
-  a revert for merged changes.
-- A transcript of every Nymbot task, kept with the chat, and Rewind to here.
-- Per-event notification settings and clearer push text for each task state.
-- Delete account data and wipe the device from Settings > Account; other
-  devices signed in to a deleted key wipe too.
+- A message too long for one sync row (over about 440 KB) now reaches your other
+  devices whole: it syncs as linked rows beside the shortened copy older versions
+  read, and that copy no longer cuts an emoji in half.
+- The check before sending long text to a model now counts attached text files
+  and the quoted message too, as the web app does.
+- Text of any length, pasted or typed, reaches Nymbot whole: it travels as linked
+  parts and shows as one message with Show more. When it is longer than the
+  chosen model can read, Nymbot says so before anything is sent or charged and
+  offers a longer-context model or sending it in parts.
+- iPhone Duo: on the outer display the header actions and the whole chip row
+  (tier, chips, model, Web, Git, Schedule, balance) move into a slim rail
+  under the system status strip, and the open drawer puts New chat, Info,
+  Menu and the balance there; in inner landscape the chip row and header
+  stay clear of the status cluster.
 
 Changed
+- Coming back to the app now fetches only the support replies that arrived since the last check, and checks the connection of the chat on screen first; the connection of your other chats (anonymous or under your nym) is checked a few minutes later.
+- When you come back to the app with several chats open, the connections of the chats not on screen are checked one at a time, each a few minutes apart from the others and from the run list of the chat you are viewing; a second return while one waits moves it further on instead of acting at the same moment.
+- A support reply that reached the server at nearly the same moment as another one, while the app was checking for replies, now still shows up on the next check instead of being skipped; replies already shown are not added again.
+- Such a support reply also shows up when many other messages reached the server in the same minute; the check reads through them a page at a time.
+- Adding instructions to a request that is already writing its answer now says so and offers to send them as a new message, and that request's answer still arrives; before, the app said they were passed on and the answer could fail to arrive.
 - Each message to Nymbot travels over a connection whose keys are made for
   that one turn, and the reply is sealed with a key made for that turn too.
   Your device sends the recent chat with each message and keeps a running
@@ -33,9 +38,10 @@ Changed
   window, the chat list stays docked beside the chat and Tasks opens beside
   it, as in the web app. Escape closes Tasks. Phones keep the slide-out list.
 - With a mouse or trackpad, pointing at a message shows its actions with
-  tooltips in a small bar over the message's top corner, so messages never
-  shift when a mouse, trackpad or Apple Pencil comes and goes; a touch tap
-  still opens the labeled row.
+  tooltips in a row under it, as in the web app, at any window width; once a
+  mouse or trackpad has been used the space for the row stays, so messages
+  never shift when the pointer hides or comes back; a touch tap still opens
+  the labeled row.
 - We no longer store or log the text of your Nymbot messages: live drafts,
   progress steps, plans, questions, follow-ups and sources stay in server
   memory only, logs keep just the error type, Cloudflare AI Gateway is asked
@@ -53,14 +59,6 @@ Changed
 - A chat whose model is gone, or needs Pro credits you do not have, falls back
   to your current pick or Standard and says so before anything is sent.
 - Your current model pick syncs across devices like the web app.
-- The on-screen keyboard's Enter key starts a new line. Enter sends only from
-  a hardware keyboard, as in Nymchat.
-- Announcements page with back and forward buttons (for example 2 of 5), and
-  closing the banner dismisses them all.
-- Nymbot asks before anything is sent to its AI services, as a first-run step
-  on every platform.
-- The Apple key backup moves to CloudKit; older iCloud Keychain backups still
-  restore.
 - An anonymous chat's header no longer shows an Anon pill, so the chat title
   gets that room. The toolbar's Anon control and the Anon label on your
   messages still show that the chat is anonymous, and screen readers hear it
@@ -69,14 +67,96 @@ Changed
   place it shows, including notices at the bottom of the screen, status lines,
   notification words and UnifiedPush texts; the translation replaces the English
   in place when it arrives, and is fetched once per language and app version.
+- While an anonymous chat is shown, the nym's background tasks are not
+  followed and a message under the nym waiting for a free run slot reads no
+  run list; both carry on once a chat under the nym is shown.
 
 Fixed
+- Offline right after the app opens, an image kept on the device for more than
+  a week still shows: tidying the image cache no longer deletes an image while
+  it is being loaded.
+- iPhone Duo: the Close a sheet puts in the outer display's right rail draws
+  the same close icon as the rest of the app.
+- A parked request that was resumed no longer brings its old question back on another device or after reconnecting, and a request you stopped is not picked up again as running after you restart the app.
+- iPhone Duo: on the outer display the right rail and the sheet Close start
+  below the status strip even while a Live Activity makes it taller, and on
+  iOS 27.1 and later they follow the reserved regions the system reports. The
+  balance stays pinned at the bottom of the rail while the rest scrolls.
+- On the iPhone Duo outer display every sheet (about, credits, appearance,
+  tasks, models, schedules and the rest) puts its Close in the right rail,
+  below the system status strip and above the dimmed backdrop, so the rail is
+  no longer covered and empty while a sheet is open. Tab reaches it from the
+  sheet and comes back.
+- On a second device, Running now shows the label and progress of a request
+  started on another device, Add instructions reaches it, and a request you
+  stopped is no longer picked up and stopped a second time.
+- On a second device, a request that carries on after you answered its
+  question, and a background task, are listed as running again instead of
+  dropped as finished, and Add instructions reaches them.
+- Stopping a repository job that runs over the per-turn channel now records the branch it committed to, so Clean up can find and delete it.
+- A long message of yours folded under Show more now shows when an emoji sits right at the fold, instead of failing to lay out.
+- Machine translations kept on the device now reset when the app's interface strings change, instead of being kept for the whole 1.0.8 version.
+- After your account is deleted on another device, this device no longer
+  syncs your settings while its check for the deletion is still waiting on the
+  server; it waits for that answer and wipes instead.
+- Deleting a long message, or its chat, now deletes the linked sync rows that
+  carried it to your other devices, so they no longer pile up on the server.
+- The first message after returning to the app no longer waits on a
+  connection that went quiet while you were away: an idle connection is
+  closed on return and the message opens a fresh one.
+- Keyboard: Tab no longer stops on an invisible spot that covers the whole
+  screen; every keyboard shortcut still works, with or without the iPhone Duo
+  rail.
+- iPhone Duo: the chip row stays clear of the status cluster when something
+  above it appears or goes away, not only after a resize.
+- iPhone Duo: on the outer display every button in the right rail, the
+  balance included, fits above the home indicator without scrolling, at every
+  text size the app offers.
+- Pointing at a Nymbot reply shows its actions under that reply again, at
+  its start edge, and your own message's under it at its end edge, instead of
+  in a bordered bar at the far opposite side of the chat.
+- With message bubbles turned off, your own message's actions end at the far
+  end of the line again, as they did before October 3 and as in the web app.
+- A reply that was still streaming when you left the app no longer stalls on
+  return: a connection that went silent in the background is found within
+  about 3 seconds and the reply continues on a fresh one.
+- Going from your nym to an anonymous chat soon after the anonymous chat's last
+  update no longer leaves that chat's running tasks, logs and steer status
+  waiting for minutes.
+- If a task fails while your plan decision is still on its way, the task now
+  ends with its error instead of waiting.
+- A narrow window with a trackpad, such as an iPad in Split View, shows a
+  message's actions when you point at it again, and tablets used only by
+  touch no longer keep an empty row under every message.
+- An anonymous chat reads its running tasks only with its own key, on its
+  own schedule, minutes apart from the account's own list; a steer there is
+  followed up only with that key.
+- A plan decision for a background task this device holds goes over its
+  channel, with the old request only as a fallback.
+- A plan decision sent over the channel counts as sent only once Nymbot
+  confirms it; if Nymbot refuses it, the app sends it the old way.
+- An anonymous chat's task logs, its wait for a free run slot and its task
+  list are read on a randomized schedule of their own, never right next to
+  the account's own reads, and a task ending in another chat no longer
+  starts an anonymous chat's waiting message.
+- Support replies sent while the app was closed, in the background or
+  offline load when it comes back, from Nymbot's stored copy when the
+  relays did not keep them.
+- Auto-delete keeps a Support chat that is still waiting for a reply.
+- After the app was in the background, sending to Nymbot no longer keeps
+  timing out on a connection that died while away; a fresh one opens.
 - An anonymous chat only checks and tops up its own throwaway key: opening it,
   its replies and a low balance never ask for your nym's balance or move
   credits from it. With auto top-up on, vouchers are bought ahead and the chat
   redeems them when it needs credits.
 - A reply that finished while every device was away is fetched before your
   next message, so Nymbot sees it in the conversation.
+- A chat opened while Nymbot is still answering in it, even an answer started
+  on another device, picks up that answer when it finishes, so a message sent
+  right after sees it.
+- In an anonymous chat, approving, rejecting or revising a plan and answering
+  a question are sent with that chat's throwaway key, and a rejected or
+  revised plan reaches Nymbot as you decided it.
 - Standalone chats over the per-turn channel: answers to questions and approvals
   from before the update continue where they stopped, long messages and
   attached text files send in parts again, the running summary syncs with the
@@ -95,14 +175,6 @@ Fixed
 - Mouse wheel and trackpad scrolling no longer stop working on a wide window
   after Settings or another sheet opened from the chat list closes, and a
   wheel turn right after opening a chat is no longer undone.
-- Links in replies render cleanly, including [title](url), bracketed and
-  angle-bracket links and trailing punctuation; payment links inside a link
-  stay plain text.
-- Translations that came out garbled show in English until they are redone.
-- nymbot:// and nymbot.ai/app links open in the app on Android, and tapping a
-  notification that cold-launches the app on iOS opens its chat.
-- The app launches on iOS 27 (UIScene lifecycle).
-- The newest messages stay above the composer when the keyboard opens.
 - Switching to another chat while Apply, Undo, Close PR, a branch action or a
   PR-watch fix is still working no longer wipes or changes the first chat's
   messages, and a send that stops after you switch no longer puts its
@@ -129,6 +201,44 @@ Fixed
   are empty; it keeps the model it already had.
 - Opening the chat that is already on screen, from the chat list, a
   notification, a link or search, keeps its unsent text, files and quote.
+
+## [1.0.8] - 2026-10-20
+
+Added
+- Paste an image from the clipboard into the composer and it attaches and
+  uploads like a picked image.
+- Plan first, then approve: Nymbot can show its plan before a task runs, and
+  you approve, edit, reject or ask for a revision.
+- Nymbot can ask you a question mid-task and waits for the answer even with
+  the app closed. Skills get their own puzzle-piece icon.
+- Pull requests a task opens are watched: CI, reviews, comments, merge state
+  and optional fix runs.
+- Undo across every repo a reply changed, close a task's pull request, or open
+  a revert for merged changes.
+- A transcript of every Nymbot task, kept with the chat, and Rewind to here.
+- Per-event notification settings and clearer push text for each task state.
+- Delete account data and wipe the device from Settings > Account; other
+  devices signed in to a deleted key wipe too.
+
+Changed
+- The on-screen keyboard's Enter key starts a new line. Enter sends only from
+  a hardware keyboard, as in Nymchat.
+- Announcements page with back and forward buttons (for example 2 of 5), and
+  closing the banner dismisses them all.
+- Nymbot asks before anything is sent to its AI services, as a first-run step
+  on every platform.
+- The Apple key backup moves to CloudKit; older iCloud Keychain backups still
+  restore.
+
+Fixed
+- Links in replies render cleanly, including [title](url), bracketed and
+  angle-bracket links and trailing punctuation; payment links inside a link
+  stay plain text.
+- Translations that came out garbled show in English until they are redone.
+- nymbot:// and nymbot.ai/app links open in the app on Android, and tapping a
+  notification that cold-launches the app on iOS opens its chat.
+- The app launches on iOS 27 (UIScene lifecycle).
+- The newest messages stay above the composer when the keyboard opens.
 
 ## [1.0.7] - 2026-09-24
 

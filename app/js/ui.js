@@ -85,6 +85,14 @@
         if (text != null) n.textContent = text;
         return n;
     };
+    const named = (node, value, fallback) => {
+        node.textContent = value || fallback;
+        node.toggleAttribute('data-i18n-skip', !!value);
+        return node;
+    };
+    const titled = (value, fallback) => {
+        $('chatTitle').replaceChildren(named(el('span'), value, fallback));
+    };
 
     const SHARE_CACHE = 'nymbot-share-v1';
     const SHARE_SEARCH_ABOVE = 6;
@@ -107,6 +115,7 @@
 
     const CAP_WAIT_POLL_MS = 15000;
     const STOPPED_BRANCH_WAIT_MS = 120000;
+    const STOPPED_KEEP_MS = 2 * 3600 * 1000;
 
     const MODIFIER = /Mac|iPhone|iPad/.test(navigator.platform || '') ? 'Cmd' : 'Ctrl';
 
@@ -355,7 +364,7 @@
 
         watchDeleted() {
             Sync.noteDeletedLogin(false);
-            Sync.beforeRun = async () => !(await this.checkDeleted());
+            Sync.beforeRun = async () => !(await this.checkDeleted({ force: true }));
             if (this._deletedTimer) clearInterval(this._deletedTimer);
             this._deletedTimer = setInterval(() => { this.checkDeleted().catch(() => { }); }, 300000);
             if (!this._deletedWatch) {
@@ -367,11 +376,11 @@
             setTimeout(() => this.checkDeleted().catch(() => { }), 800);
         },
 
-        async checkDeleted() {
+        async checkDeleted(opts) {
             if (this._deletedWiping) return true;
             const now = Date.now();
             if (this._deletedChecking) return this._deletedChecking;
-            if (this._deletedAt && now - this._deletedAt < 5000) return false;
+            if (!(opts && opts.force) && this._deletedAt && now - this._deletedAt < 5000) return false;
             this._deletedChecking = (async () => {
                 let gone = false;
                 try { gone = await Sync.deletedElsewhere(); } catch (_) { gone = false; }
@@ -679,7 +688,7 @@
             }
             this.renderAttachments();
             this.renderQuote();
-            $('chatTitle').textContent = conv.support ? t('Support') : (conv.title || t('New chat'));
+            titled(conv.support ? '' : conv.title, conv.support ? t('Support') : t('New chat'));
             this.anonTitle(conv.anon);
             const support = !!conv.support;
             $('shell').classList.toggle('is-support', support);
@@ -768,7 +777,9 @@
                     btn.appendChild(pin);
                 }
                 const main = el('div', 'conv-main');
-                main.appendChild(el('span', 'conv-title', conv.support ? t('Support') : (conv.title || t('New chat'))));
+                const convTitle = el('span', 'conv-title', conv.support ? t('Support') : (conv.title || t('New chat')));
+                if (!conv.support && conv.title) convTitle.dataset.i18nSkip = '';
+                main.appendChild(convTitle);
                 const bits = [];
                 const convRepos = (conv.repoIds || []).map(id => repos.find(r => r.id === id)).filter(Boolean);
                 if (convRepos.length) bits.push(convRepos.map(r => r.label || r.repo).join(', '));
@@ -943,18 +954,20 @@
             }
             const bot = Chat.botFor(this.conv);
             const wrap = el('div', 'empty');
-            wrap.appendChild(el('h2', null, bot ? bot.name : t('Ask Nymbot anything')));
-            wrap.appendChild(el('p', null, bot
+            wrap.appendChild(named(el('h2'), bot ? bot.name : '', t('Ask Nymbot anything')));
+            wrap.appendChild(named(el('p'), bot && bot.tagline, bot
                 ? (bot.tagline || t('This chat answers the way that bot was written to.'))
                 : t('End-to-end encrypted, paid a reply at a time. Type ? for commands, or start with one of these.')));
             const cards = el('div', 'empty-cards');
-            const own = bot && (bot.starters || []).length
+            const mine = !!(bot && (bot.starters || []).length);
+            const own = mine
                 ? bot.starters.map(body => ({ title: bot.name, body }))
                 : pickStarters(starters().filter(x => x.needs !== 'repos' || Store.repos().length)
                     .filter(x => x.needs !== 'pro' || (Number(this.balance.pro) || 0) > 0));
             for (const starter of own) {
                 const b = el('button', 'empty-card');
                 b.type = 'button';
+                if (mine) b.dataset.i18nSkip = '';
                 b.appendChild(el('strong', null, starter.title));
                 b.appendChild(el('span', null, starter.body));
                 b.addEventListener('click', () => {
@@ -1021,6 +1034,7 @@
 
         modelTitle(m) {
             const title = el('span', 'author-model', m.model);
+            title.dataset.i18nSkip = '';
             const pro = m.pro != null ? !!m.pro : !!m.model;
             if (!pro) return title;
             const maker = this.makerOfMessage(m);
@@ -1039,6 +1053,7 @@
         makerMark(maker) {
             const mark = Icons.brand(maker.slug, { size: 14 });
             mark.classList.add('maker-mark');
+            mark.dataset.i18nSkip = '';
             mark.removeAttribute('aria-hidden');
             mark.setAttribute('role', 'img');
             mark.setAttribute('aria-label', maker.name);
@@ -1118,7 +1133,9 @@
                 } else {
                     const me = this.selfIdentity();
                     who.classList.add(me.colour);
-                    who.appendChild(document.createTextNode(me.name));
+                    const myName = el('span', 'author-name', me.name);
+                    myName.dataset.i18nSkip = '';
+                    who.appendChild(myName);
                     if (m.edited) who.appendChild(el('span', 'author-model', t('edited')));
                     if (m.scheduled) who.appendChild(el('span', 'author-model', t('Scheduled')));
                 }
@@ -1170,8 +1187,25 @@
             }
 
             const text = el('div', 'msg-text');
-            if (m.role === 'bot' || m.role === 'self') {
-                // User messages render markdown too; the renderer escapes HTML.
+            if (m.role === 'self' && String(m.content || '').length > window.NymLongText.FOLD_SHOWN) {
+                const full = String(m.content);
+                const head = window.NymLongText.fold(full);
+                const paint = (src) => {
+                    text.innerHTML = MD.render(src, { wrap: this.settings.codeWrap, lineNumbers: this.settings.lineNumbers, media: null });
+                };
+                paint(head);
+                text.classList.add('msg-long');
+                const more = el('button', 'btn btn-small msg-more', t('Show more'));
+                more.type = 'button';
+                let open = false;
+                more.addEventListener('click', () => {
+                    open = !open;
+                    paint(open ? full : head);
+                    more.textContent = open ? t('Show less') : t('Show more');
+                });
+                body.appendChild(text);
+                body.appendChild(more);
+            } else if (m.role === 'bot' || m.role === 'self') {
                 text.innerHTML = MD.render(m.content, {
                     wrap: this.settings.codeWrap,
                     lineNumbers: this.settings.lineNumbers,
@@ -1181,7 +1215,10 @@
                 text.style.whiteSpace = 'pre-wrap';
                 text.textContent = m.content;
             }
-            body.appendChild(text);
+            if (!text.parentNode) body.appendChild(text);
+            if (m.role === 'self' && Number(m.cut) > 0) {
+                body.appendChild(el('div', 'msg-cut', t('Shortened on this device. The full {kb} KB message is on the device that sent it, and Nymbot received all of it.', { kb: Math.max(1, Math.round(Number(m.cut) / 1024)).toLocaleString() })));
+            }
             if (m.role === 'bot' && !m.support && window.NymbotRunner) window.NymbotRunner.decorate(text);
             if (m.docs && window.NymbotDocs) {
                 const used = window.NymbotDocs.usedNode(m.docs);
@@ -1241,7 +1278,7 @@
                     card.appendChild(Icons.node(
                         Artifacts.previewable(a.lang) ? 'prompt' : 'copy', { size: 14 }));
                     const main = el('span', 'artifact-card-main');
-                    main.appendChild(el('strong', null, a.title));
+                    main.appendChild(named(el('strong'), a.title, ''));
                     main.appendChild(el('span', null, [
                         a.lang || 'text',
                         t('{n} lines', { n: a.body.split('\n').length }),
@@ -1275,6 +1312,7 @@
             node.appendChild(body);
             const actions = this.actionsFor(m);
             node.appendChild(actions);
+            if (this.openActionsId === m.id && matchMedia('(pointer: coarse)').matches) actions.classList.add('is-open');
 
             // No hover on touch, so a tap opens the row, one at a time.
             body.addEventListener('click', (e) => {
@@ -1285,6 +1323,7 @@
                     row.classList.remove('is-open');
                 }
                 actions.classList.toggle('is-open', !open);
+                this.openActionsId = open ? null : m.id;
             });
             return node;
         },
@@ -2059,6 +2098,46 @@
             }
         },
 
+        longTextModel(conv) {
+            const cat = this.models;
+            const picked = (conv && conv.proModel) || (!(conv && (conv.frozenModel || conv.modelPin)) && this.settings && this.settings.proModel) || null;
+            const key = picked && picked.key ? picked.key : '';
+            const rows = cat && Array.isArray(cat.models) ? cat.models.filter(m => m && m.key && !m.command && (!m.kind || m.kind === 'chat')) : [];
+            const row = key ? rows.find(m => m.key === key) : null;
+            return {
+                label: row ? (row.label || row.key) : (picked ? (picked.label || key) : t('the standard model')),
+                context: row ? Number(row.context) || 0 : Number(cat && cat.standardContext) || 128000,
+                out: row ? Number(row.outTokens) || 0 : Number(cat && cat.standardOut) || 8192,
+                rows
+            };
+        },
+
+        async longTextGate(conv, wireText) {
+            const LT = window.NymLongText;
+            const cost = LT.bodyCost(wireText);
+            if (cost <= LT.BODY_MAX) return { go: true };
+            const model = this.longTextModel(conv);
+            const got = LT.contextCheck(cost, model.context, model.out);
+            if (got.ok) return { go: true };
+            const longer = model.rows
+                .filter(m => Number(m.context) > 0 && LT.contextCheck(cost, m.context, m.outTokens).ok)
+                .sort((a, b) => Number(a.context) - Number(b.context))[0] || null;
+            const chunks = LT.chunksFor(wireText, got.limit);
+            const kb = Math.max(1, Math.round(cost / 1024));
+            const body = t('This message is about {kb} KB (about {tokens} tokens), and {model} reads at most about {limit} tokens at once. Nothing has been sent or charged yet.', { kb: kb.toLocaleString(), tokens: got.tokens.toLocaleString(), model: model.label, limit: got.limit.toLocaleString() });
+            const choice = await this.ask({
+                title: t('Too long for this model'),
+                body: longer
+                    ? body + ' ' + t('{longer} can read all of it, or it can go as {n} separate questions, each charged as it is sent.', { longer: longer.label || longer.key, n: chunks.length })
+                    : body + ' ' + t('It can go as {n} separate questions, each charged as it is sent.', { n: chunks.length }),
+                confirm: longer ? t('Switch to {model}', { model: longer.label || longer.key }) : t('Send in {n} parts', { n: chunks.length }),
+                alt: longer ? t('Send in {n} parts', { n: chunks.length }) : ''
+            });
+            if (choice === 'alt') return { go: false, chunks };
+            if (!choice) return { go: false };
+            return longer ? { go: true, switchTo: longer } : { go: false, chunks };
+        },
+
         async sendNow(conv, typed, override, opts, release) {
             const input = $('input');
             const bare = !!opts.bare;
@@ -2068,7 +2147,6 @@
             const here = () => !!(this.conv && this.conv.id === conv.id);
             const started = () => {
                 release();
-                if (typeof opts.onStarted === 'function') { try { opts.onStarted(); } catch (_) { } }
             };
             const carried = Array.isArray(opts.attachments);
             const composing = here() && !bare && !carried;
@@ -2173,6 +2251,22 @@
                     Chat.wireTextFor(conv, text, { attachments, quote })));
                 return;
             }
+            if (!opts.longChecked) {
+                const gate = await this.longTextGate(conv, Chat.wireTextFor(conv, text, { attachments, quote }));
+                if (gate.switchTo) {
+                    this.setModel(gate.switchTo);
+                } else if (gate.chunks) {
+                    restore();
+                    clearComposer();
+                    for (let i = 0; i < gate.chunks.length; i++) {
+                        await this.send('[Part ' + (i + 1) + ' of ' + gate.chunks.length + ']\n' + gate.chunks[i], conv, { bare: true, longChecked: true });
+                    }
+                    return;
+                } else if (!gate.go) {
+                    restore();
+                    return;
+                }
+            }
 
             let maxCost = null;
             if (Caps.any(conv)) {
@@ -2224,7 +2318,7 @@
             if (!live.title) {
                 const title = Chat.titleFor(typed);
                 live = this.patchChat(live, { title }) || live;
-                if (here()) $('chatTitle').textContent = title;
+                if (here()) titled(title, t('New chat'));
                 this.renderList();
             }
 
@@ -2237,7 +2331,8 @@
             await this.runTurn(turn, live, mine, {
                 typed, text, asked, pick, research, team, attachments, quote, maxCost,
                 override: giving ? null : override, composing: composing || (giving && carried),
-                unattended: !!opts.unattended, toppedUp: !!opts.toppedUp, forkOf: opts.forkOf || null
+                unattended: !!opts.unattended, toppedUp: !!opts.toppedUp, forkOf: opts.forkOf || null,
+                onSending: opts.onSending || null
             });
         },
 
@@ -2286,6 +2381,7 @@
                     onTurn: (eventId, signer, info) => {
                         this.bindRun(turn, live.id, mine, eventId, signer, info);
                         this.watchTurn(turn, eventId, signer);
+                        if (typeof ctx.onSending === 'function') { try { ctx.onSending(); } catch (_) { } }
                     }
                 });
                 this.stopWatchingTurn(turn);
@@ -2380,6 +2476,7 @@
             turn.sent = true;
             const wire = info && info.msgId;
             if (wire && !turn.runId) turn.runId = wire;
+            if (info && info.chanRun) turn.chanRun = info.chanRun;
             if (info && info.replay) turn.replay = info.replay;
             if (mine && wire && !turn.resumed) {
                 if (!mine.wire) {
@@ -2585,7 +2682,7 @@
                                 reuse: m, unattended: !!m.unattended, bare: !!m.bare
                             });
                             await new Promise((resolve) => {
-                                opts.onStarted = resolve;
+                                opts.onSending = resolve;
                                 Promise.resolve(this.send(m.content, target, opts)).catch(() => { }).then(resolve);
                             });
                         }
@@ -2702,15 +2799,37 @@
                 turn.controller.signal.addEventListener('abort', () => done(false), { once: true });
                 const check = async () => {
                     const Runs = window.NymbotRuns;
-                    if (Runs && !Identity.isRemote) {
-                        await Runs.poll(this).catch(() => null);
-                        const busy = Runs.entries(this).filter(x => x.run !== turn.id).length;
-                        if (this._capWaiters.includes(entry) && busy < (Chat.validRuns(this.settings.maxRuns) || Api.RUN_LIMIT)) {
+                    const conv = Store.conversation(turn.convId);
+                    let next = CAP_WAIT_POLL_MS;
+                    if (conv && conv.anon) {
+                        const own = Api.chatSigner(conv);
+                        const G = Runs && Runs.gate;
+                        let res = null;
+                        if (own.ok && own.signer && G) {
+                            if (G.ready('anon')) {
+                                G.stamp('anon');
+                                res = await Api.liveRuns(null, { signer: own.signer }).catch(() => null);
+                                G.stamp('anon');
+                            } else {
+                                const due = G.hold('anon');
+                                if (due) next = Math.max(1000, due - Date.now());
+                            }
+                        }
+                        const runs = res && res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : null;
+                        if (runs && this._capWaiters.includes(entry) && runs.filter(r => r && r.replyTo !== turn.runId).length < Api.RUN_LIMIT) {
                             done(true);
                             return;
                         }
+                    } else if (Runs && !Identity.isRemote) {
+                        const read = await Runs.pollNym(this).catch(() => false);
+                        if (read && this._capWaiters.includes(entry) && Runs.nymBusy(this, turn.id) < (Chat.validRuns(this.settings.maxRuns) || Api.RUN_LIMIT)) {
+                            done(true);
+                            return;
+                        }
+                        const due = !read && Runs.gate && !(this.conv && this.conv.anon) ? Runs.gate.due.nym : 0;
+                        if (due > Date.now()) next = Math.max(1000, due - Date.now());
                     }
-                    if (this._capWaiters.includes(entry)) timer = setTimeout(check, CAP_WAIT_POLL_MS);
+                    if (this._capWaiters.includes(entry)) timer = setTimeout(check, next);
                 };
                 timer = setTimeout(check, CAP_WAIT_POLL_MS);
             });
@@ -3142,7 +3261,12 @@
                 turn.node = null;
             }
             if (had && !turn.waiting) {
-                const next = this._capWaiters.shift();
+                const pool = (x) => {
+                    const c = Store.conversation(x.convId);
+                    return c && c.anon ? c.id : '';
+                };
+                const mine = pool(turn);
+                const next = this._capWaiters.find(w => pool(w.turn) === mine);
                 if (next) next.resolve(true);
             }
             this.refreshComposer();
@@ -3427,19 +3551,59 @@
             try { turn.controller.abort(); } catch (_) { }
             if (turn.runId && turn.sent && !turn.waiting) {
                 const conv = Store.conversation(turn.convId);
+                this.stoppedRun(turn.runId, conv);
                 if (window.NymbotRuns) window.NymbotRuns.cancel(this, conv, turn.runId, turn.signer).catch(() => { });
-                if (conv && turn.eventId) this.keepStoppedBranches(conv, turn.eventId, turn.signer).catch(() => { });
+                if (conv && (turn.eventId || turn.chanRun)) this.keepStoppedBranches(conv, turn.eventId, turn.signer, turn.chanRun).catch(() => { });
             }
             if (!(opts && opts.quiet) && !turn.quiet && turn.asked) this.runNote(turn, t('Stopped.'));
             this.endTurn(turn);
         },
 
-        async keepStoppedBranches(conv, eventId, signer) {
+        stoppedRun(run, conv) {
+            const seen = this._stoppedRuns || (this._stoppedRuns = new Set());
+            if (!run) return;
+            seen.add(run);
+            if (seen.size > 200) seen.delete(seen.values().next().value);
+            if (!conv) return;
+            const key = this.stoppedKey(conv);
+            const now = Date.now();
+            const held = Store.read(key, []);
+            const kept = (Array.isArray(held) ? held : []).filter(x => x && x.run !== run && now - (Number(x.at) || 0) < STOPPED_KEEP_MS);
+            kept.push({ run, at: now });
+            Store.write(key, kept.slice(-200));
+        },
+
+        stoppedKey(conv) {
+            return conv && conv.anon ? 'runs_stopped:' + this.keyOf(conv) : 'runs_stopped';
+        },
+
+        isStoppedRun(conv, run) {
+            if (!run) return false;
+            if (this._stoppedRuns && this._stoppedRuns.has(run)) return true;
+            const held = Store.read(this.stoppedKey(conv), []);
+            const now = Date.now();
+            return Array.isArray(held) && held.some(x => x && x.run === run && now - (Number(x.at) || 0) < STOPPED_KEEP_MS);
+        },
+
+        async keepStoppedBranches(conv, eventId, signer, run) {
             if (!Chat.reposFor(conv).some(r => r.allowWrites && GitRun.jobBranchesOn(r))) return;
+            if (run) {
+                const until = Date.now() + STOPPED_BRANCH_WAIT_MS;
+                for (let i = 0; Date.now() < until; i++) {
+                    await new Promise(done => setTimeout(done, Math.min(15000, 1000 * (i + 1))));
+                    const got = await Chat.storedData(conv, run).catch(() => null);
+                    if (!got) continue;
+                    if (got.checkpoint) Chat.rememberBranches(Store.conversation(conv.id) || conv, got.checkpoint);
+                    return;
+                }
+                return;
+            }
+            const own = signer ? { ok: true, signer } : Api.chatSigner(conv);
+            if (!own.ok) return;
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), STOPPED_BRANCH_WAIT_MS);
             try {
-                const res = await Chat.claim({ eventId }, { signer: signer || null, controller });
+                const res = await Chat.claim({ eventId }, { signer: own.signer, controller });
                 const mark = res && res.status === 200 && res.data ? res.data.checkpoint : null;
                 if (mark) Chat.rememberBranches(Store.conversation(conv.id) || conv, mark);
             } finally {
@@ -3508,6 +3672,7 @@
             const open = [];
             msgs.forEach((m, i) => {
                 if (m.role !== 'self' || m.pending || !m.wire || m.wire === exclude || now - (Number(m.ts) || 0) > 86400000 || busy(m)) return;
+                if (this.isStoppedRun(conv, m.wire)) return;
                 const next = msgs[i + 1];
                 if ((next && (next.role === 'bot' || next.role === 'error')) || msgs.some(x => (x.role === 'bot' || x.role === 'error') && (x.askedBy === m.id || x.replyTo === m.wire))) return;
                 open.push(m);
@@ -3518,13 +3683,34 @@
                 if (had && had.p) { jobs.push(had.p); continue; }
                 if (had && now - had.at < 20000) continue;
                 const rec = { at: now, p: null };
-                rec.p = Chat.storedReply(conv, m.wire).then(async (res) => {
-                    if (!res || busy(m)) return;
-                    const turn = this.beginTurn(conv, t('Nymbot is thinking'), { asked: m.id, runId: m.wire });
+                let live = null;
+                const onLive = () => {
+                    if (busy(m)) return null;
+                    const own = Api.chatSigner(conv);
+                    live = this.beginTurn(conv, t('Nymbot is thinking'), { asked: m.id, runId: m.wire });
+                    live.sent = true;
+                    if (own.signer) live.signer = own.signer;
+                    this.watchTurn(live, m.wire, own.signer || null);
+                    this.renderCard(live);
+                    return live.controller.signal;
+                };
+                rec.p = Chat.storedReply(conv, m.wire, { onLive }).then(async (res) => {
+                    if (live && (live.stopped || !this.turns.has(live.id))) return;
+                    if (res && res.running) {
+                        rec.running = true;
+                        if (live) this.endTurn(live);
+                        return;
+                    }
+                    if (!res || (!live && busy(m))) {
+                        if (live) this.endTurn(live);
+                        return;
+                    }
+                    const turn = live || this.beginTurn(conv, t('Nymbot is thinking'), { asked: m.id, runId: m.wire });
+                    if (live) this.stopWatchingTurn(live);
                     turn.eventId = m.wire;
                     turn.sent = true;
                     await this.acceptReply(turn, Store.conversation(conv.id) || conv, res);
-                }).catch(() => null).finally(() => { rec.p = null; rec.at = Date.now(); });
+                }).catch(() => null).finally(() => { rec.p = null; rec.at = rec.running ? 0 : Date.now(); });
                 seen.set(m.wire, rec);
                 jobs.push(rec.p);
             }
@@ -4135,7 +4321,7 @@
                 case 'rename':
                     if (arg) {
                         this.conv = Store.updateConversation(this.conv.id, { title: arg });
-                        $('chatTitle').textContent = arg;
+                        titled(arg, t('New chat'));
                         this.renderList();
                         return true;
                     }
@@ -4717,7 +4903,6 @@
                 : t('That is today\'s free replies used. Tap Buy for credits, which also unlock the sharper models, repositories, images and web search.'));
         },
 
-        /// True only once the balances are known and neither the nym nor any throwaway key holds credits.
         freeOnly() {
             const b = this.balance;
             if (b.standard == null || b.pro == null) return false;
@@ -4842,14 +5027,12 @@
             const bot = Chat.botFor(conv);
             const botChip = $('chipBot');
             botChip.classList.toggle('is-active', !!bot);
-            botChip.querySelector('.chip-label').textContent = bot ? bot.name : t('Bot');
+            named(botChip.querySelector('.chip-label'), bot ? bot.name : '', t('Bot'));
 
             const space = Chat.workspaceFor(conv);
             const spaceChip = $('chipWorkspace');
             spaceChip.classList.toggle('is-active', !!space);
-            spaceChip.querySelector('.chip-label').textContent = space
-                ? space.name
-                : t('Workspace');
+            named(spaceChip.querySelector('.chip-label'), space ? space.name : '', t('Workspace'));
 
             const effortChip = $('chipEffort');
             const effort = Chat.effortOf(conv);
@@ -6347,7 +6530,7 @@
             for (const space of Store.workspaces()) {
                 const option = document.createElement('option');
                 option.value = space.id;
-                option.textContent = space.name || t('Untitled');
+                named(option, space.name, t('Untitled'));
                 scope.appendChild(option);
             }
             scope.value = (this.conv && this.conv.workspaceId) || '';
@@ -6375,7 +6558,7 @@
                 const head = el('span', 'memory-topic');
                 head.appendChild(document.createTextNode(entry.topic || t('Note')));
                 const space = entry.scope ? Store.workspace(entry.scope) : null;
-                if (space) head.appendChild(el('span', 'memory-scope', space.name || t('Untitled')));
+                if (space) head.appendChild(named(el('span', 'memory-scope'), space.name, t('Untitled')));
                 if (entry.source === 'chat') {
                     head.appendChild(el('span', 'memory-scope', t('noticed')));
                 }
@@ -6482,7 +6665,9 @@
             for (const { conv, message } of rows) {
                 const row = el('div', 'pinned-row');
                 const main = el('div', 'pinned-main');
-                main.appendChild(el('span', 'search-name', conv.title || t('New chat')));
+                const searchName = el('span', 'search-name', conv.title || t('New chat'));
+                if (conv.title) searchName.dataset.i18nSkip = '';
+                main.appendChild(searchName);
                 main.appendChild(el('span', 'search-sub', MD.plain(message.content).slice(0, 180)));
                 main.style.cursor = 'pointer';
                 main.addEventListener('click', () => {
@@ -6534,7 +6719,9 @@
                 const row = el('button', 'search-row');
                 row.type = 'button';
                 const main = el('div', 'search-main');
-                main.appendChild(el('span', 'search-name', hit.conv.title || t('New chat')));
+                const hitName = el('span', 'search-name', hit.conv.title || t('New chat'));
+                if (hit.conv.title) hitName.dataset.i18nSkip = '';
+                main.appendChild(hitName);
                 main.appendChild(el('span', 'search-sub', hit.excerpt));
                 row.appendChild(main);
                 row.addEventListener('click', () => {
@@ -6603,7 +6790,7 @@
             for (const folder of Store.folders()) {
                 const option = document.createElement('option');
                 option.value = folder.id;
-                option.textContent = folder.name;
+                named(option, folder.name, '');
                 option.selected = folder.id === conv.folderId;
                 select.appendChild(option);
             }
@@ -7025,7 +7212,7 @@
             for (const a of made) {
                 const row = el('div', 'repo-row');
                 const main = el('div', 'repo-main');
-                main.appendChild(el('span', 'repo-name', a.title));
+                main.appendChild(named(el('span', 'repo-name'), a.title, ''));
                 main.appendChild(el('span', 'repo-sub', [
                     a.lang || 'text',
                     t('{n} lines', { n: a.body.split('\n').length }),
@@ -7210,7 +7397,7 @@
             const main = el('div', 'repo-main');
             const open = el('button', 'artifact-open');
             open.type = 'button';
-            open.appendChild(el('span', 'repo-name', a.title || t('Untitled')));
+            open.appendChild(named(el('span', 'repo-name'), a.title, t('Untitled')));
             const lines = String(a.body || '').split('\n').length;
             const sub = el('span', 'repo-sub', [
                 a.lang || 'text',
@@ -8585,9 +8772,8 @@
                 mark.appendChild(Icons.node(bot.icon || 'robot', { size: 15 }));
                 row.appendChild(mark);
                 const main = el('div', 'repo-main');
-                main.appendChild(el('span', 'repo-name', bot.name || t('Untitled')));
-                main.appendChild(el('span', 'repo-sub',
-                    bot.tagline || bot.modelLabel || t('Auto-routed')));
+                main.appendChild(named(el('span', 'repo-name'), bot.name, t('Untitled')));
+                main.appendChild(named(el('span', 'repo-sub'), bot.tagline || bot.modelLabel, t('Auto-routed')));
                 main.style.cursor = 'pointer';
                 main.addEventListener('click', () => this.useBot(
                     bot.id === active ? null : bot.id));
@@ -8692,7 +8878,7 @@
             if (!bot) return;
             this.sharingBot = id;
             const link = Bots.link(bot);
-            $('shareBotTitle').textContent = bot.name || t('Share this bot');
+            named($('shareBotTitle'), bot.name, t('Share this bot'));
             $('shareBotLink').value = link;
             $('shareBotAddr').hidden = !bot.naddr;
             $('shareBotNaddr').value = bot.naddr || '';
@@ -8777,9 +8963,9 @@
             box.hidden = false;
             const head = el('div', 'bot-preview-head');
             head.appendChild(Icons.node(bot.icon || 'robot', { size: 16 }));
-            head.appendChild(el('strong', null, bot.name));
+            head.appendChild(named(el('strong'), bot.name, ''));
             box.appendChild(head);
-            if (bot.tagline) box.appendChild(el('p', 'bot-preview-line', bot.tagline));
+            if (bot.tagline) box.appendChild(named(el('p', 'bot-preview-line'), bot.tagline, ''));
             box.appendChild(el('p', 'bot-preview-line',
                 bot.modelLabel ? t('Model: {name}', { name: bot.modelLabel }) : t('Auto-routed')));
             if (bot.instructions) {
@@ -8869,6 +9055,7 @@
             const count = n ? (n === 1 ? t('1 file') : t('{n} files', { n })) : '';
             const summary = [count, clipped].filter(Boolean).join(' · ');
             $('shareTargetSummary').textContent = summary;
+            $('shareTargetSummary').toggleAttribute('data-i18n-skip', !!clipped);
             $('shareTargetSummary').hidden = !summary;
             const search = $('shareTargetSearch');
             search.value = '';
@@ -8905,7 +9092,7 @@
                 row.type = 'button';
                 row.dataset.share = conv.id;
                 if (conv.pinned) row.appendChild(Icons.node('pin', { size: 11, filled: true }));
-                row.appendChild(el('span', 'chip-menu-label', conv.title || t('New chat')));
+                row.appendChild(named(el('span', 'chip-menu-label'), conv.title, t('New chat')));
                 row.addEventListener('click', () => this.acceptShare(conv));
                 list.appendChild(row);
             }
@@ -8981,7 +9168,7 @@
             for (const space of spaces) {
                 const row = el('div', 'repo-row' + (space.id === active ? ' is-on' : ''));
                 const main = el('div', 'repo-main');
-                main.appendChild(el('span', 'repo-name', space.name || t('Untitled')));
+                main.appendChild(named(el('span', 'repo-name'), space.name, t('Untitled')));
                 main.appendChild(el('span', 'repo-sub', [
                     t('{n} files', { n: (space.files || []).length }),
                     t('{n} repos', { n: (space.repoIds || []).length })
@@ -9481,7 +9668,7 @@
             Store.dropThread(cid);
             if (!kept.title) {
                 kept = Store.updateConversation(cid, { title: Chat.titleFor(this.compare.prompt) });
-                if (here()) $('chatTitle').textContent = kept.title;
+                if (here()) titled(kept.title, t('New chat'));
             }
             if (here()) this.conv = kept;
 
@@ -10473,7 +10660,7 @@
             });
             if (title == null) return;
             const next = this.patchChat(conv, { title: title.trim() || t('New chat') });
-            if (this.conv && next.id === this.conv.id) $('chatTitle').textContent = next.title;
+            if (this.conv && next.id === this.conv.id) titled(next.title, t('New chat'));
             this.renderList();
         },
 
@@ -10582,6 +10769,7 @@
                         group: t('Chats'),
                         name: conv.title || t('New chat'),
                         hint: conv.archived ? t('archived') : '',
+                        nameTyped: !!conv.title,
                         run: () => this.open(Store.conversation(conv.id))
                     });
                     if (rows.length > 40) break;
@@ -10592,6 +10780,8 @@
                         group: t('Messages'),
                         name: hit.excerpt.slice(0, 70),
                         hint: hit.conv.title || t('New chat'),
+                        nameTyped: true,
+                        hintTyped: !!hit.conv.title,
                         run: () => {
                             this.open(Store.conversation(hit.conv.id));
                             setTimeout(() => this.jumpToMessage(hit.message.id), 60);
@@ -10624,8 +10814,11 @@
                 } else {
                     name.textContent = row.name;
                 }
+                if (row.nameTyped) name.dataset.i18nSkip = '';
                 b.appendChild(name);
-                b.appendChild(el('span', 'palette-hint', row.hint || ''));
+                const hint = el('span', 'palette-hint', row.hint || '');
+                if (row.hintTyped) hint.dataset.i18nSkip = '';
+                b.appendChild(hint);
                 b.addEventListener('click', () => this.runPalette(i));
                 list.appendChild(b);
             });

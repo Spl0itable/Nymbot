@@ -322,16 +322,17 @@
             const payload = { runId: m.ask.runId, pendingId: body.id };
             if (body.skipped) payload.skipped = true;
             else payload.answers = body.answers;
+            const own = Api.chatSigner(conv);
             let res;
             try {
-                res = await Api.call('pm-answer', payload, { timeout: 20000 });
+                res = own.ok ? await Api.call('pm-answer', payload, { timeout: 20000, signer: own.signer }) : { status: 0, data: {} };
             } catch (_) {
                 res = { status: 0, data: {} };
             }
             const data = (res && res.data) || {};
             if (res && res.status === 200 && data.ok) {
                 const done = this.patch(ui, conv.id, m, kept);
-                if (window.NymbotBackground) window.NymbotBackground.answered(ui, conv, done, data);
+                if (window.NymbotBackground && !conv.anon) window.NymbotBackground.answered(ui, conv, done, data);
                 return;
             }
             if (res && (res.status === 410 || data.expired)) {

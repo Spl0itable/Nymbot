@@ -28,7 +28,7 @@ import { ASK_WAIT_MS } from "./_ask.js";
 var CHAN_MAX_PER_SOCKET = 8;
 var CHAN_OPEN_PER_MIN = 30;
 var CHAN_MESSAGE_MAX = 16 * 1024 * 1024;
-var TURN_PARTS_MAX = 8;
+var TURN_PARTS_MAX = 1000;
 var CHAN_KEEP_MS = 24 * 3600 * 1000;
 var CHAN_REPLY_AFTER = 3600;
 var CHAN_RESEAL_MARGIN = 300;
@@ -252,6 +252,7 @@ function chanLegHooks(env, botSk, u, run, pq, ctl) {
       var parks = !!(pending && st.k);
       var meta = pick(obj, META_FIELDS);
       if (pending && !parks) meta.pendingTool = pending;
+      if (obj && obj.background) meta.background = bgInfo(obj.background);
       var wrap = null;
       var carried = false;
       if (obj && obj.event && botSk) {
@@ -425,6 +426,12 @@ function chanSocket(o) {
       resumeTaken: ref.resumeTaken || null,
       cipher: chanCipher(ref.c, ref.run, ref.u, "s2c"),
       ctl: function () { return ref.c ? bytesToHex(ref.c) : null; },
+      peer: function (run) {
+        var other = LIVE.get(liveKey(ref.u, run));
+        var c = other && other.c ? other.c : null;
+        if (!c) chans.forEach(function (x) { if (!c && x.u === ref.u && x.joinedC && x.joinedC[run]) c = x.joinedC[run]; });
+        return c ? chanCipher(c, run, ref.u, "c2s") : null;
+      },
       draft: function () { return pump; },
       step: function (step) {
         if (!step || typeof step !== "object") return;
@@ -543,6 +550,11 @@ function chanSocket(o) {
     } else {
       var info = pick(data, CONTENT_FREE);
       if (data && typeof data.error === "string") info.message = data.error;
+      if (data && data.team === true) info.team = true;
+      if (data && data.capExceeded === true) {
+        info.capExceeded = true;
+        if (Number.isFinite(Number(data.maxCost))) info.maxCost = Number(data.maxCost);
+      }
       fanout(ref, TYPES.ERROR, { run: ref.run, code: status === 402 || (data && data.noCredits) ? "credits" : (status === 429 ? "rate" : "failed"), info: info });
       if (ref.c) { ref.c.fill(0); ref.c = null; }
       LIVE.delete(liveKey(ref.u, ref.run));
@@ -627,10 +639,18 @@ function chanSocket(o) {
     if (!b || typeof b.run !== "string") throw Object.assign(new Error("malformed"), { chanCode: "malformed" });
     if (!pr || pr.run !== b.run) {
       var live = LIVE.get(liveKey(ch.u, b.run));
-      if (live && live.watchers.has(ch) && type === TYPES.APPROVE && b.kind !== "plan") {
+      var watching = !!(live && live.watchers.has(ch));
+      if (watching && type === TYPES.APPROVE && b.kind !== "plan") {
         return await control(ch, { action: b.ok ? "pm-steer" : "pm-cancel", replyTo: b.run, text: b.ok ? "Approved." : undefined });
       }
-      out(ch, TYPES.ERROR, { run: b.run, code: "no-run" });
+      var decision = type === TYPES.ANSWER || b.kind === "plan";
+      var pid = String(type === TYPES.ANSWER ? b.q || "" : b.id || "");
+      if (decision && (watching || await heldBy(ch, b))) {
+        var answered = await control(ch, pendingBody(type, b), pid);
+        if (answered && answered.ok) out(ch, TYPES.ACCEPT, { run: b.run, wrap: null, answered: pid });
+        return answered;
+      }
+      out(ch, TYPES.ERROR, failFrame(b.run, "no-run", decision ? pid : null));
       return null;
     }
     ch.pendingResume = null;
@@ -666,7 +686,8 @@ function chanSocket(o) {
       body.pendingAnswer = { id: String(b.q || ""), answers: b.answer };
       text = typeof b.text === "string" && b.text ? b.text : (typeof b.answer === "string" ? b.answer : JSON.stringify(b.answer || ""));
     } else if (b.kind === "plan") {
-      body.pendingAnswer = { id: String(b.id || ""), decision: b.ok ? "approve" : "decline", edits: b.edits };
+      var decided = b.decision === "approve" || b.decision === "reject" || b.decision === "revise" ? b.decision : (b.ok ? "approve" : "reject");
+      body.pendingAnswer = { id: String(b.id || ""), decision: decided, edits: b.edits };
       text = b.ok ? "Approved." : "Declined.";
     } else if (b.kind === "tool") {
       if (b.ok) body.runApprove = String(b.id || "");
@@ -687,18 +708,69 @@ function chanSocket(o) {
     return data;
   }
 
-  async function control(ch, body) {
+  async function heldBy(ch, b) {
+    if (ch.joinedC && ch.joinedC[b.run]) return true;
+    if (typeof b.c !== "string" || !HEX64.test(b.c) || !RUN_ID.test(b.run)) return false;
+    var c = hexToBytes(b.c);
+    var row = await chanRunGet(env, ch.u, b.run);
+    if (!row || !row.ctl_id || row.ctl_id !== controlId(c) || (row.phase !== "live" && row.phase !== "bg")) {
+      c.fill(0);
+      return false;
+    }
+    ch.joinedC = ch.joinedC || {};
+    ch.joinedC[b.run] = c;
+    ch.runs.add(b.run);
+    return true;
+  }
+
+  function pendingBody(type, b) {
+    var body = { action: "pm-answer", replyTo: b.run, runId: b.run };
+    if (type === TYPES.ANSWER) {
+      body.pendingId = String(b.q || "");
+      if (Array.isArray(b.answer) && !b.answer.length) body.skipped = true;
+      else body.answers = b.answer;
+      return body;
+    }
+    body.pendingId = String(b.id || "");
+    body.decision = b.decision === "approve" || b.decision === "reject" || b.decision === "revise" ? b.decision : (b.ok ? "approve" : "reject");
+    if (b.edits) body.edits = b.edits;
+    return body;
+  }
+
+  function failFrame(run, code, refused) {
+    return refused == null ? { run: run, code: code } : { run: run, code: code, refused: refused };
+  }
+
+  async function control(ch, body, refused) {
     var ref = LIVE.get(liveKey(ch.u, body.replyTo));
     var c = ref && ref.c ? ref.c : (ch.joinedC && ch.joinedC[body.replyTo]) || null;
     if (!c && body.action !== "pm-cancel") {
-      out(ch, TYPES.ERROR, { run: body.replyTo, code: "no-run" });
+      out(ch, TYPES.ERROR, failFrame(body.replyTo, "no-run", refused));
       return null;
     }
     var hooks = { run: body.replyTo, user: ch.u, cipher: chanCipher(c, body.replyTo, ch.u, "c2s"), control: true };
     var res = await o.call(hooks, Object.assign({ pubkey: ch.u }, body));
     var data = null;
     try { data = await res.json(); } catch (e) { data = null; }
-    if (!res || res.status >= 400) out(ch, TYPES.ERROR, { run: body.replyTo, code: res && res.status === 404 ? "no-run" : "failed" });
+    if (!res || res.status >= 400) {
+      out(ch, TYPES.ERROR, failFrame(body.replyTo, refused === "steer" ? steerCode(res, data) : (res && res.status === 404 ? "no-run" : "failed"), refused));
+      return null;
+    }
+    return data;
+  }
+
+  function steerCode(res, data) {
+    if (!res) return "failed";
+    if (res.status === 404) return "no-run";
+    if (res.status === 409) return data && data.final === true ? "final" : "finished";
+    if (res.status === 413) return "long";
+    if (res.status === 429) return "rate";
+    return "failed";
+  }
+
+  async function steerOn(ch, b) {
+    var data = await control(ch, { action: "pm-steer", replyTo: b.run, text: b.text }, "steer");
+    if (data) out(ch, TYPES.ACCEPT, { run: b.run, wrap: null, steered: data && typeof data.id === "string" ? data.id : "" });
     return data;
   }
 
@@ -789,7 +861,7 @@ function chanSocket(o) {
       case TYPES.JOIN: return await onJoin(ch, b);
       case TYPES.STEER:
         if (!b || typeof b.run !== "string" || typeof b.text !== "string") throw Object.assign(new Error("malformed"), { chanCode: "malformed" });
-        return await control(ch, { action: "pm-steer", replyTo: b.run, text: b.text });
+        return await steerOn(ch, b);
       case TYPES.CANCEL:
         if (!b || typeof b.run !== "string") throw Object.assign(new Error("malformed"), { chanCode: "malformed" });
         return await control(ch, { action: "pm-cancel", replyTo: b.run });

@@ -37,7 +37,7 @@ class TranscriptBook {
   String? viewing;
 
   static const flushAfter = Duration(seconds: 1);
-  static const logEvery = Duration(seconds: 30);
+  static Duration logEvery = const Duration(seconds: 30);
   static final _hex = RegExp(r'^[0-9a-f]{64}$');
 
   static int now() => DateTime.now().millisecondsSinceEpoch;
@@ -379,7 +379,7 @@ class TranscriptBook {
   }
 
   void remote(List<RemoteRun> runs, Map<String, Map> raw, Conversation? Function(String thread) convOf,
-      bool Function(String runId) local) {
+      bool Function(String runId) local, {bool Function(Conversation conv)? readable}) {
     final at = now();
     for (final r in runs) {
       if (!_hex.hasMatch(r.replyTo) || local(r.replyTo)) continue;
@@ -388,14 +388,16 @@ class TranscriptBook {
       final tx = _remoteTx(conv.id, r);
       if (tx.end != null) continue;
       _noteServer(tx, {...?raw[r.replyTo]?.cast<String, dynamic>(), 'state': r.state}, at);
-      if (at - (_fetched[tx.id] ?? 0) > logEvery.inMilliseconds) unawaited(refresh(tx, conv));
+      if (readable != null && readable(conv) && at - (_fetched[tx.id] ?? 0) > logEvery.inMilliseconds) {
+        unawaited(refresh(tx, conv));
+      }
     }
     for (final tx in [...live.values]) {
       if (tx.end != null || tx.run == null || tx.id != tx.run) continue;
       if (runs.any((r) => r.replyTo == tx.run) || local(tx.run!)) continue;
       if (at - (_fetched[tx.id] ?? 0) <= logEvery.inMilliseconds) continue;
       final conv = store.conversations().where((c) => c.id == tx.conv).firstOrNull;
-      if (conv != null) unawaited(refresh(tx, conv));
+      if (conv != null && readable != null && readable(conv)) unawaited(refresh(tx, conv));
     }
   }
 

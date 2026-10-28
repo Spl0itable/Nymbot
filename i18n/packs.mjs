@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { LANGUAGES } from './languages.mjs';
+import { catalogHash } from './catalog-key.mjs';
 import { loadCache } from './translate.mjs';
 
 const byCode = new Map(LANGUAGES.map((l) => [l.code, l]));
@@ -37,12 +38,13 @@ export async function buildPacks(sources) {
     name: byCode.get(code).name,
     ...(byCode.get(code).native ? { native: byCode.get(code).native } : {}),
   }));
-  return { packs, published, partial };
+  return { packs, published, partial, catalog: catalogHash(sources) };
 }
 
-export async function writePacks(dir, { packs, published }) {
+export async function writePacks(dir, { packs, published, catalog }) {
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, 'index.json'), JSON.stringify(published));
+  if (catalog) await writeFile(path.join(dir, 'catalog.json'), JSON.stringify({ hash: catalog }));
   for (const [code, pack] of packs) {
     await writeFile(path.join(dir, `${code}.json`), JSON.stringify(pack));
   }

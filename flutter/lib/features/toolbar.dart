@@ -6,6 +6,8 @@ import '../services/chat_engine.dart';
 import '../state/app_controller.dart';
 import '../core/theme/theme.dart';
 import 'desktop_layout.dart';
+import 'duo_rail.dart';
+import 'purchase_policy.dart';
 import 'brand_tile.dart';
 import 'i18n/i18n.dart';
 import 'sheets/anon_sheet.dart';
@@ -36,178 +38,12 @@ class NymbotToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final theme = Theme.of(context);
-    final model = app.activeModel;
-    final media = app.activeMediaModel;
-    final pro = model != null || AppController.mediaNeedsPro(media);
-    final shown = media ?? model;
-    final accent = pro ? theme.colorScheme.secondary : theme.colorScheme.primary;
-    final repos = app.activeRepos;
-    final persona = app.activePersona;
-    final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
-    final locked = app.freeOnly;
-
-    final chips = <_ChipSpec>[
-      _ChipSpec(
-        glyph: 'auto-routed',
-        paidOnly: true,
-        label: shown == null
-            ? t('Auto-routed')
-            : media != null
-                ? AppController.mediaLabel(media)
-                : shown['label'] as String,
-        active: shown != null,
-        brand: shown == null ? null : shown['slug'] as String?,
-        onTap: () => showModelsSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'git',
-        paidOnly: true,
-        label: repos.isEmpty
-            ? t('Git')
-            : repos.length == 1
-                ? repos.first.display
-                : t('{n} repos', {'n': repos.length}),
-        active: repos.isNotEmpty,
-        onTap: () => showReposSheet(context),
-      ),
-      if (app.runnerAvailable && repos.isNotEmpty)
-        _ChipSpec(
-          glyph: 'server-runs',
-          paidOnly: true,
-          label: t('Server runs'),
-          active: app.current?.serverRuns == true,
-          onTap: () => _toggleServerRuns(context, app),
-        ),
-      if (app.siteCheckAvailable)
-        _ChipSpec(
-          glyph: 'site-check',
-          paidOnly: true,
-          label: t('Site checker'),
-          active: false,
-          onTap: () => showSiteCheckSheet(context),
-        ),
-      _ChipSpec(
-        glyph: 'connectors',
-        paidOnly: true,
-        label: app.activeConnectors.isEmpty
-            ? t('Connectors')
-            : app.activeConnectors.length == 1
-                ? app.activeConnectors.first.name
-                : t('{n} connectors', {'n': app.activeConnectors.length}),
-        active: app.activeConnectors.isNotEmpty,
-        onTap: () => showConnectorsSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'persona',
-        label: persona != null
-            ? persona.name
-            : hasSystem
-                ? t('Custom')
-                : t('Persona'),
-        active: persona != null || hasSystem,
-        onTap: () => showPersonasSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'skills',
-        label: app.skillOf(app.current) != null ? Skills.label(app.skillOf(app.current)!) : t('Skills'),
-        active: app.skillOf(app.current) != null,
-        onTap: () async {
-          final picked = await showSkillsSheet(context);
-          if (picked != null) app.queueInput(picked);
-        },
-      ),
-      _ChipSpec(
-        glyph: 'scheduled',
-        label: app.schedules.where((s) => s.enabled).isEmpty
-            ? t('Scheduled')
-            : t('{n} scheduled',
-                {'n': app.schedules.where((s) => s.enabled).length}),
-        active: app.schedules.any((s) => s.enabled),
-        onTap: () => showSchedulesSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'ghost',
-        label: t('Ghost'),
-        active: app.current?.ephemeral == true,
-        onTap: () => _confirmGhost(context, app),
-      ),
-      _ChipSpec(
-        glyph: 'bot',
-        label: app.activeBot?.name ?? t('Bot'),
-        active: app.activeBot != null,
-        onTap: () => showBotsSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'workspace',
-        label: app.activeWorkspace?.name ?? t('Workspace'),
-        active: app.activeWorkspace != null,
-        onTap: () => showWorkspacesSheet(context),
-      ),
-      _ChipSpec(
-        glyph: 'compare',
-        paidOnly: true,
-        label: t('Compare'),
-        active: false,
-        onTap: () => showCompareSheet(context),
-      ),
-      if (app.artifacts.isNotEmpty)
-        _ChipSpec(
-          glyph: 'artifacts',
-          label: app.artifacts.length == 1
-              ? t('1 artifact')
-              : t('{n} artifacts', {'n': app.artifacts.length}),
-          active: true,
-          onTap: () => showArtifactsSheet(context),
-        ),
-      // Only Pro replies outside repo tasks can think harder; repo tasks have their own budget.
-      if (pro && repos.isEmpty)
-        _ChipSpec(
-          glyph: 'effort',
-          paidOnly: true,
-          label: switch (ChatEngine.effortOf(app.current)) {
-            'careful' => t('Careful'),
-            'deep' => t('Deep'),
-            _ => t('Effort'),
-          },
-          active: ChatEngine.effortOf(app.current) != 'normal',
-          onTap: () => _cycleEffort(context, app),
-        ),
-      _ChipSpec(
-        glyph: 'research',
-        paidOnly: true,
-        label: t('Research'),
-        active: app.researchNext,
-        onTap: () => toggleResearchChip(context, app),
-      ),
-      if (app.teamAvailable)
-        _ChipSpec(
-          glyph: 'team',
-          paidOnly: true,
-          label: app.teamSetting == null
-              ? t('Team')
-              : t('Team of {n}', {'n': app.teamSetting!.workers}),
-          active: app.teamSetting != null,
-          onTap: () => showTeamSheet(context),
-        ),
-      _ChipSpec(
-        glyph: 'web',
-        paidOnly: true,
-        label: t('Web'),
-        active: app.settings.webSearch,
-        onTap: () => app.setWebSearch(!app.settings.webSearch),
-      ),
-      _ChipSpec(
-        glyph: 'anon',
-        paidOnly: true,
-        label: t('Anon'),
-        active: app.current?.anon ?? false,
-        onTap: () => _anonChip(context, app),
-      ),
-    ].map((c) => c.paidOnly && locked ? c.locked(context) : c).toList();
-
+    final set = _chipSet(context);
+    final pro = set.pro;
+    final accent = set.accent;
     // Active chips sort to the front, followed by a divider.
-    final on = chips.where((c) => c.active).toList();
-    final off = chips.where((c) => !c.active).toList();
+    final on = set.on;
+    final off = set.off;
 
     Widget spaced(List<Widget> children) {
       final out = <Widget>[];
@@ -284,6 +120,333 @@ class NymbotToolbar extends StatelessWidget {
           const SizedBox(width: 6),
           balance,
         ],
+      ),
+    );
+  }
+}
+
+({bool pro, Color accent, List<_ChipSpec> all, List<_ChipSpec> on, List<_ChipSpec> off})
+    _chipSet(BuildContext context) {
+  final app = AppScope.of(context);
+  final theme = Theme.of(context);
+  final model = app.activeModel;
+  final media = app.activeMediaModel;
+  final pro = model != null || AppController.mediaNeedsPro(media);
+  final shown = media ?? model;
+  final accent = pro ? theme.colorScheme.secondary : theme.colorScheme.primary;
+  final repos = app.activeRepos;
+  final persona = app.activePersona;
+  final hasSystem = (app.current?.systemPrompt ?? '').trim().isNotEmpty;
+  final locked = app.freeOnly;
+
+  final chips = <_ChipSpec>[
+    _ChipSpec(
+      glyph: 'auto-routed',
+      paidOnly: true,
+      label: shown == null
+          ? t('Auto-routed')
+          : media != null
+              ? AppController.mediaLabel(media)
+              : shown['label'] as String,
+      active: shown != null,
+      brand: shown == null ? null : shown['slug'] as String?,
+      onTap: () => showModelsSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'git',
+      paidOnly: true,
+      label: repos.isEmpty
+          ? t('Git')
+          : repos.length == 1
+              ? repos.first.display
+              : t('{n} repos', {'n': repos.length}),
+      active: repos.isNotEmpty,
+      onTap: () => showReposSheet(context),
+    ),
+    if (app.runnerAvailable && repos.isNotEmpty)
+      _ChipSpec(
+        glyph: 'server-runs',
+        paidOnly: true,
+        label: t('Server runs'),
+        active: app.current?.serverRuns == true,
+        onTap: () => _toggleServerRuns(context, app),
+      ),
+    if (app.siteCheckAvailable)
+      _ChipSpec(
+        glyph: 'site-check',
+        paidOnly: true,
+        label: t('Site checker'),
+        active: false,
+        onTap: () => showSiteCheckSheet(context),
+      ),
+    _ChipSpec(
+      glyph: 'connectors',
+      paidOnly: true,
+      label: app.activeConnectors.isEmpty
+          ? t('Connectors')
+          : app.activeConnectors.length == 1
+              ? app.activeConnectors.first.name
+              : t('{n} connectors', {'n': app.activeConnectors.length}),
+      active: app.activeConnectors.isNotEmpty,
+      onTap: () => showConnectorsSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'persona',
+      label: persona != null
+          ? persona.name
+          : hasSystem
+              ? t('Custom')
+              : t('Persona'),
+      active: persona != null || hasSystem,
+      onTap: () => showPersonasSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'skills',
+      label: app.skillOf(app.current) != null ? Skills.label(app.skillOf(app.current)!) : t('Skills'),
+      active: app.skillOf(app.current) != null,
+      onTap: () async {
+        final picked = await showSkillsSheet(context);
+        if (picked != null) app.queueInput(picked);
+      },
+    ),
+    _ChipSpec(
+      glyph: 'scheduled',
+      label: app.schedules.where((s) => s.enabled).isEmpty
+          ? t('Scheduled')
+          : t('{n} scheduled',
+              {'n': app.schedules.where((s) => s.enabled).length}),
+      active: app.schedules.any((s) => s.enabled),
+      onTap: () => showSchedulesSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'ghost',
+      label: t('Ghost'),
+      active: app.current?.ephemeral == true,
+      onTap: () => _confirmGhost(context, app),
+    ),
+    _ChipSpec(
+      glyph: 'bot',
+      label: app.activeBot?.name ?? t('Bot'),
+      active: app.activeBot != null,
+      onTap: () => showBotsSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'workspace',
+      label: app.activeWorkspace?.name ?? t('Workspace'),
+      active: app.activeWorkspace != null,
+      onTap: () => showWorkspacesSheet(context),
+    ),
+    _ChipSpec(
+      glyph: 'compare',
+      paidOnly: true,
+      label: t('Compare'),
+      active: false,
+      onTap: () => showCompareSheet(context),
+    ),
+    if (app.artifacts.isNotEmpty)
+      _ChipSpec(
+        glyph: 'artifacts',
+        label: app.artifacts.length == 1
+            ? t('1 artifact')
+            : t('{n} artifacts', {'n': app.artifacts.length}),
+        active: true,
+        onTap: () => showArtifactsSheet(context),
+      ),
+    if (pro && repos.isEmpty)
+      _ChipSpec(
+        glyph: 'effort',
+        paidOnly: true,
+        label: switch (ChatEngine.effortOf(app.current)) {
+          'careful' => t('Careful'),
+          'deep' => t('Deep'),
+          _ => t('Effort'),
+        },
+        active: ChatEngine.effortOf(app.current) != 'normal',
+        onTap: () => _cycleEffort(context, app),
+      ),
+    _ChipSpec(
+      glyph: 'research',
+      paidOnly: true,
+      label: t('Research'),
+      active: app.researchNext,
+      onTap: () => toggleResearchChip(context, app),
+    ),
+    if (app.teamAvailable)
+      _ChipSpec(
+        glyph: 'team',
+        paidOnly: true,
+        label: app.teamSetting == null
+            ? t('Team')
+            : t('Team of {n}', {'n': app.teamSetting!.workers}),
+        active: app.teamSetting != null,
+        onTap: () => showTeamSheet(context),
+      ),
+    _ChipSpec(
+      glyph: 'web',
+      paidOnly: true,
+      label: t('Web'),
+      active: app.settings.webSearch,
+      onTap: () => app.setWebSearch(!app.settings.webSearch),
+    ),
+    _ChipSpec(
+      glyph: 'anon',
+      paidOnly: true,
+      label: t('Anon'),
+      active: app.current?.anon ?? false,
+      onTap: () => _anonChip(context, app),
+    ),
+  ].map((c) => c.paidOnly && locked ? c.locked(context) : c).toList();
+
+  final on = chips.where((c) => c.active).toList();
+  final off = chips.where((c) => !c.active).toList();
+  return (pro: pro, accent: accent, all: chips, on: on, off: off);
+}
+
+Future<void> _pickTier(BuildContext context, AppController app, bool isPro) async {
+  if (isPro && app.freeOnly) {
+    await offerCredits(context);
+  } else if (isPro) {
+    await showModelsSheet(context);
+  } else {
+    await app.dropProMedia();
+    await app.setProModel(null);
+  }
+}
+
+List<Widget> nymbotRailChips(BuildContext context) {
+  final app = AppScope.of(context);
+  final set = _chipSet(context);
+  final byGlyph = {for (final c in set.all) c.glyph: c};
+  Widget icon(_ChipSpec c) => c.brand != null
+      ? BrandTile(slug: c.brand!, size: 22)
+      : NymGlyph(c.glyph, size: 20);
+  Widget toggle(String glyph) {
+    final c = byGlyph[glyph]!;
+    return DuoRailButton(
+      key: ValueKey('duo-$glyph'),
+      icon: icon(c),
+      label: c.label,
+      toggled: c.active,
+      dimmed: c.dimmed,
+      onTap: c.onTap,
+    );
+  }
+
+  final model = byGlyph['auto-routed']!;
+  final standard = t('Standard');
+  final proLabel = t('Pro');
+  return [
+    DuoRailButton(
+      key: const ValueKey('duo-tier'),
+      icon: _TierGlyph(pro: set.pro, accent: set.accent, standard: standard, proLabel: proLabel),
+      label: set.pro ? proLabel : standard,
+      semanticsLabel: '$standard / $proLabel',
+      toggled: set.pro,
+      onTap: () => _pickTier(context, app, !set.pro),
+    ),
+    DuoRailButton(
+      key: const ValueKey('duo-chips'),
+      icon: const NymGlyph('menu', size: 20),
+      label: t('All settings for this chat'),
+      badge: set.on.isEmpty ? null : '${set.on.length}',
+      onTap: () => _showChipMenu(context, set.on, set.off),
+    ),
+    DuoRailButton(
+      key: const ValueKey('duo-model'),
+      icon: icon(model),
+      label: model.label,
+      semanticsLabel: t('Model: {name}', {'name': model.label}),
+      dimmed: model.dimmed,
+      onTap: model.onTap,
+    ),
+    toggle('web'),
+    toggle('git'),
+    toggle('scheduled'),
+  ];
+}
+
+Widget nymbotRailBalance(BuildContext context, {bool account = false}) {
+  final app = AppScope.of(context);
+  final theme = Theme.of(context);
+  final free = !app.proTier &&
+      app.freeLeft != null &&
+      (app.freeOnly || (!app.spendingAnon && (app.standardBalance ?? 0) == 0));
+  final balance = account ? app.standardBalance : app.shownBalance;
+  final String caption;
+  final String label;
+  if (account && app.standardBalance != null) {
+    caption = shortCredit(app.standardBalance);
+    label = t('{standard} Standard · {pro} Pro', {
+      'standard': creditFigure(app.standardBalance),
+      'pro': creditFigure(app.proBalance),
+    });
+  } else if (!account && free) {
+    caption = shortCredit(app.freeLeft);
+    label = t('{n} free', {'n': figure(app.freeLeft)});
+  } else if (balance == null) {
+    caption = '…';
+    label = creditPurchasesDisabled ? t('Credits') : t('Buy');
+  } else {
+    caption = shortCredit(balance);
+    label = creditFigure(balance);
+  }
+  final anon = !account && app.spendingAnon;
+  return DuoRailButton(
+    key: ValueKey(account ? 'duo-account-balance' : 'duo-balance'),
+    icon: NymGlyph(anon ? 'anon' : 'bolt',
+        size: 20,
+        color: anon ? theme.colorScheme.secondary : NymbotColors.lightning),
+    label: label,
+    caption: caption,
+    onTap: () => showCreditsSheet(context),
+  );
+}
+
+class _TierGlyph extends StatelessWidget {
+  const _TierGlyph({
+    required this.pro,
+    required this.accent,
+    required this.standard,
+    required this.proLabel,
+  });
+
+  final bool pro;
+  final Color accent;
+  final String standard;
+  final String proLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget side(String label, bool active) => Container(
+          width: 26,
+          height: 15,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? accent : Colors.transparent,
+            borderRadius: BorderRadius.circular(5),
+          ),
+          child: Text(
+            String.fromCharCode(label.runes.first),
+            style: TextStyle(
+              fontSize: 10,
+              height: 1,
+              fontWeight: active ? FontWeight.bold : FontWeight.normal,
+              color: active
+                  ? theme.scaffoldBackgroundColor
+                  : theme.textTheme.bodySmall?.color,
+            ),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [side(standard, !pro), side(proLabel, pro)],
       ),
     );
   }
@@ -434,7 +597,6 @@ const _paidCommands = {
   'image', 'video', 'speak', 'review',
 };
 
-/// Turning a paid feature off stays allowed on the free tier.
 bool paidOnlyCommand(String cmd, String arg) =>
     _paidCommands.contains(cmd) &&
     !RegExp(r'^(off|disconnect|normal)$', caseSensitive: false).hasMatch(arg);
@@ -718,16 +880,7 @@ class _TierSwitch extends StatelessWidget {
           ),
         );
 
-    Future<void> pick(bool isPro) async {
-      if (isPro && app.freeOnly) {
-        await offerCredits(context);
-      } else if (isPro) {
-        await showModelsSheet(context);
-      } else {
-        await app.dropProMedia();
-        await app.setProModel(null);
-      }
-    }
+    Future<void> pick(bool isPro) => _pickTier(context, app, isPro);
 
     Widget side(String label, bool active, bool isPro) => Semantics(
           key: ValueKey('tier-${isPro ? 'pro' : 'standard'}'),

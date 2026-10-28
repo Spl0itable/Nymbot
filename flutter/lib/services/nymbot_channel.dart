@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -196,6 +197,7 @@ class ChanSocket {
   }
 
   void _onRaw(dynamic data) {
+    _rx++;
     List<dynamic>? m;
     try {
       final d = jsonDecode(data is String ? data : utf8.decode((data as List).cast<int>()));
@@ -236,6 +238,11 @@ class ChanSocket {
       got = await wait.future.timeout(timeout);
     } on TimeoutException {
       _waits.remove(n);
+      final w = _wire;
+      if (w != null && _links.isEmpty) {
+        _gone(w);
+        unawaited(w.close());
+      }
       throw ChanFailure('timeout');
     }
     if (got[0] == 'CHAN_ERR') throw ChanFailure('${got.length > 2 ? got[2] : 'failed'}');
@@ -260,6 +267,35 @@ class ChanSocket {
     if (w == null) return;
     _gone(w);
     await w.close();
+  }
+
+  static const Duration probeTimeout = Duration(seconds: 3);
+  static final Random _rng = Random.secure();
+  int _rx = 0;
+  bool _probing = false;
+
+  Future<void> probe({Duration timeout = probeTimeout}) async {
+    final w = _wire;
+    if (w == null || _probing) return;
+    _probing = true;
+    final before = _rx;
+    final n = List<String>.generate(16, (_) => _rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    final wait = Completer<List<dynamic>>();
+    _waits[n] = wait;
+    try {
+      _raw(['CHAN_KEY', n, '']);
+      await wait.future.timeout(timeout);
+    } on TimeoutException {
+      _waits.remove(n);
+      if (identical(_wire, w) && _rx == before) {
+        _gone(w);
+        unawaited(w.close());
+      }
+    } catch (_) {
+      _waits.remove(n);
+    } finally {
+      _probing = false;
+    }
   }
 }
 
@@ -325,7 +361,87 @@ class NymbotChannels {
     _ready[pk] = l;
   }
 
+  final List<(String, ChanSocket)> _queue = [];
+  Timer? _head;
+  String? _headPk;
+  int Function(String pk)? _slot;
+  bool Function(String pk)? _free;
+  void Function(String pk, bool waited)? _acted;
+
+  void _revive(String pk, ChanSocket s) {
+    if (!identical(_socks[pk], s)) return;
+    final l = _ready.remove(pk);
+    _warm.remove(pk);
+    l?.close();
+    if (!s.connected) return;
+    if (s._links.values.every((x) => identical(x, l))) {
+      unawaited(s.close());
+    } else {
+      unawaited(s.probe());
+    }
+  }
+
+  void _act(String pk, ChanSocket s, bool waited) {
+    _acted?.call(pk, waited);
+    _revive(pk, s);
+  }
+
+  void _arm(String pk, ChanSocket s) {
+    final got = _slot?.call(pk) ?? 0;
+    _headPk = pk;
+    _head = Timer(Duration(milliseconds: got < 1 ? 1 : got), () {
+      final live = identical(_socks[pk], s) && s.connected;
+      final ready = _free;
+      if (live && ready != null && !ready(pk)) {
+        _arm(pk, s);
+        return;
+      }
+      _head = null;
+      _headPk = null;
+      if (live) _act(pk, s, true);
+      _pump();
+    });
+  }
+
+  void _pump() {
+    while (_head == null && _queue.isNotEmpty) {
+      final (pk, s) = _queue.removeAt(0);
+      if (!identical(_socks[pk], s) || !s.connected) continue;
+      _arm(pk, s);
+    }
+  }
+
+  void resumed({
+    bool Function(String pk)? shown,
+    int Function(String pk)? slot,
+    bool Function(String pk)? ready,
+    void Function(String pk, bool waited)? acted,
+  }) {
+    _slot = slot;
+    _free = ready;
+    _acted = acted;
+    for (final e in _socks.entries.toList()) {
+      final pk = e.key;
+      final s = e.value;
+      if (_headPk == pk || _queue.any((q) => q.$1 == pk)) continue;
+      if (!s.connected) {
+        _revive(pk, s);
+        continue;
+      }
+      if (shown != null && !shown(pk)) {
+        _queue.add((pk, s));
+        continue;
+      }
+      _act(pk, s, false);
+    }
+    _pump();
+  }
+
   Future<void> close() async {
+    _head?.cancel();
+    _head = null;
+    _headPk = null;
+    _queue.clear();
     for (final s in _socks.values) {
       await s.close();
     }

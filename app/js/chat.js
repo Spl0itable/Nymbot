@@ -18,6 +18,17 @@
     let pulledAt = 0;
     let pulling = null;
     const PULL_FRESH_MS = 20000;
+    const NO_GATE = Object.freeze({ shown: () => true, slot: () => 0, ready: () => true, acted: () => { } });
+
+    function sockHooks() {
+        const R = window.NymbotRuns;
+        if (!R || typeof R.chanHooks !== 'function') return NO_GATE;
+        return R.chanHooks(() => Identity.pubkey, () => {
+            const ui = window.NymbotUI;
+            const conv = ui && ui.conv;
+            return conv && conv.anon ? conv.anonPk : Identity.pubkey;
+        });
+    }
 
     function chan() {
         if (chanClient || !window.NymbotChanClient || !window.NymbotChannel || typeof WebSocket !== 'function') return chanClient;
@@ -30,11 +41,18 @@
                 set: (k, v) => { try { Store.write('chan:' + k, v); } catch (_) { } }
             },
             open: (wrap, key) => key.open(wrap),
+            shown: (u) => sockHooks().shown(u),
+            slot: (u) => sockHooks().slot(u),
+            ready: (u) => sockHooks().ready(u),
+            acted: (u, late) => sockHooks().acted(u, late),
             claim: async (run, key) => {
                 const res = await Api.call('pm-claim', { run }, { timeout: 20000, signer: key.signer || null });
                 return res && res.status === 200 ? res.data : null;
             }
         });
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && chanClient) chanClient.resumed(); });
+        window.addEventListener('online', () => { if (chanClient) chanClient.resumed(); });
+        window.addEventListener('pageshow', (e) => { if (e.persisted && chanClient) chanClient.resumed(); });
         return chanClient;
     }
 
@@ -440,7 +458,7 @@
 
     function overLimitMessage(wireText) {
         const kb = Math.round(Wire.bodyCost(wireText) / 1024);
-        const max = Math.round((Wire.BODY_MAX * Wire.PARTS_MAX) / 1024);
+        const max = Math.round(Wire.LONG_MAX / 1024);
         return t('This message is {n} KB, and the most one question can carry is about {max} KB. Put a long file in a workspace instead, where the whole of it is searched rather than sent.', { n: kb, max: max });
     }
 
@@ -813,7 +831,7 @@
 
         wireCost(conv, text, options) {
             const used = Wire.bodyCost(wireTextFor(conv, text, options || {}));
-            const max = Wire.BODY_MAX * Wire.PARTS_MAX;
+            const max = Wire.LONG_MAX;
             return { used, max, over: Math.max(0, used - max) };
         },
 
@@ -846,7 +864,8 @@
             else delete extra.maxRuns;
             const replay = { extra: Object.assign({}, extra), msgId: prepared.msgId, isFresh: prepared.isFresh, partWraps: prepared.partWraps, rumor: prepared.rumor || null, rumors: prepared.rumors || null, text: prepared.text || null };
             if (typeof opts.onTurn === 'function') {
-                try { opts.onTurn(extra.eventId, signer, { msgId: prepared.msgId, replay }); } catch (_) { }
+                const chanRun = viaChan ? ((window.NymbotChanClient.splitToken(opts.resume || '') || {}).run || (prepared.rumor ? window.NymbotChanClient.runOf(prepared.rumor) : null)) : null;
+                try { opts.onTurn(extra.eventId, signer, { msgId: prepared.msgId, replay, chanRun }); } catch (_) { }
             }
 
             const controller = opts.controller || new AbortController();
@@ -871,12 +890,14 @@
             };
             let status, data;
             if (viaChan) {
+                const release = await Api.holdSlot(controller.signal, opts.onSlot, signer && signer.pubkey ? signer.pubkey : '');
                 try {
-                    ({ status, data } = await this.chanSend(conv, prepared, extra, opts, viaChan, controller));
+                    if (release) ({ status, data } = await this.chanSend(conv, prepared, extra, opts, viaChan, controller));
                 } finally {
+                    if (release) release();
                     if (ownsController && this.controller === controller) this.controller = null;
                 }
-                if (controller.signal.aborted) throw fail(stoppedErr());
+                if (!release || controller.signal.aborted) throw fail(stoppedErr(), data);
                 if (data && data.lost) {
                     const err = fail(new Error(t('Nymbot could not finish that one. Try again; it will not be charged twice.')));
                     err.late = true;
@@ -988,11 +1009,17 @@
             return window.NymbotChanClient.dataOf({ phase: run.phase, wrap, info: {}, opened: { seal: opened.seal, rumor: opened.rumor, run } });
         },
 
-        async steerChan(conv, run, text) {
+        async steerChan(conv, run, text, sealed) {
             const cc = chan();
-            if (!cc || !cc.offered()) return false;
-            const key = chanKey(conv, null);
+            if (!cc || !(cc.offered() || sealed === true)) return false;
+            const key = chanKey(conv || {}, null);
             return key ? cc.steerFrom(key, run, String(text || '')) : false;
+        },
+
+        async runSealed(conv, run, sealed) {
+            const cc = chan();
+            const key = cc ? chanKey(conv || {}, null) : null;
+            return key ? cc.openSealed(key, run, sealed).catch(() => null) : null;
         },
 
         chanReady() {
@@ -1032,13 +1059,21 @@
             recoverStored(conv, null);
         },
 
-        async storedReply(conv, run) {
+        async storedData(conv, run) {
+            const cc = chan();
+            if (!cc || !conv || !run) return null;
+            const key = chanKey(conv, conv.anon ? Anon.forConv(conv) : null);
+            return key ? cc.claimed(key, run) : null;
+        },
+
+        async storedReply(conv, run, hooks) {
             const cc = chan();
             if (!cc || !conv || !run) return null;
             const payer = conv.anon ? Anon.forConv(conv) : null;
             const key = chanKey(conv, payer);
             if (!key) return null;
-            const fin = await cc.stored(key, run);
+            const fin = await cc.stored(key, run, hooks);
+            if (fin && fin.running) return { running: true };
             if (!fin || fin.error) return null;
             const res = chanResult(fin);
             if (res.status !== 200 || !res.data) return null;
@@ -1074,7 +1109,7 @@
                 if (token) {
                     const pa = opts.pendingAnswer && typeof opts.pendingAnswer === 'object' ? opts.pendingAnswer : null;
                     let then = null;
-                    if (pa && pa.decision) then = { approve: true, body: { kind: 'plan', id: String(pa.id || ''), ok: pa.decision === 'approve', edits: pa.edits || null } };
+                    if (pa && pa.decision) then = { approve: true, body: { kind: 'plan', id: String(pa.id || ''), ok: pa.decision === 'approve', decision: String(pa.decision), edits: pa.edits || null } };
                     else if (pa) then = { body: { q: String(pa.id || ''), answer: pa.skipped ? [] : pa.answers, text: prepared.text || (prepared.rumor ? prepared.rumor.content : '') } };
                     else if (opts.runApprove || opts.runDecline) then = { approve: true, body: { kind: 'tool', id: String(opts.runApprove || opts.runDecline), ok: !!opts.runApprove } };
                     else if (opts.mcpApprove || opts.mcpDecline) then = { approve: true, body: { kind: 'connector', id: String(opts.mcpApprove || opts.mcpDecline), ok: !!opts.mcpApprove } };
@@ -1104,10 +1139,10 @@
             const attachments = opts.attachments || [];
             const isFresh = opts.fresh === true || /^\s*!\s*\S/.test(text);
             const wireText = wireTextFor(conv, text, opts);
-            const bodies = Wire.split(wireText);
-            if (bodies.length > Wire.PARTS_MAX) {
+            if (!window.NymLongText.check(wireText).ok) {
                 throw new Error(overLimitMessage(wireText));
             }
+            const bodies = Wire.split(wireText);
             const botKem = PQ.botKey ? PQ.botKey.pk : null;
             const msgId = Wire.sharedId();
             if (typeof opts.onStep === 'function') {

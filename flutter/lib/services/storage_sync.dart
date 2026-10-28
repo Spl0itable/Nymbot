@@ -103,6 +103,12 @@ class StorageSync {
     );
   }
 
+  Future<bool> settingsDelete(EventSigner signer, {required String category}) async {
+    final resp = await _call('settings-delete', signer,
+        extra: {'category': category}, timeout: const Duration(seconds: 20));
+    return resp != null && resp['error'] == null && resp['ok'] == true;
+  }
+
   Future<Map<String, dynamic>?> _call(
     String action,
     EventSigner signer, {

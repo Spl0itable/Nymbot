@@ -18,6 +18,51 @@ const String kSupportTokensKey = 'support_tokens';
 
 const String kSupportSeenKey = 'support_seen';
 
+const String kSupportStoredKey = 'support_stored';
+
+const int kSupportStoredPages = 4;
+
+const int kSupportStoredLimit = 100;
+
+const int kSupportStoredOverlapMs = 60000;
+
+final RegExp _storedHex64 = RegExp(r'^[0-9a-f]{64}$');
+
+typedef SupportCursor = ({int s, String id});
+
+({SupportCursor cursor, SupportCursor floor}) supportStoredPlan(Object? held, String pk, int since) {
+  final mine = held is Map && held['pk'] == pk;
+  final c = mine ? held['cursor'] : null;
+  if (c is Map) {
+    final s = c['s'];
+    final id = c['id'];
+    if (s is int && s >= 0 && id is String && (id.isEmpty || _storedHex64.hasMatch(id))) {
+      final back = s - kSupportStoredOverlapMs;
+      return (cursor: (s: back < 0 ? 0 : back, id: ''), floor: (s: s, id: id));
+    }
+  }
+  final at = mine ? held['at'] : null;
+  final was = mine ? held['since'] : null;
+  final after = mine ? held['after'] : null;
+  final from = at is int && at > 0 && was is int && after is Map
+      ? was
+      : at is int && at > 0
+          ? at - kSupportSlackSeconds
+          : since;
+  final start = (s: (from < 0 ? 0 : from) * 1000, id: '');
+  return (cursor: start, floor: start);
+}
+
+SupportCursor supportStoredLater(SupportCursor next, SupportCursor floor) {
+  final ahead = next.s > floor.s || (next.s == floor.s && next.id.compareTo(floor.id) > 0);
+  return ahead ? next : floor;
+}
+
+bool supportStoredWalk(SupportCursor next, SupportCursor floor, Object? more, int page) {
+  final ahead = next.s > floor.s || (next.s == floor.s && next.id.compareTo(floor.id) > 0);
+  return more == true && !ahead && page < kSupportStoredPages - 2;
+}
+
 const String kSupportTag = 'nymbot-support';
 
 const int kSupportTokensMax = 4;

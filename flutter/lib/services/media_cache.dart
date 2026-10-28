@@ -40,6 +40,7 @@ class MediaCache {
   final Map<String, Future<Uint8List>> _inflight = {};
   int _generation = 0;
   bool _pruned = false;
+  final Map<String, int> _busy = {};
   Future<void>? _pruning;
   bool _pruneAgain = false;
 
@@ -90,6 +91,22 @@ class MediaCache {
 
   Future<T> load<T>(String url, Future<T> Function(Uint8List bytes) use,
       {void Function(int received, int? total)? progress}) async {
+    final key = keyOf(url);
+    _busy[key] = (_busy[key] ?? 0) + 1;
+    try {
+      return await _load(url, use, progress);
+    } finally {
+      final left = (_busy[key] ?? 1) - 1;
+      if (left > 0) {
+        _busy[key] = left;
+      } else {
+        _busy.remove(key);
+      }
+    }
+  }
+
+  Future<T> _load<T>(String url, Future<T> Function(Uint8List bytes) use,
+      void Function(int received, int? total)? progress) async {
     if (!_pruned) {
       _pruned = true;
       unawaited(trim());
@@ -235,7 +252,7 @@ class MediaCache {
     final dir = await _root();
     if (dir == null) return;
     final now = _now();
-    final live = <({File file, DateTime at, int size})>[];
+    final live = <({File file, DateTime at, int size, bool held})>[];
     await for (final e in dir.list(followLinks: false)) {
       if (e is! File) continue;
       final path = e.path;
@@ -245,19 +262,22 @@ class MediaCache {
         continue;
       }
       if (!path.endsWith('.i') && !path.endsWith('.m')) continue;
+      final name = e.uri.pathSegments.last;
+      final held = _busy.containsKey(name.substring(0, name.length - 2));
       final stat = await e.stat();
       final age = now.difference(stat.modified);
-      if (age.isNegative || age >= _limit(e)) {
+      if (!held && (age.isNegative || age >= _limit(e))) {
         await _drop(e);
         continue;
       }
-      live.add((file: e, at: stat.modified, size: stat.size));
+      live.add((file: e, at: stat.modified, size: stat.size, held: held));
     }
     live.sort((a, b) => a.at.compareTo(b.at));
     var count = live.length;
     var bytes = live.fold<int>(0, (n, x) => n + x.size);
     for (final x in live) {
       if (count <= maxEntries && bytes <= maxBytes) break;
+      if (x.held) continue;
       await _drop(x.file);
       count--;
       bytes -= x.size;

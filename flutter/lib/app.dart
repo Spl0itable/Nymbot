@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/theme/theme.dart';
 import 'features/ai_consent.dart';
+import 'features/duo_rail.dart';
 import 'features/gate_screen.dart';
 import 'features/home_screen.dart';
 import 'features/i18n/i18n.dart';
@@ -90,7 +91,7 @@ Widget appFrame(BuildContext context, Widget? child, AppSettings settings) {
     ),
     child: Directionality(
       textDirection: I18n.isRtl ? TextDirection.rtl : TextDirection.ltr,
-      child: child ?? const SizedBox.shrink(),
+      child: DuoSheetRailHost(child: child ?? const SizedBox.shrink()),
     ),
   );
 }

@@ -306,6 +306,7 @@ class ChatEngine {
         'kind': 'plan',
         'id': '${pendingAnswer['id'] ?? ''}',
         'ok': pendingAnswer['decision'] == 'approve',
+        'decision': '${pendingAnswer['decision']}',
         'edits': pendingAnswer['edits'],
       });
     }
@@ -339,6 +340,8 @@ class ChatEngine {
     final sub = link.events.listen((ev) async {
       final run = ev.body['run'];
       if (run != null && run != view.run) return;
+      if (ev.type == ChannelType.accept && (ev.body['answered'] is String || ev.body['steered'] is String)) return;
+      if (ev.type == ChannelType.error && ev.body['refused'] is String) return;
       if (ev.type == ChannelType.accept) {
         view.accepted = true;
         final w = ev.body['wrap'];
@@ -452,17 +455,34 @@ class ChatEngine {
   }
 
   Future<TurnResult?> claimChan(Conversation conv, String run, EventSigner signer,
-      {String? anonPk, PreparedTurn? prepared, void Function(List<String> ids)? onThreadIds}) async {
+      {String? anonPk, PreparedTurn? prepared, void Function(List<String> ids)? onThreadIds, void Function(String? ctl)? onRunning}) async {
     final res = await api.call('pm-claim', signer, extra: {'run': run}, timeout: const Duration(seconds: 20));
     final wraps = res.data['wraps'];
     if (res.status != 200 || wraps is! List) return null;
-    Map<String, dynamic>? last;
+    final last = storedEnd(res.data['phase'], wraps);
+    Map<String, dynamic>? live;
     for (final w in wraps) {
-      if (w is Map && (w['phase'] == 'done' || w['phase'] == 'park') && w['wrap'] is Map) last = (w['wrap'] as Map).cast<String, dynamic>();
+      if (w is Map && w['phase'] == 'live' && w['wrap'] is Map) live = (w['wrap'] as Map).cast<String, dynamic>();
     }
-    if (last == null) return null;
-    final p = prepared ??
-        (PreparedTurn(
+    if (last == null) {
+      final phase = res.data['phase'];
+      if (onRunning == null || (phase != 'live' && phase != 'bg')) return null;
+      String? ctl;
+      if (phase == 'live' && live != null) {
+        try {
+          final r = await readRunWrap(NostrEvent.fromJson(live), signer, anonPk: anonPk);
+          if (r.run == run) ctl = r.ctl;
+        } catch (_) {}
+      }
+      onRunning(ctl);
+      return null;
+    }
+    final p = prepared ?? _ghost(conv, run, signer, anonPk);
+    return finish(p, 200, {'event': last}, onThreadIds: onThreadIds ?? (_) {});
+  }
+
+  PreparedTurn _ghost(Conversation conv, String run, EventSigner signer, String? anonPk) =>
+      PreparedTurn(
           conv: conv,
           signer: signer,
           extra: const {},
@@ -470,8 +490,32 @@ class ChatEngine {
           msgId: run,
           anonPk: anonPk,
           ghost: true,
-        )..chan = ChanSpec(rumor: const {}, run: run, opts: const {}, context: const {}));
-    return finish(p, 200, {'event': last}, onThreadIds: onThreadIds ?? (_) {});
+        )..chan = ChanSpec(rumor: const {}, run: run, opts: const {}, context: const {});
+
+  Future<TurnResult?> joinChan(Conversation conv, String run, String ctl, EventSigner signer,
+      {String? anonPk, required TurnControl control, void Function(List<String> ids)? onThreadIds}) async {
+    final ch = channels;
+    if (ch == null || chanOffered == false) return null;
+    final p = _ghost(conv, run, signer, anonPk);
+    final view = _chanViews.putIfAbsent(p.eventId, () => ChanRunView(run));
+    _chanRuns[run] = view;
+    view.ctl = ctl;
+    ChanLink link;
+    try {
+      link = await ch.take(signer);
+    } on ChanFailure {
+      return null;
+    }
+    joins++;
+    final end = await _chanDrive(link, view, p, [(ChannelType.join, {'run': run, 'c': ctl})], control);
+    view.link?.close();
+    link.close();
+    if (control.cancelled) return null;
+    if (end.type == ChannelType.abort || end.type == ChannelType.error) {
+      return claimChan(conv, run, signer, anonPk: anonPk, prepared: p, onThreadIds: onThreadIds);
+    }
+    final info = end.body['info'] is Map ? (end.body['info'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    return finish(p, 200, {...info, 'event': end.body['wrap']}, onThreadIds: onThreadIds ?? (_) {});
   }
 
   Future<({NostrEvent seal, Map<String, dynamic> rumor})?> _open(NostrEvent wrap, EventSigner signer, {String? anonPk}) async {
@@ -551,9 +595,11 @@ class ChatEngine {
         .catchError((_) {});
   }
 
-  Future<bool> steerChan(String run, String text, EventSigner signer, {String? anonPk}) async {
+  static Duration steerWait = const Duration(seconds: 8);
+
+  Future<String> steerChan(String run, String text, EventSigner signer, {String? anonPk, bool sealed = false}) async {
     final view = _chanRuns[run];
-    if (view == null || view.ctl == null) return _steerFrom(run, text, signer, anonPk);
+    if (view == null || view.ctl == null) return _steerFrom(run, text, signer, anonPk, sealed: sealed);
     var link = view.link;
     try {
       if (link == null || !link.usable) {
@@ -561,22 +607,82 @@ class ChatEngine {
         view.link = link;
         await link.send(ChannelType.join, {'run': run, 'c': view.ctl});
       }
-      await link.send(ChannelType.steer, {'run': run, 'text': text});
-      return true;
+      return await _steerOn(link, run, text);
+    } on ChanFailure {
+      return 'lost';
+    }
+  }
+
+  static String _steerRefusal(Object? code) => switch (code) {
+        'final' => 'final',
+        'finished' || 'no-run' => 'finished',
+        'long' => 'long',
+        _ => 'failed',
+      };
+
+  Future<String> _steerOn(ChanLink link, String run, String text) async {
+    final acked = link.events
+        .firstWhere((ev) =>
+            ev.body['run'] == run &&
+            ((ev.type == ChannelType.accept && ev.body['steered'] is String) ||
+                (ev.type == ChannelType.error && ev.body['refused'] == 'steer')))
+        .timeout(steerWait)
+        .then((ev) => ev.type == ChannelType.accept ? 'ok' : _steerRefusal(ev.body['code']),
+            onError: (Object e) => e is TimeoutException ? 'ok' : 'lost');
+    await link.send(ChannelType.steer, {'run': run, 'text': text});
+    return acked;
+  }
+
+  static Duration decideWait = const Duration(seconds: 8);
+
+  Future<bool> decideChan(String run, Map<String, dynamic> body, EventSigner signer, {bool approve = true}) async {
+    final view = _chanRuns[run];
+    final ch = channels;
+    if (view == null || view.ctl == null || ch == null) return false;
+    var link = view.link;
+    try {
+      if (link == null || !link.usable) {
+        link = await ch.take(signer);
+        view.link = link;
+      }
+      final answered = link.events
+          .firstWhere((ev) =>
+              ev.body['run'] == run &&
+              ((ev.type == ChannelType.accept && ev.body['answered'] is String) ||
+                  (ev.type == ChannelType.error && ev.body['refused'] is String && ev.body['refused'] != 'steer')))
+          .timeout(decideWait)
+          .then((ev) => ev.type == ChannelType.accept, onError: (Object _) => false);
+      await link.send(approve ? ChannelType.approve : ChannelType.answer, {...body, 'run': run, 'c': view.ctl});
+      return await answered;
     } on ChanFailure {
       return false;
     }
   }
 
-  Future<bool> _steerFrom(String run, String text, EventSigner signer, String? anonPk) async {
-    final ch = channels;
-    if (ch == null || chanOffered == false || !chanSeen) return false;
+  static Map<String, dynamic>? storedEnd(Object? phase, List wraps) {
+    if (phase == 'live') return null;
+    final ws = [for (final w in wraps) if (w is Map && w['phase'] is String) w];
+    final from = ws.lastIndexWhere((w) => w['phase'] == 'live') + 1;
+    for (var i = ws.length - 1; i >= from; i--) {
+      final w = ws[i];
+      if ((w['phase'] == 'done' || w['phase'] == 'park') && w['wrap'] is Map) return (w['wrap'] as Map).cast<String, dynamic>();
+    }
+    return null;
+  }
+
+  static bool claimEnded(Object? phase, List wraps) {
+    if (phase is String) return phase != 'live' && phase != 'bg';
+    final last = wraps.lastWhere((w) => w is Map && w['phase'] is String, orElse: () => null);
+    return last is Map && (last['phase'] == 'done' || last['phase'] == 'park');
+  }
+
+  Future<({bool ended, String? ctl})> _claimCtl(String run, EventSigner signer, String? anonPk) async {
     String? ctl;
     try {
       final res = await api.claimChanRun(signer, run);
       final wraps = res.data['wraps'];
-      if (wraps is! List) return false;
-      if (wraps.any((w) => w is Map && (w['phase'] == 'done' || w['phase'] == 'park'))) return false;
+      if (wraps is! List) return (ended: false, ctl: null);
+      if (claimEnded(res.data['phase'], wraps)) return (ended: true, ctl: null);
       for (final w in wraps.reversed) {
         if (w is! Map || w['phase'] != 'live' || w['wrap'] is! Map) continue;
         final r = await readRunWrap(NostrEvent.fromJson((w['wrap'] as Map).cast<String, dynamic>()), signer, anonPk: anonPk);
@@ -584,9 +690,70 @@ class ChatEngine {
         break;
       }
     } catch (_) {
-      return false;
+      return (ended: false, ctl: null);
     }
-    if (ctl == null) return false;
+    return (ended: false, ctl: ctl);
+  }
+
+  final Map<String, Future<({bool ended, String? ctl})>> _sealedCtl = {};
+
+  Future<({bool ended, String label, String progress, List<Map<String, dynamic>>? plan, bool last})?> openSealedRun(
+      String run, Map sealed, EventSigner signer, {String? anonPk}) async {
+    final label = sealed['label'];
+    final progress = sealed['progress'];
+    if (label is! String || progress is! String) return null;
+    String? ctl = _chanRuns[run]?.ctl;
+    if (ctl == null) {
+      final key = '${signer.pubkey}:$run';
+      var pending = _sealedCtl[key];
+      if (pending == null) {
+        pending = _claimCtl(run, signer, anonPk);
+        _sealedCtl[key] = pending;
+      }
+      if (_sealedCtl.length > 50) {
+        final first = _sealedCtl.keys.first;
+        _sealedCtl.removeWhere((k, _) => k == first);
+      }
+      final got = await pending;
+      if (got.ended || got.ctl == null) _sealedCtl.removeWhere((k, _) => k == key);
+      if (got.ended) return (ended: true, label: '', progress: '', plan: null, last: false);
+      ctl = got.ctl;
+    }
+    if (ctl == null || !RegExp(r'^[0-9a-f]{64}$').hasMatch(ctl)) return null;
+    final c = hexToBytes(ctl);
+    Future<String> open(String blob) async {
+      if (blob.isEmpty) return '';
+      for (final dir in const ['s2c', 'c2s']) {
+        try {
+          return await channelControlOpen(c: c, dir: dir, run: run, userPk: signer.pubkey, blob: blob);
+        } on ChannelError {
+          continue;
+        }
+      }
+      return '';
+    }
+    Object? o;
+    try {
+      o = jsonDecode(await open(progress));
+    } catch (_) {
+      o = null;
+    }
+    final m = o is Map ? o : const {};
+    return (
+      ended: false,
+      label: await open(label),
+      progress: m['p'] is String ? m['p'] as String : '',
+      plan: m['plan'] is List ? planOf(m['plan']) : null,
+      last: m['f'] == 1,
+    );
+  }
+
+  Future<String> _steerFrom(String run, String text, EventSigner signer, String? anonPk, {bool sealed = false}) async {
+    final ch = channels;
+    if (ch == null || chanOffered == false || (!chanSeen && !sealed)) return 'lost';
+    final got = await _claimCtl(run, signer, anonPk);
+    final ctl = got.ctl;
+    if (ctl == null) return 'lost';
     try {
       final link = await ch.take(signer);
       final answered = link.events
@@ -595,15 +762,14 @@ class ChatEngine {
       await link.send(ChannelType.join, {'run': run, 'c': ctl});
       if ((await answered).type != ChannelType.accept) {
         link.close();
-        return false;
+        return 'lost';
       }
       final view = _chanRuns.putIfAbsent(run, () => ChanRunView(run));
       view.ctl = ctl;
       view.link = link;
-      await link.send(ChannelType.steer, {'run': run, 'text': text});
-      return true;
+      return await _steerOn(link, run, text);
     } catch (_) {
-      return false;
+      return 'lost';
     }
   }
 
@@ -1655,18 +1821,15 @@ class ChatEngine {
     text = used.text;
     final head =
         preamble(conv, repos, persona, workspace, bot, text, memories, used.blocks);
-    final quoted = (quote == null || quote.isEmpty)
-        ? ''
-        : '> ${quote.replaceAll('\n', '\n> ')}\n\n';
-    final attached = attachments.map((a) => a.wireBlock).join();
     final searched = DocLibrary.instance.wireFor(conv.id, text, attachments);
-    final wireText = '$head$quoted$text$attached$searched';
+    final body = WireLimits.bodyFor(text,
+        attachments: attachments, quote: quote, searched: searched);
+    final wireText = '$head$body';
 
-    // NIP-44 caps plaintext at 65535 bytes, so long questions travel as several parts the worker reassembles.
-    final bodies = WireLimits.split(wireText);
-    if (bodies.length > WireLimits.partsMax) {
+    if (!WireLimits.check(wireText).ok) {
       throw ChatFailure(WireLimits.overLimitMessage(wireText));
     }
+    final bodies = WireLimits.split(wireText);
     final xId = msgId ?? _sharedId();
 
     // A ghost chat publishes only the wrap to the bot, no archive copy or reply re-publish.

@@ -6,6 +6,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../services/doc_library.dart';
+import '../services/wire_limits.dart';
 import '../app.dart';
 import '../core/crypto/keys.dart';
 import '../core/theme/theme.dart';
@@ -61,6 +63,7 @@ import 'sheets/sheet.dart';
 import 'command_palette.dart';
 import 'delete_account.dart';
 import 'desktop_layout.dart';
+import 'duo_rail.dart';
 import 'command_sheet.dart';
 import 'markdown_body.dart';
 import 'media_viewer.dart';
@@ -126,12 +129,17 @@ class _ThreadPosition extends ScrollPositionWithSingleContext {
     super.debugLabel,
   });
 
+  double? holdEnd;
+
   @override
   bool correctForNewDimensions(
       ScrollMetrics oldPosition, ScrollMetrics newPosition) {
     final end = newPosition.maxScrollExtent;
-    if (oldPosition.viewportDimension != newPosition.viewportDimension &&
-        oldPosition.extentAfter < 1 &&
+    final hold = holdEnd != null && (pixels - holdEnd!).abs() < 0.5;
+    holdEnd = null;
+    if ((hold ||
+            oldPosition.viewportDimension != newPosition.viewportDimension &&
+                oldPosition.extentAfter < 1) &&
         (pixels - end).abs() > 0.01) {
       correctPixels(end);
       return false;
@@ -148,6 +156,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _drawerKey = GlobalKey<_ChatDrawerState>();
+  bool _drawerOpen = false;
   // Styles markdown in the composer as you type.
   final _input = MarkdownEditingController();
   late final _inputFocus = FocusNode(onKeyEvent: _composerKey);
@@ -170,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Only one message's action row is open at a time.
   String? _openActions;
   bool _atBottom = true;
+  bool _mouse = false;
   bool _makerLookup = false;
   String? _findTerm;
   int _findAt = 0;
@@ -193,6 +205,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _mouse = mousePointer();
+    mouseTracker.addListener(_mouseChanged);
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       final near = _scroll.position.maxScrollExtent - _scroll.offset < 140;
@@ -536,6 +550,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     RunOutputs.toComposer.removeListener(_takeRunOutput);
     Incoming.stop();
     WidgetsBinding.instance.removeObserver(this);
+    mouseTracker.removeListener(_mouseChanged);
     final app = _app;
     final conv = app?.current;
     if (app != null && conv != null) {
@@ -551,6 +566,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _scroll.dispose();
     _voice.dispose();
     super.dispose();
+  }
+
+  void _mouseChanged() {
+    final mouse = mousePointer();
+    if (mouse == _mouse) return;
+    _mouse = mouse;
+    if (!mounted || !mouse || !_atBottom || !_scroll.hasClients) return;
+    final position = _scroll.position;
+    if (position is! _ThreadPosition) return;
+    position.holdEnd = position.pixels;
+    WidgetsBinding.instance.addPostFrameCallback((_) => position.holdEnd = null);
   }
 
   void _toBottom({bool animate = true}) {
@@ -1338,6 +1364,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
   }
 
+  Future<({bool stop, List<String>? chunks})> _longTextGate(
+      AppController app, Conversation conv, String text) async {
+    final cost = WireLimits.bodyCost(text);
+    final model = app.longTextModel(conv);
+    final got = WireLimits.contextCheck(cost, model.context, model.out);
+    if (got.ok) return (stop: false, chunks: null);
+    final fitting = [
+      for (final m in model.rows)
+        if (m['context'] is num &&
+            WireLimits.contextCheck(cost, (m['context'] as num).toInt(), m['outTokens'] is num ? (m['outTokens'] as num).toInt() : 0).ok)
+          m
+    ]..sort((a, b) => (a['context'] as num).compareTo(b['context'] as num));
+    final longer = fitting.isEmpty ? null : fitting.first;
+    final chunks = WireLimits.chunksFor(text, got.limit);
+    final kb = math.max(1, (cost / 1024).round());
+    final body = t('This message is about {kb} KB (about {tokens} tokens), and {model} reads at most about {limit} tokens at once. Nothing has been sent or charged yet.',
+        {'kb': kb, 'tokens': got.tokens, 'model': model.label, 'limit': got.limit});
+    final longerLabel = longer == null ? '' : (longer['label'] as String? ?? longer['key'] as String);
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('Too long for this model')),
+        content: Text(longer != null
+            ? '$body ${t('{longer} can read all of it, or it can go as {n} separate questions, each charged as it is sent.', {'longer': longerLabel, 'n': chunks.length})}'
+            : '$body ${t('It can go as {n} separate questions, each charged as it is sent.', {'n': chunks.length})}'),
+        actions: [
+          TextButton(
+              key: const ValueKey('long-cancel'),
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: Text(t('Cancel'))),
+          TextButton(
+              key: const ValueKey('long-parts'),
+              onPressed: () => Navigator.pop(ctx, 'parts'),
+              child: Text(t('Send in {n} parts', {'n': chunks.length}))),
+          if (longer != null)
+            FilledButton(
+              key: const ValueKey('long-switch'),
+              onPressed: () => Navigator.pop(ctx, 'switch'),
+              child: Text(t('Switch to {model}', {'model': longerLabel})),
+            ),
+        ],
+      ),
+    );
+    if (choice == 'parts') return (stop: false, chunks: chunks);
+    if (choice == 'switch' && longer != null) {
+      await app.setProModel(Map<String, dynamic>.from(longer));
+      return (stop: false, chunks: null);
+    }
+    return (stop: true, chunks: null);
+  }
+
   Future<void> _send(
       [String? override, bool bare = false, bool fromKey = false]) async {
     final text = override ?? _input.markdown.trim();
@@ -1345,6 +1422,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final app = AppScope.read(context);
     final conv = app.current;
     if (conv == null) return;
+    final gateText = override == null && !conv.support
+        ? WireLimits.bodyFor(text,
+            attachments: app.attachments,
+            quote: app.quote,
+            searched: DocLibrary.instance.wireFor(conv.id, text, app.attachments))
+        : text;
+    if (!conv.support && WireLimits.bodyCost(gateText) > WireLimits.bodyMax) {
+      final gate = await _longTextGate(app, conv, gateText);
+      if (!mounted || gate.stop) return;
+      if (gate.chunks != null) {
+        if (override == null) {
+          app.takeComposer();
+          _input.clear();
+          await app.store.setDraft(conv.id, '');
+        }
+        final chunks = gate.chunks!;
+        for (var i = 0; i < chunks.length; i++) {
+          await _send('[Part ${i + 1} of ${chunks.length}]\n${chunks[i]}', true);
+          if (!mounted) return;
+        }
+        return;
+      }
+    }
     final held = override == null && !conv.support ? app.takeComposer() : null;
     if (_touchKeyboard &&
         (!fromKey || MediaQuery.viewInsetsOf(context).bottom > 0)) {
@@ -2031,6 +2131,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final desktop = desktopLayout(context);
+    final size = MediaQuery.sizeOf(context);
+    final regions = DuoRegions.of(context);
+    final strip = desktop ? null : duoOuterStrip(regions, size);
+    final barClear = strip != null
+        ? 0.0
+        : duoClearance(
+                Rect.fromLTRB(0, 0, size.width,
+                    MediaQuery.paddingOf(context).top + kToolbarHeight),
+                regions) -
+            MediaQuery.paddingOf(context).right;
     final heading = conv?.support ?? false
         ? t('Support')
         : conv == null || conv.title.isEmpty
@@ -2041,10 +2151,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       bindings: _shortcuts(app),
       child: Focus(
         autofocus: true,
-        child: _beside(desktop, Scaffold(
-          drawer: desktop ? null : _ChatDrawer(onJump: _jumpFromLibrary),
+        skipTraversal: true,
+        child: _beside(desktop, DuoRailFrame(
+          strip: strip,
+          rail: (context) => _duoRail(context, app),
+          child: Scaffold(
+          key: _scaffoldKey,
+          onDrawerChanged: (open) => setState(() => _drawerOpen = open),
+          drawer: desktop
+              ? null
+              : _ChatDrawer(
+                  key: _drawerKey,
+                  onJump: _jumpFromLibrary,
+                  railed: strip != null),
           drawerEdgeDragWidth: desktop ? null : MediaQuery.sizeOf(context).width * 0.5,
           appBar: AppBar(
+            actionsPadding:
+                barClear > 0 ? EdgeInsets.only(right: barClear) : null,
             title: Semantics(
               button: true,
               hint: t('Rename this chat'),
@@ -2079,7 +2202,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
             ),
-            actions: [
+            actions: strip != null ? const [] : [
               TasksButton(open: _tasksOpen, onPressed: () => _openTasks(context)),
               IconButton(
                 icon: const NymGlyph('search', size: 20),
@@ -2101,7 +2224,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               const NoticeBanner(),
               if (!(conv?.support ?? false)) ...[
-                const NymbotToolbar(),
+                DuoClear(
+                    child: strip == null
+                        ? const NymbotToolbar()
+                        : const SizedBox.shrink()),
                 const ContextBar(),
               ],
               if (_findTerm != null) _findBar(context, app),
@@ -2128,22 +2254,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ],
           ),
           ),
-        )),
+        ))),
       ),
     );
   }
 
+  Widget _duoRail(BuildContext context, AppController app) {
+    if (_drawerOpen) {
+      final drawer = _drawerKey.currentState;
+      return DuoRail(pinned: nymbotRailBalance(context, account: true), children: [
+        DuoRailButton(
+          key: const ValueKey('duo-new-chat'),
+          icon: const NymGlyph('plus', size: 20),
+          label: t('New chat'),
+          onTap: () async {
+            await app.newConversation();
+            _scaffoldKey.currentState?.closeDrawer();
+          },
+        ),
+        DuoRailButton(
+          key: const ValueKey('duo-info'),
+          icon: const NymGlyph('info', size: 20),
+          label: t('About Nymbot'),
+          onTap: () => showAboutSheet(context),
+        ),
+        DuoRailButton(
+          key: const ValueKey('duo-menu'),
+          icon: const NymGlyph('menu', size: 20),
+          label: t('Menu'),
+          toggled: drawer?._libraryOpen ?? false,
+          onTap: () {
+            _drawerKey.currentState?._toggleMenu();
+            setState(() {});
+          },
+        ),
+      ]);
+    }
+    return DuoRail(pinned: nymbotRailBalance(context), children: [
+      TasksButton(open: _tasksOpen, onPressed: () => _openTasks(context)),
+      DuoRailButton(
+        key: const ValueKey('duo-search'),
+        icon: const NymGlyph('search', size: 20),
+        label: t('Search everything'),
+        onTap: () => _openSearch(),
+      ),
+      DuoRailButton(
+        key: const ValueKey('duo-more'),
+        icon: const NymGlyph('more', size: 20, filled: true),
+        label: t('Chat options'),
+        onTap: () => _menu(app),
+      ),
+      const DuoRailDivider(),
+      ...nymbotRailChips(context),
+    ]);
+  }
+
   Widget _beside(bool desktop, Widget chat) {
-    if (!desktop) return chat;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          key: const ValueKey('docked-sidebar'),
-          width: kSidebarWidth,
-          child: _ChatDrawer(onJump: _jumpFromLibrary, docked: true),
-        ),
-        const VerticalDivider(width: 1),
+        if (desktop) ...[
+          SizedBox(
+            key: const ValueKey('docked-sidebar'),
+            width: kSidebarWidth,
+            child: _ChatDrawer(onJump: _jumpFromLibrary, docked: true),
+          ),
+          const VerticalDivider(width: 1),
+        ],
         Expanded(child: chat),
       ],
     );
@@ -3026,7 +3203,10 @@ Future<void> confirmDeleteChat(
 }
 
 class _ChatDrawer extends StatefulWidget {
-  const _ChatDrawer({required this.onJump, this.docked = false});
+  const _ChatDrawer(
+      {super.key, required this.onJump, this.docked = false, this.railed = false});
+
+  final bool railed;
 
   final Future<void> Function(ArtifactJump jump) onJump;
   final bool docked;
@@ -3232,7 +3412,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
             ),
           ],
         ),
-        trailing: Row(
+        trailing: widget.railed ? null : Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
@@ -3285,7 +3465,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
         ),
       ),
     ];
-    final toggle = <Widget>[
+    final toggle = widget.railed ? <Widget>[] : <Widget>[
       const Divider(height: 1),
       InkWell(
         key: const ValueKey('drawer-menu-toggle'),
@@ -3426,7 +3606,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
           );
         }),
         subtitle: Text(
-          app.standardBalance == null
+          widget.railed || app.standardBalance == null
               ? t('{n} relays', {'n': app.relaysUp})
               : t('{standard} Standard · {pro} Pro', {
                   'standard': creditFigure(app.standardBalance),

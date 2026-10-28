@@ -22,7 +22,13 @@
     const BUSY_STATUS = new Set([429, 503, 529]);
     const BUSY_TEXT = /rate[- ]?limit|too many requests|overloaded|over capacity|no capacity|try again later|temporarily unavailable/i;
 
-    const slots = { busy: 0, waiting: [] };
+    const pools = new Map();
+
+    function poolOf(key) {
+        const k = key || '';
+        if (!pools.has(k)) pools.set(k, { busy: 0, waiting: [] });
+        return pools.get(k);
+    }
 
     function runLimit() {
         let n = RUN_LIMIT;
@@ -30,15 +36,19 @@
         return Math.max(1, Math.min(RUN_CEILING, Math.floor(n)));
     }
 
-    function pump() {
-        while (slots.waiting.length && slots.busy < runLimit()) {
-            const next = slots.waiting.shift();
-            slots.busy++;
-            next.grant();
+    function pump(key) {
+        for (const [k, slots] of pools) {
+            if (key != null && k !== key) continue;
+            while (slots.waiting.length && slots.busy < runLimit()) {
+                const next = slots.waiting.shift();
+                slots.busy++;
+                next.grant();
+            }
         }
     }
 
-    function takeSlot(signal, onSlot) {
+    function takeSlot(signal, onSlot, key) {
+        const slots = poolOf(key);
         if (!slots.waiting.length && slots.busy < runLimit()) {
             slots.busy++;
             return Promise.resolve(true);
@@ -66,9 +76,10 @@
         });
     }
 
-    function freeSlot() {
+    function freeSlot(key) {
+        const slots = poolOf(key);
         slots.busy = Math.max(0, slots.busy - 1);
-        pump();
+        pump(key || '');
     }
 
     const url = () => `https://${C.apiHost}/api/bot`;
@@ -211,12 +222,13 @@
                 }
             };
             if (!SLOTTED.has(action) || options.slot === false) return attempt();
-            const got = await takeSlot(outer, options.onSlot);
+            const pool = options.signer && options.signer.pubkey ? options.signer.pubkey : '';
+            const got = await takeSlot(outer, options.onSlot, pool);
             if (!got) return { status: 0, aborted: true, data: { error: t('Stopped.') } };
             try {
                 return await attempt();
             } finally {
-                freeSlot();
+                freeSlot(pool);
             }
         },
 
@@ -238,14 +250,34 @@
         RUN_LIMIT,
         RUN_CEILING,
 
-        inFlight() { return { busy: slots.busy, waiting: slots.waiting.length }; },
+        inFlight() {
+            let busy = 0;
+            let waiting = 0;
+            for (const s of pools.values()) { busy += s.busy; waiting += s.waiting.length; }
+            return { busy, waiting };
+        },
 
         refreshSlots() { pump(); },
 
+        async holdSlot(signal, onSlot, key) {
+            const k = key || '';
+            return (await takeSlot(signal, onSlot, k)) ? () => freeSlot(k) : null;
+        },
+
+        chatSigner(conv) {
+            if (!conv || !conv.anon) return { ok: true, signer: null };
+            const A = window.NymbotAnon;
+            const id = A ? A.forConv(conv) : null;
+            return id ? { ok: true, signer: A.signer(id) } : { ok: false, signer: null };
+        },
+
         cancelRun(replyTo, opts) {
+            const { conv, ...rest } = opts || {};
             const cc = window.NymbotChat && window.NymbotChat.channel ? window.NymbotChat.channel() : null;
             if (cc) cc.cancel(replyTo);
-            return this.call('pm-cancel', { replyTo }, Object.assign({ timeout: 10000 }, opts || {}));
+            const own = rest.signer ? { ok: true, signer: rest.signer } : this.chatSigner(conv);
+            if (!own.ok) return Promise.resolve({ status: 404, data: {} });
+            return this.call('pm-cancel', { replyTo }, Object.assign({ timeout: 10000 }, rest, { signer: own.signer }));
         },
 
         async steerRun(replyTo, text, opts) {
@@ -253,10 +285,16 @@
             const Chat = window.NymbotChat;
             const cc = Chat && Chat.channel ? Chat.channel() : null;
             if (cc && cc.holds(replyTo)) {
-                return cc.steer(replyTo, text) ? { status: 200, data: { ok: true } } : { status: 404, data: { error: t('That run is no longer reachable from this device.') } };
+                return (await cc.steer(replyTo, text)) || { status: 404, data: { error: t('That run is no longer reachable from this device.') } };
             }
-            if (cc && conv && typeof Chat.steerChan === 'function' && await Chat.steerChan(conv, replyTo, text)) return { status: 200, data: { ok: true } };
-            return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, rest));
+            const sealed = rest.sealed === true;
+            delete rest.sealed;
+            const far = cc && (conv || sealed) && typeof Chat.steerChan === 'function' ? await Chat.steerChan(conv, replyTo, text, sealed) : false;
+            if (far) return far;
+            if (sealed) return { status: 404, data: { error: t('That run is no longer reachable from this device.') } };
+            const own = rest.signer ? { ok: true, signer: rest.signer } : this.chatSigner(conv);
+            if (!own.ok) return { status: 404, data: { error: t('That run is no longer reachable from this device.') } };
+            return this.call('pm-steer', { replyTo, text }, Object.assign({ timeout: 10000 }, rest, { signer: own.signer }));
         },
 
         steerStatus(ids, opts) {

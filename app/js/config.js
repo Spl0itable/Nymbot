@@ -1,5 +1,5 @@
 window.NymbotConfig = {
-    version: 'v1.0.7',
+    version: 'v1.0.9',
     apiHost: 'nymbot.ai',
 
     botPubkey: 'fb242a282d605f5f8141da8087a3ff0c16b255935306b324b578b43c6cf54bb2',

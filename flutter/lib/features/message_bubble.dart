@@ -9,6 +9,7 @@ import '../models/artifact.dart';
 import '../models/conversation.dart';
 import '../models/model_maker.dart';
 import '../models/workspace.dart';
+import '../services/wire_limits.dart';
 import '../services/server_runs.dart';
 import '../services/git_review.dart';
 import '../services/pr_watch.dart';
@@ -146,8 +147,29 @@ class MessageBubble extends StatefulWidget {
 }
 
 class _MessageBubbleState extends State<MessageBubble> {
+  bool _longOpen = false;
   bool? _reasoningOpen;
+
   bool _hovered = false;
+  bool _mouse = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _mouse = mousePointer();
+    mouseTracker.addListener(_mouseChanged);
+  }
+
+  @override
+  void dispose() {
+    mouseTracker.removeListener(_mouseChanged);
+    super.dispose();
+  }
+
+  void _mouseChanged() {
+    final mouse = mousePointer();
+    if (mounted && mouse != _mouse) setState(() => _mouse = mouse);
+  }
 
   void _hover(bool on) {
     if (_hovered != on) setState(() => _hovered = on);
@@ -197,7 +219,17 @@ class _MessageBubbleState extends State<MessageBubble> {
               child: _content(context, m, self, theme),
             ),
           ),
-          if (widget.actionsOpen) _actions(context, m),
+          if (widget.actionsOpen)
+            _actions(context, m)
+          else if (_mouse)
+            Visibility(
+              key: const ValueKey('hover-actions'),
+              visible: _hovered,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: _actions(context, m, compact: true),
+            ),
           if (widget.followUps.isNotEmpty && widget.onFollowUp != null)
             _followUps(context),
         ],
@@ -213,38 +245,10 @@ class _MessageBubbleState extends State<MessageBubble> {
       ],
     );
 
-    final farStart = self && settings.bubbles;
     return MouseRegion(
       onEnter: (_) => _hover(true),
       onExit: (_) => _hover(false),
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          _message(context, m, gap, showAvatar, row),
-          if (_hovered && !widget.actionsOpen)
-            Positioned(
-              key: const ValueKey('hover-actions'),
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Align(
-                alignment: farStart ? AlignmentDirectional.topStart : AlignmentDirectional.topEnd,
-                child: Material(
-                  color: theme.colorScheme.surface,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: BorderSide(color: theme.hintColor.withValues(alpha: 0.3)),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(1),
-                    child: _actions(context, m, compact: true),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
+      child: _message(context, m, gap, showAvatar, row),
     );
   }
 
@@ -480,6 +484,14 @@ class _MessageBubbleState extends State<MessageBubble> {
           children: [
             if (m.attachments.isNotEmpty) _attachments(context, m),
             if (m.role == ChatRole.self) DocUsageLine(messageId: m.id),
+            if (m.role == ChatRole.self && m.cut > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  t('Shortened on this device. The full {kb} KB message is on the device that sent it, and Nymbot received all of it.', {'kb': math.max(1, (m.cut / 1024).round())}),
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+                ),
+              ),
             if (m.repos.isNotEmpty)
               Wrap(
                 spacing: 4,
@@ -490,8 +502,22 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             if (m.quote != null && m.quote!.isNotEmpty) _quoted(context, m.quote!),
             if (m.thinking != null) _reasoning(context, m),
-            // Your own messages render as markdown too.
-            if (m.role == ChatRole.bot || m.role == ChatRole.self)
+            if (m.role == ChatRole.self && m.content.length > WireLimits.foldShown) ...[
+              MarkdownBody(
+                _longOpen ? m.content : WireLimits.fold(m.content),
+                monospace: settings.monospaceReplies,
+                wrapCode: settings.codeWrap,
+                lineNumbers: settings.lineNumbers,
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  key: const ValueKey('long-more'),
+                  onPressed: () => setState(() => _longOpen = !_longOpen),
+                  child: Text(_longOpen ? t('Show less') : t('Show more')),
+                ),
+              ),
+            ] else if (m.role == ChatRole.bot || m.role == ChatRole.self)
               MarkdownBody(
                 revealed(m.content, widget.reveal),
                 monospace: settings.monospaceReplies,
@@ -1075,15 +1101,16 @@ class _MessageBubbleState extends State<MessageBubble> {
     add('close', t('Delete'), MessageAction.delete);
 
     return Padding(
-      padding: EdgeInsets.only(top: compact ? 0 : 2),
-      child: Wrap(
-        spacing: 2,
-        runSpacing: 0,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        alignment: self && widget.settings.bubbles
-            ? WrapAlignment.end
-            : WrapAlignment.start,
-        children: buttons,
+      padding: const EdgeInsets.only(top: 2),
+      child: SizedBox(
+        width: self && !widget.settings.bubbles ? double.infinity : null,
+        child: Wrap(
+          spacing: 2,
+          runSpacing: 0,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          alignment: self ? WrapAlignment.end : WrapAlignment.start,
+          children: buttons,
+        ),
       ),
     );
   }

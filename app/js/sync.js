@@ -19,6 +19,8 @@
     const ART_MAX_CHARS = 240000;
     const ROW_MAX_BYTES = 240000;
     const ROW_HARD_BYTES = 880000;
+    const LONG_ROW_BYTES = 435904;
+    const LONG_PREFIX = 'long-';
     const SEAL_MAX_BYTES = 900000;
     const OVERLAP_MS = 10000;
     const FULL_EVERY_MS = 24 * 3600 * 1000;
@@ -177,8 +179,91 @@
         });
     }
 
+    const LT = () => window.NymLongText;
+
+    function shortened(m) {
+        const text = m && typeof m.content === 'string' ? m.content : '';
+        if (text.length * 3 + 2048 <= ROW_HARD_BYTES / 2) return m;
+        const bytes = utf8Bytes(JSON.stringify(m));
+        if (bytes <= ROW_HARD_BYTES / 2) return m;
+        const keep = Math.floor(ROW_HARD_BYTES / 8);
+        const out = Object.assign({}, m, { content: LT().head(text, keep), cut: m.cut || utf8Bytes(text) });
+        if (!m.cut) out.long = LT().split(text, LONG_ROW_BYTES).length;
+        return out;
+    }
+
+    function longKey(chatId, msgId, index) {
+        return LONG_PREFIX + JSON.stringify([chatId, msgId, index]);
+    }
+
+    function longKeyOf(key) {
+        if (typeof key !== 'string' || key.indexOf(LONG_PREFIX) !== 0) return null;
+        try {
+            const v = JSON.parse(key.slice(LONG_PREFIX.length));
+            return Array.isArray(v) && v.length === 3 && typeof v[0] === 'string' && typeof v[1] === 'string' ? v : null;
+        } catch (_) { return null; }
+    }
+
+    function longRows(chatId, full, sent) {
+        const out = {};
+        const byId = new Map(full.filter(m => m && m.id).map(m => [m.id, m]));
+        for (const m of sent) {
+            if (!m || !m.id || !(Number(m.long) > 1) || !(Number(m.cut) > 0)) continue;
+            const own = byId.get(m.id);
+            if (!own || own.cut || typeof own.content !== 'string') continue;
+            const pieces = LT().split(own.content, LONG_ROW_BYTES);
+            if (pieces.length !== Number(m.long)) continue;
+            pieces.forEach((text, i) => {
+                out[longKey(chatId, m.id, i + 1)] = { id: chatId, x: m.id, part: [i + 1, pieces.length], of: Number(m.cut), text };
+            });
+        }
+        return out;
+    }
+
+    function longSets(remote) {
+        const sets = new Map();
+        for (const key of Object.keys(remote || {})) {
+            const k = longKeyOf(key);
+            const row = remote[key];
+            if (!k || !row || typeof row.text !== 'string' || !Array.isArray(row.part)) continue;
+            const i = Number(row.part[0]);
+            const n = Number(row.part[1]);
+            if (row.id !== k[0] || row.x !== k[1] || i !== k[2] || !(n > 1) || i < 1 || i > n) continue;
+            const id = k[0] + '\n' + k[1];
+            let set = sets.get(id);
+            if (!set) {
+                set = { chat: k[0], x: k[1], n, of: Number(row.of), parts: new Map() };
+                sets.set(id, set);
+            }
+            if (set.n !== n || set.of !== Number(row.of)) { set.bad = true; continue; }
+            set.parts.set(i, row.text);
+        }
+        const joined = new Map();
+        for (const [id, set] of sets) {
+            if (set.bad || set.parts.size !== set.n) continue;
+            const pieces = [];
+            for (let i = 1; i <= set.n; i++) pieces.push(set.parts.get(i));
+            const text = pieces.join('');
+            if (utf8Bytes(text) !== set.of) continue;
+            joined.set(id, { chat: set.chat, x: set.x, n: set.n, of: set.of, text });
+        }
+        return joined;
+    }
+
+    function rejoined(chatId, msgs, joined, needLong = true) {
+        return msgs.map(m => {
+            if (!m || !m.id || !(Number(m.cut) > 0)) return m;
+            const got = joined.get(chatId + '\n' + m.id);
+            if (!got || got.of !== Number(m.cut) || (needLong && got.n !== Number(m.long))) return m;
+            const copy = Object.assign({}, m, { content: got.text });
+            delete copy.cut;
+            delete copy.long;
+            return copy;
+        });
+    }
+
     function fitMessages(msgs) {
-        const list = msgs.slice();
+        const list = msgs.map(shortened);
         let total = 64;
         const sizes = list.map(m => {
             const n = utf8Bytes(JSON.stringify(m)) + 1;
@@ -489,7 +574,7 @@
             if (!record || !record.id) continue;
             if (graves && graves[record.id]) continue;
             const held = out.get(record.id);
-            if (!held || stamp(record) >= stamp(held)) out.set(record.id, record);
+            if (!held || (stamp(record) >= stamp(held) && !(record.cut && !held.cut))) out.set(record.id, record);
         }
         return Array.from(out.values());
     }
@@ -668,6 +753,7 @@
                 const tx = fitTranscripts(entry, Store.transcripts ? Store.transcripts(conv.id) : []);
                 if (tx.length) entry.transcripts = tx;
                 out['chat-' + conv.id] = entry;
+                Object.assign(out, longRows(conv.id, msgs, entry.messages));
             }
             const Artifacts = window.NymbotArtifacts;
             if (Artifacts) {
@@ -792,19 +878,23 @@
                 touched.push('chats');
             }
 
+            const joined = longSets(remote);
+            const joinedChats = new Set();
             for (const key of Object.keys(remote)) {
                 if (key.indexOf('chat-') !== 0) continue;
                 const entry = remote[key];
                 if (!entry || !entry.id || !Array.isArray(entry.messages)) continue;
                 if (graves[entry.id] || Store.isGhost(entry.id)) continue;
+                joinedChats.add(entry.id);
                 const mine = Store.messages(entry.id);
-                const theirs = supportCut && entry.id === SUPPORT_ID
+                const theirs = rejoined(entry.id, supportCut && entry.id === SUPPORT_ID
                     ? entry.messages.filter(m => sentAt(m) > supportCut)
-                    : entry.messages;
-                const merged = keepLocal(mergeById(mine, theirs, graves), mine)
+                    : entry.messages, joined);
+                const whole = keepLocal(mergeById(rejoined(entry.id, mine, joined, false), theirs, graves), mine)
                     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-                if (merged.length !== mine.length) {
-                    Store.saveMessages(entry.id, merged);
+                const wasCut = new Set(mine.filter(m => m && m.cut).map(m => m.id));
+                if (whole.length !== mine.length || whole.some(m => m && wasCut.has(m.id) && !m.cut)) {
+                    Store.saveMessages(entry.id, whole);
                     touched.push(key);
                 }
                 const T = window.NymbotTranscripts;
@@ -816,6 +906,13 @@
                         if (!touched.includes(key)) touched.push(key);
                     }
                 }
+            }
+            for (const set of joined.values()) {
+                if (joinedChats.has(set.chat) || graves[set.chat] || Store.isGhost(set.chat)) continue;
+                const mine = Store.messages(set.chat);
+                if (!mine.some(m => m && m.id === set.x && m.cut)) continue;
+                Store.saveMessages(set.chat, rejoined(set.chat, mine, joined, false));
+                if (!touched.includes('chat-' + set.chat)) touched.push('chat-' + set.chat);
             }
 
             if (remote.anonKeys && typeof remote.anonKeys === 'object' && window.NymbotAnon) {
@@ -924,6 +1021,18 @@
             return false;
         },
 
+        async drop(dTag) {
+            if (this.blocked) return false;
+            this._load();
+            const category = await categoryFor(dTag);
+            const resp = await call('settings-delete', { category });
+            if (!resp || resp.error) return false;
+            this._hashes.delete(category);
+            this._names.delete(category);
+            delete this.rejected[dTag];
+            return true;
+        },
+
         async _mergeRemote(category, dTag, fallback) {
             const data = await call('settings-get', { only: [category] });
             if (!data || !data.categories || typeof data.categories !== 'object') return null;
@@ -966,13 +1075,18 @@
                     this._commit();
                     const local = this.snapshot();
                     // Server rows for conversations deleted here are emptied rather than left behind.
+                    const graves = this.graves();
+                    const drop = [];
                     for (const key of new Set(Object.keys(remote).concat([...this._names.values()]))) {
                         if (key.indexOf('chat-') === 0 && !local[key]) local[key] = { id: '', messages: [] };
+                        const lk = longKeyOf(key);
+                        if (lk && !local[key] && (graves[lk[0]] || !Store.messages(lk[0]).some(m => m && m.id === lk[1]))) drop.push(key);
                     }
                     try {
                         for (const [dTag, value] of Object.entries(local)) {
                             await this.push(dTag, value);
                         }
+                        for (const dTag of drop) await this.drop(dTag);
                     } finally {
                         this._saveHashes();
                     }

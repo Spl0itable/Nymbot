@@ -474,7 +474,7 @@
         if (!items.length) return null;
         return {
             id: m.id, messageId: m.id, mode, live: false,
-            title: askedBefore(list, i) || modeLabel(mode),
+            title: askedBefore(list, i) || modeLabel(mode), asked: !!askedBefore(list, i),
             state: groupState(items, false, end), items, ts: m.ts || 0,
             plan: rec && rec.plan ? rec.plan : null
         };
@@ -746,7 +746,9 @@
         jumpBtn.type = 'button';
         jumpBtn.tabIndex = -1;
         jumpBtn.dataset.message = g.messageId;
-        jumpBtn.appendChild(el('span', 'task-group-name', g.live && g.asked ? g.asked : g.title));
+        const name = el('span', 'task-group-name', g.live && g.asked ? g.asked : g.title);
+        if (g.live ? !!g.asked : g.asked) name.dataset.i18nSkip = '';
+        jumpBtn.appendChild(name);
         const meta = [modeLabel(g.mode)];
         if (g.background) meta.push(t('In the background'));
         else if (g.remote) meta.push(t('On another device'));

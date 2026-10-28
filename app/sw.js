@@ -18,6 +18,7 @@ const SHELL = [
     '/app/js/relays.js',
     '/app/js/pq.js',
     '/app/js/channel.js',
+    '/app/js/long-text.js',
     '/app/js/wire.js',
     '/app/js/api.js',
     '/app/js/anon.js',

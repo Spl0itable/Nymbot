@@ -12,7 +12,7 @@ import '../../services/dev_contact.dart';
 import '../i18n/i18n.dart';
 import 'sheet.dart';
 
-const String kAboutVersion = 'v1.0.8';
+const String kAboutVersion = 'v1.0.9';
 const String kLiveVersionUrl = 'https://nymbot.ai/app/version.json';
 const String kRepoUrl = 'https://github.com/Spl0itable/Nymbot';
 const String kDocsUrl = 'https://nymbot.ai/docs/';

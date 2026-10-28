@@ -31,6 +31,7 @@
     const ended = new Map();
     let settleTimer = null;
     let lastPoll = 0;
+    const laterTimers = { nym: null, anon: null };
     let watching = false;
 
     function clip(v, max) {
@@ -51,8 +52,29 @@
             state: STATES.has(raw.state) ? raw.state : 'running',
             background: raw.background === true,
             startedAt: Number(raw.startedAt) || 0,
-            updatedAt: Number(raw.updatedAt) || 0
+            updatedAt: Number(raw.updatedAt) || 0,
+            sealed: raw.sealed && typeof raw.sealed === 'object' && typeof raw.sealed.label === 'string' && typeof raw.sealed.progress === 'string'
+                ? { label: raw.sealed.label.slice(0, 8192), progress: raw.sealed.progress.slice(0, 131072) } : null
         };
+    }
+
+    async function unseal(list, conv) {
+        const out = [];
+        for (const r of list) {
+            if (!r.sealed || !Chat() || typeof Chat().runSealed !== 'function') { out.push(r); continue; }
+            gate.stamp(gate.sideOf(conv));
+            const o = await Chat().runSealed(conv, r.replyTo, r.sealed);
+            if (o && o.ended) {
+                ended.set(r.replyTo, Date.now());
+                continue;
+            }
+            if (o) {
+                const plan = Chat().planOf ? Chat().planOf(o.plan) : null;
+                Object.assign(r, { label: clip(o.label, 120) || r.label, progress: clip(o.progress, 200) || r.progress, plan: plan && plan.length ? plan : r.plan });
+            }
+            out.push(r);
+        }
+        return out;
     }
 
     function signerFor(conv) {
@@ -161,55 +183,206 @@
         return local.concat(out.filter(e => e.remote));
     }
 
+    function anonOpen(ui) {
+        return ui.conv && ui.conv.anon ? ui.conv : null;
+    }
+
+    function spread() {
+        const top = Math.max(0, Number(api.ANON_SPREAD_MS) || 0);
+        if (!top) return 0;
+        return Math.floor(top * (crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296));
+    }
+
+    const gate = {
+        at: { nym: 0, anon: 0 },
+        due: { nym: 0, anon: 0 },
+        sock: 0,
+        sockAt: 0,
+        sideOf(conv) { return conv && conv.anon ? 'anon' : 'nym'; },
+        other(side) { return side === 'anon' ? 'nym' : 'anon'; },
+        busy(side, now) { return !!this.due[side] && now < this.due[side] + api.ANON_GAP_MS; },
+        shown(side) {
+            const ui = window.NymbotUI;
+            return this.sideOf(ui && ui.conv) === side;
+        },
+        settle(side, now) {
+            if (this.due[side] && this.due[side] <= now && !this.shown(side)) this.due[side] = 0;
+        },
+        release(side, due) {
+            if (due && this.due[side] === due) this.due[side] = 0;
+        },
+        ready(side) {
+            const now = Date.now();
+            const o = this.other(side);
+            this.settle(o, now);
+            return now - this.at[o] >= api.ANON_GAP_MS && !this.busy(o, now) && !(this.due[side] > now) && !this.near(now);
+        },
+        near(t) {
+            const gap = Math.max(0, Number(api.ANON_GAP_MS) || 0);
+            return [this.sockAt, this.sock].some((x) => x && Math.abs(t - x) < gap);
+        },
+        hold(side) {
+            const now = Date.now();
+            if (this.due[side] > now) return this.due[side];
+            const o = this.other(side);
+            this.settle(o, now);
+            if (this.busy(o, now)) return 0;
+            let at = Math.max(now, this.at[o]) + api.ANON_GAP_MS + spread();
+            for (const x of [this.sockAt, this.sock]) if (x && Math.abs(at - x) < api.ANON_GAP_MS) at = x + api.ANON_GAP_MS + spread();
+            this.due[side] = at;
+            return at;
+        },
+        slot() {
+            const now = Date.now();
+            const gap = Math.max(0, Number(api.ANON_GAP_MS) || 0);
+            let from = Math.max(now, this.at.nym, this.at.anon);
+            for (const side of ['nym', 'anon']) {
+                this.settle(side, now);
+                if (this.due[side] && now < this.due[side] + gap) from = Math.max(from, this.due[side]);
+            }
+            this.sock = from + gap + spread();
+            return this.sock - now;
+        },
+        free() {
+            const now = Date.now();
+            const gap = Math.max(0, Number(api.ANON_GAP_MS) || 0);
+            return ['nym', 'anon'].every((side) => {
+                this.settle(side, now);
+                return now - this.at[side] >= gap && !(this.due[side] && Math.abs(now - this.due[side]) < gap);
+            });
+        },
+        acted(side, late) {
+            this.stamp(side);
+            if (!late) return;
+            this.sockAt = Date.now();
+            this.sock = 0;
+        },
+        stamp(side) {
+            const now = Date.now();
+            this.at[side] = Math.max(this.at[side], now);
+            if (this.due[side] && now >= this.due[side]) this.due[side] = 0;
+        }
+    };
+
+    function chanHooks(nymKey, shownKey) {
+        const sideOf = (u) => (u === nymKey() ? 'nym' : 'anon');
+        return {
+            shown: (u) => !!u && u === shownKey(),
+            slot: () => gate.slot(),
+            ready: () => gate.free(),
+            acted: (u, late) => gate.acted(sideOf(u), late)
+        };
+    }
+
+    function later(ui, side) {
+        const due = gate.hold(side);
+        if (laterTimers[side]) return;
+        const now = Date.now();
+        const theirs = gate.due[gate.other(side)];
+        const wait = due ? due - now : (theirs > now ? theirs - now : api.ANON_GAP_MS + spread());
+        laterTimers[side] = setTimeout(() => {
+            laterTimers[side] = null;
+            const open = anonOpen(ui);
+            if (document.visibilityState !== 'hidden' && (side === 'anon' ? open : (!open && followers.size))) poll(ui).catch(() => { });
+            else gate.release(side, due);
+        }, Math.max(0, wait));
+    }
+
     async function poll(ui) {
         const Identity = window.NymbotIdentity;
         if (!Identity || !Identity.pubkey) return remote;
         if (polling) return polling;
         watch(ui);
+        const open = anonOpen(ui);
+        const side = open ? 'anon' : 'nym';
+        if (!gate.ready(side)) {
+            later(ui, side);
+            if (open) checkSteers(ui).catch(() => { });
+            return remote;
+        }
         lastPoll = Date.now();
         polling = (async () => {
-            let mine = null;
-            try {
-                const res = await Api().liveRuns(null, {});
-                if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
-                    mine = res.data.runs.map(clean).filter(Boolean).slice(0, 20);
-                    for (const r of mine) {
-                        for (const b of r.branches) {
-                            try { Chat().rememberBranchStep(b, null, null); } catch (_) { }
-                        }
-                    }
-                } else if (res.status && res.status !== 429) {
-                    mine = [];
-                }
-            } catch (_) { }
-            const open = ui.conv && ui.conv.anon && HEX.test(String(ui.conv.rootId || '')) ? ui.conv : null;
-            const signer = open ? signerFor(open) : null;
-            let theirs = null;
-            if (signer) {
-                try {
-                    await Api().jitter();
-                    const res = await Api().liveRuns(open.rootId, { signer });
-                    if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
-                        theirs = res.data.runs.map(clean).filter(r => r && r.thread === open.rootId).slice(0, 20);
-                        for (const r of theirs) {
-                            for (const b of r.branches) {
-                                try { Chat().rememberBranchStep(b, open); } catch (_) { }
-                            }
-                        }
-                    }
-                } catch (_) { }
-            }
-            const kept = remote.filter(r => r.anon);
-            const nym = mine != null ? mine : remote.filter(r => !r.anon);
-            const anon = theirs != null ? theirs.map(r => Object.assign(r, { anon: true }))
-                : kept.filter(r => signer && r.thread === open.rootId);
-            remote = nym.concat(anon).filter(r => !endedHere(r));
-            render(ui);
+            if (open) await readAnon(open);
+            else await readNym();
+            remote = remote.filter(r => !endedHere(r));
+            render(ui, side);
             reconcile(ui);
             checkSteers(ui).catch(() => { });
             return remote;
         })();
         try { return await polling; } finally { polling = null; }
+    }
+
+    async function pollNym(ui) {
+        const Identity = window.NymbotIdentity;
+        if (!Identity || !Identity.pubkey || polling || anonOpen(ui)) return false;
+        if (!gate.ready('nym')) {
+            gate.hold('nym');
+            return false;
+        }
+        await poll(ui);
+        return true;
+    }
+
+    function nymBusy(ui, except) {
+        let n = 0;
+        for (const turn of ui.turns.values()) {
+            if (turn.quiet || turn.id === except) continue;
+            const conv = Store().conversation(turn.convId);
+            if (!(conv && conv.anon)) n++;
+        }
+        return n + others(ui).filter(r => !r.anon).length;
+    }
+
+    async function readNym() {
+        let mine = null;
+        gate.stamp('nym');
+        try {
+            const res = await Api().liveRuns(null, {});
+            gate.stamp('nym');
+            if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
+                mine = await unseal(res.data.runs.map(clean).filter(Boolean).slice(0, 20), null);
+                gate.stamp('nym');
+                for (const r of mine) {
+                    for (const b of r.branches) {
+                        try { Chat().rememberBranchStep(b, null, null); } catch (_) { }
+                    }
+                }
+            } else if (res.status && res.status !== 429) {
+                mine = [];
+            }
+        } catch (_) { }
+        remote = mine != null ? mine : remote.filter(r => !r.anon);
+    }
+
+    async function readAnon(open) {
+        const signer = HEX.test(String(open.rootId || '')) ? signerFor(open) : null;
+        let theirs = null;
+        if (signer) {
+            try {
+                await Api().jitter();
+                if (!gate.ready('anon')) return;
+                gate.stamp('anon');
+                const res = await Api().liveRuns(open.rootId, { signer });
+                gate.stamp('anon');
+                if (res.status === 200 && res.data && Array.isArray(res.data.runs)) {
+                    theirs = await unseal(res.data.runs.map(clean).filter(r => r && r.thread === open.rootId).slice(0, 20), open);
+                    gate.stamp('anon');
+                    for (const r of theirs) {
+                        for (const b of r.branches) {
+                            try { Chat().rememberBranchStep(b, open); } catch (_) { }
+                        }
+                    }
+                }
+            } catch (_) { }
+        }
+        const anon = theirs != null ? theirs.map(r => Object.assign(r, { anon: true }))
+            : remote.filter(r => r.anon && signer && r.thread === open.rootId);
+        remote = remote.filter(r => !r.anon).concat(anon);
+    }
+
+    function inView(ui, s) {
+        return s.signer ? !!(ui.conv && ui.conv.id === s.convId) : !(ui.conv && ui.conv.anon);
     }
 
     function watched() {
@@ -225,16 +398,19 @@
             for (const id of localRunIds(ui)) live.add(id);
             const groups = new Map();
             for (const [id, s] of watched()) {
-                if (live.has(s.runId)) continue;
-                if (s.signer && !(ui.conv && ui.conv.id === s.convId)) continue;
+                if (live.has(s.runId) || !inView(ui, s)) continue;
                 if (!groups.has(s.signer)) groups.set(s.signer, []);
                 groups.get(s.signer).push(id);
             }
             const offers = new Map();
             for (const [signer, ids] of groups) {
+                const side = signer ? 'anon' : 'nym';
+                if (!gate.ready(side)) continue;
                 let res;
                 try {
+                    gate.stamp(side);
                     res = await Api().steerStatus(ids.slice(0, 20), { signer });
+                    gate.stamp(side);
                 } catch (_) {
                     continue;
                 }
@@ -263,8 +439,8 @@
         try { await checking; } finally { checking = null; }
     }
 
-    function render(ui) {
-        if (window.NymbotTranscripts) window.NymbotTranscripts.remote(ui, remote);
+    function render(ui, side) {
+        if (window.NymbotTranscripts) window.NymbotTranscripts.remote(ui, remote, side);
         renderCount(ui);
         if (window.NymbotTasks) window.NymbotTasks.refresh(ui);
         const sheet = $('modalRunning');
@@ -278,8 +454,8 @@
         node.textContent = n ? String(n) : '';
     }
 
-    function visible(name) {
-        if (name === 'steers') return watched().length > 0;
+    function visible(name, ui) {
+        if (name === 'steers') return watched().some(([, s]) => inView(ui, s));
         if (name === 'tasks') return !!(window.NymbotTasks && window.NymbotTasks.isOpen);
         if (name === 'sheet') { const s = $('modalRunning'); return !!(s && !s.hidden); }
         return false;
@@ -290,7 +466,7 @@
         if (on) poll(ui).catch(() => { });
         if (timer || !followers.size) return;
         const tick = () => {
-            for (const f of [...followers]) if (!visible(f)) followers.delete(f);
+            for (const f of [...followers]) if (!visible(f, ui)) followers.delete(f);
             if (!followers.size) { timer = null; return; }
             poll(ui).catch(() => { }).then(() => { timer = setTimeout(tick, POLL_MS); });
         };
@@ -378,7 +554,7 @@
 
     async function cancel(ui, conv, runId, signer) {
         if (!HEX.test(String(runId || ''))) return null;
-        const res = await Api().cancelRun(runId, { signer: signer || signerFor(conv) });
+        const res = await Api().cancelRun(runId, { signer: signer || null, conv });
         return res && res.status === 200 ? res.data : null;
     }
 
@@ -387,7 +563,8 @@
         const conv = r ? convForThread(r.thread) : null;
         remote = remote.filter(x => x.replyTo !== runId);
         render(ui);
-        await cancel(ui, conv, runId, null).catch(() => null);
+        if (typeof ui.stoppedRun === 'function') ui.stoppedRun(runId, r && r.anon && conv && !conv.anon ? null : conv);
+        if (!(r && r.anon && !conv)) await cancel(ui, conv, runId, null).catch(() => null);
         ui.toast(t('Stopped.'));
     }
 
@@ -402,7 +579,7 @@
         return text == null ? null : String(text).trim();
     }
 
-    async function deliver(ui, conv, runId, signer, text, far) {
+    async function deliver(ui, conv, runId, signer, text, far, sealed) {
         if (!text) return;
         if (text.length > STEER_MAX) {
             ui.toast(t('That is too long. Instructions can be up to 2,000 characters.'));
@@ -411,7 +588,7 @@
         let res;
         const signedBy = signer || signerFor(conv);
         try {
-            res = await Api().steerRun(runId, text, { signer: signedBy, conv });
+            res = await Api().steerRun(runId, text, sealed ? { signer: signedBy, conv, sealed: true } : { signer: signedBy, conv });
         } catch (_) {
             res = { status: 0, data: {} };
         }
@@ -473,14 +650,21 @@
     async function steerRemote(ui, runId) {
         const r = remote.find(x => x.replyTo === runId);
         const conv = r ? convForThread(r.thread) : null;
+        if (r && r.anon && !conv) return;
         const text = await askSteer(ui);
         if (!text) return;
-        await deliver(ui, conv, runId, null, text, true);
+        await deliver(ui, conv, runId, null, text, true, !!(r && r.sealed));
     }
 
     const api = {
         RECONCILE_MS: 30000,
+        ANON_GAP_MS: 120000,
+        ANON_SPREAD_MS: 180000,
+        gate,
+        chanHooks,
         poll,
+        pollNym,
+        nymBusy,
         settled,
         follow,
         forConv,

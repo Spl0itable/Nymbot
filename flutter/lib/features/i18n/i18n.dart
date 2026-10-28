@@ -9,7 +9,6 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config.dart';
-import '../sheets/about_sheet.dart' show kAboutVersion;
 
 /// Runtime translation from asset packs keyed by English string, shared with the web app.
 class I18n {
@@ -20,6 +19,10 @@ class I18n {
   static String lang = 'en';
   static Map<String, String>? _pack;
   static List<LanguageOption> available = const [];
+  static const _noCatalog = '00000000';
+  static String catalog = _noCatalog;
+  static String keyFor(String hash) => 'c$hash';
+  static String get cacheKey => keyFor(catalog);
   static Future<List<String?>?> Function(List<String> texts, String target) fetcher = _proxy;
   static const protectedNames = {
     'Nymbot', 'Nymchat', 'Nostr', 'Zapstore', 'App Store', 'Google Play', 'TestFlight', '21 Million LLC'
@@ -42,6 +45,7 @@ class I18n {
   /// Never throws; a missing pack leaves the app in English.
   static Future<void> load({String? preferred}) async {
     available = await _index();
+    catalog = await _readCatalog();
     final was = lang;
     lang = _pick(preferred, available.map((l) => l.code).toList());
     _pack = null;
@@ -71,7 +75,19 @@ class I18n {
     _queue = [];
   }
 
+  static Future<String> _readCatalog() async {
+    try {
+      final decoded = jsonDecode(await rootBundle.loadString('$_dir/catalog.json'));
+      final hash = decoded is Map ? decoded['hash'] : null;
+      if (hash is String && RegExp(r'^[0-9a-f]{8}$').hasMatch(hash)) return hash;
+    } catch (_) {}
+    return _noCatalog;
+  }
+
   static String _mtKey(String code) => 'i18n_mt_$code';
+
+  @visibleForTesting
+  static Future<Map<String, String>> storedMt(String code) => _loadMt(code);
 
   static Future<Map<String, String>> _loadMt(String code) async {
     try {
@@ -79,7 +95,7 @@ class I18n {
       final raw = prefs.getString(_mtKey(code));
       if (raw == null) return {};
       final decoded = jsonDecode(raw);
-      if (decoded is Map && decoded['v'] == kAboutVersion && decoded['m'] is Map) {
+      if (decoded is Map && decoded['v'] == cacheKey && decoded['m'] is Map) {
         return (decoded['m'] as Map).map((k, v) => MapEntry('$k', '$v'));
       }
       await prefs.remove(_mtKey(code));
@@ -90,7 +106,7 @@ class I18n {
   static Future<void> _saveMt(String code, Map<String, String> mt) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_mtKey(code), jsonEncode({'v': kAboutVersion, 'm': mt}));
+      await prefs.setString(_mtKey(code), jsonEncode({'v': cacheKey, 'm': mt}));
     } catch (_) {}
   }
 

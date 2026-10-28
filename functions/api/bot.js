@@ -122,7 +122,7 @@ import { giftCode, giftAmount, giftTier, GIFT_MIN, GIFT_TTL_MS, GIFT_MAX_OPEN } 
 import { l402RefundToken, l402RefundPeek, l402RefundRedeem } from "./_l402refund.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runBatched, runRepoLockKey, runLockTake, runLockBeat, runLockDrop,
   runTurnsRecent, runTurnsThread, runThreadHolders, runTurnsCopy, runTurnAdd, runSummaryGet, runSummaryPut, runWrapsPrune, runResultPut, runResultGet, runResultDrop, runGet, runByResume, runCountLive, runStart, runContinue,
-  runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runForget, runSweep,
+  runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent, runListSince, runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runForget, runSweep, runSweepClaim, runSweepRounds,
   RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS, RUN_AWAITING_MS, RUN_STEER_CHARS, RUN_ROW_KEEP_MS, RUN_RESULT_KEEP_MS, RUN_PROGRESS_CHARS } from "./_runs.js";
 import { ASK_TOOL, ASK_TOOL_NAME, ASK_GUIDELINE, ASK_WAIT_MS, askParse, askTake, askBlock, askErrorText, askPauseReply, pendingQuestion,
   pendingSettle, pendingAnswerOf, planDecisionText, PLAN_TOOL, PLAN_TOOL_NAME, PLAN_GATE_TEXT, PLAN_REJECTED_TEXT, PLAN_GUIDELINE, planMode, planGate, planParse,
@@ -6691,11 +6691,14 @@ function botRunAge(ms) {
   return h + (h === 1 ? " hour ago" : " hours ago");
 }
 
-async function botRunOthers(db, pk, thread, exclude, cipher) {
+var BOT_RUN_NO_CIPHER = { seal: function () { return ""; }, open: function () { return ""; } };
+
+async function botRunOthers(db, pk, thread, exclude, cipherOf) {
   var rows = await runLive(db, pk, thread, exclude, Date.now(), 8);
   var now = Date.now();
   var open = 0;
   return rows.map(function (r) {
+    var cipher = cipherOf(r) || BOT_RUN_NO_CIPHER;
     var got = botRunUnpack(cipher, r.progress);
     var steerable = !botSteerRefusal(r, cipher, now);
     return {
@@ -6772,6 +6775,15 @@ function botSteerRefusal(row, cipher, now) {
     return { status: 409, body: { error: BOT_STEER_FINAL, final: true, state: "running" } };
   }
   return null;
+}
+
+async function botSteerApply(db, pk, asked, row, text, cipher, now) {
+  var no = botSteerRefusal(row, cipher, now);
+  if (no) return no;
+  var id = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
+  var added = await runSteerAdd(db, pk, asked, id, cipher.seal(text), now);
+  if (!added) return { status: 503, body: { error: "Updates can't be passed on right now." } };
+  return { status: 200, body: { ok: true, state: row.state, id: id } };
 }
 
 function botSteerQuote(label) {
@@ -7349,8 +7361,15 @@ function wrapsFor(fetched, ids, botPrivkey, botPq, known) {
   return out;
 }
 
-function wrapsToCache(fetched, extra, botPrivkey, botPq, known) {
-  var all = Object.assign({}, fetched);
+function wrapsToCache(fetched, extra, botPrivkey, botPq, known, onlyIds) {
+  var all = {};
+  if (Array.isArray(onlyIds)) {
+    for (var o = 0; o < onlyIds.length; o++) {
+      if (fetched[onlyIds[o]]) all[onlyIds[o]] = fetched[onlyIds[o]];
+    }
+  } else {
+    all = Object.assign({}, fetched);
+  }
   for (var i = 0; i < extra.length; i++) {
     if (extra[i] && extra[i].id) all[extra[i].id] = extra[i];
   }
@@ -7369,8 +7388,12 @@ function maybeSweepBotWraps(context, env) {
   var now = Date.now();
   if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
   botWrapSweepLastMs = now;
-  var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
-    .then(function () { return runSweep(env.DB_BOT, now, BOT_WRAP_SWEEP_MAX); })
+  var db = env.DB_BOT;
+  var work = runSweepClaim(db, now, BOT_WRAP_SWEEP_EVERY_MS)
+    .then(function (won) {
+      if (!won) return 0;
+      return runSweepRounds(db, now, BOT_WRAP_SWEEP_MAX, function (n) { return botWrapsSweep(db, now - BOT_WRAP_KEEP_MS, n); });
+    })
     .catch(function () { return 0; });
   try {
     if (context && typeof context.waitUntil === "function") context.waitUntil(work);
@@ -7378,15 +7401,22 @@ function maybeSweepBotWraps(context, env) {
 }
 
 // Awaited so a quick follow-up reply doesn't read a cache the write hasn't reached.
-async function botCacheWraps(env, pubkey, entries, keepIds) {
+async function botCacheWraps(env, pubkey, entries, keepIds, mustId) {
   var live = [];
   for (var i = 0; i < entries.length; i++) {
     var entry = entries[i];
     if (entry && entry.event && isHex64(entry.event.id)) live.push(entry);
   }
   if (!live.length) return;
+  var ok = false;
   try {
-    await botWrapsPut(env.DB_BOT, pubkey, live, keepIds);
+    ok = await botWrapsPut(env.DB_BOT, pubkey, live, keepIds);
+  } catch (e) { }
+  if (ok !== false || !mustId || live.length < 2) return;
+  var must = live.filter(function (entry) { return entry.event.id === mustId; });
+  if (!must.length) return;
+  try {
+    await botWrapsPut(env.DB_BOT, pubkey, must, null);
   } catch (e) { }
 }
 function splitQuotedReply(raw) {
@@ -7405,7 +7435,8 @@ function splitQuotedReply(raw) {
   return { quoted: quoted.join("\n").trim(), reply: lines.slice(i).join("\n").trim(), author: author };
 }
 
-var BOT_PM_TEXT_MAX = 200000;
+var BOT_LONG_TEXT_MAX = 4000000;
+var BOT_PM_TEXT_MAX = BOT_LONG_TEXT_MAX;
 
 function parseBotPMRequest(rawMessage) {
   var freshOnly = false;
@@ -8505,6 +8536,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       source: cat.source, models: list, groups: groups, aliases: cat.aliases,
       unpriced: unpriced, satsPerCredit: BOT_PRO_SATS_PER_CREDIT,
       standardRoutes: routes,
+      standardContext: BOT_STANDARD_CONTEXT,
+      standardOut: BOT_STANDARD_OUT,
       research: researchPublicLimits(),
       usdPerCredit: btcUsd ? Math.round(BOT_PRO_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
       standardUsdPerCredit: btcUsd ? Math.round(BOT_SATS_PER_CREDIT / 1e8 * btcUsd * 1e6) / 1e6 : null,
@@ -8634,6 +8667,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   var replySched = null;
   var replyPrw = null;
   var runCipher = chanCtx && chanCtx.cipher ? chanCtx.cipher : botRunCipher(botPrivkey, userPubkey);
+  var legacyRunCipher = chanCtx ? botRunCipher(botPrivkey, userPubkey) : runCipher;
+  function runCipherOf(row) {
+    if (!row) return null;
+    if (chanCtx) return typeof chanCtx.peer === "function" ? chanCtx.peer(row.asked) : null;
+    return row.progress && !legacyRunCipher.open(row.progress) ? null : legacyRunCipher;
+  }
   // `threadRoot` files the reply in the user's thread; `model` is omitted for replies no model wrote.
   async function wrapReplyPair(text, threadRoot, model) {
     var opts = null;
@@ -8784,9 +8823,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         return !(r.state === "running" && Number(r.beat_at) <= listNow - RUN_LIVE_MS) && !r.cancel;
       }).map(function (r) {
         var got = botRunUnpack(runCipher, r.progress);
+        var sealedRow = !!r.progress && !runCipher.open(r.progress);
         return {
           replyTo: r.asked, thread: r.thread || "", kind: r.kind || "chat",
           label: runLabel(runCipher.open(r.label)), progress: got.p, plan: got.plan,
+          sealed: sealedRow ? { label: String(r.label || ""), progress: String(r.progress || "") } : undefined,
           branches: got.branches.length ? got.branches : undefined,
           background: got.bg ? true : undefined, until: got.bg || undefined,
           legs: got.legs.length ? got.legs : undefined,
@@ -8814,13 +8855,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (steerRow && !chanCtx && ((steerRow.progress && !runCipher.open(steerRow.progress)) || (await chanRunGet(env, ctlPk, ctlAsked)))) {
       return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
     }
-    var steerNow = Date.now();
-    var steerNo = botSteerRefusal(steerRow, runCipher, steerNow);
-    if (steerNo) return json(steerNo.body, steerNo.status);
-    var steerId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
-    var steered = await runSteerAdd(env.DB_BOT, ctlPk, ctlAsked, steerId, runCipher.seal(steerText), steerNow);
-    if (!steered) return json({ error: "Updates can't be passed on right now." }, 503);
-    return json({ ok: true, state: steerRow.state, id: steerId });
+    var steerApplied = await botSteerApply(env.DB_BOT, ctlPk, ctlAsked, steerRow, steerText, runCipher, Date.now());
+    return json(steerApplied.body, steerApplied.status);
   }
 
   if (body.action === "notify-turn") {
@@ -9547,6 +9583,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       return await turnFail({ error: "Message author does not match the authenticated user." }, 403);
     }
     var message = sanitizeInput(currentUnwrapped.rumor.content || "", BOT_PM_TEXT_MAX);
+    var declaredParts = (leg || chanCtx) ? 0 : rumorPartTotal(currentUnwrapped.rumor);
+    if (declaredParts > 1 && partIds.length < 2) {
+      var firstGap = rumorPartIndex(currentUnwrapped.rumor) === 1 ? 2 : 1;
+      return await turnFail({ error: "Part " + firstGap + " of " + declaredParts + " of your message did not arrive. Nothing was charged; send it again.", missingPart: firstGap, retryable: true }, 504);
+    }
     // Every part must open, share the author and message id; any hole refuses the whole message.
     if (partIds.length > 1) {
       var wantMsgId = rumorTagValue(currentUnwrapped.rumor, "x");
@@ -9563,13 +9604,32 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         if (!wantMsgId || rumorTagValue(pu.rumor, "x") !== wantMsgId) {
           return await turnFail({ error: "Those parts are not all from the same message." }, 400);
         }
-        pieces.push({ at: rumorPartIndex(pu.rumor) || (qi + 1), text: String(pu.rumor.content || "") });
+        var pat = rumorPartIndex(pu.rumor) || (qi + 1);
+        if (pieces.some(function (p) { return p.at === pat; })) continue;
+        pieces.push({ at: pat, text: String(pu.rumor.content || "") });
       }
       pieces.sort(function (a, b) { return a.at - b.at; });
+      var partTotal = rumorPartTotal(currentUnwrapped.rumor);
+      for (var pk = 0; pk < pieces.length; pk++) {
+        if (pieces[pk].at !== pk + 1) {
+          return await turnFail({ error: "Part " + (pk + 1) + " of your message did not arrive. Nothing was charged; send it again.", missingPart: pk + 1, retryable: true }, 504);
+        }
+      }
+      if (partTotal && pieces.length !== partTotal) {
+        return await turnFail({ error: "Part " + (pieces.length + 1) + " of " + partTotal + " of your message did not arrive. Nothing was charged; send it again.", missingPart: pieces.length + 1, retryable: true }, 504);
+      }
       message = sanitizeInput(pieces.map(function (p) { return p.text; }).join(""), BOT_PM_TEXT_MAX);
     }
     clock.since("open", openFrom);
     if (!message) return await turnFail({ error: "Empty message" }, 400);
+    if (!leg && !continuing) {
+      var longLabel = proModel ? (proModel.label || proModelKey) : "the standard model";
+      if (botLongTextRefusal(message, proModel, longLabel, null)) {
+        var longCat = null;
+        try { longCat = await botProCatalog(env); } catch (e) { longCat = null; }
+        return await turnFail(botLongTextRefusal(message, proModel, longLabel, longCat), 413);
+      }
+    }
     // Every event the question traveled in, so the next turn replays all of it.
     var askedIds = leg ? [] : (partIds.length > 1 ? partIds.slice() : [currentId]);
     // Claim the message id too: two wraps of one rumor must buy one answer.
@@ -9782,9 +9842,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var recordTurn = async function (selfEvent, remember) {
       if (chanCtx) return;
       var keep = thread.slice();
-      if (remember) await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.concat([selfEvent.id]), usageT0);
+      if (remember) await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.slice(0, BOT_HISTORY_PARTS).concat([selfEvent.id]), usageT0);
       await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf), null);
+        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf, askedIds.slice(0, BOT_HISTORY_PARTS).concat(historyIds)), null, selfEvent.id);
       await runWrapsPrune(env.DB_BOT, userPubkey, runPk, keep, Date.now());
     };
 
@@ -10440,7 +10500,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       : (ghConfig ? "repo" : (mcpConfig ? "connector" : (body.runKind === "compare" ? "compare" : "chat")))));
     var runCapNo = await runRegister(runKind, freeTurn ? 0 : (proModel ? proRequired : stdRequired), !!proModel);
     if (runCapNo) return await turnFailResumable(runCapNo, 429);
-    var runOthers = fresh ? [] : await botRunOthers(env.DB_BOT, runPk, threadKey, runRoot, runCipher);
+    var runOthers = fresh ? [] : await botRunOthers(env.DB_BOT, runPk, threadKey, runRoot, runCipherOf);
 
     if (!freeTurn) {
       var holdAmount = proModel ? proRequired : stdRequired;
@@ -10578,11 +10638,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       for (var sti = 0; sti < steerSaid.steers.length; sti++) {
         var steerTo = runOthers.filter(function (o) { return o.handle && o.handle === steerSaid.steers[sti].handle; })[0];
         if (!steerTo) { steerOutcomes.push({ to: null, ok: false, why: "gone" }); continue; }
-        var steerNo = botSteerRefusal(await runGet(env.DB_BOT, runPk, steerTo.asked), runCipher, Date.now());
-        if (steerNo) { steerOutcomes.push({ to: steerTo, ok: false, why: botSteerWhy(steerNo) }); continue; }
-        var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
-        var steerAdded = await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now());
-        steerOutcomes.push({ to: steerTo, ok: !!steerAdded, why: steerAdded ? "" : "gone" });
+        var steerRowNow = await runGet(env.DB_BOT, runPk, steerTo.asked);
+        var steerCipher = runCipherOf(steerRowNow);
+        var steerRes = steerCipher
+          ? await botSteerApply(env.DB_BOT, runPk, steerTo.asked, steerRowNow, steerSaid.steers[sti].text, steerCipher, Date.now())
+          : { status: 404, body: { error: "Nymbot has no request running for that message.", unknown: true } };
+        steerOutcomes.push({ to: steerTo, ok: steerRes.status === 200, why: steerRes.status === 200 ? "" : botSteerWhy(steerRes) });
       }
       var steerAllOk = steerOutcomes.every(function (o) { return o.ok; });
       if (steerAllOk) {
@@ -12571,8 +12632,58 @@ var BOT_HISTORY_TURN_MIN = 300;
 
 // Ceiling on one decrypted turn, so a pathological message never sits in memory at full length.
 var BOT_HISTORY_DECRYPT_MAX = 32000;
-// NIP-44 caps a plaintext at 65535 bytes, so long questions arrive split across up to this many wraps.
-var BOT_MESSAGE_PARTS_MAX = 8;
+var BOT_MESSAGE_PARTS_MAX = 1000;
+var BOT_HISTORY_PARTS = 8;
+var BOT_STANDARD_CONTEXT = 128000;
+var BOT_STANDARD_OUT = 8192;
+var BOT_BYTES_PER_TOKEN = 4;
+
+function botTextCost(text) {
+  var s = String(text == null ? "" : text);
+  var cost = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c === 0x22 || c === 0x5C || c === 0x08 || c === 0x09 || c === 0x0A || c === 0x0C || c === 0x0D) cost += 2;
+    else if (c < 0x20) cost += 6;
+    else if (c < 0x80) cost += 1;
+    else if (c < 0x800) cost += 2;
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xDC00 && s.charCodeAt(i + 1) <= 0xDFFF) { cost += 4; i++; }
+    else if (c >= 0xD800 && c <= 0xDFFF) cost += 6;
+    else cost += 3;
+  }
+  return cost;
+}
+
+function botContextCheck(cost, context, maxOut) {
+  var tokens = Math.ceil(Math.max(0, Number(cost) || 0) / BOT_BYTES_PER_TOKEN);
+  var ctx = Math.floor(Number(context) || 0);
+  if (!(ctx > 0)) return { ok: true, tokens: tokens, limit: 0, context: 0 };
+  var out = Math.max(0, Math.floor(Number(maxOut) || 0));
+  var limit = out > 0 && out < ctx ? ctx - out : Math.floor(ctx * 3 / 4);
+  return { ok: tokens <= limit, tokens: tokens, limit: limit, context: ctx };
+}
+
+function botLongTextRefusal(message, model, label, catalog) {
+  var cost = botTextCost(message);
+  var ctx = model ? model.context : BOT_STANDARD_CONTEXT;
+  var out = model ? (Number(model.maxTokens) || BOT_STANDARD_OUT) : BOT_STANDARD_OUT;
+  var got = botContextCheck(cost, ctx, out);
+  if (got.ok) return null;
+  var longer = [];
+  var models = catalog && catalog.models ? catalog.models : {};
+  for (var key in models) {
+    var m = models[key];
+    if (!m || !(Number(m.context) > 0)) continue;
+    if (botContextCheck(cost, m.context, Number(m.maxTokens) || BOT_STANDARD_OUT).ok) longer.push({ key: key, label: m.label || key, context: Number(m.context) });
+  }
+  longer.sort(function (a, b) { return a.context - b.context; });
+  var kb = Math.max(1, Math.round(cost / 1024));
+  return {
+    error: "This message is about " + kb + " KB (about " + got.tokens + " tokens), and " + (label || "this model") + " reads at most about " + got.limit + " tokens at once. Nothing was sent to the model and nothing was charged. Switch to a model with a longer context, or send it in parts.",
+    tooLong: { bytes: cost, tokens: got.tokens, limit: got.limit, context: got.context },
+    longer: longer.slice(0, 6)
+  };
+}
 
 // One credit per extra wrap, since split questions carry several times a normal turn's input.
 var BOT_PART_SURCHARGE = 1;
@@ -12593,6 +12704,18 @@ function botPartsCount(body) {
   }
   if (typeof body.eventId === "string" && seen.indexOf(body.eventId) === -1) seen.push(body.eventId);
   return Math.max(1, seen.length);
+}
+
+function rumorPartTotal(rumor) {
+  var tags = rumor && Array.isArray(rumor.tags) ? rumor.tags : [];
+  for (var i = 0; i < tags.length; i++) {
+    var tag = tags[i];
+    if (Array.isArray(tag) && tag[0] === "part") {
+      var n = parseInt(tag[2], 10);
+      if (n > 0 && n <= BOT_MESSAGE_PARTS_MAX) return n;
+    }
+  }
+  return 0;
 }
 
 // Read off the tag, since relay delivery order is no order; 0 means a whole message.
@@ -15426,6 +15549,14 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 }
 
 export {
+  botTextCost,
+  botContextCheck,
+  botLongTextRefusal,
+  rumorPartTotal,
+  BOT_MESSAGE_PARTS_MAX,
+  BOT_LONG_TEXT_MAX,
+  BOT_HISTORY_PARTS,
+  maybeSweepBotWraps,
   botResultPut,
   botResultGet,
   botLogLine,

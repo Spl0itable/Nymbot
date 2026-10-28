@@ -677,6 +677,13 @@ async function handleSettingsAction(context, body) {
     return json({ ok: true, category: cat, updatedAt: updatedAt });
   }
 
+  if (body.action === "settings-delete") {
+    var delCat = String(body.category || "");
+    if (!isValidSettingsCategory(delCat)) return json({ error: "Unknown settings category." }, 400);
+    var delRes = await env.DB_SETTINGS.prepare("DELETE FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, delCat).run();
+    return json({ ok: true, category: delCat, deleted: (delRes && delRes.meta && delRes.meta.changes) || 0 });
+  }
+
   return json({ error: "Unknown action" }, 400);
 }
 
@@ -1108,6 +1115,88 @@ function pmWrapRecipient(ev) {
   return p ? p[1].toLowerCase() : null;
 }
 
+var SUPPORT_PAGE_MAX = 100;
+var SUPPORT_TOKENS_MAX = 4;
+var SUPPORT_SKIP_MAX = 100;
+var HEX64_RE = /^[0-9a-f]{64}$/i;
+
+function supportWrapFor(ev, pubkey, tokens) {
+  if (!ev || ev.kind !== 1059 || !Array.isArray(ev.tags)) return false;
+  var toMe = false;
+  var tagged = false;
+  for (var i = 0; i < ev.tags.length; i++) {
+    var t = ev.tags[i];
+    if (!Array.isArray(t) || typeof t[1] !== "string") continue;
+    if (t[0] === "p" && t[1].toLowerCase() === pubkey) toMe = true;
+    if (t[0] === "t" && tokens.indexOf(t[1].toLowerCase()) !== -1) tagged = true;
+  }
+  return toMe && tagged;
+}
+
+async function supportGet(env, body, json) {
+  var pubkey = typeof body.pubkey === "string" ? body.pubkey.toLowerCase() : "";
+  var tokens = [];
+  var raw = Array.isArray(body.tokens) ? body.tokens : [];
+  for (var i = 0; i < raw.length && tokens.length < SUPPORT_TOKENS_MAX; i++) {
+    if (typeof raw[i] === "string" && HEX64_RE.test(raw[i]) && tokens.indexOf(raw[i].toLowerCase()) === -1) tokens.push(raw[i].toLowerCase());
+  }
+  if (!HEX64_RE.test(pubkey) || !tokens.length) return json({ error: "Invalid request" }, 400);
+  var limit0 = Math.min(SUPPORT_PAGE_MAX, Math.max(1, Math.floor(Number(body.limit) || SUPPORT_PAGE_MAX)));
+  if (body.cursor && typeof body.cursor === "object") {
+    var cs = Math.max(0, Math.floor(Number(body.cursor.s) || 0));
+    var cid = typeof body.cursor.id === "string" && HEX64_RE.test(body.cursor.id) ? body.cursor.id.toLowerCase() : "";
+    var crows;
+    try {
+      crows = (await replica(env.DB_PM).prepare(
+        "SELECT id, stored_at, event FROM pm WHERE pubkey = ? AND stored_at = ? AND id > ? UNION ALL SELECT id, stored_at, event FROM pm WHERE pubkey = ? AND stored_at > ? ORDER BY stored_at ASC, id ASC LIMIT ?"
+      ).bind(pubkey, cs, cid, pubkey, cs, limit0).all()).results || [];
+    } catch (e) {
+      return json({ error: "Support messages are unavailable right now." }, 503);
+    }
+    var found = [];
+    var cur = { s: cs, id: cid };
+    for (var c = 0; c < crows.length; c++) {
+      cur = { s: Number(crows[c].stored_at) || 0, id: crows[c].id };
+      var cev = null;
+      try { cev = JSON.parse(crows[c].event); } catch (e) { cev = null; }
+      if (supportWrapFor(cev, pubkey, tokens)) found.push(cev);
+    }
+    return json({ events: found, cursor: cur, more: crows.length >= limit0 });
+  }
+  var since = Math.max(0, Math.floor(Number(body.since) || 0));
+  var after = body.after && typeof body.after === "object" ? body.after : null;
+  var at = after && Number.isFinite(Number(after.at)) ? Math.max(since, Math.floor(Number(after.at))) : since;
+  var skip = after && Array.isArray(after.ids)
+    ? after.ids.filter(function (x) { return typeof x === "string" && HEX64_RE.test(x); }).map(function (x) { return x.toLowerCase(); }).slice(0, SUPPORT_SKIP_MAX)
+    : [];
+  var limit = Math.min(SUPPORT_PAGE_MAX, Math.max(1, Math.floor(Number(body.limit) || SUPPORT_PAGE_MAX)));
+  var rows;
+  try {
+    rows = (await replica(env.DB_PM).prepare(
+      "SELECT id, created_at, event FROM pm WHERE pubkey = ? AND created_at >= ? ORDER BY created_at ASC LIMIT ?"
+    ).bind(pubkey, at, limit + skip.length).all()).results || [];
+  } catch (e) {
+    return json({ error: "Support messages are unavailable right now." }, 503);
+  }
+  var events = [];
+  var fresh = 0;
+  var lastAt = at;
+  var lastIds = skip.slice();
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    var rowAt = Number(row.created_at) || 0;
+    if (rowAt === at && skip.indexOf(row.id) !== -1) continue;
+    fresh++;
+    if (rowAt !== lastAt) { lastAt = rowAt; lastIds = []; }
+    lastIds.push(row.id);
+    var ev = null;
+    try { ev = JSON.parse(row.event); } catch (e) { ev = null; }
+    if (supportWrapFor(ev, pubkey, tokens)) events.push(ev);
+  }
+  var full = rows.length >= limit + skip.length && fresh > 0;
+  return json({ events: events, next: full ? { at: lastAt, ids: lastIds.slice(-SUPPORT_SKIP_MAX) } : null });
+}
+
 async function handlePmAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -1156,6 +1245,8 @@ async function handlePmAction(context, body) {
       headers: { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS }
     });
   }
+
+  if (body.action === "pm-support") return supportGet(env, body, json);
 
   var userPubkey = body.pubkey;
   if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);

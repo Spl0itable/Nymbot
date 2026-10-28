@@ -147,6 +147,34 @@ class NymbotApi {
     return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
   }
 
+  Future<Map<String, dynamic>?> supportStored(
+      String pubkey, List<String> tokens, ({int s, String id}) cursor,
+      {int limit = 100, Duration? timeout}) async {
+    try {
+      final resp = await _client
+          .post(
+            Uri.parse(NymbotConfig.storageUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': NymbotConfig.userAgent,
+            },
+            body: jsonEncode({
+              'action': 'pm-support',
+              'pubkey': pubkey,
+              'tokens': tokens,
+              'cursor': {'s': cursor.s < 0 ? 0 : cursor.s, 'id': cursor.id},
+              'limit': limit,
+            }),
+          )
+          .timeout(timeout ?? const Duration(seconds: 10));
+      if (resp.statusCode != 200) return null;
+      final data = jsonDecode(resp.body);
+      return data is Map<String, dynamic> ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<bool> markDeleted(EventSigner signer, {Duration? timeout}) async {
     try {
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;

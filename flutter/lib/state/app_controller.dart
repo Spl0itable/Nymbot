@@ -74,6 +74,7 @@ import '../services/tasks.dart';
 import '../services/team.dart';
 import 'identity.dart';
 import 'store.dart';
+import 'run_gate.dart';
 import 'transcript_book.dart';
 
 /// [read] is false when neither D1 nor the relays answered, which is not "no root".
@@ -180,15 +181,23 @@ class AppController extends ChangeNotifier {
 
   Future<({bool live, Map<String, dynamic>? run})?> _transcriptLog(
       Conversation conv, String runId, int since) async {
+    final side = conv.anon;
+    if (!runGate.ready(side)) return null;
     final signer = await _signerOf(conv);
+    if (!runGate.ready(side)) return null;
+    runGate.stamp(side);
     final res = await api.liveRuns(signer,
         thread: conv.anon && conv.rootId.isNotEmpty ? conv.rootId : null, log: runId);
+    runGate.stamp(side);
     final runs = res.data['runs'];
     final listed = res.status == 200 && runs is List ? runs : null;
     for (final r in listed ?? const []) {
       if (r is Map && r['replyTo'] == runId) return (live: true, run: r.cast<String, dynamic>());
     }
+    if (!runGate.ready(side)) return null;
+    runGate.stamp(side);
     final done = await api.doneSince(signer, (since - 60000).clamp(0, since), log: runId);
+    runGate.stamp(side);
     final ended = done.data['runs'];
     final over = done.status == 200 && ended is List ? ended : null;
     for (final r in over ?? const []) {
@@ -318,6 +327,36 @@ class AppController extends ChangeNotifier {
   bool _holdsAsk(ChatMessage m) =>
       turns.values.any((t) => t.askId == m.id || (m.wire != null && (t.msgId == m.wire || t.prepared?.chan?.run == m.wire)));
 
+  final Set<String> _stoppedRuns = {};
+
+  static const stoppedKeep = Duration(hours: 2);
+
+  String _stoppedKey(Conversation conv) => conv.anon ? 'runs_stopped:${conv.anonPk ?? 'anon'}' : 'runs_stopped';
+
+  List<Map<String, dynamic>> _stoppedHeld(Conversation conv) {
+    try {
+      final v = jsonDecode(store.getString(_stoppedKey(conv)) ?? '[]');
+      final now = DateTime.now().millisecondsSinceEpoch;
+      return [
+        for (final x in v is List ? v : const [])
+          if (x is Map && x['run'] is String && x['at'] is num && now - (x['at'] as num) < stoppedKeep.inMilliseconds) x.cast<String, dynamic>()
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _stopped(String run, [Conversation? conv]) {
+    if (run.isEmpty) return;
+    _stoppedRuns.add(run);
+    if (_stoppedRuns.length > 200) _stoppedRuns.remove(_stoppedRuns.first);
+    if (conv == null) return;
+    final kept = [..._stoppedHeld(conv).where((x) => x['run'] != run), {'run': run, 'at': DateTime.now().millisecondsSinceEpoch}];
+    unawaited(store.setString(_stoppedKey(conv), jsonEncode(kept.length > 200 ? kept.sublist(kept.length - 200) : kept)).catchError((_) {}));
+  }
+
+  bool _isStopped(Conversation conv, String run) => _stoppedRuns.contains(run) || _stoppedHeld(conv).any((x) => x['run'] == run);
+
   Future<void> recoverStored(Conversation conv, {String? exclude}) async {
     if (conv.support || identity.pubkey.isEmpty || chat.channels == null || chat.chanOffered == false) return;
     if (conv.anon && conv.anonPk == null) return;
@@ -328,7 +367,7 @@ class AppController extends ChangeNotifier {
       final m = list[i];
       final w = m.wire;
       if (m.role != ChatRole.self || m.pending != null || w == null || w.isEmpty || w == exclude || m.id == exclude) continue;
-      if (now.difference(m.at) > const Duration(hours: 24) || _holdsAsk(m)) continue;
+      if (now.difference(m.at) > const Duration(hours: 24) || _holdsAsk(m) || _isStopped(conv, w)) continue;
       if (i + 1 < list.length && (list[i + 1].role == ChatRole.bot || list[i + 1].role == ChatRole.error)) continue;
       if (list.any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) continue;
       open.add(m);
@@ -344,9 +383,14 @@ class AppController extends ChangeNotifier {
       final at = _storedAt[w];
       if (at != null && now.difference(at) < const Duration(seconds: 20)) continue;
       _storedAt[w] = now;
-      final job = _readStored(conv, m).catchError((_) {}).whenComplete(() {
+      var running = false;
+      final job = _readStored(conv, m).then((r) => running = r, onError: (_) => false).whenComplete(() {
         _storedReads.remove(w);
-        _storedAt[w] = DateTime.now();
+        if (running) {
+          _storedAt.remove(w);
+        } else {
+          _storedAt[w] = DateTime.now();
+        }
       });
       _storedReads[w] = job;
       jobs.add(job);
@@ -354,18 +398,32 @@ class AppController extends ChangeNotifier {
     if (jobs.isNotEmpty) await Future.wait(jobs);
   }
 
-  Future<void> _readStored(Conversation conv, ChatMessage m) async {
+  Future<bool> _readStored(Conversation conv, ChatMessage m) async {
     final w = m.wire!;
     final signer = conv.anon ? await anon.signer(pk: conv.anonPk) : identity.signer;
-    final res = await chat.claimChan(conv, w, signer, anonPk: conv.anon ? conv.anonPk : null, onThreadIds: _threadIdsOf(conv));
-    if (res == null || _gone || _holdsAsk(m)) return;
-    if (store.messages(conv.id).any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) return;
+    final anonPk = conv.anon ? conv.anonPk : null;
+    var running = false;
+    String? ctl;
+    var res = await chat.claimChan(conv, w, signer, anonPk: anonPk, onThreadIds: _threadIdsOf(conv), onRunning: (c) {
+      running = true;
+      ctl = c;
+    });
+    final c = ctl;
+    if (res == null && (c == null || _gone || _holdsAsk(m))) return running;
     final turn = ChatTurn(conv, askId: m.id, msgId: w);
     turn.sent = true;
     turn.model = modelOf(conv);
     turns[turn.key] = turn;
     try {
+      if (res == null && c != null) {
+        notifyListeners();
+        res = await chat.joinChan(conv, w, c, signer, anonPk: anonPk, control: turn.control, onThreadIds: _threadIdsOf(conv));
+        if (res == null) return true;
+      }
+      if (res == null || _gone) return false;
+      if (store.messages(conv.id).any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) return false;
       await _land(turn, res);
+      return false;
     } finally {
       _endTurn(turn);
     }
@@ -834,6 +892,29 @@ class AppController extends ChangeNotifier {
     };
   }
 
+  ({String label, int context, int out, List<Map> rows}) longTextModel(Conversation? conv) {
+    final cat = mentionCatalog;
+    final picked = conv?.proModel ?? ((conv?.modelPin ?? false) ? null : proModel);
+    final key = picked?['key'] is String ? picked!['key'] as String : '';
+    final rows = [
+      for (final m in (cat?['models'] as List?) ?? const [])
+        if (m is Map && m['key'] is String && m['command'] == null && (m['kind'] == null || m['kind'] == 'chat')) m
+    ];
+    Map? row;
+    for (final m in rows) {
+      if (m['key'] == key) row = m;
+    }
+    int num0(Object? v) => v is num ? v.toInt() : 0;
+    return (
+      label: row != null
+          ? (row['label'] as String? ?? key)
+          : (picked != null ? (picked['label'] as String? ?? key) : t('the standard model')),
+      context: row != null ? num0(row['context']) : (num0(cat?['standardContext']) > 0 ? num0(cat?['standardContext']) : 128000),
+      out: row != null ? num0(row['outTokens']) : (num0(cat?['standardOut']) > 0 ? num0(cat?['standardOut']) : 8192),
+      rows: rows,
+    );
+  }
+
   Map<String, dynamic>? _catalogEntry(String? key) {
     final row = catalogRow(mentionCatalog, key);
     if (row != null) return row;
@@ -1289,7 +1370,7 @@ class AppController extends ChangeNotifier {
           title: t('Nymbot support replied'),
           body: t('Open the chat to read it.')));
     }
-    _startSupport();
+    unawaited(_startSupport(stored: false));
     return true;
   }
 
@@ -1311,7 +1392,7 @@ class AppController extends ChangeNotifier {
     return supportFilter(identity.pubkey, tokens, _supportSince());
   }
 
-  void _startSupport({bool restart = false}) {
+  Future<void> _startSupport({bool restart = false, bool stored = true}) async {
     if (_supportSub != null && !restart) return;
     final filter = _supportFilter();
     if (filter == null) return;
@@ -1319,7 +1400,83 @@ class AppController extends ChangeNotifier {
     _supportSub = supportRelays.subscribe(filter, (e) {
       unawaited(receiveSupportWrap(e));
     });
-    unawaited(fetchSupport());
+    await Future.wait([fetchSupport(), if (stored) fetchSupportStored()]);
+  }
+
+  Future<void> catchUpSupport() => _startSupport(restart: true);
+
+  bool _relaysSeenUp = false;
+
+  void relaysChanged(int up) {
+    final was = relaysUp;
+    relaysUp = up;
+    if (up > 0 && was == 0 && _relaysSeenUp && _supportSub != null) {
+      unawaited(catchUpSupport());
+    }
+    if (up > 0) _relaysSeenUp = true;
+  }
+
+  Future<void>? _supportStoring;
+
+  Future<void> fetchSupportStored() {
+    final running = _supportStoring;
+    if (running != null) return running;
+    final next = _storeSupport().whenComplete(() => _supportStoring = null);
+    _supportStoring = next;
+    return next;
+  }
+
+  ({SupportCursor cursor, SupportCursor floor}) _storedPlan(String pk) {
+    Object? held;
+    try {
+      final raw = store.getString(kSupportStoredKey);
+      held = raw == null ? null : jsonDecode(raw);
+    } catch (_) {}
+    return supportStoredPlan(held, pk, _supportSince());
+  }
+
+  Future<void> _storeSupport() async {
+    final pk = identity.pubkey;
+    final tokens = supportTokens;
+    if (supportChat == null || tokens.isEmpty || pk.isEmpty) return;
+    final plan = _storedPlan(pk);
+    var cursor = plan.cursor;
+    var floor = plan.floor;
+    final handed = <String>{};
+    for (var page = 0; page < kSupportStoredPages; page++) {
+      final data = await api.supportStored(pk, tokens, cursor,
+          limit: kSupportStoredLimit);
+      final events = data?['events'];
+      final next = data?['cursor'];
+      if (data == null || events is! List || next is! Map) return;
+      final s = next['s'];
+      final id = next['id'];
+      if (s is! int || id is! String) return;
+      for (final e in events) {
+        if (e is! Map) continue;
+        final wid = e['id'];
+        if (wid is! String || wid.isEmpty || _supportWraps.contains(wid) || !handed.add(wid)) continue;
+        try {
+          unawaited(receiveSupportWrap(
+              NostrEvent.fromJson(Map<String, dynamic>.from(e))));
+        } catch (_) {}
+      }
+      await _supportChain;
+      if (identity.pubkey != pk) return;
+      if (supportStoredWalk((s: s, id: id), floor, data['more'], page)) {
+        cursor = (s: s, id: id);
+        continue;
+      }
+      cursor = supportStoredLater((s: s, id: id), floor);
+      floor = cursor;
+      await store.setString(
+          kSupportStoredKey,
+          jsonEncode({
+            'pk': pk,
+            'cursor': {'s': cursor.s, 'id': cursor.id},
+          }));
+      if (data['more'] != true) return;
+    }
   }
 
   void _stopSupport() {
@@ -1546,6 +1703,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _supportWaiting(Conversation c) {
+    if (!c.support) return false;
+    final thread = store.messages(c.id);
+    return thread.isNotEmpty && thread.last.role == ChatRole.self;
+  }
+
   /// Startup sweep of ghost chats and chats past the auto-delete window.
   Future<int> sweepOldChats() async {
     final days = settings.autoDeleteDays;
@@ -1553,7 +1716,10 @@ class AppController extends ChangeNotifier {
     final doomed = conversations
         .where((c) =>
             c.ephemeral ||
-            (days > 0 && !c.pinned && c.updatedAt.isBefore(cutoff)))
+            (days > 0 &&
+                !c.pinned &&
+                !_supportWaiting(c) &&
+                c.updatedAt.isBefore(cutoff)))
         .map((c) => c.id)
         .toList();
     if (doomed.isEmpty) return 0;
@@ -2296,14 +2462,14 @@ class AppController extends ChangeNotifier {
     held = await _putAsk(conv, held, {'state': 'sending', 'error': ''});
     final runId = a['runId'];
     if (runId is String && runId.isNotEmpty) {
-      final res = await api.answer(identity.signer, runId, '${a['id']}',
+      final res = await api.answer(await _signerOf(conv), runId, '${a['id']}',
           answers: skipped ? null : (got['answers'] as List).cast<Map<String, dynamic>>(), skipped: skipped);
       if (res.status == 200 && res.data['ok'] == true) {
         held = await _putAsk(conv, held, kept);
         final turn = ChatTurn(conv, msgId: runId);
         transcripts.begin(turn);
         transcripts.asked(turn, skipped ? 'skipped' : 'answered', held);
-        await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
+        if (!conv.anon) await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
         return;
       }
       if (res.status == 410 || res.status == 409 || res.data['expired'] == true || res.data['gone'] == true) {
@@ -2433,7 +2599,7 @@ class AppController extends ChangeNotifier {
       final signer = await _signerOf(conv);
       final via = await _steerOverChan(runId, said, signer, conv.anon ? conv.anonPk : null);
       if (via != null) {
-        steered = via;
+        steered = via == 'ok';
       } else {
         final res = await api.steerRun(signer, runId, said);
         steered = res.status == 200 && res.data['ok'] == true;
@@ -2486,14 +2652,24 @@ class AppController extends ChangeNotifier {
     held = await _putPlan(conv, held, {'state': 'sending', 'error': ''});
     final runId = p['runId'];
     if (runId is String && runId.isNotEmpty) {
-      final res = await api.answer(identity.signer, runId, '${p['id']}',
-          decision: '${got['decision']}', edits: body['edits'] is Map ? (body['edits'] as Map).cast<String, dynamic>() : null);
+      final signer = await _signerOf(conv);
+      final edits = body['edits'] is Map ? (body['edits'] as Map).cast<String, dynamic>() : null;
+      final decision = '${got['decision']}';
+      final ApiResult res = await chat.decideChan(runId, {
+        'kind': 'plan',
+        'id': '${p['id']}',
+        'ok': decision == 'approve',
+        'decision': decision,
+        'edits': ?edits,
+      }, signer)
+          ? (status: 200, data: <String, dynamic>{'ok': true, 'runId': runId})
+          : await api.answer(signer, runId, '${p['id']}', decision: decision, edits: edits);
       if (res.status == 200 && res.data['ok'] == true) {
         held = await _putPlan(conv, held, kept);
         final turn = ChatTurn(conv, msgId: runId);
         transcripts.begin(turn);
         if (stage != null) transcripts.planned(turn, stage, held);
-        await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
+        if (!conv.anon) await _trackBackground(turn, (runId: runId, until: (res.data['until'] as num?)?.toInt() ?? 0));
         return;
       }
       if (res.status == 410 || res.status == 409 || res.data['expired'] == true || res.data['gone'] == true) {
@@ -3985,7 +4161,7 @@ class AppController extends ChangeNotifier {
     signedIn = true;
     deletedElsewhere = false;
     relays.onStatus((up, _) {
-      relaysUp = up;
+      relaysChanged(up);
       notifyListeners();
     });
     relays.connect();
@@ -3998,7 +4174,7 @@ class AppController extends ChangeNotifier {
     await openStartingChat();
     notifyListeners();
     unawaited(replyNotify.attach());
-    _startSupport();
+    unawaited(_startSupport());
 
     _watchDeleted();
     sync.onChange = _afterSync;
@@ -4085,7 +4261,7 @@ class AppController extends ChangeNotifier {
       artifacts = store.artifacts(open.id);
     }
     if (touched.contains('chat-$kSupportChatId')) _supportSeen = null;
-    _startSupport(restart: touched.contains('supportTokens'));
+    unawaited(_startSupport(restart: touched.contains('supportTokens')));
     notifyListeners();
   }
 
@@ -4107,6 +4283,8 @@ class AppController extends ChangeNotifier {
     _pendingTimer?.cancel();
     _runsTimer?.cancel();
     _runsSettle?.cancel();
+    _anonRunsTimer?.cancel();
+    _nymRunsTimer?.cancel();
     _farTimer?.cancel();
     _bgTimer?.cancel();
     for (final turn in turns.values) {
@@ -4958,20 +5136,36 @@ class AppController extends ChangeNotifier {
   }
 
   final Set<String> _starting = {};
-  final List<Completer<void>> _endWaiters = [];
+  final List<(String, Completer<void>)> _endWaiters = [];
   final Map<String, ChatTurn> _parked = {};
   Timer? _pendingTimer;
   bool _flushing = false;
 
-  int get _slotsUsed => turns.values.where((t) => t.holdsSlot).length;
+  String _poolOf(ChatTurn t) => t.conv.anon ? t.conv.id : '';
+
+  int _slotsUsedIn(String pool) => turns.values.where((t) => t.holdsSlot && _poolOf(t) == pool).length;
+
+  @visibleForTesting
+  Future<void> takeSlotForTest(ChatTurn turn) => _takeSlot(turn);
+
+  @visibleForTesting
+  Future<bool> waitForRoomForTest(ChatTurn turn, int limit) => _waitForRoom(turn, limit);
+
+  @visibleForTesting
+  void finishTurnForTest(ChatTurn turn) {
+    turns[turn.key] = turn;
+    _endTurn(turn);
+  }
 
   Future<void> _takeSlot(ChatTurn turn, {bool force = false}) async {
     if (turn.holdsSlot) return;
+    final pool = _poolOf(turn);
     bool ahead() => turns.values.any((o) =>
         !identical(o, turn) &&
         o.slotWait != null &&
+        _poolOf(o) == pool &&
         o.began.isBefore(turn.began));
-    while (!force && !turn.stopped && (_slotsUsed >= runLimit || ahead())) {
+    while (!force && !turn.stopped && (_slotsUsedIn(pool) >= runLimit || ahead())) {
       turn.phase = 'slot';
       turn.status = t('Waiting for a free slot');
       notifyListeners();
@@ -4989,9 +5183,12 @@ class AppController extends ChangeNotifier {
   void _wakeSlots() {
     final waiting = turns.values.where((t) => t.slotWait != null).toList()
       ..sort((a, b) => a.began.compareTo(b.began));
-    var free = runLimit - _slotsUsed;
+    final free = <String, int>{};
     for (final w in waiting) {
-      if (free-- <= 0) break;
+      final pool = _poolOf(w);
+      final left = free[pool] ??= runLimit - _slotsUsedIn(pool);
+      if (left <= 0) continue;
+      free[pool] = left - 1;
       final gate = w.slotWait;
       w.slotWait = null;
       if (gate != null && !gate.isCompleted) gate.complete();
@@ -5036,6 +5233,8 @@ class AppController extends ChangeNotifier {
     }
     _endTurn(turn);
     if (!told) return;
+    _stopped(turn.runId, turn.conv);
+    _stopped(turn.prepared?.chan?.run ?? '', turn.conv);
     final prepared = turn.prepared;
     if (prepared != null) {
       unawaited(_keepStoppedBranches(turn.conv, prepared).catchError((_) {}));
@@ -5053,12 +5252,22 @@ class AppController extends ChangeNotifier {
   Future<void> _keepStoppedBranches(
       Conversation conv, PreparedTurn prepared) async {
     if (!reposOf(conv).any((r) => r.allowWrites && r.jobBranches)) return;
+    final run = prepared.chan?.runId;
     final until = DateTime.now().add(stoppedBranchWait);
     var i = 0;
     while (!_gone && DateTime.now().isBefore(until)) {
       final step = claimBackoff[math.min(i++, claimBackoff.length - 1)];
       await Future<void>.delayed(step + Jitter.next(step ~/ 4));
       if (_gone || !DateTime.now().isBefore(until)) return;
+      if (run != null) {
+        final got = await _stoppedChanMark(conv, run, prepared);
+        if (!got.done) continue;
+        final mark = got.mark;
+        if (mark != null) {
+          await rememberBranches(_conversationById(conv.id) ?? conv, mark);
+        }
+        return;
+      }
       final res = await api.claimRun(prepared.signer, prepared.eventId);
       final data = res.data;
       if (res.status == 0 || res.status == 202 || data['pending'] == true) {
@@ -5070,6 +5279,17 @@ class AppController extends ChangeNotifier {
         await rememberBranches(_conversationById(conv.id) ?? conv, mark);
       }
       return;
+    }
+  }
+
+  Future<({bool done, Map<String, dynamic>? mark})> _stoppedChanMark(
+      Conversation conv, String run, PreparedTurn prepared) async {
+    try {
+      final got = await chat.claimChan(conv, run, prepared.signer,
+          anonPk: prepared.anonPk);
+      return (done: got != null, mark: got?.checkpoint);
+    } on ChatFailure catch (e) {
+      return (done: true, mark: e.checkpoint);
     }
   }
 
@@ -5085,8 +5305,9 @@ class AppController extends ChangeNotifier {
     if (turn.holdsSlot) turn.holdsSlot = false;
     _wakeSlots();
     if (ended) {
-      final waiters = [..._endWaiters];
-      _endWaiters.clear();
+      final pool = _poolOf(turn);
+      final waiters = [for (final w in _endWaiters) if (w.$1 == pool) w.$2];
+      _endWaiters.removeWhere((w) => w.$1 == pool);
       for (final w in waiters) {
         if (!w.isCompleted) w.complete();
       }
@@ -5762,8 +5983,6 @@ class AppController extends ChangeNotifier {
     await store.saveConversations(conversations);
   }
 
-  // Late replies
-
   static const _claimsKey = 'pending_claims';
 
   List<Map<String, dynamic>> _storedClaims() {
@@ -6016,8 +6235,6 @@ class AppController extends ChangeNotifier {
     if (turn.phase != 'claiming') _endTurn(turn);
   }
 
-  // The run cap
-
   VoidCallback? onBuy;
 
   static List<String> runCapChoices(Map<String, dynamic> cap) {
@@ -6095,7 +6312,7 @@ class AppController extends ChangeNotifier {
 
   Future<bool> _waitForRoom(ChatTurn turn, int limit) async {
     final ended = Completer<void>();
-    _endWaiters.add(ended);
+    _endWaiters.add((_poolOf(turn), ended));
     final until = DateTime.now().add(slotWaitFor);
     final signer = turn.prepared?.signer ?? await _signerOf(turn.conv);
     var i = 0;
@@ -6113,14 +6330,20 @@ class AppController extends ChangeNotifier {
       if (turn.stopped || _gone) return false;
       if (ended.isCompleted) return true;
       if (DateTime.now().isAfter(until)) return false;
+      final side = turn.conv.anon;
+      if (!side && _anonShown) continue;
+      if (!runGate.ready(side)) {
+        runGate.hold(side);
+        continue;
+      }
+      runGate.stamp(side);
       final res = await api.liveRuns(signer);
+      runGate.stamp(side);
       final runs = res.data['runs'];
       if (res.status == 200 && runs is List && runs.length < limit) return true;
     }
     return false;
   }
-
-  // Steering
 
   final Map<String, String> _steered = {};
   final Map<String, _FarSteer> _farSteers = {};
@@ -6131,9 +6354,17 @@ class AppController extends ChangeNotifier {
 
   Future<bool?> Function(String text, Conversation conv)? onSteerMissed;
 
-  Future<bool?> _steerOverChan(String runId, String body, EventSigner signer, String? anonPk) async {
-    if (chat.chanRun(runId) != null) return chat.steerChan(runId, body, signer, anonPk: anonPk);
-    if (chat.chanSeen && RegExp(r'^[0-9a-f]{64}$').hasMatch(runId) && await chat.steerChan(runId, body, signer, anonPk: anonPk)) return true;
+  Future<String?> _steerOverChan(String runId, String body, EventSigner signer, String? anonPk) async {
+    if (chat.chanRun(runId) != null) {
+      final got = await chat.steerChan(runId, body, signer, anonPk: anonPk);
+      return got == 'lost' ? 'failed' : got;
+    }
+    final sealed = _sealedRuns.contains(runId);
+    if ((chat.chanSeen || sealed) && RegExp(r'^[0-9a-f]{64}$').hasMatch(runId)) {
+      final got = await chat.steerChan(runId, body, signer, anonPk: anonPk, sealed: sealed);
+      if (got != 'lost') return got;
+      if (sealed) return 'finished';
+    }
     return null;
   }
 
@@ -6144,16 +6375,17 @@ class AppController extends ChangeNotifier {
     for (final t in turns.values) {
       if (t.runId == runId) local = t;
     }
+    if (local == null && conv == null && _anonRuns.any((r) => r.replyTo == runId)) return 'failed';
     final owner = local?.conv ?? conv;
     final signer = local?.prepared?.signer ??
         (owner != null ? await _signerOf(owner) : identity.signer);
     final anonPk = owner != null && owner.anon ? owner.anonPk : null;
     final via = await _steerOverChan(runId, body, signer, anonPk);
-    if (via == false) return 'failed';
-    if (via == true) {
+    if (via == 'ok') {
       transcripts.steered(runId, body, convId: owner?.id);
       return 'ok';
     }
+    if (via != null) return via;
     final res = await api.steerRun(signer, runId, body);
     if (res.status == 200 && res.data['ok'] == true) {
       transcripts.steered(runId, body, convId: owner?.id);
@@ -6189,7 +6421,11 @@ class AppController extends ChangeNotifier {
         _farTimer = null;
         return;
       }
-      if (_runsTimer == null) unawaited(refreshRuns());
+      if (_runsTimer != null) return;
+      final open = current;
+      final anonShown = open != null && open.anon;
+      final due = _farSteers.values.any((s) => s.signer.pubkey == identity.pubkey ? !anonShown : open?.id == s.convId);
+      if (due) unawaited(refreshRuns());
     });
   }
 
@@ -6204,7 +6440,7 @@ class AppController extends ChangeNotifier {
       final signers = <String, EventSigner>{};
       _farSteers.forEach((id, s) {
         if (live.contains(s.runId)) return;
-        if (s.signer.pubkey != identity.pubkey && current?.id != s.convId) return;
+        if (s.signer.pubkey == identity.pubkey ? current?.anon == true : current?.id != s.convId) return;
         groups.putIfAbsent(s.signer.pubkey, () => []).add(id);
         signers[s.signer.pubkey] = s.signer;
       });
@@ -6212,7 +6448,11 @@ class AppController extends ChangeNotifier {
       final convs = <String, Conversation?>{};
       for (final entry in groups.entries) {
         final ids = entry.value.take(20).toList();
+        final side = entry.key != identity.pubkey;
+        if (!runGate.ready(side)) continue;
+        runGate.stamp(side);
         final res = await api.steerStatus(signers[entry.key]!, ids);
+        runGate.stamp(side);
         final states = res.data['states'];
         if (res.status != 200 || states is! Map) continue;
         for (final id in ids) {
@@ -6476,7 +6716,7 @@ class AppController extends ChangeNotifier {
     if (_following || backgroundRuns.isEmpty || !identity.present) return;
     _following = true;
     try {
-      await refreshRuns();
+      if (!await _refreshNymRuns()) return;
       final listed = <String, Map>{..._runsRaw};
       final missing = [
         for (final r in backgroundRuns)
@@ -6487,7 +6727,10 @@ class AppController extends ChangeNotifier {
                 .map((r) => r.startedAt)
                 .reduce((a, b) => a < b ? a : b) -
             60000;
+        if (_anonShown) return;
+        runGate.stamp(false);
         final res = await api.doneSince(identity.signer, since);
+        runGate.stamp(false);
         final ended = res.data['runs'];
         if (res.status == 200 && ended is List) {
           for (final r in ended) {
@@ -6534,7 +6777,10 @@ class AppController extends ChangeNotifier {
     final legs = BackgroundJobs.legsOf(r['legs']);
     for (final leg in legs) {
       if (run.claimed.contains(leg)) continue;
+      if (_anonShown) return;
+      runGate.stamp(false);
       final got = await api.claimRun(identity.signer, leg);
+      runGate.stamp(false);
       if (got.status == 202 || got.status <= 0 || got.data['pending'] == true) {
         break;
       }
@@ -6840,12 +7086,21 @@ class AppController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // Runs on any device
-
   List<RemoteRun> remoteRuns = [];
   int _runsWatchers = 0;
   Timer? _runsTimer;
   static Duration runsReconcile = const Duration(seconds: 30);
+  static Duration get anonRunsGap => RunGate.gap;
+  static set anonRunsGap(Duration v) => RunGate.gap = v;
+  static Duration get anonRunsSpread => RunGate.spread;
+  static set anonRunsSpread(Duration v) => RunGate.spread = v;
+  static int Function(int top)? get anonRunsDraw => RunGate.draw;
+  static set anonRunsDraw(int Function(int top)? v) => RunGate.draw = v;
+  late final RunGate runGate = RunGate(shown: (anon) => _anonShown == anon);
+  Timer? _anonRunsTimer;
+  Timer? _nymRunsTimer;
+  List<RemoteRun> _mineRuns = [];
+  List<RemoteRun> _anonRuns = [];
   static const _endedGrace = Duration(seconds: 60);
   static const _endedKeep = Duration(hours: 1);
   static const _runsResume = Duration(seconds: 60);
@@ -6873,43 +7128,163 @@ class AppController extends ChangeNotifier {
     );
   }
 
+  final Set<String> _sealedRuns = {};
+
+  Future<List<RemoteRun>> _unsealRuns(List raw, EventSigner signer, {String? anonPk, bool anon = false}) async {
+    final out = <RemoteRun>[];
+    for (final r in raw) {
+      final run = remoteRunOf(r);
+      if (run == null) continue;
+      final sealed = (r as Map)['sealed'];
+      if (sealed is! Map) {
+        out.add(run);
+        continue;
+      }
+      _sealedRuns.add(run.replyTo);
+      if (_sealedRuns.length > 200) _sealedRuns.remove(_sealedRuns.first);
+      runGate.stamp(anon);
+      final o = await chat.openSealedRun(run.replyTo, sealed, signer, anonPk: anonPk);
+      if (o != null && o.ended) continue;
+      if (o == null) {
+        out.add(run);
+        continue;
+      }
+      final plan = o.plan;
+      out.add((
+        replyTo: run.replyTo,
+        thread: run.thread,
+        kind: run.kind,
+        label: o.label.isNotEmpty ? o.label : run.label,
+        progress: o.progress.isNotEmpty ? o.progress : run.progress,
+        plan: plan != null && plan.isNotEmpty ? plan : run.plan,
+        state: run.state,
+        startedAt: run.startedAt,
+        updatedAt: run.updatedAt,
+        branches: run.branches,
+        background: run.background,
+        until: run.until,
+      ));
+    }
+    return out;
+  }
+
   Future<void> refreshRuns() async {
     if (!signedIn && identity.pubkey.isEmpty) return;
-    _runsPolledAt = DateTime.now().millisecondsSinceEpoch;
-    final res = await api.liveRuns(identity.signer);
-    final list = res.data['runs'];
     final open = current;
-    final ask = open != null && open.anon && open.rootId.isNotEmpty ? open : null;
-    List? theirs;
-    if (ask != null) {
-      await Jitter.wait();
-      final got = await api.liveRuns(await _signerOf(ask), thread: ask.rootId);
-      final raw = got.data['runs'];
-      if (got.status == 200 && raw is List) {
-        theirs = [
-          for (final r in raw)
-            if (r is Map && r['thread'] == ask.rootId) r,
-        ];
-      }
+    if (open != null && open.anon) {
+      await _refreshAnonRuns(open);
+      return;
     }
-    if (res.status != 200 || list is! List) return;
+    await _refreshNymRuns();
+  }
+
+  bool get _anonShown => current?.anon ?? false;
+
+  Future<bool> _refreshNymRuns() async {
+    final open = current;
+    if (open != null && open.anon) return false;
+    if (!runGate.ready(false)) {
+      _nymRunsLater();
+      return false;
+    }
+    _runsPolledAt = DateTime.now().millisecondsSinceEpoch;
+    runGate.stamp(false);
+    final res = await api.liveRuns(identity.signer);
+    runGate.stamp(false);
+    final list = res.data['runs'];
+    if (res.status != 200 || list is! List) return true;
     _runsRaw = {
       for (final r in list)
         if (r is Map && r['replyTo'] is String) r['replyTo'] as String: r,
     };
-    final mine = list.map(remoteRunOf).whereType<RemoteRun>().toList();
-    final others = (theirs ?? const []).map(remoteRunOf).whereType<RemoteRun>().toList();
+    final mine = await _unsealRuns(list, identity.signer);
+    runGate.stamp(false);
     for (final r in mine) {
       for (final b in r.branches) {
         await rememberBranchStep(b);
       }
     }
-    for (final r in others) {
-      for (final b in r.branches) {
-        await rememberBranchStep(b, conv: ask);
-      }
+    _mineRuns = mine;
+    _anonRuns = [];
+    _publishRuns(false);
+    return true;
+  }
+
+  Future<void> _refreshAnonRuns(Conversation ask) async {
+    if (ask.rootId.isEmpty) return;
+    if (!runGate.ready(true)) {
+      _anonRunsLater(ask);
+      if (_farSteers.isNotEmpty) unawaited(_checkFarSteers());
+      return;
     }
-    final runs = [...mine, ...others];
+    _runsPolledAt = DateTime.now().millisecondsSinceEpoch;
+    await Jitter.wait();
+    if (_gone || current?.id != ask.id) return;
+    final signer = await _signerOf(ask);
+    if (!runGate.ready(true)) {
+      _anonRunsLater(ask);
+      return;
+    }
+    runGate.stamp(true);
+    final got = await api.liveRuns(signer, thread: ask.rootId);
+    runGate.stamp(true);
+    final raw = got.data['runs'];
+    if (got.status == 200 && raw is List) {
+      final theirs = await _unsealRuns([
+        for (final r in raw)
+          if (r is Map && r['thread'] == ask.rootId) r,
+      ], signer, anonPk: ask.anonPk, anon: true);
+      runGate.stamp(true);
+      for (final r in theirs) {
+        for (final b in r.branches) {
+          await rememberBranchStep(b, conv: ask);
+        }
+      }
+      _anonRuns = theirs;
+    } else {
+      _anonRuns = [for (final r in _anonRuns) if (r.thread == ask.rootId) r];
+    }
+    _publishRuns(true);
+  }
+
+  ({int due, int wait}) _laterWait(bool side) {
+    final due = runGate.hold(side);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final theirs = runGate.due(!side);
+    final wait = due > 0 ? math.max(0, due - now) : (theirs > now ? theirs - now : anonRunsGap.inMilliseconds);
+    return (due: due, wait: wait);
+  }
+
+  void _nymRunsLater() {
+    final (:due, :wait) = _laterWait(false);
+    if (_nymRunsTimer != null || _gone) return;
+    _nymRunsTimer = Timer(Duration(milliseconds: wait), () {
+      _nymRunsTimer = null;
+      final open = current;
+      if (_gone || (open != null && open.anon) || _runsWatchers <= 0) {
+        runGate.release(false, due);
+        return;
+      }
+      unawaited(_refreshNymRuns());
+    });
+  }
+
+  void _anonRunsLater(Conversation ask) {
+    final (:due, :wait) = _laterWait(true);
+    if (_anonRunsTimer != null || _gone) return;
+    _anonRunsTimer = Timer(Duration(milliseconds: wait), () {
+      _anonRunsTimer = null;
+      final open = current;
+      if (_gone || open == null || open.id != ask.id) {
+        runGate.release(true, due);
+        return;
+      }
+      unawaited(_refreshAnonRuns(open));
+    });
+  }
+
+  void _publishRuns([bool? side]) {
+    final runs = [..._mineRuns, ..._anonRuns];
     for (final r in runs) {
       for (final t in turns.values) {
         if (t.runId == r.replyTo) {
@@ -6919,7 +7294,8 @@ class AppController extends ChangeNotifier {
       }
     }
     remoteRuns = [for (final r in runs) if (!_endedHere(r)) r];
-    transcripts.remote(remoteRuns, _runsRaw, chatOfThread, _isLocal);
+    transcripts.remote(remoteRuns, _runsRaw, chatOfThread, _isLocal,
+        readable: side == null ? null : (c) => c.anon == side && (!side || current?.id == c.id));
     notifyListeners();
     _reconcileRuns();
     if (_farSteers.isNotEmpty) unawaited(_checkFarSteers());
@@ -6998,14 +7374,15 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> stopRemote(RemoteRun run) async {
+    final anon = _anonRuns.any((r) => r.replyTo == run.replyTo);
     remoteRuns = remoteRuns.where((r) => r.replyTo != run.replyTo).toList();
     notifyListeners();
     final conv = chatOfThread(run.thread);
+    _stopped(run.replyTo, conv == null || anon != conv.anon ? null : conv);
+    if (anon && (conv == null || !conv.anon)) return;
     final signer = conv != null ? await _signerOf(conv) : identity.signer;
     await api.cancelRun(signer, run.replyTo);
   }
-
-  // Offline sends
 
   List<ChatMessage> pendingIn(Conversation conv) =>
       [for (final m in _messagesOf(conv)) if (m.pending != null) m];
@@ -7899,10 +8276,15 @@ class AppController extends ChangeNotifier {
   Future<void> resumed() async {
     if (!signedIn || identity.pubkey.isEmpty) return;
     if (await checkDeleted()) return;
+    final h = ChanHooks(runGate, () => identity.pubkey, () {
+      final c = current;
+      return c != null && c.anon ? (c.anonPk ?? '') : identity.pubkey;
+    });
+    chat.channels?.resumed(shown: h.shown, slot: h.slot, ready: h.ready, acted: h.acted);
     _resumeRuns();
     if (_entered) relays.wake();
     if (_entered) unawaited(sync.kick());
-    if (_entered) unawaited(fetchSupport());
+    if (_entered) unawaited(catchUpSupport());
     await refreshNotices();
     await refreshBalance();
     await resumeInvoice();
@@ -8117,7 +8499,6 @@ class AppController extends ChangeNotifier {
       ? (proTier ? anonProBalance : anonStandardBalance)
       : (proTier ? proBalance : standardBalance);
 
-  /// True only once the balances are known and neither the nym nor any throwaway key holds credits.
   bool get freeOnly {
     final standard = standardBalance, pro = proBalance;
     if (standard == null || pro == null) return false;
@@ -8381,7 +8762,8 @@ class AppController extends ChangeNotifier {
   static const String deletedFreshKey = 'deletedLoginFresh';
   static const int deletedSkewSec = 600;
   Timer? _deletedTimer;
-  bool _deletedBusy = false;
+  Future<bool>? _deletedCheck;
+  String _deletedCheckFor = '';
   bool _deleting = false;
 
   int deletedLoginAt() => store.getInt(deletedLoginKey);
@@ -8424,11 +8806,21 @@ class AppController extends ChangeNotifier {
 
   bool deletedElsewhere = false;
 
-  Future<bool> checkDeleted() async {
-    if (_deleting || _deletedBusy) return false;
+  Future<bool> checkDeleted() {
+    if (_deleting) return Future.value(true);
     final pubkey = identity.pubkey;
-    if (pubkey.isEmpty) return false;
-    _deletedBusy = true;
+    if (pubkey.isEmpty) return Future.value(false);
+    final pending = _deletedCheck;
+    if (pending != null && _deletedCheckFor == pubkey) return pending;
+    _deletedCheckFor = pubkey;
+    late final Future<bool> check;
+    check = _askDeleted(pubkey).whenComplete(() {
+      if (identical(_deletedCheck, check)) _deletedCheck = null;
+    });
+    return _deletedCheck = check;
+  }
+
+  Future<bool> _askDeleted(String pubkey) async {
     try {
       await noteDeletedLogin();
       final answer = await api.deletedMark(identity.signer);
@@ -8453,8 +8845,6 @@ class AppController extends ChangeNotifier {
       return true;
     } catch (_) {
       return false;
-    } finally {
-      _deletedBusy = false;
     }
   }
 
@@ -8539,6 +8929,8 @@ class AppController extends ChangeNotifier {
     _parked.clear();
     _offlineHeld.clear();
     remoteRuns = [];
+    _mineRuns = [];
+    _anonRuns = [];
     _farSteers.clear();
     signedIn = false;
     _entered = false;

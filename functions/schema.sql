@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS pm (
   PRIMARY KEY (pubkey, id)
 );
 CREATE INDEX IF NOT EXISTS pm_pubkey_created ON pm (pubkey, created_at DESC);
+CREATE INDEX IF NOT EXISTS pm_pubkey_stored ON pm (pubkey, stored_at, id);
 
 CREATE TABLE IF NOT EXISTS shares (
   hash TEXT NOT NULL,

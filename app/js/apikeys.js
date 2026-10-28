@@ -596,6 +596,7 @@
             row.dataset.key = k.id;
             const main = el('div', 'repo-main');
             const name = el('span', 'repo-name', k.name || t('Untitled'));
+            if (k.name) name.dataset.i18nSkip = '';
             main.appendChild(name);
             const hint = el('span', 'repo-sub api-key-hint', k.hint || '');
             hint.dataset.i18nSkip = '';

@@ -630,3 +630,30 @@ Uint8List channelDecodeFrame(String text) {
     throw ChannelError('malformed');
   }
 }
+
+Future<String> channelControlOpen({
+  required Uint8List c,
+  required String dir,
+  required String run,
+  required String userPk,
+  required String blob,
+}) async {
+  if (c.length != 32 || (dir != 'c2s' && dir != 's2c') || run.isEmpty || !_hex64.hasMatch(userPk)) {
+    throw ChannelError('malformed');
+  }
+  final b = channelDecodeFrame(blob);
+  if (b.length < 1 + 12 + _tagLen || b[0] != channelVersion) throw ChannelError('malformed');
+  final aad = _concat([_label('/ctl $dir'), hexToBytes(userPk), _utf8(run)]);
+  List<int> out;
+  try {
+    out = await _aead.decrypt(
+      SecretBox(Uint8List.sublistView(b, 13, b.length - _tagLen),
+          nonce: Uint8List.sublistView(b, 1, 13), mac: Mac(Uint8List.sublistView(b, b.length - _tagLen))),
+      secretKey: SecretKey(c),
+      aad: aad,
+    );
+  } catch (_) {
+    throw ChannelError('tamper');
+  }
+  return utf8.decode(out, allowMalformed: true);
+}

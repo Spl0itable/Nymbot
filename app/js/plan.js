@@ -494,16 +494,21 @@
             const Api = window.NymbotApi;
             const payload = { runId: m.proposal.runId, pendingId: body.id, decision: body.decision };
             if (body.edits) payload.edits = body.edits;
+            const own = Api.chatSigner(conv);
+            const cc = window.NymbotChat && window.NymbotChat.channel ? window.NymbotChat.channel() : null;
+            const chan = { kind: 'plan', id: String(body.id || ''), ok: body.decision === 'approve', decision: String(body.decision) };
+            if (body.edits) chan.edits = body.edits;
             let res;
             try {
-                res = await Api.call('pm-answer', payload, { timeout: 20000 });
+                if (cc && cc.holds(payload.runId) && await cc.decide(payload.runId, chan, true)) res = { status: 200, data: { ok: true, runId: payload.runId, via: 'channel' } };
+                else res = own.ok ? await Api.call('pm-answer', payload, { timeout: 20000, signer: own.signer }) : { status: 0, data: {} };
             } catch (_) {
                 res = { status: 0, data: {} };
             }
             const data = (res && res.data) || {};
             if (res && res.status === 200 && data.ok) {
                 const done = this.patch(ui, conv.id, m, kept);
-                if (window.NymbotBackground) window.NymbotBackground.answered(ui, conv, done, data);
+                if (window.NymbotBackground && !conv.anon) window.NymbotBackground.answered(ui, conv, done, data);
                 return;
             }
             if (res && (res.status === 410 || data.expired || (res.status === 409 && data.gone))) {

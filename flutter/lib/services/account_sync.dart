@@ -21,6 +21,7 @@ import 'nostr/event_signer.dart';
 import 'storage_sync.dart';
 import 'support_thread.dart';
 import 'task_transcript.dart';
+import 'wire_limits.dart';
 
 class AccountSync {
   AccountSync({
@@ -48,6 +49,7 @@ class AccountSync {
   static const int rowMaxBytes = 240000;
 
   static const int rowHardBytes = 880000;
+  static const int longRowBytes = 435904;
 
   static const int sealMaxBytes = 900000;
 
@@ -286,9 +288,117 @@ class AccountSync {
     return changed ? {...m, 'attachments': attachments} : m;
   }
 
+  static Map<String, dynamic> _shortened(Map<String, dynamic> m) {
+    final text = m['content'] is String ? m['content'] as String : '';
+    if (text.length * 3 + 2048 <= rowHardBytes ~/ 2) return m;
+    if (utf8.encode(jsonEncode(m)).length <= rowHardBytes ~/ 2) return m;
+    final keep = rowHardBytes ~/ 8;
+    final prior = m['cut'] is num ? (m['cut'] as num).toInt() : 0;
+    return {
+      ...m,
+      'content': WireLimits.head(text, keep),
+      'cut': prior > 0 ? prior : utf8.encode(text).length,
+      if (prior <= 0) 'long': WireLimits.split(text, longRowBytes).length,
+    };
+  }
+
+  static const String _longPrefix = 'long-';
+
+  static String longKey(String chatId, String msgId, int index) =>
+      '$_longPrefix${jsonEncode([chatId, msgId, index])}';
+
+  static List<Object?>? _longKeyOf(String key) {
+    if (!key.startsWith(_longPrefix)) return null;
+    try {
+      final v = jsonDecode(key.substring(_longPrefix.length));
+      if (v is List && v.length == 3 && v[0] is String && v[1] is String && v[2] is int) return v;
+    } catch (_) {}
+    return null;
+  }
+
+  static Map<String, dynamic> _longRows(
+      String chatId, List<ChatMessage> full, List<Map<String, dynamic>> sent) {
+    final out = <String, dynamic>{};
+    final byId = {for (final m in full) m.id: m};
+    for (final m in sent) {
+      final id = m['id'];
+      final n = m['long'] is num ? (m['long'] as num).toInt() : 0;
+      final cut = m['cut'] is num ? (m['cut'] as num).toInt() : 0;
+      if (id is! String || n < 2 || cut <= 0) continue;
+      final own = byId[id];
+      if (own == null || own.cut > 0) continue;
+      final pieces = WireLimits.split(own.content, longRowBytes);
+      if (pieces.length != n) continue;
+      for (var i = 0; i < pieces.length; i++) {
+        out[longKey(chatId, id, i + 1)] = {
+          'id': chatId,
+          'x': id,
+          'part': [i + 1, n],
+          'of': cut,
+          'text': pieces[i],
+        };
+      }
+    }
+    return out;
+  }
+
+  static Map<String, _LongJoin> _longSets(Map<String, dynamic> remote) {
+    final sets = <String, _LongJoin>{};
+    for (final key in remote.keys) {
+      final k = _longKeyOf(key);
+      final row = remote[key];
+      if (k == null || row is! Map || row['text'] is! String || row['part'] is! List) continue;
+      final part = row['part'] as List;
+      if (part.length != 2 || part[0] is! num || part[1] is! num) continue;
+      final i = (part[0] as num).toInt();
+      final n = (part[1] as num).toInt();
+      final of = row['of'] is num ? (row['of'] as num).toInt() : -1;
+      if (row['id'] != k[0] || row['x'] != k[1] || i != k[2] || n < 2 || i < 1 || i > n) continue;
+      final set = sets.putIfAbsent(
+          '${k[0]}\n${k[1]}', () => _LongJoin(k[0] as String, k[1] as String, n, of));
+      if (set.n != n || set.of != of) {
+        set.bad = true;
+        continue;
+      }
+      set.parts[i] = row['text'] as String;
+    }
+    final out = <String, _LongJoin>{};
+    sets.forEach((id, set) {
+      if (set.bad || set.parts.length != set.n) return;
+      final b = StringBuffer();
+      for (var i = 1; i <= set.n; i++) {
+        b.write(set.parts[i]);
+      }
+      final text = b.toString();
+      if (utf8.encode(text).length != set.of) return;
+      set.text = text;
+      out[id] = set;
+    });
+    return out;
+  }
+
+  static List<Map<String, dynamic>> _rejoined(
+      String chatId, List<Map<String, dynamic>> msgs, Map<String, _LongJoin> joined,
+      {bool needLong = true}) {
+    if (joined.isEmpty) return msgs;
+    return [
+      for (final m in msgs)
+        () {
+          final cut = m['cut'] is num ? (m['cut'] as num).toInt() : 0;
+          final n = m['long'] is num ? (m['long'] as num).toInt() : 0;
+          final got = joined['$chatId\n${m['id']}'];
+          if (cut <= 0 || got == null || got.of != cut || (needLong && got.n != n)) return m;
+          final copy = {...m, 'content': got.text};
+          copy.remove('cut');
+          copy.remove('long');
+          return copy;
+        }(),
+    ];
+  }
+
   static List<Map<String, dynamic>> fitMessages(
       List<Map<String, dynamic>> msgs) {
-    final list = [...msgs];
+    final list = [for (final m in msgs) _shortened(m)];
     var total = 64;
     final sizes = [
       for (final m in list) utf8.encode(jsonEncode(m)).length + 1,
@@ -422,7 +532,7 @@ class AccountSync {
       if (id is! String || id.isEmpty) continue;
       if (graves.containsKey(id)) continue;
       final held = out[id];
-      if (held == null || _stamp(record) >= _stamp(held)) out[id] = record;
+      if (held == null || (_stamp(record) >= _stamp(held) && !(record['cut'] != null && held['cut'] == null))) out[id] = record;
     }
     return out.values.toList();
   }
@@ -807,6 +917,8 @@ class AccountSync {
       final tx = fitTranscripts(entry, _store.transcripts(conv.id));
       if (tx.isNotEmpty) entry['transcripts'] = [for (final x in tx) x.toJson()];
       out['chat-${conv.id}'] = entry;
+      out.addAll(_longRows(
+          conv.id, kept, (entry['messages'] as List).cast<Map<String, dynamic>>()));
     }
     final knownRows = {..._names.values, ..._remote.keys};
     for (final conv in chats) {
@@ -1035,6 +1147,8 @@ class AccountSync {
       touched.add('supportTokens');
     }
 
+    final joined = _longSets(remote);
+    final joinedChats = <String>{};
     for (final key in remote.keys) {
       if (!key.startsWith('chat-') || _alreadyApplied(remote, key)) continue;
       await _breathe();
@@ -1043,9 +1157,11 @@ class AccountSync {
       final id = entry['id'];
       if (id is! String || id.isEmpty) continue;
       if (graves.containsKey(id) || _store.isGhost(id)) continue;
+      joinedChats.add(id);
       final mine = _store.messages(id);
-      final theirs = _maps(entry['messages']);
-      final mineWire = [for (final m in mine) _msgToWire(m, null)];
+      final theirs = _rejoined(id, _maps(entry['messages']), joined);
+      final mineWire = _rejoined(id, [for (final m in mine) _msgToWire(m, null)], joined,
+          needLong: false);
       final merged = keepLocal(
               _mergeById(
                 mineWire,
@@ -1075,6 +1191,20 @@ class AccountSync {
           if (!touched.contains(key)) touched.add(key);
         }
       }
+    }
+
+    for (final set in joined.values) {
+      if (joinedChats.contains(set.chat) || graves.containsKey(set.chat) || _store.isGhost(set.chat)) {
+        continue;
+      }
+      final mine = _store.messages(set.chat);
+      if (!mine.any((m) => m.id == set.x && m.cut > 0)) continue;
+      await _store.saveMessages(set.chat, [
+        for (final m in _rejoined(set.chat, [for (final m in mine) _msgToWire(m, null)], joined,
+            needLong: false))
+          _msgFromWire(m)
+      ]);
+      touched.add('chat-${set.chat}');
     }
 
     for (final key in remote.keys) {
@@ -1360,6 +1490,20 @@ class AccountSync {
     return false;
   }
 
+  Future<bool> _drop(String dTag, {int? gen}) async {
+    if (blocked) return false;
+    _load();
+    final category = categoryFor(dTag);
+    final ok = await _storage.settingsDelete(_identity.signer, category: category);
+    if (!ok || (gen != null && !_live(gen))) return false;
+    _hashes.remove(category);
+    _names.remove(category);
+    _prints.remove(category);
+    _remote.remove(dTag);
+    rejected.remove(dTag);
+    return true;
+  }
+
   Future<({Object? value})?> _mergeFor(
       String dTag, String category, int? gen) async {
     final at = gen ?? _gen;
@@ -1503,10 +1647,17 @@ class AccountSync {
       if (!applied.isCompleted) applied.complete(SyncRound.ok(touched));
 
       final known = {...remote.keys, ..._names.values};
+      final drop = <String>{};
       void emptied(Map<String, dynamic> into) {
         for (final key in known) {
           if (key.startsWith('chat-') && !into.containsKey(key)) {
             into[key] = {'id': '', 'messages': const []};
+          }
+          final lk = _longKeyOf(key);
+          if (lk != null &&
+              !into.containsKey(key) &&
+              !_store.messages(lk[0] as String).any((m) => m.id == lk[1])) {
+            drop.add(key);
           }
         }
       }
@@ -1555,6 +1706,14 @@ class AccountSync {
           if (sent || _tooLong(entry.key, entry.value)) {
             _prints[categoryFor(entry.key)] = _print(bare[entry.key]);
           }
+        }
+        for (final key in drop) {
+          if (!_live(gen)) return stale;
+          if (clockStarted.elapsed > pushBudget) {
+            _again = true;
+            break;
+          }
+          await _drop(key, gen: gen);
         }
       } finally {
         if (_live(gen)) await _saveHashes();
@@ -1643,4 +1802,15 @@ class SyncRound {
   final List<String> touched;
 
   bool get isOk => state == 'ok';
+}
+
+class _LongJoin {
+  _LongJoin(this.chat, this.x, this.n, this.of);
+  final String chat;
+  final String x;
+  final int n;
+  final int of;
+  final Map<int, String> parts = {};
+  bool bad = false;
+  String text = '';
 }

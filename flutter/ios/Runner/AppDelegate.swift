@@ -22,7 +22,17 @@ import UserNotifications
     ) { _ in
       ShareInbox.drain()
     }
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(duoRegionsMayHaveChanged),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  @objc private func duoRegionsMayHaveChanged() {
+    DuoRegionProbe.refresh()
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -108,6 +118,9 @@ import UserNotifications
         KeyBackupCloud.handle(call, result: result)
       }
     }
+    if let registrar = registry.registrar(forPlugin: "NymbotDuoRegions") {
+      DuoRegionProbe.register(with: registrar.messenger())
+    }
     if let registrar = registry.registrar(forPlugin: "NymbotLinks") {
       registrar.addSceneDelegate(SceneLinks.shared)
     }
@@ -162,6 +175,101 @@ final class SceneLinks: NSObject, FlutterSceneLifeCycleDelegate {
 }
 
 class SceneDelegate: FlutterSceneDelegate {}
+
+final class DuoRegionProbe: UIView {
+  private static var channel: FlutterMethodChannel?
+  private static weak var probe: DuoRegionProbe?
+  private var geometryWatch: NSKeyValueObservation?
+  private var last: [[Double]]?
+
+  static func register(with messenger: FlutterBinaryMessenger) {
+    let made = FlutterMethodChannel(name: "ai.nymbot/duo_regions", binaryMessenger: messenger)
+    made.setMethodCallHandler { call, result in
+      guard call.method == "current" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let probe = install()
+      probe?.last = probe?.rects()
+      result(probe?.last)
+    }
+    channel = made
+  }
+
+  static func refresh() {
+    install()?.report()
+  }
+
+  private static func install() -> DuoRegionProbe? {
+    guard #available(iOS 27.1, *) else { return nil }
+    if let probe = probe, probe.superview != nil { return probe }
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let host = scenes.lazy.compactMap { scene in
+      scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+    }.first
+    guard let root = host?.rootViewController?.view else { return nil }
+    let made = DuoRegionProbe(frame: root.bounds)
+    made.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    made.isUserInteractionEnabled = false
+    made.backgroundColor = .clear
+    made.accessibilityElementsHidden = true
+    root.insertSubview(made, at: 0)
+    probe = made
+    return made
+  }
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    if #available(iOS 27.1, *) {
+      _ = registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) {
+        (probe: DuoRegionProbe, _: UITraitCollection) in
+        probe.report()
+      }
+    }
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  override class var requiresConstraintBasedLayout: Bool { true }
+
+  override func updateConstraints() {
+    report()
+    super.updateConstraints()
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    setNeedsUpdateConstraints()
+    geometryWatch = nil
+    if #available(iOS 27.1, *), let scene = window?.windowScene {
+      geometryWatch = scene.observe(\.effectiveGeometry, options: [.new]) { [weak self] _, _ in
+        DispatchQueue.main.async { self?.report() }
+      }
+    }
+    report()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    report()
+  }
+
+  private func rects() -> [[Double]]? {
+    guard #available(iOS 27.1, *), let root = superview else { return nil }
+    return reservedRegions(kind: .occlusion).map { region in
+      let frame = convert(region.frame, to: root)
+      return [Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)]
+    }
+  }
+
+  private func report() {
+    guard let rects = rects(), rects != last else { return }
+    last = rects
+    DuoRegionProbe.channel?.invokeMethod("regions", arguments: rects)
+  }
+}
 
 enum Intents {
   private static var channel: FlutterMethodChannel?

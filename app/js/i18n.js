@@ -8,6 +8,8 @@
     const SKIP_ELEMENTS = new Set(['SCRIPT', 'STYLE', 'SVG', 'PRE', 'CODE', 'TEXTAREA']);
     const TEXT_ATTRIBUTES = ['alt', 'title', 'placeholder', 'aria-label', 'data-tip'];
     const MT_URL = '/api/proxy?action=translate';
+    const CATALOG_URL = '/app/i18n/catalog.json';
+    const NO_CATALOG = '00000000';
     const MT_BATCH = 25;
     const MT_CHARS = 18000;
     const MT_MAX = 5000;
@@ -15,6 +17,14 @@
     const RENDERED_MAX = 3000;
     const PROTECTED = new Set(['Nymbot', 'Nymchat', 'Nostr', 'Zapstore', 'App Store', 'Google Play', 'TestFlight', '21 Million LLC']);
     const TOKEN = /\{\w+\}|<[^<>]+>|&[#\w]+;/g;
+    const USER_CONTENT = '[data-i18n-skip], .msg-text, .msg-attachments, .search-sub, .task-child, .run-plan, .model-title';
+    const USER_DATA = [
+        /https?:\/\/|www\./i,
+        /[\w.+-]+@[\w-]+\.[a-z]{2,}/i,
+        /\b(?:npub|nsec|note|nevent|nprofile|naddr|lnurl|lnbc)1[02-9ac-hj-np-z]{8,}/i,
+        /\b[0-9a-f]{12,}\b/i,
+        /\b[\w-]+\.(?:jpe?g|png|gif|webp|heic|heif|avif|mp4|mov|m4v|webm|mkv|pdf|zip|rar|7z|txt|csv|json|docx?|xlsx?|pptx?|mp3|m4a|aac|wav|ogg|opus|flac|apk|ipa|dmg|exe)\b/i
+    ];
 
     function fill(text, vars) {
         if (!vars) return text;
@@ -46,19 +56,18 @@
     }
 
     function wordy(text) {
-        return text.length <= MT_MAX && /\p{L}{2}/u.test(text) && !PROTECTED.has(text);
+        return text.length <= MT_MAX && /\p{L}{2}/u.test(text) && !PROTECTED.has(text) && !USER_DATA.some((re) => re.test(text));
     }
 
     function skipped(el) {
-        return !!el && !!el.closest && !!el.closest('[data-i18n-skip], .msg-text');
+        return !!el && !!el.closest && !!el.closest(USER_CONTENT);
     }
 
     function walkText(root, visit) {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
             acceptNode: (node) => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
-                    if (SKIP_ELEMENTS.has(node.tagName) || node.tagName === 'NOSCRIPT' || node.hasAttribute('data-i18n-skip')
-                        || node.classList.contains('msg-text') || node.isContentEditable) {
+                    if (SKIP_ELEMENTS.has(node.tagName) || node.tagName === 'NOSCRIPT' || node.matches(USER_CONTENT) || node.isContentEditable) {
                         return NodeFilter.FILTER_REJECT;
                     }
                 }
@@ -77,7 +86,7 @@
         const selector = TEXT_ATTRIBUTES.map((a) => `[${a}]`).join(',');
         const scope = root.nodeType === Node.ELEMENT_NODE && root.matches(selector) ? [root] : [];
         for (const el of [...scope, ...root.querySelectorAll(selector)]) {
-            if (el.closest('[data-i18n-skip]')) continue;
+            if (el.closest(USER_CONTENT)) continue;
             for (const attr of TEXT_ATTRIBUTES) {
                 const value = el.getAttribute(attr);
                 if (value) visit(el, attr, value);
@@ -111,6 +120,7 @@
         sources: new Set(),
         statics: staticSources(),
         rendered: new Map(),
+        catalog: NO_CATALOG,
 
         pick(published) {
             const stored = (() => {
@@ -142,8 +152,23 @@
             } catch (_) { return []; }
         },
 
+        async catalogHash() {
+            let resp;
+            try { resp = await fetch(CATALOG_URL, { cache: 'no-cache' }); } catch (_) { return null; }
+            if (resp.status === 404) return NO_CATALOG;
+            if (!resp.ok) return null;
+            try {
+                const data = await resp.json();
+                return data && typeof data.hash === 'string' && /^[0-9a-f]{8}$/.test(data.hash) ? data.hash : NO_CATALOG;
+            } catch (_) { return NO_CATALOG; }
+        },
+
+        cacheKey() {
+            return this.catalog == null ? null : 'c' + this.catalog;
+        },
+
         async init() {
-            this.available = await this.published();
+            [this.available, this.catalog] = await Promise.all([this.published(), this.catalogHash()]);
             this.lang = this.pick(this.available.map((l) => l.code));
             if (this.lang === 'en') return this.settle();
             try {
@@ -173,14 +198,15 @@
         loadMt(lang) {
             try {
                 const raw = JSON.parse(localStorage.getItem(this.mtKey(lang)) || 'null');
-                if (raw && raw.v === C.version && raw.m && typeof raw.m === 'object') return raw.m;
-                if (raw) localStorage.removeItem(this.mtKey(lang));
+                if (raw && (this.catalog == null || raw.v === this.cacheKey()) && raw.m && typeof raw.m === 'object') return raw.m;
+                if (raw && this.catalog != null) localStorage.removeItem(this.mtKey(lang));
             } catch (_) { }
             return {};
         },
 
         saveMt() {
-            try { localStorage.setItem(this.mtKey(this.lang), JSON.stringify({ v: C.version, m: this.mt })); } catch (_) { }
+            if (this.catalog == null) return;
+            try { localStorage.setItem(this.mtKey(this.lang), JSON.stringify({ v: this.cacheKey(), m: this.mt })); } catch (_) { }
         },
 
         lookup(source) {

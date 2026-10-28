@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../duo_rail.dart';
+
 Future<T?> showNymSheet<T>(
   BuildContext context,
   WidgetBuilder builder, {
@@ -10,7 +12,8 @@ Future<T?> showNymSheet<T>(
       isScrollControlled: isScrollControlled,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (context) => KeyboardInset(child: Builder(builder: builder)),
+      builder: (context) =>
+          DuoSheetMark(child: KeyboardInset(child: Builder(builder: builder))),
     );
 
 Future<T?> showNymDialog<T>({

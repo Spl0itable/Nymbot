@@ -124,8 +124,11 @@ ok(shared.length > 20,
      'in its own script, so a reader who cannot read the current one still finds it');
 
   const written = (await readdir(outDir)).sort();
-  ok(written.join(',') === 'es.json,index.json',
-     'the pack and the index are written, and nothing else', written);
+  ok(written.join(',') === 'catalog.json,es.json,index.json',
+     'the pack, the index and the catalog hash are written, and nothing else', written);
+  const { catalogHash } = await import('../catalog-key.mjs');
+  ok(JSON.parse(await readFile(path.join(outDir, 'catalog.json'), 'utf8')).hash === catalogHash(sources),
+     'the catalog hash is the hash of the strings the packs are made from');
   const index = JSON.parse(await readFile(path.join(outDir, 'index.json'), 'utf8'));
   ok(Array.isArray(index) && index.length === 1, 'the index is the list the app fetches');
   const pack = JSON.parse(await readFile(path.join(outDir, 'es.json'), 'utf8'));
@@ -148,7 +151,7 @@ ok(shared.length > 20,
   ok(empty.stdout === '0', 'an empty cache publishes nothing');
   ok(JSON.parse(await readFile(path.join(emptyDir, 'index.json'), 'utf8')).length === 0,
      'and still writes an index, so the app boots into English instead of erroring');
-  ok((await readdir(emptyDir)).join(',') === 'index.json', 'and no pack beside it');
+  ok((await readdir(emptyDir)).sort().join(',') === 'catalog.json,index.json', 'and no pack beside it, only the catalog hash');
 
   await rm(scratch, { recursive: true, force: true });
 }
@@ -232,6 +235,20 @@ const dartI18n = await readFile(path.join(root, 'flutter/lib/features/i18n/i18n.
   const index = await readFile(path.join(root, 'flutter/assets/i18n/index.json'), 'utf8');
   ok(Array.isArray(JSON.parse(index)),
      'and an index is committed, so a checkout that has never been built still bundles');
+}
+
+{
+  const { catalogHash } = await import('../catalog-key.mjs');
+  const want = catalogHash(flutter.sources);
+  let shipped = null;
+  try {
+    shipped = JSON.parse(await readFile(path.join(root, 'flutter/assets/i18n/catalog.json'), 'utf8')).hash;
+  } catch (_) { }
+  ok(shipped === want,
+     'the Flutter app ships the hash of the strings in its lib as assets/i18n/catalog.json, so its translation cache resets exactly when they change',
+     JSON.stringify({ shipped, want, write: { hash: want } }));
+  const tracked = (await run('git', ['ls-files', 'flutter/assets/i18n/catalog.json'], { cwd: root })).stdout.trim();
+  ok(tracked !== '', 'and the mirror commits that file, so it is the Flutter app\'s own copy and not a build output');
 }
 
 console.log(fail === 0 ? '\napp translation: all assertions passed' : `\n${fail} FAILURES`);

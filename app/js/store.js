@@ -710,8 +710,9 @@
 
         sweepOldChats(days) {
             const cutoff = Date.now() - (days || 0) * 86400000;
+            const waiting = (c) => c.support && (this.messages(c.id).slice(-1)[0] || {}).role === 'self';
             const doomed = this.conversations().filter(c => c.ephemeral
-                || (days > 0 && !c.pinned && (c.updatedAt || 0) < cutoff));
+                || (days > 0 && !c.pinned && !waiting(c) && (c.updatedAt || 0) < cutoff));
             for (const conv of doomed) this.deleteConversation(conv.id);
             return doomed.length;
         },

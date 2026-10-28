@@ -315,6 +315,7 @@ html[data-motion="reduce"] *::after {
 .btn-danger { border-color: var(--danger); color: var(--danger); }
 .btn-ghost { color: var(--text-dim); }
 .btn-small { padding: 0.35rem 0.7rem; font-size: 0.85rem; }
+.modal-card .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
 .btn-brand {
     display: inline-flex;
@@ -1371,8 +1372,8 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 }
 .chat-message.self .msg-actions { justify-content: flex-end; }
 .chat-message:hover .msg-actions,
-.chat-message:focus-within .msg-actions,
 .msg-actions.is-open { opacity: 1; }
+.chat-message:has(:focus-visible) .msg-actions { opacity: 1; }
 
 /* No hover on touch, so the row is revealed by tapping the bubble. */
 @media (pointer: coarse) {
@@ -1390,26 +1391,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
         flex-wrap: wrap;
         gap: 0.15rem 0.35rem;
     }
-}
-
-@media not all and (pointer: coarse) {
-    .msg-actions {
-        position: absolute;
-        top: 0;
-        inset-inline-end: 0;
-        z-index: 5;
-        flex-basis: auto;
-        flex-wrap: nowrap;
-        margin-top: 0;
-        padding: 1px;
-        border: 1px solid var(--line-strong);
-        border-radius: 8px;
-        background: var(--bg-raised);
-        pointer-events: none;
-    }
-    html:not([data-bubbles="off"]) .chat-message.self .msg-actions { inset-inline-start: 0; inset-inline-end: auto; }
-    .chat-message:hover .msg-actions,
-    .chat-message:focus-within .msg-actions { pointer-events: auto; }
 }
 
 .msg-action {
@@ -1985,8 +1966,6 @@ pre.code code { background: none; padding: 0; font-size: inherit; white-space: p
 .artifact-card-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .artifact-card-main strong { color: var(--text); font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-card-main span { font-size: 0.74rem; color: var(--text-faint); }
-
-/* Tasks */
 
 .tasks-btn { position: relative; }
 .tasks-btn.is-open { color: var(--primary); }
@@ -3102,3 +3081,13 @@ html[data-motion="reduce"] .tasks-btn.is-running::after, html[data-motion="reduc
 .delete-done h2 { margin: 0; font-size: 1.3rem; }
 .delete-done p { margin: 0; line-height: 1.5; color: var(--text-dim); }
 .delete-done .btn { margin-top: 8px; min-width: 140px; }
+
+.msg-more {
+    margin-top: 6px;
+}
+
+.msg-cut {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--secondary);
+}

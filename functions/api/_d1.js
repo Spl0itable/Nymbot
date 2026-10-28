@@ -209,20 +209,23 @@ async function repairBotWraps(db) {
 }
 
 // `ok` separates "not stored" from "store unreachable"; only the latter justifies a relay fetch.
+var BOT_WRAPS_KEEP_MS = 90 * 86400 * 1000;
+
 export async function botWrapsGet(db, pk, ids) {
   var out = {};
   if (!hasD1(db)) return { ok: false, rows: out };
   if (!ids || ids.length === 0) return { ok: true, rows: out };
   var ph = ids.map(function () { return "?"; }).join(",");
-  var sql = "SELECT id, json, root, msg, misses FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ")";
+  var sql = "SELECT id, json, root, msg, misses FROM botpm_wraps WHERE pubkey = ? AND id IN (" + ph + ") AND stored_at >= ?";
+  var keepFloor = Date.now() - BOT_WRAPS_KEEP_MS;
   var rs = null;
   try {
-    rs = await db.prepare(sql).bind(pk, ...ids).all();
+    rs = await db.prepare(sql).bind(pk, ...ids, keepFloor).all();
   } catch (e) {
     noteWrapErr(e);
     await repairBotWraps(db);
     try {
-      rs = await db.prepare(sql).bind(pk, ...ids).all();
+      rs = await db.prepare(sql).bind(pk, ...ids, keepFloor).all();
     } catch (e2) {
       noteWrapErr(e2);
       return { ok: false, rows: out };
@@ -275,11 +278,11 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
       "DELETE FROM botpm_wraps WHERE pubkey = ? AND id NOT IN (" + ph + ")"
     ).bind(pk, ...keepIds));
   }
-  if (!stmts.length) return;
+  if (!stmts.length) return true;
   try {
     await db.batch(stmts);
     botWrapsDiag.ok++;
-    return;
+    return true;
   } catch (e) {
     noteWrapErr(e);
   }
@@ -287,8 +290,10 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
   try {
     await db.batch(stmts);
     botWrapsDiag.ok++;
+    return true;
   } catch (e2) {
     noteWrapErr(e2);
+    return false;
   }
 }
 

@@ -156,30 +156,61 @@
             }
         },
 
-        async chanStatus(rec, cc) {
+        gate() {
+            const R = window.NymbotRuns;
+            return R && R.gate ? R.gate : null;
+        },
+
+        anonShown(ui) {
+            return !!(ui && ui.conv && ui.conv.anon);
+        },
+
+        held(ui) {
+            if (this.anonShown(ui)) return true;
+            const G = this.gate();
+            if (!G || G.ready('nym')) return false;
+            G.hold('nym');
+            return true;
+        },
+
+        async nymRead(ui, send) {
+            if (this.anonShown(ui)) return null;
+            const G = this.gate();
+            if (G) G.stamp('nym');
+            try { return await send(); } finally { if (G) G.stamp('nym'); }
+        },
+
+        async chanStatus(ui, rec, cc) {
             let res;
-            try { res = await Api().call('pm-claim', { run: rec.runId }, { timeout: 15000 }); } catch (_) { return null; }
+            try { res = await this.nymRead(ui, () => Api().call('pm-claim', { run: rec.runId }, { timeout: 15000 })); } catch (_) { return null; }
+            if (res === null) return { held: true };
             const data = res && res.status === 200 ? res.data : null;
             if (!data || !Array.isArray(data.wraps)) return null;
-            const done = data.wraps.filter(w => w && w.phase === 'done' && w.wrap && w.wrap.id);
+            const wraps = data.wraps.filter(w => w && w.wrap && w.wrap.id);
+            const tail = wraps.slice(wraps.map(w => w.phase).lastIndexOf('live') + 1);
+            const handed = tail.findIndex(w => w.phase === 'done' || w.phase === 'park');
+            const done = handed < 0 ? [] : tail.slice(handed + 1).filter(w => w.phase === 'done');
             if (!this._chanWraps) this._chanWraps = new Map();
             for (const w of done) this._chanWraps.set('cw:' + w.wrap.id, w.wrap);
             const running = data.phase === 'bg' || data.phase === 'live';
             if (!running) cc.forget(rec.runId);
-            return { state: running ? 'running' : 'done', legs: done.slice(1).map(w => 'cw:' + w.wrap.id), listed: running };
+            return { state: running ? 'running' : 'done', legs: done.map(w => 'cw:' + w.wrap.id), listed: running };
         },
 
-        async status(rec) {
+        async status(ui, rec) {
+            if (this.held(ui)) return { held: true };
             const cc = Chat().channel ? Chat().channel() : null;
-            if (cc && cc.live(rec.runId)) return this.chanStatus(rec, cc);
+            if (cc && cc.live(rec.runId)) return this.chanStatus(ui, rec, cc);
             try {
                 const fresh = Date.now() - (this._logAt.get(rec.runId) || 0) >= this.LOG_MS;
+                const live = await this.nymRead(ui, () => Api().call('pm-runs', fresh ? { log: rec.runId } : {}, { timeout: 10000 }));
+                if (live === null) return { held: true };
                 if (fresh) this._logAt.set(rec.runId, Date.now());
-                const live = await Api().call('pm-runs', fresh ? { log: rec.runId } : {}, { timeout: 10000 });
                 const runs = live && live.status === 200 && live.data && Array.isArray(live.data.runs) ? live.data.runs : null;
                 const hit = runs ? runs.find(r => r && r.replyTo === rec.runId) : null;
                 if (hit) return { state: LIVE.has(hit.state) ? hit.state : 'running', legs: this.legIds(hit.legs), listed: true, log: hit.log };
-                const done = await Api().call('pm-done-since', { since: Math.max(0, (Number(rec.at) || Date.now()) - 60000), log: rec.runId }, { timeout: 10000 });
+                const done = await this.nymRead(ui, () => Api().call('pm-done-since', { since: Math.max(0, (Number(rec.at) || Date.now()) - 60000), log: rec.runId }, { timeout: 10000 }));
+                if (done === null) return { held: true };
                 const ended = done && done.status === 200 && done.data && Array.isArray(done.data.runs) ? done.data.runs : null;
                 const end = ended ? ended.find(r => r && r.replyTo === rec.runId) : null;
                 if (end) return { state: String(end.state || ''), legs: this.legIds(end.legs), listed: false, log: end.log };
@@ -199,7 +230,7 @@
             try {
                 res = chanWrap
                     ? { status: 200, data: (await Chat().chanData(Store().conversation(rec.convId), chanWrap)) || {} }
-                    : await Api().claimRun(legId, { controller: turn.controller });
+                    : await this.nymRead(ui, () => Api().claimRun(legId, { controller: turn.controller }));
             } catch (_) {
                 return chanWrap ? { skip: true } : { wait: true };
             }
@@ -244,14 +275,15 @@
                 await this.wait(turn, this.POLL_MS);
                 if (turn.stopped) break;
                 if (Date.now() > (Number(rec.until) || 0) + KEEP_MS) { end = { end: 'lost' }; break; }
-                const seen = await this.status(rec);
+                const seen = await this.status(ui, rec);
                 if (turn.stopped) break;
-                if (!seen) continue;
+                if (!seen || seen.held) continue;
                 if (window.NymbotTranscripts) window.NymbotTranscripts.server(ui, turn, seen);
                 let waiting = false;
                 const over = seen.state === 'failed' || seen.state === 'stopped' || seen.state === 'expired';
                 for (const leg of seen.legs) {
                     if (claimed.has(leg)) continue;
+                    if (this.anonShown(ui)) { waiting = true; break; }
                     const got = await this.claimLeg(ui, turn, rec, leg);
                     if (turn.stopped) break;
                     if (got.wait && !over) { waiting = true; break; }
@@ -350,7 +382,13 @@
         },
 
         async recheck(ui, rec) {
-            const seen = await this.status(rec);
+            const seen = await this.status(ui, rec);
+            if (seen && seen.held) {
+                setTimeout(() => {
+                    if (this.runs().some(r => r.runId === rec.runId && r.waiting)) this.recheck(ui, rec).catch(() => { });
+                }, this.POLL_MS);
+                return;
+            }
             if (!seen || !seen.state || seen.state === 'awaiting') return;
             const conv = Store().conversation(rec.convId);
             if (!conv) return;

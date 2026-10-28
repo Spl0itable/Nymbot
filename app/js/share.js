@@ -283,7 +283,9 @@
                     img.alt = a.name || '';
                     chip.appendChild(img);
                 }
-                chip.appendChild(el('span', null, a.name || t('file')));
+                const fileName = el('span', null, a.name || t('file'));
+                if (a.name) fileName.dataset.i18nSkip = '';
+                chip.appendChild(fileName);
                 tray.appendChild(chip);
                 if (a.kind === 'text' && typeof a.text === 'string') {
                     const pre = el('pre', 'share-file', a.text);

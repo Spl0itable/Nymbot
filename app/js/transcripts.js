@@ -16,7 +16,7 @@
     const SYNC_MAX_CHARS = 200000;
     const FLUSH_MS = 1000;
     const POLL_MS = 5000;
-    const LOG_EVERY_MS = 30000;
+    const tune = { logEvery: 30000 };
     const HEX = /^[0-9a-f]{64}$/;
     const KINDS = ['chat', 'research', 'team', 'repo', 'connector', 'server-run', 'media', 'compare'];
     const ENDS = ['completed', 'failed', 'canceled'];
@@ -785,7 +785,20 @@
         return changed;
     }
 
-    function remote(ui, list) {
+    function sideOf(conv) {
+        return conv && conv.anon ? 'anon' : 'nym';
+    }
+
+    function readable(ui, conv, side) {
+        if (!side || !conv || sideOf(conv) !== side) return false;
+        return side === 'nym' || !!(ui && ui.conv && ui.conv.id === conv.id);
+    }
+
+    function gateOf() {
+        return window.NymbotRuns && window.NymbotRuns.gate;
+    }
+
+    function remote(ui, list, side) {
         const now = Date.now();
         for (const r of list || []) {
             if (!r || !HEX.test(String(r.replyTo || ''))) continue;
@@ -796,13 +809,14 @@
             const tx = remoteTx(conv.id, r);
             if (tx.end) continue;
             noteRemote(tx, r, now);
-            if (now - (fetched.get(tx.id) || 0) > LOG_EVERY_MS) refresh(tx).catch(() => { });
+            if (readable(ui, conv, side) && now - (fetched.get(tx.id) || 0) > tune.logEvery) refresh(tx).catch(() => { });
         }
         for (const tx of [...live.values()]) {
             if (tx.end || !tx.run || tx.id !== tx.run) continue;
+            if (!readable(ui, Store() ? Store().conversation(tx.conv) : null, side)) continue;
             if ((list || []).some(r => r && r.replyTo === tx.run)) continue;
             if (ui && ui.turns && [...ui.turns.values()].some(x => x.runId === tx.run)) continue;
-            if (now - (fetched.get(tx.id) || 0) <= LOG_EVERY_MS) continue;
+            if (now - (fetched.get(tx.id) || 0) <= tune.logEvery) continue;
             refresh(tx).catch(() => { });
         }
     }
@@ -810,14 +824,22 @@
     async function fetchLog(conv, runId, since) {
         const signer = signerFor(conv);
         if (conv && conv.anon && !signer) return null;
+        const G = gateOf();
+        const side = sideOf(conv);
+        if (!G || !G.ready(side)) return null;
         const opts = { timeout: 10000, signer };
         const body = { log: runId };
         if (conv && conv.anon && conv.rootId) body.thread = conv.rootId;
+        G.stamp(side);
         let res = await Api().call('pm-runs', body, opts);
+        G.stamp(side);
         const runs = res && res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : null;
         const hit = runs ? runs.find(r => r && r.replyTo === runId) : null;
         if (hit) return { live: true, run: hit };
+        if (!G.ready(side)) return null;
+        G.stamp(side);
         res = await Api().call('pm-done-since', { since: Math.max(0, (Number(since) || Date.now()) - 60000), log: runId }, opts);
+        G.stamp(side);
         const ended = res && res.status === 200 && res.data && Array.isArray(res.data.runs) ? res.data.runs : null;
         const done = ended ? ended.find(r => r && r.replyTo === runId) : null;
         if (done) return { live: false, run: done };
@@ -1214,6 +1236,8 @@
     }
 
     window.NymbotTranscripts = {
+        get LOG_EVERY_MS() { return tune.logEvery; },
+        set LOG_EVERY_MS(v) { tune.logEvery = Number(v) || 30000; },
         Core,
         SYNC_MAX_CHARS,
         begin,

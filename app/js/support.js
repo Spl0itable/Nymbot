@@ -8,12 +8,17 @@
     const NT = () => window.NostrTools;
     const Wire = () => window.NymbotWire;
     const PQ = () => window.NymbotPQ;
+    const Edge = () => window.NymbotEdge;
 
     const ID = 'support';
     const TAG = 'nymbot-support';
     const TOKENS_KEY = 'supportTokens';
     const CURSOR_KEY = 'supportCursor';
     const SEEN_KEY = 'supportSeen';
+    const STORED_KEY = 'supportStored';
+    const STORED_PAGES = 4;
+    const STORED_LIMIT = 100;
+    const STORED_OVERLAP_MS = 60000;
     const TOKENS_MAX = 4;
     const SEEN_MAX = 1000;
     const LOOKBACK_SEC = 2 * 86400;
@@ -55,6 +60,7 @@
         _chain: Promise.resolve(),
         _wraps: new Set(),
         _resumeBound: false,
+        _storing: null,
         viewing: () => false,
         changed: () => { },
         replied: () => { },
@@ -67,8 +73,9 @@
             if (!this._resumeBound) {
                 this._resumeBound = true;
                 document.addEventListener('visibilitychange', () => {
-                    if (!document.hidden) this.refresh();
+                    if (!document.hidden) this.catchUp();
                 });
+                window.addEventListener('online', () => this.catchUp());
             }
             this.start();
         },
@@ -168,7 +175,7 @@
             return { kinds: [1059], '#p': [Identity.pubkey], '#t': tokens, since: this.since() };
         },
 
-        start() {
+        start(opts) {
             const filter = this.filter();
             if (!filter) {
                 this.stop();
@@ -179,7 +186,89 @@
             this.stop();
             this._key = key;
             this._unsub = Relays.subscribe(filter, (event) => this.receive(event));
+            if (!(opts && opts.quiet)) this.stored().catch(() => { });
             return true;
+        },
+
+        catchUp() {
+            if (!this.filter()) return Promise.resolve(0);
+            this.stop();
+            return this.refresh();
+        },
+
+        storedPlanFrom(held, pk, since) {
+            const mine = held && typeof held === 'object' && held.pk === pk;
+            const c = mine && held.cursor && typeof held.cursor === 'object' ? held.cursor : null;
+            if (c && Number.isSafeInteger(c.s) && c.s >= 0 && typeof c.id === 'string' && (c.id === '' || HEX64.test(c.id))) {
+                return { cursor: { s: Math.max(0, c.s - STORED_OVERLAP_MS), id: '' }, floor: { s: c.s, id: c.id } };
+            }
+            const at = mine ? Number(held.at) || 0 : 0;
+            const was = mine ? Number(held.since) : NaN;
+            const from = at && Number.isFinite(was) && held.after && typeof held.after === 'object' ? was
+                : at ? at - LOOKBACK_SEC : since;
+            const s = Math.max(0, Math.floor(from)) * 1000;
+            return { cursor: { s, id: '' }, floor: { s, id: '' } };
+        },
+
+        storedLater(next, floor) {
+            const ahead = next.s > floor.s || (next.s === floor.s && next.id > floor.id);
+            return ahead ? { s: next.s, id: next.id } : { s: floor.s, id: floor.id };
+        },
+
+        storedWalk(next, floor, more, page) {
+            const ahead = next.s > floor.s || (next.s === floor.s && next.id > floor.id);
+            return more === true && !ahead && page < STORED_PAGES - 2;
+        },
+
+        storedPlan(pk) {
+            return this.storedPlanFrom(Store.read(STORED_KEY, null), pk, this.since());
+        },
+
+        stored() {
+            if (this._storing) return this._storing;
+            const pk = Identity.pubkey;
+            const tokens = this.tokens().map(x => x.token);
+            if (!pk || !tokens.length || !this.thread() || !C.apiHost || !Edge()) return Promise.resolve(0);
+            const plan = this.storedPlan(pk);
+            const run = async () => {
+                let cursor = plan.cursor;
+                let floor = plan.floor;
+                const handed = new Set();
+                let got = 0;
+                for (let page = 0; page < STORED_PAGES; page++) {
+                    let data = null;
+                    try {
+                        const resp = await Edge().fetch('https://' + C.apiHost + '/api/storage', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'pm-support', pubkey: pk, tokens, cursor, limit: STORED_LIMIT })
+                        });
+                        data = resp && resp.ok ? await resp.json() : null;
+                    } catch (_) { data = null; }
+                    const next = data && data.cursor;
+                    if (!data || !Array.isArray(data.events) || !next || !Number.isSafeInteger(next.s) || typeof next.id !== 'string') return got;
+                    for (const event of data.events) {
+                        const id = event && typeof event.id === 'string' ? event.id : '';
+                        if (!id || handed.has(id) || this._wraps.has(id)) continue;
+                        handed.add(id);
+                        this.receive(event);
+                        got++;
+                    }
+                    await this._chain;
+                    if (Identity.pubkey !== pk) return got;
+                    if (this.storedWalk(next, floor, data.more, page)) {
+                        cursor = { s: next.s, id: next.id };
+                        continue;
+                    }
+                    cursor = this.storedLater(next, floor);
+                    floor = cursor;
+                    Store.write(STORED_KEY, { pk, cursor });
+                    if (data.more !== true) return got;
+                }
+                return got;
+            };
+            this._storing = run().finally(() => { this._storing = null; });
+            return this._storing;
         },
 
         stop() {
@@ -276,7 +365,7 @@
             if (role === 'bot' && o.incoming) {
                 try { this.replied(msg, { watching }); } catch (_) { }
             }
-            this.start();
+            this.start({ quiet: true });
             return msg;
         },
 

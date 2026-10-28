@@ -217,7 +217,7 @@ console.log(`  ${documents.length} pages: ${documents.map((d) => d.slug ?? "/").
   const app = await buildPacks((await appSources()).sources);
   await writePacks(path.join(outDir, "app", "i18n"), app);
   const flutter = await buildPacks((await flutterSources()).sources);
-  await writePacks("flutter/assets/i18n", flutter);
+  await writePacks("flutter/assets/i18n", { ...flutter, catalog: null });
   const say = (label, built) => `${label}: ${built.packs.size} languages`
     + (built.partial.length ? `, ${built.partial.length} incomplete` : "");
   console.log(`  ${say("app packs", app)}; ${say("flutter packs", flutter)}`);

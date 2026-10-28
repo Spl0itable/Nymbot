@@ -2704,7 +2704,7 @@ var AUTH_REPLAY_ACTIONS = [
   "voucher-issue", "voucher-redeem", "gift-create", "gift-redeem", "gift-cancel",
   "pm-revert", "git-apply", "git-branch", "runner-run", "site-check", "mcp-probe",
   "shop-set-active", "shop-buy-invoice", "shop-claim", "shop-transfer", "shop-redeem",
-  "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
+  "settings-set", "settings-delete", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
   "channel-delete", "zap-put", "pm-answer", "panic-mark"
 ];
 
@@ -2713,7 +2713,7 @@ function authPayloadRequired(action) {
 }
 
 var AUTH_REPLAY_SOFT = [
-  "mcp-probe", "settings-set", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
+  "mcp-probe", "settings-set", "settings-delete", "account-purge", "profile-set", "pm-put", "pm-deposit", "pm-delete",
   "channel-delete", "zap-put"
 ];
 
