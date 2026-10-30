@@ -110,6 +110,7 @@ class Store {
   int getInt(String key, {int fallback = 0}) => _prefs.getInt(key) ?? fallback;
   Future<void> setInt(String key, int value) => _prefs.setInt(key, value);
   Future<void> remove(String key) => _prefs.remove(key);
+  Iterable<String> keysStartingWith(String prefix) => _prefs.getKeys().where((k) => k.startsWith(prefix));
 
   AppSettings settings() {
     final raw = _prefs.getString('appSettings');
@@ -328,13 +329,56 @@ class Store {
   Future<void> saveFolders(List<ChatFolder> list) => _watched(
       _prefs.setString('folders', ChatFolder.encodeList(list.take(100).toList())));
 
-  List<Conversation> conversations() =>
-      Conversation.decodeList(_prefs.getString('conversations'));
+  static const anonChatsKey = 'nymbot_anon_chats';
+  Map<String, String> _anonChats = {};
+
+  List<Conversation> conversations() {
+    final list = Conversation.decodeList(_prefs.getString('conversations'));
+    for (final c in list) {
+      c.anonPk ??= _anonChats[c.id];
+    }
+    return list;
+  }
+
+  Future<void> loadAnonChats() async {
+    if (vault.locked) return;
+    final held = <String, String>{};
+    try {
+      final v = jsonDecode(await secret(anonChatsKey) ?? '{}');
+      if (v is Map) {
+        v.forEach((k, pk) {
+          if (k is String && pk is String) held[k] = pk;
+        });
+      }
+    } catch (_) {}
+    _anonChats = held;
+    if ((_prefs.getString('conversations') ?? '').contains('"anonPk"')) {
+      await _putConversations(conversations());
+    }
+  }
+
+  Future<void> _putConversations(List<Conversation> kept) async {
+    if (vault.locked) {
+      await _prefs.setString('conversations', Conversation.encodeList(kept));
+      return;
+    }
+    final keys = {for (final c in kept) if (c.anonPk != null) c.id: c.anonPk!};
+    if (jsonEncode(keys) != jsonEncode(_anonChats)) {
+      if (keys.isEmpty) {
+        await dropSecret(anonChatsKey);
+      } else {
+        await setSecret(anonChatsKey, jsonEncode(keys));
+      }
+      _anonChats = keys;
+    }
+    await _prefs.setString('conversations',
+        jsonEncode([for (final c in kept) Map<String, dynamic>.of(c.toJson())..remove('anonPk')]));
+  }
 
   Future<void> saveConversations(List<Conversation> list) async {
     final kept = list.take(500).toList();
     final aside = _anonOnly(conversations(), kept);
-    await _prefs.setString('conversations', Conversation.encodeList(kept));
+    await _putConversations(kept);
     _touched(aside: aside);
   }
 
@@ -629,6 +673,7 @@ class Store {
 
   /// Deletes everything local; there is no server account to log out of.
   Future<void> wipe() async {
+    _anonChats = {};
     _lowered.clear();
     _txCache.clear();
     _ghostTx.clear();

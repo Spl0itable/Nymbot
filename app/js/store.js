@@ -118,6 +118,33 @@
         announce(key);
     }
 
+    function anonKeys() {
+        const held = load('anonChats', null);
+        return held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+    }
+
+    function putConversations(list) {
+        const V = window.NymbotVault;
+        if (V && V.locked()) return write('conversations', list);
+        const keys = {};
+        for (const c of list) if (c && c.id && typeof c.anonPk === 'string') keys[c.id] = c.anonPk;
+        const held = load('anonChats', null);
+        if (JSON.stringify(keys) !== JSON.stringify(held || {})) {
+            aside++;
+            try {
+                if (Object.keys(keys).length) {
+                    if (!write('anonChats', keys)) return false;
+                } else if (held != null) drop('anonChats');
+            } finally { aside--; }
+        }
+        return write('conversations', list.map((c) => {
+            if (!c || typeof c.anonPk !== 'string') return c;
+            const copy = Object.assign({}, c);
+            delete copy.anonPk;
+            return copy;
+        }));
+    }
+
     function uid() {
         const b = crypto.getRandomValues(new Uint8Array(8));
         return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
@@ -523,13 +550,23 @@
 
         conversations() {
             const list = read('conversations', []);
-            return Array.isArray(list) ? list : [];
+            if (!Array.isArray(list)) return [];
+            const keys = anonKeys();
+            return list.map(c => (c && c.id && typeof c.anonPk !== 'string' && typeof keys[c.id] === 'string' ? Object.assign({}, c, { anonPk: keys[c.id] }) : c));
         },
 
         saveConversations(list) {
             const kept = list.slice(0, 500);
-            if (anonOnly(load('conversations', []), kept)) return this.aside(() => write('conversations', kept));
-            return write('conversations', kept);
+            if (anonOnly(this.conversations(), kept)) return this.aside(() => putConversations(kept));
+            return putConversations(kept);
+        },
+
+        sealAnonKeys() {
+            const V = window.NymbotVault;
+            if (V && V.locked()) return;
+            const list = read('conversations', []);
+            if (!Array.isArray(list) || !list.some(c => c && typeof c.anonPk === 'string')) return;
+            this.aside(() => putConversations(this.conversations()));
         },
 
         conversation(id) {
@@ -589,6 +626,7 @@
             drop('artifacts_' + id);
             drop('tx_' + id);
             this._ghostTx.delete(id);
+            if (window.NymbotAnon && window.NymbotAnon.tidyStopped) window.NymbotAnon.tidyStopped([id]);
         },
 
         duplicateConversation(id, title) {

@@ -16,6 +16,7 @@
     const HTC_DOMAIN = 'Nymbot_Voucher_HashToCurve_v1';
     const DLEQ_DOMAIN = 'Nymbot_Voucher_DLEQ_v1';
     const PREV_MAX = 4;
+    const STOPPED_KEEP_MS = 2 * 3600 * 1000;
     const SYNC_KEYS_MAX = 32;
     const SYNC_TOKENS_MAX = 512;
     const SPENT_MAX = 1024;
@@ -128,10 +129,66 @@
 
         load() {
             this.state = Store.read('anon', null) || { current: null, prev: [], tokens: [], pending: null, spent: [] };
+            Store.sealAnonKeys();
+            this.tidyStopped();
             return this.state;
         },
 
         save() { Store.aside(() => Store.write('anon', this.state)); },
+
+        _stoppedHeld() {
+            const held = Store.read('anonStopped', null);
+            return held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+        },
+
+        _stoppedPut(all) {
+            const V = window.NymbotVault;
+            if (V && V.locked()) return;
+            Store.aside(() => {
+                if (Object.keys(all).length) Store.write('anonStopped', all);
+                else if (Store.read('anonStopped', null) != null) Store.drop('anonStopped');
+            });
+        },
+
+        tidyStopped(drop) {
+            const P = window.NymbotConfig.storagePrefix;
+            try {
+                const old = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith(P + 'runs_stopped:')) old.push(k);
+                }
+                for (const k of old) localStorage.removeItem(k);
+            } catch (_) { }
+            const held = this._stoppedHeld();
+            const gone = new Set(drop || []);
+            const chats = new Map(Store.conversations().filter(c => c && c.anon && c.id).map(c => [c.id, c]));
+            const now = Date.now();
+            const kept = {};
+            for (const [id, list] of Object.entries(held)) {
+                const c = chats.get(id);
+                if (gone.has(id) || !c || !c.anonPk || !this.identity(c.anonPk)) continue;
+                const live = (Array.isArray(list) ? list : []).filter(x => x && typeof x.run === 'string' && now - (Number(x.at) || 0) < STOPPED_KEEP_MS);
+                if (live.length) kept[id] = live.slice(-200);
+            }
+            if (JSON.stringify(kept) !== JSON.stringify(held)) this._stoppedPut(kept);
+            return kept;
+        },
+
+        markStopped(convId, run) {
+            if (!convId || !run) return;
+            const all = this.tidyStopped();
+            const list = (all[convId] || []).filter(x => x.run !== run);
+            list.push({ run, at: Date.now() });
+            all[convId] = list.slice(-200);
+            this._stoppedPut(all);
+        },
+
+        stoppedIn(convId) {
+            const list = this._stoppedHeld()[convId];
+            const now = Date.now();
+            return new Set((Array.isArray(list) ? list : []).filter(x => x && now - (Number(x.at) || 0) < STOPPED_KEEP_MS).map(x => x.run));
+        },
 
         enabled() { return !!Store.settings().anon; },
 
@@ -195,7 +252,10 @@
             if (!id) return null;
             if (conv && conv.anonPk !== id.pk) {
                 conv.anonPk = id.pk;
-                if (conv.id) Store.updateConversation(conv.id, { anonPk: id.pk, silent: true });
+                if (conv.id) {
+                    Store.updateConversation(conv.id, { anonPk: id.pk, silent: true });
+                    this.tidyStopped([conv.id]);
+                }
             }
             return id;
         },
@@ -294,6 +354,7 @@
             this._annCache = null;
             this._prune();
             this.save();
+            if (old) this.tidyStopped(Store.conversations().filter(c => c && c.anonPk === old.pk).map(c => c.id));
             if (!sweep || !old) return 0;
             return this._sweep(old);
         },

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -215,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _input.addListener(() {
       final empty = _input.text.trim().isEmpty;
       if (empty != _inputEmpty) setState(() => _inputEmpty = empty);
-      if (!empty && mounted) AppScope.of(context).composing();
+      if (!empty && mounted) AppScope.read(context).composing();
     });
     _voice.addListener(() => setState(() {}));
     RunOutputs.toComposer.addListener(_takeRunOutput);
@@ -249,7 +250,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final app = AppScope.of(context);
+    final app = AppScope.read(context);
     if (!identical(app, _app)) {
       _app?.modelNote.removeListener(_sayModel);
       app.modelNote.addListener(_sayModel);
@@ -2107,7 +2108,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
+    final app = AppScope.watch(context, _shellPick);
     final conv = app.current;
     if (conv?.id != _shownConv) {
       _shownConv = conv?.id;
@@ -2230,11 +2231,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         : const SizedBox.shrink()),
                 const ContextBar(),
               ],
-              if (_findTerm != null) _findBar(context, app),
+              if (_findTerm != null)
+                Builder(builder: (context) => _findBar(context, AppScope.of(context))),
               Expanded(
                 child: Stack(
                   children: [
-                    Positioned.fill(child: _messages(context, app)),
+                    Positioned.fill(
+                        child: Builder(
+                            builder: (context) =>
+                                _messages(context, AppScope.of(context)))),
                     const SandboxView(),
                     if (!_atBottom && app.messages.isNotEmpty)
                       Positioned(
@@ -2250,7 +2255,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-              _composer(context, app),
+              Builder(
+                  builder: (context) =>
+                      _composer(context, AppScope.watch(context, _composerPick))),
             ],
           ),
           ),
@@ -2526,10 +2533,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         : app.transcripts.index(conv.id);
 
     _trackDraft(app);
+    if (_bubbleConv != conv?.id || _bubbles.length > messages.length * 2 + 64) {
+      _bubbleConv = conv?.id;
+      _bubbles.clear();
+    }
     return StickyAvatarScope(
       child: NotificationListener<ScrollNotification>(
         onNotification: _threadScrolled,
-        child: ListView.builder(
+        child: SelectionArea(
+          child: ListView.builder(
           controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -2538,8 +2550,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, e) {
             final entry = entries[e];
             if (entry is ChatTurn) {
-              return _runEntry(context, app, entry, messages, selfPubkey,
-                  identical(entry, latest));
+              return SelectionContainer.disabled(
+                  child: _runEntry(context, app, entry, messages, selfPubkey,
+                      identical(entry, latest)));
             }
             final i = entry as int;
             final m = messages[i];
@@ -2547,13 +2560,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             final lastInGroup =
                 i + 1 >= messages.length || groupStart[i + 1] != groupStart[i];
             final key = _keys.putIfAbsent(m.id, () => GlobalKey());
+            final selfName = app.selfNameIn(app.current, me?.name);
+            final covered = m.role == ChatRole.bot && TranscriptBook.covers(transcriptIndex, m);
+            final reusable = m.checkpoint == null &&
+                m.pendingTool == null &&
+                m.prWatch == null &&
+                m.proposal == null &&
+                m.ask == null &&
+                m.staged == null;
+            final sig = [
+              _openActions == m.id,
+              _voice.speakingId == m.id,
+              _highlighted == m.id,
+              i == offer,
+              _revealId == m.id ? _revealAt : null,
+              grouped,
+              lastInGroup,
+              messages[groupStart[i]].id,
+              app.settings,
+              app.settingsRev,
+              me?.picture,
+              selfName,
+              selfPubkey,
+              app.mentionCatalog,
+              app.artifactsOf(m.id).length,
+              covered,
+            ];
+            final hit = _bubbles[m.id];
+            if (reusable && hit != null && identical(hit.$1, m) && listEquals(hit.$2, sig)) {
+              return hit.$3;
+            }
             final bubble = MessageBubble(
               message: m,
               artifacts: app.artifactsOf(m.id),
               actionsOpen: _openActions == m.id,
               onToggleActions: () => setState(
                   () => _openActions = _openActions == m.id ? null : m.id),
-              onOpenArtifact: (a) => showArtifact(context, a),
+              onOpenArtifact: (a) => showArtifact(this.context, a),
               onUndoCheckpoint: m.checkpoint == null ? null : () => _undo(m),
               onBranchAction: m.checkpoint == null ? null : (job, op) => _branch(m, job, op),
               onClosePull: m.checkpoint == null ? null : (pr) => _closePull(m, pr),
@@ -2569,9 +2612,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onAlwaysAllowTool:
                   app.canAlwaysAllow(m.pendingTool) ? () => app.allowPendingToolAlways(m) : null,
               onApplyStaged: m.staged == null ? null : () => _applyStaged(m),
-              onDiscardStaged: m.staged == null ? null : () => AppScope.read(context).discardStaged(m),
+              onDiscardStaged: m.staged == null ? null : () => app.discardStaged(m),
               selfPubkey: selfPubkey,
-              selfName: app.selfNameIn(app.current, me?.name),
+              selfName: selfName,
               selfPicture: me?.picture ?? '',
               settings: app.settings,
               grouped: grouped,
@@ -2585,7 +2628,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onFollowUp: (text) => _followUp(m, text),
               onEditFollowUp: _editFollowUp,
               reveal: _revealId == m.id ? _revealAt : null,
-              hasTranscript: m.role == ChatRole.bot && TranscriptBook.covers(transcriptIndex, m),
+              hasTranscript: covered,
             );
             final extra = m.pending != null
                 ? PendingActions(message: m, onEdit: _takePending)
@@ -2594,21 +2637,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     : m.role == ChatRole.bot && m.steerOffer != null
                         ? SteerOfferActions(message: m)
                         : null;
-            return KeyedSubtree(
+            final out = KeyedSubtree(
               key: key,
               child: extra == null
                   ? bubble
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
-                      children: [bubble, extra],
+                      children: [bubble, SelectionContainer.disabled(child: extra)],
                     ),
             );
+            if (reusable) _bubbles[m.id] = (m, sig, out);
+            return out;
           },
+        ),
         ),
       ),
     );
   }
+
+  final Map<String, (ChatMessage, List<Object?>, Widget)> _bubbles = {};
+  String? _bubbleConv;
 
   void _takePending(String text) {
     _input.setMarkdown(text);
@@ -3272,7 +3321,7 @@ class _ChatDrawerState extends State<_ChatDrawer> {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
+    final app = AppScope.watch(context, _drawerPick);
     final list = app.visibleConversations;
     final folders = {for (final f in app.folders) f.id: f.name};
 
@@ -3795,4 +3844,77 @@ List<String> _progressLines(List<TurnStep> steps) {
     out.add(line);
   }
   return out;
+}
+
+List<Object?> _shellPick(AppController app) {
+  final c = app.current;
+  return [
+    c,
+    c?.id,
+    c?.title,
+    c?.pinned,
+    c?.anon,
+    c?.support,
+    c?.unread,
+    app.jumpTo,
+    app.pendingInput,
+    app.messages.isEmpty,
+    app.settings,
+    app.settingsRev,
+    app.identity.pubkey,
+  ];
+}
+
+List<Object?> _composerPick(AppController app) {
+  final c = app.current;
+  return [
+    c,
+    c?.id,
+    c?.support,
+    app.settings,
+    app.settingsRev,
+    app.mentionCatalog,
+    app.catalogPricing,
+    app.allSkills.length,
+    app.quote,
+    app.sending,
+    app.activeModel,
+    app.activeMediaModel,
+    app.activeBot,
+    app.repoNeedsPro,
+    app.capRoomLine,
+    app.messages.isEmpty,
+    for (final a in app.attachments) a,
+  ];
+}
+
+List<Object?> _drawerPick(AppController app) {
+  final me = app.profiles.of(app.identity.pubkey);
+  return [
+    app.current?.id,
+    app.convFilter,
+    app.settings,
+    app.settingsRev,
+    app.identity.pubkey,
+    me.picture,
+    app.nickname,
+    app.relaysUp,
+    app.standardBalance,
+    app.proBalance,
+    for (final f in app.folders) ...[f.id, f.name],
+    for (final r in app.repos) r,
+    for (final c in app.visibleConversations) ...[
+      c,
+      c.title,
+      c.pinned,
+      c.updatedAt,
+      c.folderId,
+      c.repoIds.length,
+      c.tags.length,
+      c.support,
+      c.anon,
+      c.unread,
+      app.sendingIn(c),
+    ],
+  ];
 }

@@ -3565,22 +3565,22 @@
             seen.add(run);
             if (seen.size > 200) seen.delete(seen.values().next().value);
             if (!conv) return;
-            const key = this.stoppedKey(conv);
+            if (conv.anon) {
+                if (window.NymbotAnon) window.NymbotAnon.markStopped(conv.id, run);
+                return;
+            }
             const now = Date.now();
-            const held = Store.read(key, []);
+            const held = Store.read('runs_stopped', []);
             const kept = (Array.isArray(held) ? held : []).filter(x => x && x.run !== run && now - (Number(x.at) || 0) < STOPPED_KEEP_MS);
             kept.push({ run, at: now });
-            Store.write(key, kept.slice(-200));
-        },
-
-        stoppedKey(conv) {
-            return conv && conv.anon ? 'runs_stopped:' + this.keyOf(conv) : 'runs_stopped';
+            Store.write('runs_stopped', kept.slice(-200));
         },
 
         isStoppedRun(conv, run) {
             if (!run) return false;
             if (this._stoppedRuns && this._stoppedRuns.has(run)) return true;
-            const held = Store.read(this.stoppedKey(conv), []);
+            if (conv && conv.anon) return !!window.NymbotAnon && window.NymbotAnon.stoppedIn(conv.id).has(run);
+            const held = Store.read('runs_stopped', []);
             const now = Date.now();
             return Array.isArray(held) && held.some(x => x && x.run === run && now - (Number(x.at) || 0) < STOPPED_KEEP_MS);
         },
@@ -3589,8 +3589,11 @@
             if (!Chat.reposFor(conv).some(r => r.allowWrites && GitRun.jobBranchesOn(r))) return;
             if (run) {
                 const until = Date.now() + STOPPED_BRANCH_WAIT_MS;
+                const waits = Array.isArray(Chat.CLAIM_WAITS) && Chat.CLAIM_WAITS.length ? Chat.CLAIM_WAITS : [3000];
                 for (let i = 0; Date.now() < until; i++) {
-                    await new Promise(done => setTimeout(done, Math.min(15000, 1000 * (i + 1))));
+                    const step = waits[Math.min(i, waits.length - 1)];
+                    await new Promise(done => setTimeout(done, step + Api.jitterMs(Math.floor(step / 4))));
+                    if (Date.now() >= until) return;
                     const got = await Chat.storedData(conv, run).catch(() => null);
                     if (!got) continue;
                     if (got.checkpoint) Chat.rememberBranches(Store.conversation(conv.id) || conv, got.checkpoint);

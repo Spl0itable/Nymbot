@@ -189,7 +189,11 @@
             const consent = window.NymbotAiConsent;
             if (consent && consent.guards(action) && !consent.allowed()) return consent.blocked();
             const options = opts || {};
-            const body = await this.signedBody(action, extra, options);
+            const body = await this.signedBody(action, extra, options).catch((e) => {
+                if (!options.signer && !Identity.canSign()) return null;
+                throw e;
+            });
+            if (body == null) return { status: 0, data: { error: t('No signer is connected.') } };
             const outer = options.controller ? options.controller.signal : (options.signal || null);
             const attempt = async () => {
                 if (outer && outer.aborted) {

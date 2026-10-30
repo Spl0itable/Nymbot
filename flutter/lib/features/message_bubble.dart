@@ -197,7 +197,7 @@ class _MessageBubbleState extends State<MessageBubble> {
     if (system) {
       return Padding(
         padding: EdgeInsets.only(bottom: gap, top: 2),
-        child: _systemCard(context, m),
+        child: SelectionContainer.disabled(child: _systemCard(context, m)),
       );
     }
 
@@ -208,19 +208,19 @@ class _MessageBubbleState extends State<MessageBubble> {
             self && settings.bubbles ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           if (!widget.grouped)
-            GestureDetector(
-              onLongPress: widget.onToggleActions,
-              child: _author(context, m, self),
+            SelectionContainer.disabled(
+              child: GestureDetector(
+                onLongPress: widget.onToggleActions,
+                child: _author(context, m, self),
+              ),
             ),
-          SelectionArea(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTapUp: widget.onToggleActions == null ? null : _tapped,
-              child: _content(context, m, self, theme),
-            ),
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapUp: widget.onToggleActions == null ? null : _tapped,
+            child: _content(context, m, self, theme),
           ),
           if (widget.actionsOpen)
-            _actions(context, m)
+            SelectionContainer.disabled(child: _actions(context, m))
           else if (_mouse)
             Visibility(
               key: const ValueKey('hover-actions'),
@@ -228,10 +228,11 @@ class _MessageBubbleState extends State<MessageBubble> {
               maintainSize: true,
               maintainAnimation: true,
               maintainState: true,
-              child: _actions(context, m, compact: true),
+              child: SelectionContainer.disabled(
+                  child: _actions(context, m, compact: true)),
             ),
           if (widget.followUps.isNotEmpty && widget.onFollowUp != null)
-            _followUps(context),
+            SelectionContainer.disabled(child: _followUps(context)),
         ],
       ),
     );

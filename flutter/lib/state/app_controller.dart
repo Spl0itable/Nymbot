@@ -152,7 +152,7 @@ class AppController extends ChangeNotifier {
     await anon.load();
     c.signedIn = await identity.restore();
     c._loadSettings();
-    c.invoice = PendingInvoice.decode(store.getString(_invoiceKey));
+    c.invoice = PendingInvoice.decode(await c._heldInvoice());
     await c._loadRepos();
     await c._loadConnectors();
     await c._loadSkills();
@@ -331,11 +331,9 @@ class AppController extends ChangeNotifier {
 
   static const stoppedKeep = Duration(hours: 2);
 
-  String _stoppedKey(Conversation conv) => conv.anon ? 'runs_stopped:${conv.anonPk ?? 'anon'}' : 'runs_stopped';
-
-  List<Map<String, dynamic>> _stoppedHeld(Conversation conv) {
+  List<Map<String, dynamic>> _stoppedHeld() {
     try {
-      final v = jsonDecode(store.getString(_stoppedKey(conv)) ?? '[]');
+      final v = jsonDecode(store.getString('runs_stopped') ?? '[]');
       final now = DateTime.now().millisecondsSinceEpoch;
       return [
         for (final x in v is List ? v : const [])
@@ -351,15 +349,23 @@ class AppController extends ChangeNotifier {
     _stoppedRuns.add(run);
     if (_stoppedRuns.length > 200) _stoppedRuns.remove(_stoppedRuns.first);
     if (conv == null) return;
-    final kept = [..._stoppedHeld(conv).where((x) => x['run'] != run), {'run': run, 'at': DateTime.now().millisecondsSinceEpoch}];
-    unawaited(store.setString(_stoppedKey(conv), jsonEncode(kept.length > 200 ? kept.sublist(kept.length - 200) : kept)).catchError((_) {}));
+    if (conv.anon) {
+      unawaited(anon.markStopped(conv.id, run));
+      return;
+    }
+    final kept = [..._stoppedHeld().where((x) => x['run'] != run), {'run': run, 'at': DateTime.now().millisecondsSinceEpoch}];
+    unawaited(store.setString('runs_stopped', jsonEncode(kept.length > 200 ? kept.sublist(kept.length - 200) : kept)).catchError((_) {}));
   }
 
-  bool _isStopped(Conversation conv, String run) => _stoppedRuns.contains(run) || _stoppedHeld(conv).any((x) => x['run'] == run);
+  Future<Set<String>> _stoppedIn(Conversation conv) async => {
+        ..._stoppedRuns,
+        ...conv.anon ? await anon.stoppedIn(conv.id) : {for (final x in _stoppedHeld()) x['run'] as String},
+      };
 
   Future<void> recoverStored(Conversation conv, {String? exclude}) async {
     if (conv.support || identity.pubkey.isEmpty || chat.channels == null || chat.chanOffered == false) return;
     if (conv.anon && conv.anonPk == null) return;
+    final stopped = await _stoppedIn(conv);
     final list = store.messages(conv.id);
     final now = DateTime.now();
     final open = <ChatMessage>[];
@@ -367,7 +373,7 @@ class AppController extends ChangeNotifier {
       final m = list[i];
       final w = m.wire;
       if (m.role != ChatRole.self || m.pending != null || w == null || w.isEmpty || w == exclude || m.id == exclude) continue;
-      if (now.difference(m.at) > const Duration(hours: 24) || _holdsAsk(m) || _isStopped(conv, w)) continue;
+      if (now.difference(m.at) > const Duration(hours: 24) || _holdsAsk(m) || stopped.contains(w)) continue;
       if (i + 1 < list.length && (list[i + 1].role == ChatRole.bot || list[i + 1].role == ChatRole.error)) continue;
       if (list.any((x) => (x.role == ChatRole.bot || x.role == ChatRole.error) && x.replyTo == w)) continue;
       open.add(m);
@@ -547,7 +553,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setReplyNotify(bool on) async {
     settings.replyNotify = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     if (on) await store.setBool(_notifyAskedKey, true);
     await replyNotify.settingChanged(on);
@@ -745,6 +751,7 @@ class AppController extends ChangeNotifier {
   List<Artifact> artifacts = [];
 
   AppSettings settings = AppSettings();
+  int settingsRev = 0;
   List<GitRepo> repos = [];
   List<McpConnector> connectors = [];
   Map<String, dynamic>? proModel;
@@ -792,6 +799,7 @@ class AppController extends ChangeNotifier {
 
   void _loadSettings() {
     settings = store.settings();
+    settingsRev++;
     chat.defaultWhenDone = settings.whenDone;
     chat.chanSeen = store.getBool('chan_seen');
     final raw = store.getString('settings');
@@ -806,10 +814,16 @@ class AppController extends ChangeNotifier {
     dismissedNotices = store.dismissedNotices();
   }
 
+  Future<void> _storeSettings() {
+    settingsRev++;
+    return store.saveSettings(settings);
+  }
+
   Future<void> _saveModel() => store.saveModelPick(proModel, mediaModel);
 
   Future<void> saveSettings(AppSettings next) async {
     settings = next;
+    settingsRev++;
     chat.defaultWhenDone = next.whenDone;
     await store.saveSettings(next);
     notifyListeners();
@@ -819,13 +833,14 @@ class AppController extends ChangeNotifier {
     final kept = (name: settings.nickname, at: settings.nicknameAt);
     await store.resetSettings();
     settings = store.settings();
+    settingsRev++;
     chat.defaultWhenDone = settings.whenDone;
     chat.chanSeen = store.getBool('chan_seen');
     if (kept.at > 0) {
       settings
         ..nickname = kept.name
         ..nicknameAt = kept.at;
-      await store.saveSettings(settings);
+      await _storeSettings();
     }
     notifyListeners();
   }
@@ -837,7 +852,7 @@ class AppController extends ChangeNotifier {
     settings
       ..nickname = cleaned
       ..nicknameAt = DateTime.now().millisecondsSinceEpoch;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     return cleaned;
   }
@@ -1699,7 +1714,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setAutoDeleteDays(int days) async {
     settings.autoDeleteDays = days < 0 ? 0 : days;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
@@ -1762,19 +1777,19 @@ class AppController extends ChangeNotifier {
             ? ''
             : picked;
     chat.defaultWhenDone = settings.whenDone;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
   Future<void> setAutoContinue(int credits) async {
     settings.autoContinue = credits;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
   Future<void> setSync(bool on) async {
     settings.sync = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     if (on) {
       sync.follow();
       unawaited(sync.run());
@@ -1786,7 +1801,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setShowProgress(bool on) async {
     settings.showProgress = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
@@ -1798,7 +1813,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setNotices(bool on) async {
     settings.notices = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     if (on) {
       unawaited(refreshNotices());
     } else {
@@ -1899,7 +1914,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setWebSearch(bool on) async {
     settings.webSearch = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
@@ -4553,6 +4568,7 @@ class AppController extends ChangeNotifier {
     await store.saveConversations(conversations);
     transcripts.forget(conv.id);
     await store.dropConversation(conv.id);
+    if (conv.anon) await anon.tidyStopped([conv.id]);
     await DocLibrary.instance.forget(conv.id);
     if (!wasOpen) {
       notifyListeners();
@@ -5077,7 +5093,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setMaxRuns(int n) async {
     settings.maxRuns = n.clamp(1, 10);
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     _wakeSlots();
   }
@@ -5102,7 +5118,7 @@ class AppController extends ChangeNotifier {
     if (planFirst == 'always' || planFirst == 'changing' || planFirst == 'never') {
       settings.planFirst = planFirst!;
     }
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
   }
 
@@ -5228,11 +5244,15 @@ class AppController extends ChangeNotifier {
     turn.status = null;
     turn.draft = null;
     unawaited(_dropClaim(turn));
+    final cancel = told ? _cancelStopped(turn) : null;
     if (turn.askId != null) {
       await note(t('Stopped.'), conv: turn.conv, replyTo: _linkOf(turn));
     }
     _endTurn(turn);
-    if (!told) return;
+    if (cancel != null) await cancel;
+  }
+
+  Future<void> _cancelStopped(ChatTurn turn) async {
     _stopped(turn.runId, turn.conv);
     _stopped(turn.prepared?.chan?.run ?? '', turn.conv);
     final prepared = turn.prepared;
@@ -6293,7 +6313,7 @@ class AppController extends ChangeNotifier {
     final held = _heldFor(card);
     final n = runCapAllow(card.runCap ?? const {});
     settings.maxRuns = n.clamp(1, 10);
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     if (held == null || held.prepared == null) return;
     await _dropMessage(held.conv, card);
@@ -6535,7 +6555,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setBackgroundJobs(bool on) async {
     settings.backgroundJobs = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     unawaited(syncChecks());
   }
@@ -6825,7 +6845,7 @@ class AppController extends ChangeNotifier {
 
   Future<String?> setServerSchedules(bool on) async {
     settings.serverSchedules = on;
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     unawaited(syncChecks());
     if (on) {
@@ -6851,7 +6871,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> setScheduleDailyCap(int credits) async {
     settings.scheduleDailyCap = credits.clamp(1, 10000);
-    await store.saveSettings(settings);
+    await _storeSettings();
     notifyListeners();
     final held = schedules.where((s) => s.server != null).firstOrNull;
     if (held != null && settings.serverSchedules) {
@@ -7375,12 +7395,14 @@ class AppController extends ChangeNotifier {
 
   Future<void> stopRemote(RemoteRun run) async {
     final anon = _anonRuns.any((r) => r.replyTo == run.replyTo);
+    final mine = _mineRuns.any((r) => r.replyTo == run.replyTo);
     remoteRuns = remoteRuns.where((r) => r.replyTo != run.replyTo).toList();
     notifyListeners();
     final conv = chatOfThread(run.thread);
     _stopped(run.replyTo, conv == null || anon != conv.anon ? null : conv);
+    if (!anon && !mine) return;
     if (anon && (conv == null || !conv.anon)) return;
-    final signer = conv != null ? await _signerOf(conv) : identity.signer;
+    final signer = conv != null && conv.anon == anon ? await _signerOf(conv) : identity.signer;
     await api.cancelRun(signer, run.replyTo);
   }
 
@@ -8087,14 +8109,29 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<String?> _heldInvoice() async {
+    final plain = store.getString(_invoiceKey);
+    try {
+      if (plain != null) {
+        await store.setSecret(_invoiceKey, plain);
+        await store.remove(_invoiceKey);
+        return plain;
+      }
+      return await store.secret(_invoiceKey);
+    } catch (_) {
+      return plain;
+    }
+  }
+
   Future<void> _keepInvoice(PendingInvoice? inv) async {
     invoice = inv;
     if (inv == null) {
       _invoicePoll?.cancel();
       _invoicePoll = null;
+      await store.dropSecret(_invoiceKey);
       await store.remove(_invoiceKey);
     } else {
-      await store.setString(_invoiceKey, inv.encode());
+      await store.setSecret(_invoiceKey, inv.encode());
     }
   }
 

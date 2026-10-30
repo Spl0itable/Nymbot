@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
@@ -24,6 +26,7 @@ import '../services/media_cache.dart';
 import '../services/sandbox_host.dart';
 import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
+import '../state/app_controller.dart';
 
 Widget mediaWaiting(BuildContext context, ImageChunkEvent? progress,
     {double width = 260, double height = 180}) {
@@ -50,7 +53,7 @@ Widget mediaWaiting(BuildContext context, ImageChunkEvent? progress,
   );
 }
 
-class MarkdownBody extends StatelessWidget {
+class MarkdownBody extends StatefulWidget {
   const MarkdownBody(
     this.source, {
     super.key,
@@ -158,7 +161,9 @@ class MarkdownBody extends StatelessWidget {
       .trim();
 
   @override
-  Widget build(BuildContext context) {
+  State<MarkdownBody> createState() => _MarkdownBodyState();
+
+  Widget _build(BuildContext context) {
     final blocks = <Widget>[];
     final lines = source.replaceAll('\r\n', '\n').split('\n');
     var i = 0;
@@ -554,6 +559,38 @@ class MarkdownBody extends StatelessWidget {
   }
 }
 
+
+class _MarkdownBodyState extends State<MarkdownBody> {
+  Widget? _built;
+  List<Object?> _inputs = const [];
+
+  @override
+  Widget build(BuildContext context) {
+    final w = widget;
+    final text = DefaultTextStyle.of(context);
+    final inputs = <Object?>[
+      w.source,
+      w.wrapCode,
+      w.monospace,
+      w.media,
+      w.runnable,
+      w.lineNumbers,
+      Theme.of(context),
+      text.style,
+      text.textAlign,
+      text.softWrap,
+      text.overflow,
+      text.maxLines,
+      text.textWidthBasis,
+      MediaViewerScope.present(context),
+    ];
+    final built = _built;
+    if (built != null && listEquals(inputs, _inputs)) return built;
+    _inputs = inputs;
+    return _built = w._build(context);
+  }
+}
+
 class _ListItem {
   const _ListItem({required this.text, required this.ordered, required this.depth});
 
@@ -602,12 +639,15 @@ class _Bullet extends StatelessWidget {
 }
 
 class _Table extends StatelessWidget {
-  const _Table({
+  _Table({
     required this.head,
     required this.rows,
     required this.align,
     required this.parent,
   });
+
+  final _ColumnMemo _memo = _ColumnMemo();
+
 
   final List<String> head;
   final List<List<String>> rows;
@@ -629,15 +669,15 @@ class _Table extends StatelessWidget {
           ),
         );
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    _memo.check(MediaQuery.textScalerOf(context));
+    return ScrollIfWide(
       child: Container(
         decoration: BoxDecoration(
           border: Border.all(color: theme.dividerColor),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Table(
-          defaultColumnWidth: const IntrinsicColumnWidth(),
+          defaultColumnWidth: _OnceColumnWidth(_memo),
           border: TableBorder(
             horizontalInside: BorderSide(color: theme.dividerColor),
           ),
@@ -748,6 +788,25 @@ class _CodeBlockState extends State<CodeBlock> {
   late bool _wrap = widget.wrap;
   bool _copied = false;
   RunCodeController? _run;
+  AppController? _app;
+  Object? _seenRunner;
+
+  void _appChanged() {
+    if (mounted && !identical(_app?.runner, _seenRunner)) setState(() {});
+  }
+
+  AppController? _listen() {
+    final el = widget.runnable
+        ? context.getElementForInheritedWidgetOfExactType<AppScope>()
+        : null;
+    final app = el == null ? null : (el.widget as AppScope).notifier;
+    if (!identical(app, _app)) {
+      _app?.removeListener(_appChanged);
+      _app = app?..addListener(_appChanged);
+    }
+    _seenRunner = app?.runner;
+    return app;
+  }
 
   RunCodeController? _runnerFor(bool server) {
     if (!widget.runnable) return null;
@@ -759,6 +818,7 @@ class _CodeBlockState extends State<CodeBlock> {
 
   @override
   void dispose() {
+    _app?.removeListener(_appChanged);
     _run?.dispose();
     super.dispose();
   }
@@ -766,14 +826,15 @@ class _CodeBlockState extends State<CodeBlock> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final app = _listen();
     final server = widget.runnable &&
         !DetachedRuns.of(context) &&
-        (context.getElementForInheritedWidgetOfExactType<AppScope>() != null) &&
-        AppScope.of(context).runnerAvailable;
+        app != null &&
+        app.runnerAvailable;
     final runner = _runnerFor(server);
     final local = runner?.language != null &&
         (SandboxProtocol.localOk(runner!.language, widget.code) ||
-            !(server && ServerRuns.canRun(AppScope.of(context).runner, runner.serverLanguage, widget.code)));
+            !(server && ServerRuns.canRun(app.runner, runner.serverLanguage, widget.code)));
     final lines = widget.code.split('\n').length;
     final code = HighlightedCode(
       code: widget.code,
@@ -867,7 +928,7 @@ class _CodeBlockState extends State<CodeBlock> {
             padding: const EdgeInsets.all(10),
             child: _wrap
                 ? body
-                : SingleChildScrollView(scrollDirection: Axis.horizontal, child: body),
+                : ScrollIfWide(child: body),
           ),
           if (runner != null)
             RunOutputView(
@@ -1188,4 +1249,158 @@ String _trimLinkEnd(String url) {
     }
   }
   return u;
+}
+
+class _ColumnMemo {
+  TextScaler? _scaler;
+  Expando<double> max = Expando<double>();
+  Expando<double> min = Expando<double>();
+
+  void check(TextScaler scaler) {
+    if (scaler == _scaler) return;
+    _scaler = scaler;
+    max = Expando<double>();
+    min = Expando<double>();
+  }
+}
+
+class _OnceColumnWidth extends TableColumnWidth {
+  const _OnceColumnWidth(this.memo);
+
+  final _ColumnMemo memo;
+
+  @override
+  double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    if (cells.isEmpty) return 0;
+    return memo.max[cells.first] ??=
+        const IntrinsicColumnWidth().maxIntrinsicWidth(cells, containerWidth);
+  }
+
+  @override
+  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    if (cells.isEmpty) return 0;
+    return memo.min[cells.first] ??=
+        const IntrinsicColumnWidth().minIntrinsicWidth(cells, containerWidth);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _OnceColumnWidth && identical(other.memo, memo);
+
+  @override
+  int get hashCode => identityHashCode(memo);
+}
+
+class ScrollIfWide extends StatefulWidget {
+  const ScrollIfWide({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<ScrollIfWide> createState() => _ScrollIfWideState();
+}
+
+class _ScrollIfWideState extends State<ScrollIfWide> {
+  bool _wide = false;
+
+  void _overflowed() => _switch(true);
+
+  void _fits() => _switch(false);
+
+  void _switch(bool wide) {
+    if (_wide == wide) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _wide != wide) setState(() => _wide = wide);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => _wide
+      ? _WideFit(
+          onFit: _fits,
+          child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: widget.child),
+        )
+      : _FitWidth(onOverflow: _overflowed, child: widget.child);
+}
+
+class _WideFit extends SingleChildRenderObjectWidget {
+  const _WideFit({required this.onFit, required super.child});
+
+  final VoidCallback onFit;
+
+  @override
+  _RenderWideFit createRenderObject(BuildContext context) => _RenderWideFit(onFit);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderWideFit renderObject) {
+    renderObject.onFit = onFit;
+  }
+}
+
+class _RenderWideFit extends RenderProxyBox {
+  _RenderWideFit(this.onFit);
+
+  VoidCallback onFit;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final c = child;
+    if (c == null || !constraints.hasBoundedWidth) return;
+    if (c.getMaxIntrinsicWidth(double.infinity) <= constraints.maxWidth - 1) onFit();
+  }
+}
+
+class _FitWidth extends SingleChildRenderObjectWidget {
+  const _FitWidth({required this.onOverflow, required super.child});
+
+  final VoidCallback onOverflow;
+
+  @override
+  _RenderFitWidth createRenderObject(BuildContext context) => _RenderFitWidth(onOverflow);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderFitWidth renderObject) {
+    renderObject.onOverflow = onOverflow;
+  }
+}
+
+class _RenderFitWidth extends RenderProxyBox {
+  _RenderFitWidth(this.onOverflow);
+
+  VoidCallback onOverflow;
+  bool _over = false;
+
+  BoxConstraints _inner(BoxConstraints c) =>
+      BoxConstraints(minHeight: c.minHeight, maxHeight: c.maxHeight);
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) {
+    final c = child;
+    if (c == null) return constraints.smallest;
+    return constraints.constrain(c.getDryLayout(_inner(constraints)));
+  }
+
+  @override
+  void performLayout() {
+    final c = child;
+    if (c == null) {
+      size = constraints.smallest;
+      _over = false;
+      return;
+    }
+    c.layout(_inner(constraints), parentUsesSize: true);
+    size = constraints.constrain(c.size);
+    _over = c.size.width > size.width + 0.5;
+    if (_over) onOverflow();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (!_over) {
+      super.paint(context, offset);
+      return;
+    }
+    context.pushClipRect(needsCompositing, offset, Offset.zero & size, super.paint);
+  }
 }

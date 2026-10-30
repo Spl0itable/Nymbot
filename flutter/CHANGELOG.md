@@ -24,6 +24,8 @@ Added
   stay clear of the status cluster.
 
 Changed
+- Scrolling a chat while a reply streams does less work: only the changed message, not the whole screen, toolbar, composer or chat list, rebuilds on each update, and tables and code blocks no longer add sideways scrolling when they fit.
+- While a reply streams in, the app does less work on each update: messages that did not change are no longer parsed again, and code blocks are colored once instead of on every update, with the colored copies kept small in memory.
 - Coming back to the app now fetches only the support replies that arrived since the last check, and checks the connection of the chat on screen first; the connection of your other chats (anonymous or under your nym) is checked a few minutes later.
 - When you come back to the app with several chats open, the connections of the chats not on screen are checked one at a time, each a few minutes apart from the others and from the run list of the chat you are viewing; a second return while one waits moves it further on instead of acting at the same moment.
 - A support reply that reached the server at nearly the same moment as another one, while the app was checking for replies, now still shows up on the next check instead of being skipped; replies already shown are not added again.
@@ -70,8 +72,18 @@ Changed
 - While an anonymous chat is shown, the nym's background tasks are not
   followed and a message under the nym waiting for a free run slot reads no
   run list; both carry on once a chat under the nym is shown.
+- The run gate that spaces the nym's and anonymous chats' run-list reads takes
+  its time through one settable clock; nothing changes for the user and the
+  spacing is unchanged.
 
 Fixed
+- An anonymous chat's throwaway key, and a pending invoice for credits bought onto
+  it, are kept in the vault, never in plain storage next to your nym's data; keys
+  an earlier version left there are moved at launch. Stop on a run the Tasks list
+  no longer holds sends no cancel, so your nym never signs for an anonymous run.
+- A run you stop in an anonymous chat is remembered in the vault under that chat,
+  never under its key in plain storage, and Stop cancels the run on the server
+  before saving its Stopped. note.
 - Offline right after the app opens, an image kept on the device for more than
   a week still shows: tidying the image cache no longer deletes an image while
   it is being loaded.

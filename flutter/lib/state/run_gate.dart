@@ -4,6 +4,7 @@ class RunGate {
   static Duration gap = const Duration(minutes: 2);
   static Duration spread = const Duration(minutes: 3);
   static int Function(int top)? draw;
+  static int Function()? clock;
   static final math.Random _rng = math.Random.secure();
 
   RunGate({this.shown});
@@ -15,7 +16,7 @@ class RunGate {
   int _sock = 0;
   int _sockAt = 0;
 
-  int _now() => DateTime.now().millisecondsSinceEpoch;
+  int _now() => clock?.call() ?? DateTime.now().millisecondsSinceEpoch;
 
   int _spread() {
     final top = spread.inMilliseconds;

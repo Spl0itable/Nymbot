@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -14,20 +15,117 @@ import 'state/app_controller.dart';
 import 'features/i18n/language_select.dart';
 
 /// Hands the one controller down; every screen listens to the same [ChangeNotifier].
-class AppScope extends InheritedNotifier<AppController> {
+class AppScope extends InheritedWidget {
   const AppScope({super.key, required AppController controller, required super.child})
-      : super(notifier: controller);
+      : notifier = controller;
+
+  final AppController notifier;
 
   /// Subscribes the caller to rebuilds.
   static AppController of(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
+      context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier;
+
+  static AppController watch(
+      BuildContext context, List<Object?> Function(AppController app) pick) {
+    final scope = context.getElementForInheritedWidgetOfExactType<AppScope>()!;
+    final app = (scope.widget as AppScope).notifier;
+    context.dependOnInheritedElement(scope, aspect: _AppPick(pick, pick(app)));
+    return app;
+  }
 
   /// Reads without subscribing; safe in `initState`.
   static AppController read(BuildContext context) =>
       (context.getElementForInheritedWidgetOfExactType<AppScope>()!.widget
               as AppScope)
-          .notifier!;
+          .notifier;
+
+  @override
+  bool updateShouldNotify(AppScope oldWidget) =>
+      !identical(oldWidget.notifier, notifier);
+
+  @override
+  InheritedElement createElement() => _AppScopeElement(this);
 }
+
+class _AppPick {
+  const _AppPick(this.pick, this.seen);
+  final List<Object?> Function(AppController app) pick;
+  final List<Object?> seen;
+}
+
+class _AppScopeElement extends InheritedElement {
+  _AppScopeElement(AppScope super.widget);
+
+  static final Object _all = Object();
+  bool _dirty = false;
+
+  AppController get _app => (widget as AppScope).notifier;
+
+  @override
+  void mount(Element? parent, Object? newSlot) {
+    super.mount(parent, newSlot);
+    _app.addListener(_changed);
+  }
+
+  @override
+  void update(AppScope newWidget) {
+    final old = _app;
+    if (!identical(old, newWidget.notifier)) {
+      old.removeListener(_changed);
+      newWidget.notifier.addListener(_changed);
+    }
+    super.update(newWidget);
+  }
+
+  @override
+  void unmount() {
+    _app.removeListener(_changed);
+    super.unmount();
+  }
+
+  void _changed() {
+    _dirty = true;
+    markNeedsBuild();
+  }
+
+  @override
+  Widget build() {
+    if (_dirty) {
+      _dirty = false;
+      notifyClients(widget as AppScope);
+    }
+    return super.build();
+  }
+
+  @override
+  void updateDependencies(Element dependent, Object? aspect) {
+    final had = getDependencies(dependent);
+    if (aspect is! _AppPick) {
+      setDependencies(dependent, _all);
+      return;
+    }
+    if (identical(had, _all)) return;
+    setDependencies(dependent, <_AppPick>[
+      if (had is List<_AppPick>)
+        for (final p in had)
+          if (!identical(p.pick, aspect.pick)) p,
+      aspect,
+    ]);
+  }
+
+  @override
+  void notifyDependent(AppScope oldWidget, Element dependent) {
+    final had = getDependencies(dependent);
+    if (had is List<_AppPick> && identical(oldWidget.notifier, _app)) {
+      final app = _app;
+      if (!had.any((p) => !listEquals(p.pick(app), p.seen))) return;
+    }
+    dependent.didChangeDependencies();
+  }
+}
+
+List<Object?> _appPick(AppController app) =>
+    [app.settings, app.settingsRev, app.identity.waiting];
 
 class NymbotApp extends StatelessWidget {
   const NymbotApp({super.key, required this.controller, this.navigatorKey});
@@ -41,10 +139,10 @@ class NymbotApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return AppScope(
       controller: controller,
-      child: ListenableBuilder(
-        listenable: controller,
-        builder: (context, _) => _app(context),
-      ),
+      child: Builder(builder: (context) {
+        AppScope.watch(context, _appPick);
+        return _app(context);
+      }),
     );
   }
 

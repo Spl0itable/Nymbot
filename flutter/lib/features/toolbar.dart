@@ -36,7 +36,7 @@ class NymbotToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
+    final app = AppScope.watch(context, toolbarPick);
     final theme = Theme.of(context);
     final set = _chipSet(context);
     final pro = set.pro;
@@ -127,7 +127,7 @@ class NymbotToolbar extends StatelessWidget {
 
 ({bool pro, Color accent, List<_ChipSpec> all, List<_ChipSpec> on, List<_ChipSpec> off})
     _chipSet(BuildContext context) {
-  final app = AppScope.of(context);
+  final app = AppScope.read(context);
   final theme = Theme.of(context);
   final model = app.activeModel;
   final media = app.activeMediaModel;
@@ -683,7 +683,7 @@ class ContextBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
+    final app = AppScope.watch(context, toolbarPick);
     final theme = Theme.of(context);
     final repos = app.activeRepos;
     final persona = app.activePersona;
@@ -861,7 +861,7 @@ class _TierSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
+    final app = AppScope.watch(context, toolbarPick);
     Widget face(String label, bool active) => Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
           decoration: BoxDecoration(
@@ -1010,4 +1010,42 @@ class _TapHeight extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
         child: Center(widthFactor: 1, child: child),
       );
+}
+
+List<Object?> toolbarPick(AppController app) {
+  final conv = app.current;
+  return [
+    conv,
+    conv?.id,
+    conv?.serverRuns,
+    conv?.systemPrompt,
+    conv?.ephemeral,
+    conv?.anon,
+    for (final r in conv?.repoIds ?? const <String>[]) r,
+    app.canFlipAnon,
+    app.settings,
+    app.settingsRev,
+    app.freeLeft,
+    app.freeOnly,
+    app.proTier,
+    app.shownBalance,
+    app.spendingAnon,
+    app.standardBalance,
+    app.proBalance,
+    app.activeModel,
+    app.activeMediaModel,
+    app.activeBot,
+    app.activePersona,
+    app.activeWorkspace,
+    app.researchNext,
+    app.runnerAvailable,
+    app.siteCheckAvailable,
+    app.teamAvailable,
+    app.teamSetting,
+    app.skillOf(conv),
+    app.artifacts.length,
+    for (final r in app.activeRepos) r,
+    for (final c in app.activeConnectors) c,
+    for (final s in app.schedules) s,
+  ];
 }

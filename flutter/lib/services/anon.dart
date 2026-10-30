@@ -25,6 +25,8 @@ class AnonMode {
   static const _balancesKey = 'nymbot_anon_balances';
   static const _keysetKey = 'nymbot_anon_keyset';
   static const _enabledKey = 'anon_enabled';
+  static const _stoppedKey = 'nymbot_anon_stopped';
+  static const stoppedKeep = Duration(hours: 2);
   static const _prevMax = 4;
   static const syncKeysMax = 32;
   static const syncTokensMax = 512;
@@ -45,7 +47,81 @@ class AnonMode {
   bool get ready => enabled && _state['current'] != null;
   String? get pubkey => (_state['current'] as Map?)?['pk'] as String?;
 
+  Future<void> _stoppedChain = Future<void>.value();
+
+  Future<T> _stoppedOp<T>(Future<T> Function() body) {
+    final run = _stoppedChain.then((_) => body());
+    _stoppedChain = run.then((_) {}, onError: (_) {});
+    return run;
+  }
+
+  Future<Map<String, List<Map<String, dynamic>>>> _stoppedHeld() async {
+    try {
+      final v = jsonDecode(await _store.secret(_stoppedKey) ?? '{}');
+      if (v is! Map) return {};
+      return {
+        for (final e in v.entries)
+          if (e.key is String && e.value is List)
+            e.key as String: [
+              for (final x in e.value as List)
+                if (x is Map && x['run'] is String && x['at'] is num) x.cast<String, dynamic>()
+            ]
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<Map<String, List<Map<String, dynamic>>>> _tidyStopped(Set<String> drop) async {
+    for (final k in _store.keysStartingWith('runs_stopped:').toList()) {
+      await _store.remove(k);
+    }
+    final held = await _stoppedHeld();
+    final chats = {for (final c in _store.conversations()) if (c.anon) c.id: c};
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final kept = <String, List<Map<String, dynamic>>>{};
+    held.forEach((id, list) {
+      final c = chats[id];
+      if (drop.contains(id) || c == null || heldFor(c.anonPk) == null) return;
+      final live = [for (final x in list) if (now - (x['at'] as num) < stoppedKeep.inMilliseconds) x];
+      if (live.isNotEmpty) kept[id] = live.length > 200 ? live.sublist(live.length - 200) : live;
+    });
+    if (jsonEncode(kept) != jsonEncode(held)) {
+      if (kept.isEmpty) {
+        await _store.dropSecret(_stoppedKey);
+      } else {
+        await _store.setSecret(_stoppedKey, jsonEncode(kept));
+      }
+    }
+    return kept;
+  }
+
+  Future<void> tidyStopped([Iterable<String> drop = const []]) =>
+      _stoppedOp(() => _tidyStopped(drop.toSet())).then((_) {}, onError: (_) {});
+
+  Future<void> markStopped(String convId, String run) => _stoppedOp(() async {
+        final all = await _tidyStopped(const {});
+        final list = [...?all[convId]]..removeWhere((x) => x['run'] == run);
+        list.add({'run': run, 'at': DateTime.now().millisecondsSinceEpoch});
+        all[convId] = list.length > 200 ? list.sublist(list.length - 200) : list;
+        await _store.setSecret(_stoppedKey, jsonEncode(all));
+      }).then((_) {}, onError: (_) {});
+
+  Future<Set<String>> stoppedIn(String convId) => _stoppedOp(() async {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        return {
+          for (final x in (await _stoppedHeld())[convId] ?? const <Map<String, dynamic>>[])
+            if (now - (x['at'] as num) < stoppedKeep.inMilliseconds) x['run'] as String
+        };
+      });
+
   Future<void> load() async {
+    await _store.loadAnonChats();
+    await _loadState();
+    await tidyStopped();
+  }
+
+  Future<void> _loadState() async {
     final known = await _store.secret(_balancesKey);
     if (known != null && known.isNotEmpty) {
       try {
@@ -165,7 +241,9 @@ class AnonMode {
 
   Future<Map<String, dynamic>> bind(Conversation conv) async {
     final id = await identityFor(conv.anonPk);
+    final was = conv.anonPk;
     conv.anonPk = id['pk'] as String;
+    if (was != null && was != conv.anonPk) await tidyStopped([conv.id]);
     return id;
   }
 
@@ -264,6 +342,9 @@ class AnonMode {
     }
     _state['current'] = _newIdentity();
     await _save();
+    if (old != null) {
+      await tidyStopped([for (final c in _store.conversations()) if (c.anonPk == old['pk']) c.id]);
+    }
     if (!sweep || old == null) return 0;
     return _sweep(old);
   }

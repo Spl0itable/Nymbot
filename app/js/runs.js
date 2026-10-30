@@ -561,10 +561,11 @@
     async function stopRemote(ui, runId) {
         const r = remote.find(x => x.replyTo === runId);
         const conv = r ? convForThread(r.thread) : null;
+        const same = !!(r && conv && !!r.anon === !!conv.anon);
         remote = remote.filter(x => x.replyTo !== runId);
         render(ui);
-        if (typeof ui.stoppedRun === 'function') ui.stoppedRun(runId, r && r.anon && conv && !conv.anon ? null : conv);
-        if (!(r && r.anon && !conv)) await cancel(ui, conv, runId, null).catch(() => null);
+        if (typeof ui.stoppedRun === 'function') ui.stoppedRun(runId, same ? conv : null);
+        if (r && (!r.anon || same)) await cancel(ui, same ? conv : null, runId, null).catch(() => null);
         ui.toast(t('Stopped.'));
     }
 

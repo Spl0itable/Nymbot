@@ -80,7 +80,37 @@ class HighlightedCode extends StatelessWidget {
     );
   }
 
+  static final Map<(String, String, TextStyle, Brightness), List<InlineSpan>>
+      _spanCache = {};
+  static int _cachedSpans = 0;
+  static const _spanBudget = 16000;
+  static const _maxCachedChars = 8000;
+
+  @visibleForTesting
+  static int get cachedSpanCount => _cachedSpans;
+
   static List<InlineSpan> spans(
+    BuildContext context,
+    String code,
+    String language,
+    TextStyle base,
+  ) {
+    if (code.length > _maxCachedChars) {
+      return _spansOf(context, code, language, base);
+    }
+    final key = (code, language, base, Theme.of(context).brightness);
+    final hit = _spanCache.remove(key);
+    if (hit != null) return _spanCache[key] = hit;
+    final out = _spansOf(context, code, language, base);
+    _spanCache[key] = out;
+    _cachedSpans += out.length;
+    while (_spanCache.length > 64 || _cachedSpans > _spanBudget) {
+      _cachedSpans -= _spanCache.remove(_spanCache.keys.first)!.length;
+    }
+    return out;
+  }
+
+  static List<InlineSpan> _spansOf(
     BuildContext context,
     String code,
     String language,

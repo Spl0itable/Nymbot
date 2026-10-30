@@ -237,10 +237,15 @@
             return this.rootCode();
         },
 
+        canSign() {
+            return !!(this._sk || this.remote || (this.pubkey && window.nostr && typeof window.nostr.signEvent === 'function'));
+        },
+
         async signEvent(event) {
             const evt = Object.assign({ pubkey: this.pubkey }, event);
             if (this._sk) return NT().finalizeEvent(evt, this._sk);
             if (this.remote) return this.remote.sign(evt);
+            if (!this.canSign()) throw new Error(t('No signer is connected.'));
             const signed = await window.nostr.signEvent(evt);
             if (!signed || !signed.sig) throw new Error(t('The extension refused to sign.'));
             return signed;
