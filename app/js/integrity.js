@@ -6,9 +6,11 @@
 
     const EDGE_NONCE = '[A-Za-z0-9+/=_-]*';
     const EDGE_NONCE_ATTR = '(?: nonce="' + EDGE_NONCE + '")?';
-    const EDGE_PLATFORM_PATH = '/cdn-cgi/challenge-platform/[A-Za-z0-9_./-]+';
+    const EDGE_PLATFORM_PATH = '/cdn-cgi/challenge-platform(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+';
+    const EDGE_RAY_QUERY = '(?:\\?ray=[0-9a-f]+)?';
     const EDGE_BOOTSTRAP = "<script§NONCEATTR§>window.__CF$cv$params={r:'§RAY§',t:'§TOKEN§'§SESSION§};(function(){if(!document.body)return;var s=document.createElement('script');s.nonce='§NONCE§';s.src='§SRC§';document.head.appendChild(s);})();</script>";
     const EDGE_BOOTSTRAP_LEGACY = "<script§NONCEATTR§>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML=\"window.__CF$cv$params={r:'§RAY§',t:'§TOKEN§'};var a=document.createElement('script');a.nonce='§NONCE§';a.src='§SRC§';document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>";
+    const EDGE_BOOTSTRAP_ORIGIN = "<script§NONCEATTR§>window.__CF$cv$params={r:'§RAY§',t:'§TOKEN§'§SESSION§};(function(){if(!document.body)return;var l=window.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='§SRC§§RAYQUERY§',s=document.createElement('script');s.nonce='§NONCE§';s.src=o?new URL(u,o).href:u;document.head.appendChild(s);})();</script>";
 
     function escapeRe(s) {
         return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -17,34 +19,61 @@
     function bootstrapRe(template) {
         return new RegExp(escapeRe(template)
             .replace('§NONCEATTR§', EDGE_NONCE_ATTR)
-            .replace('§RAY§', '[0-9a-f]+')
+            .replace('§RAY§', '(?<ray>[0-9a-f]+)')
             .replace('§TOKEN§', '[A-Za-z0-9+/=]+')
             .replace('§SESSION§', "(?:,u:'[0-9a-f]+')?(?:,ut:'[A-Za-z0-9._-]+')?(?:,i:[0-9]+)?")
             .replace('§NONCE§', EDGE_NONCE)
-            .replace('§SRC§', EDGE_PLATFORM_PATH), 'g');
+            .replace('§SRC§', EDGE_PLATFORM_PATH)
+            .replace('§RAYQUERY§', '(?:\\?ray=\\k<ray>)?'));
+    }
+
+    const EDGE_TAG = /<script((?:[\t\n\f\r ]+[a-z-]+(?:="[^"<>]*"|='[^'<>]*')?)+)><\/script>/g;
+    const EDGE_TAG_ATTR = /[\t\n\f\r ]+([a-z-]+)(?:="([^"<>]*)"|='([^'<>]*)')?/g;
+    const EDGE_TAG_EXTRA = ['nonce', 'defer', 'async', 'integrity', 'crossorigin', 'data-cf-beacon', 'data-cf-settings'];
+    const EDGE_BEACON_SRC = /^https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js[^"<>]*$/;
+    const EDGE_PLATFORM_SRC = new RegExp('^' + EDGE_PLATFORM_PATH + EDGE_RAY_QUERY + '$');
+    const ROCKET_LOADER_SRC = /^\/cdn-cgi\/scripts\/[0-9a-f]+\/cloudflare-static\/rocket-loader\.min\.js$/;
+    const ROCKET_LOADER_SETTINGS = /^([0-9a-f]+)-[^"<>]*$/;
+
+    function edgeTag(attrs, src) {
+        const seen = new Map();
+        for (const [, name, dq, sq] of attrs.matchAll(EDGE_TAG_ATTR)) {
+            const value = dq ?? sq ?? null;
+            if (seen.has(name)) return null;
+            if (name === 'type' ? value !== 'module' : name !== 'src' && !EDGE_TAG_EXTRA.includes(name)) return null;
+            seen.set(name, value);
+        }
+        return src.test(seen.get('src') ?? '') ? seen : null;
     }
 
     const EDGE_PATTERNS = [
-        new RegExp('<script(?=[^<>]*\\ssrc="https://static\\.cloudflareinsights\\.com/beacon\\.min\\.js[^"<>]*")[^<>]*></script>', 'g'),
-        bootstrapRe(EDGE_BOOTSTRAP),
-        bootstrapRe(EDGE_BOOTSTRAP_LEGACY),
-        new RegExp('<script(?=[^<>]*\\ssrc="' + EDGE_PLATFORM_PATH + '")[^<>]*></script>', 'g')
+        [EDGE_TAG, EDGE_BEACON_SRC],
+        [bootstrapRe(EDGE_BOOTSTRAP)],
+        [bootstrapRe(EDGE_BOOTSTRAP_LEGACY)],
+        [bootstrapRe(EDGE_BOOTSTRAP_ORIGIN)],
+        [EDGE_TAG, EDGE_PLATFORM_SRC]
     ];
-    const ROCKET_LOADER = /<script(?=[^<>]*\ssrc="\/cdn-cgi\/scripts\/[0-9a-f]+\/cloudflare-static\/rocket-loader\.min\.js")(?=[^<>]*\sdata-cf-settings="([0-9a-f]+)-[^"<>]*")[^<>]*><\/script>/;
     const META_NONCE = new RegExp('(<meta http-equiv="Content-Security-Policy" content="[^"]*?script-src) \\\'nonce-' + EDGE_NONCE + '\\\'');
     const INLINE_SCRIPT = /<script(?:\s[^<>]*)?>[\s\S]*?<\/script>/g;
 
     function stripEdgeInjection(html) {
         let removed = 0;
-        const loader = html.match(ROCKET_LOADER);
-        if (loader) {
-            html = html.replace(loader[0], '');
+        let marker = '';
+        html = html.replace(EDGE_TAG, (tag, attrs) => {
+            const loader = !marker && edgeTag(attrs, ROCKET_LOADER_SRC);
+            const settings = loader && ROCKET_LOADER_SETTINGS.exec(loader.get('data-cf-settings') ?? '');
+            if (!settings) return tag;
+            marker = ' type="' + settings[1] + '-text/javascript"';
             removed++;
-            const marker = ' type="' + loader[1] + '-text/javascript"';
-            html = html.replace(/<script\s[^<>]*>/g, (tag) => tag.split(marker).join(''));
-        }
-        for (const re of EDGE_PATTERNS) {
-            html = html.replace(re, () => { removed++; return ''; });
+            return '';
+        });
+        if (marker) html = html.replace(/<script\s[^<>]*>/g, (tag) => tag.split(marker).join(''));
+        for (const [re, src] of EDGE_PATTERNS) {
+            html = html.replace(re, (tag, attrs) => {
+                if (src && !edgeTag(attrs, src)) return tag;
+                removed++;
+                return '';
+            });
         }
         html = html.replace(META_NONCE, '$1');
         return { html, removed };
@@ -138,6 +167,7 @@
                     else {
                         mismatches.push(path);
                         strayScripts += stray.length;
+                        for (const text of stray) console.warn('Nymbot integrity: unrecognized inline script in ' + path + ':\n' + text);
                     }
                 } catch (_) {
                     mismatches.push(path);
