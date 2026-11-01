@@ -24,6 +24,7 @@ Added
   stay clear of the status cluster.
 
 Changed
+- Scrolling the chat no longer rebuilds the whole screen each time the jump-to-newest button shows or hides.
 - Scrolling a chat while a reply streams does less work: only the changed message, not the whole screen, toolbar, composer or chat list, rebuilds on each update, and tables and code blocks no longer add sideways scrolling when they fit.
 - While a reply streams in, the app does less work on each update: messages that did not change are no longer parsed again, and code blocks are colored once instead of on every update, with the colored copies kept small in memory.
 - Coming back to the app now fetches only the support replies that arrived since the last check, and checks the connection of the chat on screen first; the connection of your other chats (anonymous or under your nym) is checked a few minutes later.

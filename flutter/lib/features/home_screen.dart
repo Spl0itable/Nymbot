@@ -181,7 +181,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Only one message's action row is open at a time.
   String? _openActions;
-  bool _atBottom = true;
+  final ValueNotifier<bool> _atBottom = ValueNotifier(true);
   bool _mouse = false;
   bool _makerLookup = false;
   String? _findTerm;
@@ -211,7 +211,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       final near = _scroll.position.maxScrollExtent - _scroll.offset < 140;
-      if (near != _atBottom) setState(() => _atBottom = near);
+      _atBottom.value = near;
     });
     _input.addListener(() {
       final empty = _input.text.trim().isEmpty;
@@ -565,6 +565,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _inputFocus.dispose();
     _inputScroll.dispose();
     _scroll.dispose();
+    _atBottom.dispose();
     _voice.dispose();
     super.dispose();
   }
@@ -573,7 +574,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final mouse = mousePointer();
     if (mouse == _mouse) return;
     _mouse = mouse;
-    if (!mounted || !mouse || !_atBottom || !_scroll.hasClients) return;
+    if (!mounted || !mouse || !_atBottom.value || !_scroll.hasClients) return;
     final position = _scroll.position;
     if (position is! _ThreadPosition) return;
     position.holdEnd = position.pixels;
@@ -720,7 +721,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!shown) return;
     if (_draftTurn != turn) {
       _draftTurn = turn;
-      _followDraft = _atBottom;
+      _followDraft = _atBottom.value;
     }
     if (_followDraft) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _pinDraft());
@@ -2241,15 +2242,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             builder: (context) =>
                                 _messages(context, AppScope.of(context)))),
                     const SandboxView(),
-                    if (!_atBottom && app.messages.isNotEmpty)
+                    if (app.messages.isNotEmpty)
                       Positioned(
                         right: 12,
                         bottom: 12,
-                        child: FloatingActionButton.small(
-                          heroTag: 'toBottom',
-                          tooltip: t('Jump to the newest message'),
-                          onPressed: () => _toBottom(),
-                          child: const NymGlyph('down', size: 18),
+                        child: ValueListenableBuilder<bool>(
+                          valueListenable: _atBottom,
+                          builder: (context, atBottom, _) => atBottom
+                              ? const SizedBox.shrink()
+                              : FloatingActionButton.small(
+                                  heroTag: 'toBottom',
+                                  tooltip: t('Jump to the newest message'),
+                                  onPressed: () => _toBottom(),
+                                  child: const NymGlyph('down', size: 18),
+                                ),
                         ),
                       ),
                   ],

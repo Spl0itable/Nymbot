@@ -149,13 +149,13 @@ that must not be readable at rest. Android backups are off entirely.
 
 ## Release signing
 
-The release APK is signed with a keystore this repository deliberately does not
-contain. `./scripts/generate-keystore.sh` creates it once —
-`android/app/nymbot-release-key.jks`, plus the `android/key.properties` that
-points Gradle at it and holds its passwords in the clear. Both are gitignored
-and must stay that way: the private key in that file *is* Nymbot's identity on
-Android, and anyone holding it with its password can sign a build every existing
-install will accept as a genuine update.
+The release APK is signed with a keystore that `./scripts/generate-keystore.sh`
+creates once — `android/app/nymbot-release-key.jks`, plus the
+`android/key.properties` that points Gradle at it and holds its passwords in the
+clear. `android/key.properties` and every `android/key-*.properties` are
+gitignored and must stay that way: the private key in the keystore *is* Nymbot's
+identity on Android, and anyone holding it with its password can sign a build
+every existing install will accept as a genuine update.
 
 Losing it is the same problem from the other side, and it is the one that cannot
 be undone. Android refuses an update signed by a different key, so a lost
@@ -188,8 +188,12 @@ four `storePassword` / `keyPassword` / `keyAlias` / `storeFile` lines. The
 generate script refuses to run when a keystore is already present, precisely so
 a restore is never mistaken for a regeneration.
 
-CI signs from the same key without ever committing it — the keystore goes in
-base64 and the passwords go in beside it, as encrypted repository secrets:
+The Play Store App Bundle from `./scripts/build-play-aab.sh` signs with the key
+named in `android/key-play.properties` instead, which takes the same four lines,
+with `storeFile=nymbot-release-key.jks` relative to `android/app/`.
+
+CI signs from the same key — the keystore goes in base64 and the passwords go
+in beside it, as encrypted repository secrets:
 
 ```sh
 base64 -i android/app/nymbot-release-key.jks | gh secret set ANDROID_KEYSTORE_BASE64
