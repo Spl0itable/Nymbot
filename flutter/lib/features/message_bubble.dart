@@ -21,6 +21,7 @@ import 'desktop_layout.dart';
 import 'doc_tray.dart';
 import 'sheets/cost_sheet.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'markdown_body.dart';
 import 'media_viewer.dart';
 import 'motion.dart';
@@ -502,7 +503,7 @@ class _MessageBubbleState extends State<MessageBubble> {
                 ],
               ),
             if (m.quote != null && m.quote!.isNotEmpty) _quoted(context, m.quote!),
-            if (m.thinking != null) _reasoning(context, m),
+            if (shownThinking(m) != null) _reasoning(context, m),
             if (m.role == ChatRole.self && m.content.length > WireLimits.foldShown) ...[
               MarkdownBody(
                 _longOpen ? m.content : WireLimits.fold(m.content),
@@ -520,7 +521,7 @@ class _MessageBubbleState extends State<MessageBubble> {
               ),
             ] else if (m.role == ChatRole.bot || m.role == ChatRole.self)
               MarkdownBody(
-                revealed(m.content, widget.reveal),
+                revealed(m.role == ChatRole.bot ? shownContent(m) : m.content, widget.reveal),
                 monospace: settings.monospaceReplies,
                 wrapCode: settings.codeWrap,
                 lineNumbers: settings.lineNumbers,
@@ -768,7 +769,7 @@ class _MessageBubbleState extends State<MessageBubble> {
             ),
             child: SingleChildScrollView(
               child: Text(
-                m.thinking!,
+                shownThinking(m)!,
                 style: TextStyle(fontSize: 12.5, color: Theme.of(context).hintColor),
               ),
             ),
@@ -794,7 +795,7 @@ class _MessageBubbleState extends State<MessageBubble> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SelectableText(
-            m.content,
+            shownContent(m),
             style: TextStyle(
               fontSize: 13,
               color: error ? NymbotColors.danger : theme.hintColor,

@@ -6,6 +6,7 @@ import '../../models/compare.dart';
 import '../../models/model_maker.dart';
 import '../brand_tile.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import '../markdown_body.dart';
 import '../nym_glyph.dart';
 import 'models_sheet.dart';
@@ -120,9 +121,7 @@ class _CompareSheetState extends State<_CompareSheet> {
     // Both answers come from frontier models, so both charge the Pro balance.
     final have = app.proBalance;
     if (have != null && have < price) {
-      setState(() => _status = t(
-          'Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
-          {'n': figure(price), 'have': creditFigure(have)}));
+      setState(() => _status = compareShortText(price, have));
       return;
     }
     final go = await showDialog<bool>(
@@ -255,7 +254,7 @@ class _CompareSheetState extends State<_CompareSheet> {
             ],
             for (final run in _runs) ...[
               const SizedBox(height: 10),
-              _Result(
+              CompareResult(
                 run: run,
                 maker: ModelMaker.of(run.model, _catalog),
                 onKeep: () => _keep(run),
@@ -268,8 +267,8 @@ class _CompareSheetState extends State<_CompareSheet> {
   }
 }
 
-class _Result extends StatelessWidget {
-  const _Result({required this.run, required this.maker, required this.onKeep});
+class CompareResult extends StatelessWidget {
+  const CompareResult({super.key, required this.run, required this.maker, required this.onKeep});
 
   final CompareRun run;
   final ModelMaker? maker;
@@ -331,8 +330,8 @@ class _Result extends StatelessWidget {
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(10),
               child: run.ok
-                  ? MarkdownBody(run.reply)
-                  : Text(run.error ?? '',
+                  ? MarkdownBody(iosBotBuyRewrite(run.reply))
+                  : Text(withoutBuyHints(run.error ?? ''),
                       style: TextStyle(
                           fontSize: 12, color: theme.colorScheme.error)),
             ),
@@ -350,3 +349,9 @@ class _Result extends StatelessWidget {
     );
   }
 }
+
+String compareShortText(num price, double have) => creditPurchasesDisabled
+    ? t('Comparing spends Pro credits — {n} for these two, and you have {have}.',
+        {'n': figure(price), 'have': creditFigure(have)})
+    : t('Comparing spends Pro credits — {n} for these two, and you have {have}. Type ?buy to top up.',
+        {'n': figure(price), 'have': creditFigure(have)});

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import 'sheet.dart';
 
 Future<void> showAnonSheet(BuildContext context) => showNymSheet<void>(
@@ -178,7 +179,10 @@ class _AnonSheetState extends State<_AnonSheet> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: app.settings.anonAutoTop,
-              title: Text(t('Keep it topped up automatically'),
+              title: Text(
+                  creditPurchasesDisabled
+                      ? t('Keep it filled automatically')
+                      : t('Keep it topped up automatically'),
                   style: const TextStyle(fontSize: 13)),
               subtitle: Text(
                 t('When the throwaway key runs low, move credits across without '
@@ -208,7 +212,8 @@ class _AnonSheetState extends State<_AnonSheet> {
                     child: TextFormField(
                       initialValue: '${app.settings.anonAutoTopFloor}',
                       keyboardType: TextInputType.number,
-                      decoration: InputDecoration(labelText: t('Top up below')),
+                      decoration: InputDecoration(
+                          labelText: creditPurchasesDisabled ? t('Move credits below') : t('Top up below')),
                       onChanged: (v) {
                         final n = int.tryParse(v) ?? 0;
                         app.settings.anonAutoTopFloor = n < 0 ? 0 : n;

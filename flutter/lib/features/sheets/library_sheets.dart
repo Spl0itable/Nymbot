@@ -6,6 +6,7 @@ import '../../models/conversation.dart';
 import '../command_palette.dart';
 import '../markdown_body.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import '../../core/theme/theme.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
@@ -185,7 +186,7 @@ class _SavedSheetState extends State<_SavedSheet> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   subtitle: Text(
-                    MarkdownBody.plain(row.message.content),
+                    MarkdownBody.plain(shownContent(row.message)),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 11),
@@ -198,7 +199,7 @@ class _SavedSheetState extends State<_SavedSheet> {
                     icon: const NymGlyph('copy', size: 17),
                     tooltip: t('Copy'),
                     onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: row.message.content)),
+                        Clipboard.setData(ClipboardData(text: shownContent(row.message))),
                   ),
                 );
               },

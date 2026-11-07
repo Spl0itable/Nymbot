@@ -73,7 +73,7 @@ class NymbotToolbar extends StatelessWidget {
                   (!app.spendingAnon && (app.standardBalance ?? 0) == 0)))
           ? t('{n} free', {'n': figure(app.freeLeft)})
           : (app.shownBalance == null
-              ? t('Buy')
+              ? (creditPurchasesDisabled ? t('Credits') : t('Buy'))
               : creditFigure(app.shownBalance)),
       active: false,
       color: app.spendingAnon ? theme.colorScheme.secondary : NymbotColors.lightning,

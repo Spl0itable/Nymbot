@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import 'about_sheet.dart';
 import 'sheet.dart';
 import '../nym_glyph.dart';
@@ -24,11 +25,16 @@ class HelpTopic {
 List<HelpTopic> helpTopics() => [
       HelpTopic(
         t('Asking, and what it costs'),
-        t('Every reply is paid for a message at a time, in credits you buy over '
-            'Lightning. Standard replies are auto-routed; Pro pins a model you '
-            'choose. The toolbar says which is answering and roughly what the '
-            'next reply will cost. Type ? in the composer for the full list of '
-            'commands.'),
+        creditPurchasesDisabled
+            ? t('Every reply is paid for a message at a time, in credits. Standard '
+                'replies are auto-routed; Pro pins a model you choose. The toolbar '
+                'says which is answering and roughly what the next reply will cost. '
+                'Type ? in the composer for the full list of commands.')
+            : t('Every reply is paid for a message at a time, in credits you buy over '
+                'Lightning. Standard replies are auto-routed; Pro pins a model you '
+                'choose. The toolbar says which is answering and roughly what the '
+                'next reply will cost. Type ? in the composer for the full list of '
+                'commands.'),
       ),
       HelpTopic(
         t('Artifacts'),

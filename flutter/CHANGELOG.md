@@ -24,6 +24,27 @@ Added
   stay clear of the status cluster.
 
 Changed
+- On iPhone, iPad and Mac the app no longer shows buy buttons, money prices for
+  credits or where to buy them, and server messages there leave out how to
+  buy, including in search, saved messages, quotes, memories, share previews,
+  shared chats opened in the app and chats exported as Markdown or text.
+  Nymbot replies there leave out only buying talk about Nymbot itself: a
+  paragraph's buying, top-up, paying or price wording, in English, German,
+  Spanish or French, goes only when the same paragraph names ?buy (not your
+  own bot's or another bot's command), nymbot.ai, Nymbot with its credits or
+  its own packs, plans or balance (not when Nymbot says it can't see or sell
+  them), Nymbot Standard or Pro credits (not another product's), the credits
+  sheet, the Buy button (not another app's) or the balance in the chat
+  header; a numbered list that loses a step is renumbered. Every other reply
+  and its reasoning show as written, including answers about topping up,
+  paying or buying in other apps, their Buy buttons, balances and Pro
+  credits, web and Android apps, Lightning, Bitcoin, zaps, other services'
+  credits, accounting, Apple Pro products, cables and phone or transit
+  top-ups, Nymbot saying it can't buy things for you or see another app's
+  balance, Nymbot helping you plan or pack, and coding answers about your own
+  shop, buy sheet or Discord, Nostr or Matrix bot commands.
+  Credits you already have, the free daily replies and every paid feature
+  work as before. Android and the web app are unchanged.
 - Scrolling the chat no longer rebuilds the whole screen each time the jump-to-newest button shows or hides.
 - Scrolling a chat while a reply streams does less work: only the changed message, not the whole screen, toolbar, composer or chat list, rebuilds on each update, and tables and code blocks no longer add sideways scrolling when they fit.
 - While a reply streams in, the app does less work on each update: messages that did not change are no longer parsed again, and code blocks are colored once instead of on every update, with the colored copies kept small in memory.

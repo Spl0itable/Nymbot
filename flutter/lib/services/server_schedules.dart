@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../features/i18n/i18n.dart';
+import '../features/purchase_policy.dart';
 import '../models/schedule.dart';
 
 class ServerSchedules {
@@ -82,14 +83,16 @@ class ServerSchedules {
   static String unavailable() => t(
       'Server schedules are not available right now, so this one runs only while the app is open.');
 
+  static String emptyBalance() => creditPurchasesDisabled
+      ? t('Server schedules spend your paid balance, which is empty.')
+      : t('Server schedules spend your paid balance, which is empty. Top up first.');
+
   static String? refusal(int status, Map<String, dynamic> data) {
     if (status == 200 && data['ok'] == true) return null;
     if (status == 409 || data['limit'] != null) {
       return t('The server keeps up to 10 schedules. Delete one first, or keep this one on this device.');
     }
-    if (data['noCredits'] == true || status == 402) {
-      return t('Server schedules spend your paid balance, which is empty. Top up first.');
-    }
+    if (data['noCredits'] == true || status == 402) return emptyBalance();
     if (status == 503 || data['unavailable'] == true || status == 0 || status == 404 ||
         data['error'] == 'Unknown action') {
       return unavailable();

@@ -1,4 +1,5 @@
 import '../features/i18n/i18n.dart';
+import '../features/purchase_policy.dart';
 
 class BackgroundRun {
   BackgroundRun({
@@ -144,7 +145,9 @@ class BackgroundJobs {
       case 'parked':
         final b = body ?? const <String, dynamic>{};
         if (b['noCredits'] == true) {
-          return t('Paused in the background: you are out of credits. Top up, then ask it to carry on.');
+          return creditPurchasesDisabled
+              ? t('Paused in the background: you are out of credits.')
+              : t('Paused in the background: you are out of credits. Top up, then ask it to carry on.');
         }
         if (b['capExceeded'] == true) {
           return t("Paused in the background: carrying on could go past this chat's spending cap.");

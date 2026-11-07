@@ -9,6 +9,7 @@ import '../models/conversation.dart';
 import '../services/chat_share.dart';
 import '../state/app_controller.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'markdown_body.dart';
 import 'sheets/sheet.dart';
 import 'nym_glyph.dart';
@@ -206,7 +207,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
     final self = m['role'] == 'user';
     final sources = (m['sources'] as List?)?.cast<Map>() ?? const [];
     final files = (m['attachments'] as List?)?.cast<Map>() ?? const [];
-    final reasoning = m['reasoning'] as String?;
+    final reasoning = iosThinkingRewrite(m['reasoning'] as String?);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
@@ -258,7 +259,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11, color: theme.hintColor)),
             ),
-          MarkdownBody(m['content'] as String),
+          MarkdownBody(self ? m['content'] as String : iosBotBuyRewrite(m['content'] as String)),
           if (sources.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -320,7 +321,7 @@ class _ShareChatSheetState extends State<_ShareChatSheet> {
                             'who': choices[i].role == ChatRole.self
                                 ? t('You')
                                 : 'Nymbot',
-                            'text': _snippet(choices[i].content),
+                            'text': _snippet(shownContent(choices[i])),
                           }),
                           overflow: TextOverflow.ellipsis,
                         ),

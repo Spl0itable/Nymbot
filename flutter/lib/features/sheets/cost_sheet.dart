@@ -5,6 +5,7 @@ import '../../models/conversation.dart';
 import '../../services/server_runs.dart';
 import '../../services/team.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import 'credits_sheet.dart';
 import 'sheet.dart';
 
@@ -19,7 +20,8 @@ List<(String, String)> costRows(BuildContext context, ChatMessage m,
     })),
     (t('Tier'), pro ? t('Pro') : t('Standard')),
     (t('Model'), m.model ?? t('Auto-routed')),
-    (t("At today's price"), t('{n} sats', {'n': figure(sats)})),
+    if (!creditPurchasesDisabled)
+      (t("At today's price"), t('{n} sats', {'n': figure(sats)})),
   ];
   if (m.calls > 1) rows.add((t('Model calls'), '${m.calls}'));
   if (m.task != null) rows.add((t('Routed as'), m.task!));
@@ -111,14 +113,16 @@ class _CostSheet extends StatelessWidget {
                       'picked for it.'),
               style: TextStyle(fontSize: 11.5, color: theme.hintColor),
             ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                showCreditsSheet(context);
-              },
-              child: Text(t('Buy credits')),
-            ),
+            if (!creditPurchasesDisabled) ...[
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  showCreditsSheet(context);
+                },
+                child: Text(t('Buy credits')),
+              ),
+            ],
           ],
         ),
       ),

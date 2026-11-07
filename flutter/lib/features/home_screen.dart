@@ -93,6 +93,7 @@ import 'sheets/repos_sheet.dart';
 import 'rewind_dialog.dart';
 import 'toolbar.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'nym_glyph.dart';
 
 String supportSendError(ContactOutcome outcome, {required bool connected}) {
@@ -664,7 +665,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     announceReply(app.settings);
     if (app.settings.autoSpeak && reply != null && app.current?.id == asked) {
-      await _voice.speak(reply.id, reply.content,
+      await _voice.speak(reply.id, shownContent(reply),
           rate: app.settings.speechRate,
           voice: app.settings.voiceUri,
           language: Voice.languageFor(reply.content, I18n.lang));
@@ -1215,7 +1216,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     both(LogicalKeyboardKey.keyC, () async {
       final replies = app.messages.where((m) => m.role == ChatRole.bot);
       if (replies.isEmpty) return;
-      await Clipboard.setData(ClipboardData(text: replies.last.content));
+      await Clipboard.setData(ClipboardData(text: shownContent(replies.last)));
       _say(t('Copied.'));
     }, shift: true);
     bindings[const SingleActivator(LogicalKeyboardKey.escape)] = () {
@@ -1575,7 +1576,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final app = AppScope.read(context);
     switch (action) {
       case MessageAction.copy:
-        await Clipboard.setData(ClipboardData(text: m.content));
+        await Clipboard.setData(ClipboardData(text: shownContent(m)));
         _say(t('Copied.'));
       case MessageAction.transcript:
         final conv = app.current;
@@ -1585,7 +1586,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               convId: conv.id, id: tx.id, remote: tx.id == tx.run && tx.end == null);
         }
       case MessageAction.speak:
-        await _voice.toggleSpeak(m.id, m.content,
+        await _voice.toggleSpeak(m.id, shownContent(m),
             rate: app.settings.speechRate,
             voice: app.settings.voiceUri,
             language: Voice.languageFor(m.content, I18n.lang));
@@ -1597,7 +1598,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case MessageAction.edit:
         await _edit(m);
       case MessageAction.quote:
-        app.setQuote(MarkdownBody.plain(m.content));
+        app.setQuote(MarkdownBody.plain(shownContent(m)));
       case MessageAction.fork:
         await app.forkAt(m);
         _say(t('Branched. The new chat carries what was said up to that point.'));
@@ -1610,7 +1611,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _say(m.pinned ? t('Removed from saved messages.') : t('Saved.'));
       case MessageAction.remember:
         // Plain text, not markup, so a memory reads as a sentence elsewhere.
-        final words = MarkdownBody.plain(m.content).trim();
+        final words = MarkdownBody.plain(shownContent(m)).trim();
         if (words.isEmpty) {
           _say(t('There is nothing in that to remember.'));
         } else {
@@ -3146,7 +3147,7 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
     case 'share':
       await SharePlus.instance.share(ShareParams(
         text: Transcript.markdown(conv,
-            elsewhere ? app.store.messages(conv.id) : app.messages,
+            shownMessages(elsewhere ? app.store.messages(conv.id) : app.messages),
             repos: reposOf(app, conv)),
         subject: conv.title.isEmpty ? 'Nymbot' : conv.title,
       ));
@@ -3159,7 +3160,7 @@ Future<void> runChatMenuChoice(BuildContext context, AppController app,
     case 'copy':
       await Clipboard.setData(ClipboardData(text: Transcript.markdown(
           conv,
-          elsewhere ? app.store.messages(conv.id) : app.messages,
+          shownMessages(elsewhere ? app.store.messages(conv.id) : app.messages),
           repos: reposOf(app, conv))));
       messenger
         ..clearSnackBars()
@@ -3198,13 +3199,13 @@ Future<void> exportChat(
           mime: 'application/json',
           subject: title);
     case 'txt':
-      await ShareFile.text(Transcript.plain(conv, messages),
+      await ShareFile.text(Transcript.plain(conv, shownMessages(messages)),
           name: Backup.fileName(title, 'txt'),
           mime: 'text/plain',
           subject: title);
     default:
       await ShareFile.text(
-          Transcript.markdown(conv, messages, repos: reposOf(app, conv)),
+          Transcript.markdown(conv, shownMessages(messages), repos: reposOf(app, conv)),
           name: Backup.fileName(title, 'md'),
           mime: 'text/markdown',
           subject: title);

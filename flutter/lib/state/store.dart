@@ -13,6 +13,7 @@ import '../models/bot.dart';
 import '../models/connector.dart';
 import '../models/conversation.dart';
 import '../models/memory.dart';
+import '../features/purchase_policy.dart';
 import '../models/schedule.dart';
 import '../models/workspace.dart';
 import 'biometrics.dart';
@@ -643,16 +644,17 @@ class Store {
         out.add((conv: conv, message: null, excerpt: conv.title));
       }
       for (final m in messages(conv.id)) {
-        final at = m.content.toLowerCase().indexOf(needle);
+        final text = shownContent(m);
+        final at = text.toLowerCase().indexOf(needle);
         if (at == -1) continue;
         final from = at - 40 < 0 ? 0 : at - 40;
-        final to = at + needle.length + 80 > m.content.length
-            ? m.content.length
+        final to = at + needle.length + 80 > text.length
+            ? text.length
             : at + needle.length + 80;
         out.add((
           conv: conv,
           message: m,
-          excerpt: '${from > 0 ? '…' : ''}${m.content.substring(from, to).trim()}',
+          excerpt: '${from > 0 ? '…' : ''}${text.substring(from, to).trim()}',
         ));
         if (out.length > 300) return out;
       }

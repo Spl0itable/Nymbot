@@ -5,6 +5,7 @@ import '../services/doc_library.dart';
 import '../services/sandbox_protocol.dart';
 import '../services/server_runs.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'run_output.dart';
 import 'server_run_artifacts.dart';
 import 'sheets/credits_sheet.dart';
@@ -200,8 +201,8 @@ Future<void> runCodeOnServer(
   final app = AppScope.read(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
   void say(String text, {bool buy = false}) => messenger?.showSnackBar(SnackBar(
-        content: UiText(text),
-        action: buy && context.mounted
+        content: UiText(withoutBuyHints(text)),
+        action: buy && !creditPurchasesDisabled && context.mounted
             ? SnackBarAction(label: t('Buy'), onPressed: () => showCreditsSheet(context))
             : null,
       ));

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../core/theme/theme.dart';
 import '../core/utils/safe_url.dart';
+import '../models/notice.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'nym_glyph.dart';
 import 'sheets/models_sheet.dart';
 
@@ -20,7 +22,7 @@ class _NoticeBannerState extends State<NoticeBanner> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final list = app.visibleNotices;
+    final list = app.visibleNotices.map(shownNotice).whereType<Notice>().toList();
     if (list.isEmpty) return const SizedBox.shrink();
     final at = list.indexWhere((n) => n.id == _shown);
     final index = at < 0 ? 0 : at;

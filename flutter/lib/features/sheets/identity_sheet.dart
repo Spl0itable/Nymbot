@@ -9,6 +9,7 @@ import '../../services/nickname.dart';
 import '../../services/passkey_backup.dart';
 import '../../state/app_controller.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import '../brand_buttons.dart';
 import '../delete_account.dart';
 import '../key_backup_ui.dart';
@@ -847,5 +848,7 @@ Future<({bool ok, String message})?> moveWholeBalance(
   final res = await app.api.transferCredits(app.identity.signer, key);
   await app.refreshBalance();
   final error = res.data['error'] as String?;
-  return (ok: error == null, message: error ?? t('Moved.'));
+  return (ok: error == null, message: movedMessage(error));
 }
+
+String movedMessage(String? error) => error == null ? t('Moved.') : withoutBuyHints(error);

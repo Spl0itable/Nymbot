@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../services/chat_share.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'markdown_body.dart';
 import 'run_output.dart';
 
@@ -123,7 +124,10 @@ class _SharedChatScreenState extends State<SharedChatScreen> {
                                     : theme.colorScheme.primary),
                           ),
                           const SizedBox(height: 4),
-                          MarkdownBody('${m['content']}',
+                          MarkdownBody(
+                              m['role'] == 'assistant'
+                                  ? iosBotBuyRewrite('${m['content']}')
+                                  : '${m['content']}',
                               runnable: m['role'] == 'assistant'),
                         ],
                       ),

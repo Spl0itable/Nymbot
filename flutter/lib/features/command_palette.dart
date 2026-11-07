@@ -6,6 +6,7 @@ import '../app.dart';
 import '../core/theme/theme.dart';
 import 'command_sheet.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'sheets/sheet.dart';
 import 'nym_glyph.dart';
 
@@ -42,7 +43,7 @@ List<(String, String, String)> paletteActions() => [
       ('memory', t('Memory'), ''),
       ('shortcuts', t('Keyboard shortcuts'), ''),
       ('about', t('About Nymbot'), ''),
-      ('credits', t('Buy credits'), ''),
+      ('credits', creditPurchasesDisabled ? t('Credits') : t('Buy credits'), ''),
       ('api', t('API keys'), ''),
       ('anon', t('Anonymous chat'), ''),
       ('identity', t('Identity'), ''),

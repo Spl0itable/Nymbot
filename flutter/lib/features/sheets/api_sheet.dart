@@ -333,6 +333,7 @@ String apiPriceLine(Map<String, dynamic>? m) {
   if (m != null && m['id'] == kApiAutoModel['id']) {
     return t('Priced per reply by the model it picks.');
   }
+  if (creditPurchasesDisabled) return '';
   final p = m?['pricing'] is Map
       ? Map<String, dynamic>.from(m!['pricing'] as Map)
       : <String, dynamic>{};
@@ -697,7 +698,9 @@ class _ApiSheetState extends State<_ApiSheet> {
     } else {
       _keysSay(
           _free
-              ? t('Key made. API calls need credits, so buy some before you use it.')
+              ? (creditPurchasesDisabled
+                  ? t('Key made. API calls spend credits, and every call is refused while your balance is empty.')
+                  : t('Key made. API calls need credits, so buy some before you use it.'))
               : t('Key made.'),
           'ok');
     }
@@ -847,7 +850,9 @@ class _ApiSheetState extends State<_ApiSheet> {
           borderRadius: BorderRadius.circular(NymbotColors.buttonRadius),
         ),
         child: Text(
-          t('API calls need credits. You can make keys now, but every call is refused until you buy some.'),
+          creditPurchasesDisabled
+              ? t('API calls need credits. You can make keys now, but every call is refused while your balance is empty.')
+              : t('API calls need credits. You can make keys now, but every call is refused until you buy some.'),
           style: const TextStyle(
               fontSize: 12.5, height: 1.4, color: NymbotColors.lightning),
         ),
@@ -993,7 +998,7 @@ class _ApiSheetState extends State<_ApiSheet> {
 
   Widget _balance(String tier, ApiBalance b) {
     final theme = Theme.of(context);
-    final value = b.sats != null
+    final value = b.sats != null && !creditPurchasesDisabled
         ? t('{n} sats', {'n': figure(b.sats)})
         : (b.credits != null
             ? t('{n} credits', {'n': creditFigure(b.credits)})
@@ -1054,7 +1059,7 @@ class _ApiSheetState extends State<_ApiSheet> {
               : t('resets {period}', {'period': _periodWord(key.resetPeriod!)}),
       ] else
         t('No cap'),
-      t('{n} sats in total', {'n': figure(key.totalUsedSats)}),
+      if (!creditPurchasesDisabled) t('{n} sats in total', {'n': figure(key.totalUsedSats)}),
     ];
     final status = <String>[
       if (key.revokedAt != null)
@@ -1182,7 +1187,7 @@ class _ApiSheetState extends State<_ApiSheet> {
         'input': figure(q.inputTokens),
         'output': figure(q.outputTokens),
       }),
-      t('{n} sats', {'n': figure(q.costSats)}),
+      if (!creditPurchasesDisabled) t('{n} sats', {'n': figure(q.costSats)}),
       if (q.balance == 'standard') t('Standard'),
       if (q.balance == 'pro') t('Pro'),
       if (owner != null && owner.name.isNotEmpty) owner.name,

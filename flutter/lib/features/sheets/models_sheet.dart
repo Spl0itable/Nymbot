@@ -7,6 +7,7 @@ import '../../state/app_controller.dart';
 import '../brand_tile.dart';
 import '../../models/model_maker.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import '../nym_glyph.dart';
 import 'sheet.dart';
 
@@ -185,7 +186,7 @@ class ModelPicker {
   }
 
   static String? rates(Map<String, dynamic> m, Map<String, dynamic>? catalog) {
-    if (ChatEngine.nominalTurnCredits(m, catalog) == null) return null;
+    if (ChatEngine.nominalTurnCredits(m, catalog) == null || creditPurchasesDisabled) return null;
     final pin = m['inUsdPerMTok'];
     final pout = m['outUsdPerMTok'];
     final cached = (m['cacheReadUsdPerMTok'] as num?)?.toDouble() ?? 0;
@@ -928,12 +929,19 @@ class _ModelsSheetState extends State<_ModelsSheet> {
                 footer: [
                   const SizedBox(height: 8),
                   Text(
-                    t('An estimate for one reply at these rates: the low end is a '
-                        'short answer, the high end a long one. Whatever the model '
-                        'has to read pushes it up — web results, repository files, '
-                        'attachments, and a long chat behind you — and a task that '
-                        'takes several passes costs more again. You pay for the '
-                        'tokens actually used, never a flat price per message.'),
+                    creditPurchasesDisabled
+                        ? t('An estimate for one reply: the low end is a '
+                            'short answer, the high end a long one. Whatever the model '
+                            'has to read pushes it up — web results, repository files, '
+                            'attachments, and a long chat behind you — and a task that '
+                            'takes several passes costs more again. Credits are spent on '
+                            'the tokens actually used, never a flat price per message.')
+                        : t('An estimate for one reply at these rates: the low end is a '
+                            'short answer, the high end a long one. Whatever the model '
+                            'has to read pushes it up — web results, repository files, '
+                            'attachments, and a long chat behind you — and a task that '
+                            'takes several passes costs more again. You pay for the '
+                            'tokens actually used, never a flat price per message.'),
                     style: TextStyle(
                         fontSize: 11, color: Theme.of(context).hintColor),
                   ),

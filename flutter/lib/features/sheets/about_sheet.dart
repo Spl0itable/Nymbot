@@ -10,6 +10,7 @@ import '../../services/build_integrity.dart';
 import '../../services/canary.dart';
 import '../../services/dev_contact.dart';
 import '../i18n/i18n.dart';
+import '../purchase_policy.dart';
 import 'sheet.dart';
 
 const String kAboutVersion = 'v1.0.9';
@@ -544,8 +545,10 @@ class _AboutSheetState extends State<_AboutSheet> {
           ),
           const SizedBox(height: 6),
           Text(
-            t('Private AI chat with no account, end-to-end encrypted, and paid '
-                'per reply in Bitcoin over Lightning.'),
+            creditPurchasesDisabled
+                ? t('Private AI chat with no account, end-to-end encrypted, and paid per reply in credits.')
+                : t('Private AI chat with no account, end-to-end encrypted, and paid '
+                    'per reply in Bitcoin over Lightning.'),
             style: TextStyle(fontSize: 12, height: 1.45, color: theme.hintColor),
           ),
           const SizedBox(height: 14),

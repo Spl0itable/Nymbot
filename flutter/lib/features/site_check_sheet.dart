@@ -4,6 +4,7 @@ import '../app.dart';
 import '../services/server_runs.dart';
 import '../services/site_checks.dart';
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import 'server_run_artifacts.dart';
 import 'sheets/credits_sheet.dart';
 import 'sheets/sheet.dart';
@@ -66,12 +67,14 @@ class _SiteCheckSheetState extends State<SiteCheckSheet> {
       return;
     }
     if (res.status == 402 && data['noCredits'] == true) {
-      final text = await app.serverRunNoCredits(conv, data);
+      final text = withoutBuyHints(await app.serverRunNoCredits(conv, data));
       if (!mounted) return;
       _say(text, warn: true);
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
         content: UiText(text),
-        action: SnackBarAction(label: t('Buy'), onPressed: () => showCreditsSheet(context)),
+        action: creditPurchasesDisabled
+            ? null
+            : SnackBarAction(label: t('Buy'), onPressed: () => showCreditsSheet(context)),
       ));
       return;
     }

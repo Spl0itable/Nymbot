@@ -13,6 +13,7 @@ import '../core/crypto/schnorr.dart' as schnorr;
 import '../core/utils/jitter.dart';
 import '../features/ai_consent.dart';
 import '../features/i18n/i18n.dart';
+import '../features/purchase_policy.dart';
 import '../models/artifact.dart';
 import '../models/bot.dart';
 import '../models/compare.dart';
@@ -5536,12 +5537,7 @@ class AppController extends ChangeNotifier {
       if (topped != null) {
         await note(describeTopUp(topped), conv: conv, replyTo: _linkOf(turn));
       } else {
-        await note(
-            res.pro
-                ? t('Pro credits running low: {n} left. Tap Buy to top up.',
-                    {'n': creditFigure(res.balance)})
-                : t('Credits running low: {n} left. Tap Buy to top up.',
-                    {'n': creditFigure(res.balance)}),
+        await note(lowBalanceNote(res.pro, res.balance),
             conv: conv,
             replyTo: _linkOf(turn));
       }
@@ -5838,8 +5834,7 @@ class AppController extends ChangeNotifier {
         }
         final wallet = conv.anon ? anonProBalance : proBalance;
         if (mention != null && mention.resolved && wallet != null && wallet <= 0) {
-          await note(t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
-              {'name': mention.model!['key']}), conv: conv);
+          await note(proEmptyNote('${mention.model!['key']}'), conv: conv);
           return await bail();
         }
       }
@@ -6276,7 +6271,7 @@ class AppController extends ChangeNotifier {
     final cap = e.runCap!;
     if (cap['free'] == true) {
       await note(e.message, conv: conv, replyTo: _linkOf(turn));
-      onBuy?.call();
+      if (!creditPurchasesDisabled) onBuy?.call();
       return;
     }
     final prepared = turn.prepared;
@@ -6924,7 +6919,7 @@ class AppController extends ChangeNotifier {
     if (run) {
       final have = model.isEmpty ? standardBalance : proBalance;
       if (have != null && have <= 0) {
-        return t('Server schedules spend your paid balance, which is empty. Top up first.');
+        return ServerSchedules.emptyBalance();
       }
     }
     final chatId = conv?.id ?? s.id;
@@ -8571,6 +8566,7 @@ class AppController extends ChangeNotifier {
     final at = free?.resetsAt ?? 0;
     // Whose allowance ran out matters.
     final byAddress = free?.netSpent ?? false;
+    if (creditPurchasesDisabled) return _freeSpentNeutral(at, byAddress);
     if (at <= 0) {
       return byAddress
           ? t("This address has used today's free replies — a new key does not "
@@ -8592,6 +8588,45 @@ class AppController extends ChangeNotifier {
             'images and web search.',
             {'time': clock});
   }
+
+  String _freeSpentNeutral(int at, bool byAddress) {
+    if (at <= 0) {
+      return byAddress
+          ? t("This address has used today's free replies — a new key does not "
+              'get another set, because they are counted per address too. They '
+              'come back at midnight UTC.')
+          : t("That is today's free replies used. They come back at midnight UTC. "
+              'Credits also unlock the sharper models, repositories, images and web search.');
+    }
+    final when = DateTime.fromMillisecondsSinceEpoch(at);
+    final clock = '${when.hour.toString().padLeft(2, '0')}'
+        ':${when.minute.toString().padLeft(2, '0')}';
+    return byAddress
+        ? t("This address has used today's free replies — a new key does not "
+            'get another set, because they are counted per address too. They '
+            'come back at {time}.', {'time': clock})
+        : t("That is today's free replies used. They come back at {time}. Credits "
+            'also unlock the sharper models, repositories, images and web search.',
+            {'time': clock});
+  }
+
+  static String lowBalanceNote(bool pro, double? balance) {
+    final n = {'n': creditFigure(balance)};
+    if (creditPurchasesDisabled) {
+      return pro
+          ? t('Pro credits running low: {n} left.', n)
+          : t('Credits running low: {n} left.', n);
+    }
+    return pro
+        ? t('Pro credits running low: {n} left. Tap Buy to top up.', n)
+        : t('Credits running low: {n} left. Tap Buy to top up.', n);
+  }
+
+  static String proEmptyNote(String name) => creditPurchasesDisabled
+      ? t('@{name} answers from your Pro balance, which is empty, so nothing was sent.',
+          {'name': name})
+      : t('@{name} answers from your Pro balance, which is empty. Type ?buy to top up, then send it again.',
+          {'name': name});
 
   String get satsLabel => activeModel != null ? 'Pro' : 'Standard';
 

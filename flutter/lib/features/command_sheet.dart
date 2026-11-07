@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'i18n/i18n.dart';
+import 'purchase_policy.dart';
 import '../core/theme/theme.dart';
 import '../services/skills.dart';
 
@@ -98,6 +99,7 @@ class BotCommands {
         term.toLowerCase().replaceFirst('?', '').trim().split(RegExp(r'\s+')).first;
     final scored = <(BotCommand, int)>[];
     for (final c in all()) {
+      if (creditPurchasesDisabled && c.name == 'buy') continue;
       var score = 0;
       if (needle.isEmpty) {
         score = 1;
@@ -119,7 +121,7 @@ class BotCommands {
   static String helpText() {
     String names(List<BotCommand> list) => list.map((c) => '?${c.name}').join(' ');
     return [
-      '${t('Free, on this device:')} ${names(local())}',
+      '${t('Free, on this device:')} ${names(local().where((c) => !creditPurchasesDisabled || c.name != 'buy').toList())}',
       '${t('Charged:')} ${names(remote().where((c) => c.group == 'charged').toList())}',
       '${t('Games:')} ${names(remote().where((c) => c.group == 'games').toList())}',
       t("Start a message with ! to send it without this chat's history."),

@@ -173,9 +173,7 @@ class _CreditsSheetState extends State<_CreditsSheet> {
         border: Border.all(color: Theme.of(context).dividerColor),
       ),
       child: Text(
-        t('Nymbot credits cannot be purchased in this app. Credits are bought '
-            'from the Nymbot web app in your browser. Credits you already have '
-            'work here as usual.'),
+        t('Credits you already have work here as usual.'),
         style: TextStyle(fontSize: 12, height: 1.45, color: Theme.of(context).hintColor),
       ),
     );

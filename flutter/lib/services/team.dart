@@ -1,4 +1,5 @@
 import '../features/i18n/i18n.dart';
+import '../features/purchase_policy.dart';
 import '../models/model_maker.dart';
 import 'chat_engine.dart';
 import 'research.dart';
@@ -393,9 +394,12 @@ class Team {
 
   static String refusal(ChatFailure e) {
     if (e.noCredits) {
-      return t(
-          'Team mode can use up to {n} Pro credits and you have {have}. Nothing was run or charged. Top up, use fewer or cheaper workers, or send it without Team mode.',
-          {'n': figure(e.required.ceil()), 'have': creditFigure(e.balance)});
+      final vars = {'n': figure(e.required.ceil()), 'have': creditFigure(e.balance)};
+      return creditPurchasesDisabled
+          ? t('Team mode can use up to {n} Pro credits and you have {have}. Nothing was run or charged. Use fewer or cheaper workers, or send it without Team mode.',
+              vars)
+          : t('Team mode can use up to {n} Pro credits and you have {have}. Nothing was run or charged. Top up, use fewer or cheaper workers, or send it without Team mode.',
+              vars);
     }
     return t(
         'Team mode did not start: {reason} Nothing was sent to a model and nothing was charged.',
