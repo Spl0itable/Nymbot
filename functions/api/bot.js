@@ -367,7 +367,7 @@ function aiRun(ai, model, input, options) {
 var NYMCHAT_VERSION = "3.75.543";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this one model; the private one routes per task.
-var BOT_MODEL_DEFAULT = "@cf/qwen/qwen3.8-27b";
+var BOT_MODEL_DEFAULT = "@cf/zai-org/glm-4.7-flash";
 // Small, fast, non-reasoning model for short structured one-shots.
 var BOT_MODEL_UTILITY = "@cf/meta/llama-3.1-8b-instruct-fast";
 // Qwen3's soft switch for its hybrid reasoning mode.
@@ -3555,7 +3555,7 @@ var BOT_GIT_CALL_MULTIPLIER = 3;
 var BOT_GIT_MAX_RESULT_CHARS = 20000;
 var BOT_GIT_MAX_FILE_CHARS = 48000;
 var BOT_GIT_MAX_TREE_ENTRIES = 600;
-var BOT_GIT_EXPLORE_MODEL = "@cf/qwen/qwen3.8-27b";
+var BOT_GIT_EXPLORE_MODEL = "@cf/zai-org/glm-4.7-flash";
 var BOT_GIT_EXPLORE_STEPS = 4;
 var BOT_GIT_EXPLORE_PER_RUN = 3;
 var BOT_GIT_EXPLORE_MAX_TOKENS = 1500;
