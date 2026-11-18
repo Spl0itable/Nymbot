@@ -364,22 +364,22 @@ function aiRun(ai, model, input, options) {
   return options ? ai.run(model, aiSafeValue(input), options) : ai.run(model, aiSafeValue(input));
 }
 
-var NYMCHAT_VERSION = "3.75.543";
+var NYMCHAT_VERSION = "3.75.545";
 var BOT_SATS_PER_CREDIT = 10;
 // The free public-channel Nymbot always uses this one model; the private one routes per task.
-var BOT_MODEL_DEFAULT = "@cf/zai-org/glm-4.7-flash";
+var BOT_MODEL_DEFAULT = "@cf/zai-org/glm-5.3-flash";
 // Small, fast, non-reasoning model for short structured one-shots.
-var BOT_MODEL_UTILITY = "cf/zai-org/glm-4.7-flash";
+var BOT_MODEL_UTILITY = "@cf/zai-org/glm-5.3-flash";
 // Qwen3's soft switch for its hybrid reasoning mode.
 var BOT_FREE_NO_THINK = "\n\n/no_think";
 // Free public-channel reply budget, including the stripped reasoning block.
 var BOT_FREE_MAX_TOKENS = 2048;
 var BOT_PM_MODELS = {
-  general: "cf/zai-org/glm-5.3-flash",
-  coding: "cf/zai-org/glm-5.3",
-  reasoning: "cf/openai/gpt-oss-120b",
-  creative: "cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  translation: "cf/zai-org/glm-4.7-flash"
+  general: "@cf/zai-org/glm-5.3-flash",
+  coding: "@cf/zai-org/glm-5.3",
+  reasoning: "@cf/openai/gpt-oss-120b",
+  creative: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  translation: "@cf/zai-org/glm-5.3-flash"
 };
 var BOT_PM_MAX_TOKENS = {
   general: 4096,
