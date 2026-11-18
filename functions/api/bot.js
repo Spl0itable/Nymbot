@@ -6,7 +6,7 @@ import { btcPriceGet, btcPriceSane, BtcPriceUnavailable } from "./_btcprice.js";
 import { mediaUsd, mediaRate, mediaSeconds, mediaTier as mediaResTier, mediaTiers, transcribeUsd } from "./_mediaprice.js";
 import { audioSeconds } from "./_audiolen.js";
 import { voucherConfigured, voucherKeysetPublic, voucherIssue, voucherRedeem } from "./_voucher.js";
-import { translateText } from "./_translate.js";
+import { translateText, PUBLIC_CACHE_TTL } from "./_translate.js";
 import { catalogProModels, catalogAliases, catalogSortKeys, catalogMediaParams,
   catalogGenerators, catalogMergeGenerators } from "./_catalog.js";
 import { mediaEditBody, mediaEditChoose, mediaEditIntent, mediaEditPrompt, mediaEditListLine,
@@ -11526,7 +11526,11 @@ var BOT_LOCALIZE_SKIP = ["translate", "wordplay", "guess", "trivia", "riddle",
   "math", "units", "ask", "summarize", "define"];
 
 // Shields code, URLs, nyms, game tokens and command names; returns English on failure.
-async function localizeBotText(text, lang, ai) {
+function botPublicTranslateOpts(env) {
+  return { gateway: (env && env.AI_GATEWAY_NAME) || "", cacheTtl: PUBLIC_CACHE_TTL };
+}
+
+async function localizeBotText(text, lang, ai, opts) {
   var src = String(text || "");
   if (!src.trim() || !lang || lang === "en" || !ai) return src;
   var tokens = [];
@@ -11535,7 +11539,7 @@ async function localizeBotText(text, lang, ai) {
     function (m) { tokens.push(m); return "PLH" + (tokens.length - 1) + "PLH"; });
   var out;
   try {
-    var res = await translateText(ai, { text: shielded, source: "auto", target: lang });
+    var res = await translateText(ai, { text: shielded, source: "auto", target: lang }, opts);
     out = res.translatedText;
   } catch (e) {
     return src;
@@ -11760,7 +11764,7 @@ async function onRequest(context) {
   // Handlers already in the user's wording and server-graded games are left alone.
   var replyLang = typeof lang === "string" ? lang.trim().toLowerCase().slice(0, 12) : "";
   if (replyLang && replyLang !== "en" && !BOT_LOCALIZE_SKIP.includes(command.toLowerCase())) {
-    response = await localizeBotText(response, replyLang, context.env.AI);
+    response = await localizeBotText(response, replyLang, context.env.AI, botPublicTranslateOpts(context.env));
   }
 
   // Always for ?ask with web search; 50% otherwise; never on reply-guess games.
@@ -11779,7 +11783,7 @@ async function onRequest(context) {
     // The response is the better language signal; it may have accents the ASCII input lacked.
     var userInputText = args || "";
     if (replyLang && replyLang !== "en") {
-      zapPrompt = await localizeBotText(zapPrompt, replyLang, context.env.AI);
+      zapPrompt = await localizeBotText(zapPrompt, replyLang, context.env.AI, botPublicTranslateOpts(context.env));
     } else if ((isLikelyNonEnglish(userInputText) || isLikelyNonEnglish(response)) && context.env.AI) {
       var translateRef = isLikelyNonEnglish(response) ? truncateText(response, 200) : userInputText;
       zapPrompt = await translateZapPrompt(zapPrompt, translateRef, context.env.AI);
@@ -14940,7 +14944,7 @@ async function handleTranslate(text, context) {
   var ai = context.env.AI || null;
   if (!ai) return "AI is not configured.";
   try {
-    var res = await translateText(ai, { text: text, source: "auto", target: "en" });
+    var res = await translateText(ai, { text: text, source: "auto", target: "en" }, botPublicTranslateOpts(context.env));
     return "\u{1F30D} " + res.translatedText;
   } catch (e) {
     return "Could not translate that text.";
