@@ -6001,7 +6001,8 @@ var NYMBOT_PM_PROMPT_TAIL = [
   "",
   "=== ABOUT NYMCHAT (only when asked) ===",
   "Nymchat (NYM — Nostr Ynstant Messenger) is a decentralized, pseudonymous chat app on the Nostr protocol. Web/PWA at https://nymchat.app, plus iOS and Android wrappers. Open source (AGPL-3.0) at https://github.com/Spl0itable/NYM. Operated by 21 Million LLC. Current version: v" + NYMCHAT_VERSION + ".",
-  "Public channels (geohash-based, ephemeral) are free. The free public bot is invoked with ?ask or @Nymbot in any channel. This private 1:1 Nymbot chat is the paid premium tier."
+  "Public channels (geohash-based, ephemeral) are free. The free public bot is invoked with ?ask or @Nymbot in any channel. This private 1:1 Nymbot chat is the paid premium tier.",
+  "Nymbot's official knowledge base is https://nymbot.ai/docs/. When a question is about Nymbot, the relevant pages are looked up for you and their excerpts appear in your context under 'NYMBOT KNOWLEDGE BASE': they are the authoritative answer for how Nymbot works, and you give the page URL you used. When nothing covers a question, point to the matching page rather than guessing: getting started https://nymbot.ai/docs/getting-started/ · apps https://nymbot.ai/docs/apps/ · conversations https://nymbot.ai/docs/chats/ · PDFs and documents https://nymbot.ai/docs/documents/ · artifacts and comparing models https://nymbot.ai/docs/artifacts/ · workspaces, bots and schedules https://nymbot.ai/docs/workspaces/ · commands https://nymbot.ai/docs/commands/ · images, video and speech https://nymbot.ai/docs/media/ · deep research https://nymbot.ai/docs/research/ · connectors (MCP) https://nymbot.ai/docs/connectors/ · team mode https://nymbot.ai/docs/team-mode/ · git https://nymbot.ai/docs/git/ · running code on your device https://nymbot.ai/docs/sandbox/ · server runs https://nymbot.ai/docs/server-runs/ · credits and pricing https://nymbot.ai/docs/credits/ · models and routing https://nymbot.ai/docs/models/ · API https://nymbot.ai/docs/api/ · encryption https://nymbot.ai/docs/encryption/ · anonymous mode https://nymbot.ai/docs/anonymous/ · identity and login https://nymbot.ai/docs/identity/ · protocol https://nymbot.ai/docs/protocol/ · troubleshooting https://nymbot.ai/docs/troubleshooting/. Never invent a docs URL beyond these; the whole knowledge base as one markdown file is https://nymbot.ai/llms-full.txt."
 ];
 
 var NYMBOT_APP_PROMPT_HEAD = [
@@ -6066,7 +6067,8 @@ var NYMBOT_APP_PROMPT_TAIL = [
   "",
   "=== ABOUT NYMBOT (only when asked) ===",
   "Nymbot lives at https://nymbot.ai. Where to get it: " + NYMBOT_APP_LINKS + ". Open source (AGPL-3.0) at https://github.com/Spl0itable/nymbot. Operated by 21 Million LLC.",
-  "Nymbot shares one identity and one credit balance with Nymchat (https://nymchat.app), the Nostr messenger it is also built into: the same key signs in to either, and credits, history and the throwaway key follow it. Someone who knows Nymbot from Nymchat's private chat is talking to the same Nymbot here, with more around it."
+  "Nymbot shares one identity and one credit balance with Nymchat (https://nymchat.app), the Nostr messenger it is also built into: the same key signs in to either, and credits, history and the throwaway key follow it. Someone who knows Nymbot from Nymchat's private chat is talking to the same Nymbot here, with more around it.",
+  "Nymbot's official knowledge base is https://nymbot.ai/docs/. When a question is about Nymbot, the relevant pages are looked up for you and their excerpts appear in your context under 'NYMBOT KNOWLEDGE BASE': they are the authoritative answer for how Nymbot works, and you give the page URL you used. When nothing covers a question, point to the matching page rather than guessing: getting started https://nymbot.ai/docs/getting-started/ · apps https://nymbot.ai/docs/apps/ · conversations https://nymbot.ai/docs/chats/ · PDFs and documents https://nymbot.ai/docs/documents/ · artifacts and comparing models https://nymbot.ai/docs/artifacts/ · workspaces, bots and schedules https://nymbot.ai/docs/workspaces/ · commands https://nymbot.ai/docs/commands/ · images, video and speech https://nymbot.ai/docs/media/ · deep research https://nymbot.ai/docs/research/ · connectors (MCP) https://nymbot.ai/docs/connectors/ · team mode https://nymbot.ai/docs/team-mode/ · git https://nymbot.ai/docs/git/ · running code on your device https://nymbot.ai/docs/sandbox/ · server runs https://nymbot.ai/docs/server-runs/ · models and routing https://nymbot.ai/docs/models/ · API https://nymbot.ai/docs/api/ · encryption https://nymbot.ai/docs/encryption/ · anonymous mode https://nymbot.ai/docs/anonymous/ · identity and login https://nymbot.ai/docs/identity/ · protocol https://nymbot.ai/docs/protocol/ · troubleshooting https://nymbot.ai/docs/troubleshooting/. Never invent a docs URL beyond these; the whole knowledge base as one markdown file is https://nymbot.ai/llms-full.txt."
 ];
 
 var BOT_BULK_BONUS = [
@@ -8058,6 +8060,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var pmSearchAttempted = false;
   var pmSearchedQuery = question;
   var pmChangelogCtx = "";
+  var pmKbCtx = "";
   var pmSearchFrom = Date.now();
   try {
     if (needsChangelogContext(question)) {
@@ -8069,6 +8072,11 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
         return { author: h && h.isBot ? "nymbot" : "", text: h && h.text };
       });
       var pmResolved = searchQueryFor(question, pmTurns);
+      try {
+        pmKbCtx = nymbotKbBlock(await nymbotKbExcerpts(question, pmResolved !== question ? pmResolved : "", runOpts.inApp === true), runOpts.inApp === true);
+      } catch (e) {
+        pmKbCtx = "";
+      }
       if (runOpts.web === true && needsWebSearch(question, pmResolved)) {
         pmSearchedQuery = pmResolved;
         if (runOpts.progress) runOpts.progress({ kind: "search", query: truncateText(pmSearchedQuery, 120) });
@@ -8079,8 +8087,8 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
       }
     }
   } catch (e) { }
-  if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted) {
-    var pmCtx = botSearchContext(question, pmSearchResults, pmSearchAttempted, pmSearchedQuery);
+  if (pmSearchResults.length > 0 || pmChangelogCtx || pmSearchAttempted || pmKbCtx) {
+    var pmCtx = pmKbCtx + botSearchContext(question, pmSearchResults, pmSearchAttempted, pmSearchedQuery);
     if (pmSearchResults.length > 0) {
       // The results the model was numbered against, so [1] and [2] have cards on the device.
       pmCitations = searchCitations(pmSearchResults);
@@ -14526,6 +14534,225 @@ async function fetchNymchatReleases(maxReleases) {
   } catch (e) {
     return [];
   }
+}
+
+var NYMBOT_KB_URL = "https://nymbot.ai/llms-full.txt";
+var NYMBOT_KB_HOME = "https://nymbot.ai/docs/";
+var NYMBOT_KB_CACHE_SECONDS = 21600;
+var NYMBOT_KB_RETRY_MS = 300000;
+var NYMBOT_KB_MAX_BYTES = 4 * 1024 * 1024;
+var NYMBOT_KB_MAX_PAGES = 3;
+var NYMBOT_KB_PAGE_CHARS = 3000;
+var NYMBOT_KB_TOTAL_CHARS = 7000;
+var nymbotKbMemo = { at: 0, pages: null, failedAt: 0 };
+var NYMBOT_KB_APP_SKIP = { "credits": true, "api-account": true };
+var NYMBOT_KB_MONEY_RX = /\?buy\b|\bbuy(?:s|ing)?\b|\bbought\b|\bpurchas|\btop[ -]?(?:s )?ups?\b|\btopping up\b|\brefill|\bbitcoin\b|\bbtc\b|\blightning\b|\bsats?\b|\bsatoshis?\b|\bzaps?\b|\binvoices?\b|\bwallets?\b|[$\u20ac\u00a3\u00a2]\s?\d|\d\s?(?:usd|eur|cents?|dollars?|euros?)\b|\bper million (?:input|output) tokens\b/i;
+
+function nymbotKbAppParts(parts) {
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i];
+    if (part.heading) {
+      if (!NYMBOT_KB_MONEY_RX.test(part.text)) out.push(part);
+      continue;
+    }
+    var kept = (part.text.match(/[^.!?]+(?:[.!?]+["'\u201d)\]]*\s*|$)/g) || [part.text]).filter(function (sentence) {
+      return sentence.trim() && !NYMBOT_KB_MONEY_RX.test(sentence);
+    }).join("").trim();
+    if (kept) out.push({ text: kept, heading: 0 });
+  }
+  return out;
+}
+
+var NYMBOT_KB_APP_RX = /\b(?:nymbot|this app|the app|your app|nymbot app)\b/i;
+var NYMBOT_KB_TOPICS = [
+  { slug: "chats", strong: true, rx: /\b(?:ghost chats?|auto-?delete|share (?:a |this |my )?chat|shared chat links?|chat titles?|clear(?:ing)? (?:my )?history|what (?:do|does) (?:you|nymbot) remember|memory|background (?:runs?|tasks?)|separate conversations?|suggested (?:next steps|follow-?ups?))\b/i },
+  { slug: "documents", strong: true, rx: /\b(?:attach(?:ing|ed)? (?:a |my )?(?:pdf|document|file|docx)s?|upload(?:ing)? (?:a |my )?(?:pdf|document|file)s?|long documents?)\b/i },
+  { slug: "artifacts", strong: true, rx: /\b(?:artifacts?|compare (?:two )?models|comparing models|ask two models|citation cards?)\b/i },
+  { slug: "workspaces", strong: true, rx: /\b(?:workspaces?|custom bots?|write (?:a |my own )?bot|share (?:a |my )?bot|scheduled prompts?)\b/i },
+  { slug: "media", strong: true, rx: /\b(?:generate|generating|make|create|draw)\b.{0,20}\b(?:images?|pictures?|videos?|clips?|voice|speech|audio)\b|(?:^|\s)\?(?:image|imagine|video|animate|clip|speak|say|tts)\b|\b(?:image generators?|video generators?|text to speech)\b/i },
+  { slug: "research", strong: true, rx: /\b(?:deep research|research mode|research reports?)\b|(?:^|\s)\?research\b/i },
+  { slug: "connectors", strong: true, rx: /\b(?:connectors?|mcp|always allow)\b/i },
+  { slug: "team-mode", strong: true, rx: /\b(?:team mode|worker models?)\b|(?:^|\s)\?team\b/i },
+  { slug: "git", strong: true, rx: /\b(?:connect(?:ing)? (?:a |my )?(?:repo|repository|github|gitlab|gitea)|git integration|repository access|github token|gitlab token|gitea token)\b|(?:^|\s)\?git\b/i },
+  { slug: "sandbox", strong: true, rx: /\b(?:run button|sandbox|run (?:this|the|my) code (?:here|in (?:the )?(?:app|chat)))\b/i },
+  { slug: "server-runs", strong: true, rx: /\b(?:server runs?|run (?:it |this |code |my code )?on (?:a |the )?server)\b/i },
+  { slug: "credits", strong: true, rx: /\b(?:credits?|free (?:daily )?allowance|free replies|my balance|top ?ups?|spending caps?|refunds?|sats per|buy(?:ing)? credits|pricing|how much (?:does|do|is) (?:nymbot|a reply|a message|it cost|each reply))\b|(?:^|\s)\?(?:buy|balance|credits)\b/i },
+  { slug: "models", strong: true, rx: /\b(?:which models?|what models?|pin(?:ned|ning)? (?:a )?model|pro models?|model catalog|switch(?:ing)? models?|auto-?routing|model routing)\b|(?:^|\s)\?model\b/i },
+  { slug: "api", strong: true, rx: /\b(?:nymbot api|your api|api keys? (?:for|from|in) nymbot|openai[- ]compatible|anthropic[- ]compatible|base url)\b/i },
+  { slug: "api-account", strong: true, rx: /\b(?:nwc|nostr wallet connect|automatic top-?ups?|auto top-?ups?)\b/i },
+  { slug: "api-integrations", strong: true, rx: /\b(?:openai sdk|anthropic sdk|aider|open webui|goose)\b/i },
+  { slug: "api-tools", strong: true, rx: /\b(?:claude code|codex cli|cline|kilo code|roo code|continue\.dev)\b/i },
+  { slug: "encryption", strong: true, rx: /\b(?:end-to-end|e2ee|post[- ]?quantum|quantum[- ]?(?:resistant|safe|proof)|ml[- ]?kem|gift ?wraps?|what (?:the|does the) server (?:see|know)s?|(?:are|is) (?:my )?(?:chats?|messages?|conversations?) (?:encrypted|private))\b/i },
+  { slug: "anonymous", strong: true, rx: /\b(?:anonymous mode|anon mode|throwaway key|blind vouchers?|vouchers?)\b|(?:^|\s)\?anon\b/i },
+  { slug: "identity", strong: true, rx: /\b(?:nsec|npub|private key|passkey|passphrase|biometric|wipe (?:my |the )?(?:device|app)|delete (?:my )?account|new device|other devices?|sync(?:ing)? (?:between|across) devices)\b/i },
+  { slug: "apps", strong: true, rx: /\b(?:android app|ios app|iphone app|app store|play store|testflight|install (?:nymbot|the app)|download (?:nymbot|the app)|reply notifications?|push notifications?)\b/i },
+  { slug: "encryption", strong: false, rx: /\b(?:encrypt\w*|privacy|private)\b/i },
+  { slug: "commands", strong: false, rx: /\b(?:commands?|slash)\b|(?:^|\s)\?[a-z]{2,}\b/i },
+  { slug: "api-chat", strong: false, rx: /\b(?:chat completions?|responses api|messages api|streaming|tool calling)\b/i },
+  { slug: "api-media", strong: false, rx: /\b(?:embeddings?|speech to text|transcri\w+)\b/i },
+  { slug: "protocol", strong: false, rx: /\b(?:protocol|nostr events?|event kinds?|ledger|authenticat\w+)\b/i },
+  { slug: "troubleshooting", strong: false, rx: /\b(?:not working|broken|doesn'?t work|isn'?t working|didn'?t arrive|no reply|missing|stuck|error|wrong balance|won'?t connect|failed)\b/i },
+  { slug: "getting-started", strong: false, rx: /\b(?:get(?:ting)? started|first (?:time|message)|new to nymbot|how do i start|how to use)\b/i },
+  { slug: "credits", strong: false, rx: /\b(?:cost|costs|price|prices|pay|paying|lightning|sats|balance)\b/i },
+  { slug: "models", strong: false, rx: /\b(?:models?|reasoning|vision)\b/i }
+];
+
+function nymbotKbParts(body) {
+  var parts = [];
+  var para = [];
+  var flush = function () {
+    var t = para.join(" ").replace(/\s+/g, " ").trim();
+    if (t) parts.push({ text: t, heading: 0 });
+    para = [];
+  };
+  String(body || "").split("\n").forEach(function (line) {
+    var h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      flush();
+      parts.push({ text: h[2].trim(), heading: Math.min(4, h[1].length) });
+      return;
+    }
+    if (!line.trim()) { flush(); return; }
+    if (/^\s*\|[\s|:-]+\|\s*$/.test(line)) return;
+    if (/^\s*(?:\||[-*]\s|\d+\.\s|>)/.test(line)) {
+      flush();
+      para.push(line.trim());
+      flush();
+      return;
+    }
+    para.push(line.trim());
+  });
+  flush();
+  return parts;
+}
+
+function nymbotKbParse(text) {
+  var pages = [];
+  String(text || "").replace(/\r/g, "").split(/\n-{3,}\n/).forEach(function (chunk) {
+    var m = /^\s*Source:\s*(https:\/\/nymbot\.ai\/\S*)\s*\n+#\s+([^\n]+)\n?([\s\S]*)$/.exec(chunk);
+    if (m) pages.push({ url: m[1], title: m[2].trim(), body: m[3] });
+    else if (pages.length) pages[pages.length - 1].body += "\n\n" + chunk;
+  });
+  pages.forEach(function (p) {
+    var slug = /\/docs\/([^/]+)\/?$/.exec(p.url);
+    p.slug = slug ? slug[1] : "";
+    p.parts = nymbotKbParts(p.body);
+    p.titleTokens = pageTokens(p.title + " " + p.slug.replace(/-/g, " "));
+    p.headTokens = pageTokens(p.parts.filter(function (x) { return x.heading; }).map(function (x) { return x.text; }).join(" "));
+    p.bodyTokens = pageTokens(p.body);
+  });
+  return pages.filter(function (p) { return /^https:\/\/nymbot\.ai\/docs\//.test(p.url); });
+}
+
+async function nymbotKbPages() {
+  var now = Date.now();
+  if (nymbotKbMemo.pages && now - nymbotKbMemo.at < NYMBOT_KB_CACHE_SECONDS * 1000) return nymbotKbMemo.pages;
+  if (nymbotKbMemo.failedAt && now - nymbotKbMemo.failedAt < NYMBOT_KB_RETRY_MS) return [];
+  var cacheKey = new Request("https://nymbot-cache.invalid/nymbot-kb-full");
+  var text = "";
+  try {
+    if (typeof caches !== "undefined" && caches.default) {
+      var hit = await caches.default.match(cacheKey);
+      if (hit) text = await hit.text();
+    }
+  } catch (_) {}
+  if (!text) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, SEARCH_TIMEOUT);
+    try {
+      var resp = await fetch(NYMBOT_KB_URL, {
+        headers: { "User-Agent": "Nymbot/1.0 (+" + NYMBOT_KB_HOME + ")", "Accept": "text/plain, text/markdown;q=0.9" },
+        signal: controller.signal
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      text = await botReadTextCapped(resp, NYMBOT_KB_MAX_BYTES);
+      try {
+        if (text && typeof caches !== "undefined" && caches.default) {
+          await caches.default.put(cacheKey, new Response(text, {
+            headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "max-age=" + NYMBOT_KB_CACHE_SECONDS }
+          }));
+        }
+      } catch (_) {}
+    } catch (e) {
+      console.warn("nymbot docs: knowledge base fetch failed — " + (/^(?:HTTP \d{3}|blocked)\b/.exec(String((e && e.message) || "")) || [/^(?:Abort|Timeout)Error$/.test(String(e && e.name)) ? "timeout" : "error"])[0]);
+      text = "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  var pages = nymbotKbParse(text);
+  if (pages.length) nymbotKbMemo = { at: now, pages: pages, failedAt: 0 };
+  else nymbotKbMemo.failedAt = now;
+  return pages;
+}
+
+function nymbotKbWanted(text) {
+  var s = String(text || "");
+  if (!s.trim()) return { wanted: false, topics: {}, aboutApp: false };
+  var topics = {};
+  var strong = false;
+  NYMBOT_KB_TOPICS.forEach(function (t) {
+    if (t.rx.test(s)) {
+      var v = t.strong ? 2 : 1;
+      topics[t.slug] = Math.max(topics[t.slug] || 0, v);
+      if (t.strong) strong = true;
+    }
+  });
+  var aboutApp = NYMBOT_KB_APP_RX.test(s);
+  return { wanted: aboutApp || strong, topics: topics, aboutApp: aboutApp };
+}
+
+async function nymbotKbExcerpts(question, context, inApp) {
+  var probe = String(question || "") + "\n" + String(context || "");
+  var want = nymbotKbWanted(probe);
+  if (!want.wanted) return [];
+  var pages = await nymbotKbPages();
+  if (inApp) pages = pages.filter(function (p) { return !NYMBOT_KB_APP_SKIP[p.slug]; });
+  if (!pages.length) return [];
+  var terms = pageQueryTerms(probe, "");
+  var df = terms.map(function (t) {
+    return pages.filter(function (p) { return pageTermHit(p.bodyTokens, t.stem); }).length;
+  });
+  var scored = pages.map(function (p) {
+    var score = want.topics[p.slug] === 2 ? 6 : (want.topics[p.slug] === 1 && want.aboutApp ? 4 : 0);
+    for (var i = 0; i < terms.length; i++) {
+      if (!df[i]) continue;
+      var idf = Math.log(1 + pages.length / df[i]);
+      var w = terms[i].weight / 3;
+      if (pageTermHit(p.titleTokens, terms[i].stem)) score += 2 * w * idf;
+      if (pageTermHit(p.headTokens, terms[i].stem)) score += w * idf;
+      if (pageTermHit(p.bodyTokens, terms[i].stem)) score += 0.5 * w * idf;
+    }
+    return { page: p, score: score };
+  }).filter(function (x) { return x.score > 0; }).sort(function (a, b) { return b.score - a.score; });
+  var picked = [];
+  if (scored.length) {
+    var floor = scored[0].score * 0.35;
+    for (var k = 0; k < scored.length && picked.length < NYMBOT_KB_MAX_PAGES; k++) {
+      if (scored[k].score >= floor) picked.push(scored[k].page);
+    }
+  }
+  if (!picked.length && want.aboutApp) {
+    var home = pages.filter(function (p) { return p.slug === ""; })[0];
+    if (home) picked.push(home);
+  }
+  var budget = Math.min(NYMBOT_KB_PAGE_CHARS, Math.floor(NYMBOT_KB_TOTAL_CHARS / Math.max(1, picked.length)));
+  return picked.map(function (p) {
+    return { url: p.url, title: p.title, text: selectPageText(inApp ? nymbotKbAppParts(p.parts) : p.parts, probe, p.title, budget) };
+  }).filter(function (x) { return x.text && x.text.trim(); });
+}
+
+function nymbotKbBlock(excerpts, inApp) {
+  if (!excerpts || !excerpts.length) return "";
+  var out = "--- NYMBOT KNOWLEDGE BASE (official documentation from " + NYMBOT_KB_HOME + ", fetched just now) ---\n";
+  for (var i = 0; i < excerpts.length; i++) {
+    out += "[" + excerpts[i].url + "] " + excerpts[i].title + "\n" + excerpts[i].text + "\n\n";
+  }
+  out += "--- END KNOWLEDGE BASE ---\n";
+  out += "These are excerpts of Nymbot's official knowledge base. For any question about how Nymbot works — " + (inApp ? "" : "credits and pricing, ") + "models, commands, chats, research, connectors, git, server runs, the API, encryption, anonymous mode — they are the authoritative answer: when they disagree with anything else you were told, the knowledge base wins, except for where a button or field sits on screen, where your instructions describe the current app. Use only what is relevant to the question, and when you rely on a page, give its URL so the user can read more. " + PAGE_GAP + " marks text that was left out. If the excerpts do not cover what was asked, say so plainly and point to " + NYMBOT_KB_HOME + " rather than guessing.\n";
+  if (inApp) out += "In this app, the credits rule above still applies: say what something costs in credits and that tapping their balance shows their credits, and never give a place, command or payment method for getting more.\n";
+  return out;
 }
 
 function findRelease(releases, query) {
